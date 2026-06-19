@@ -14,7 +14,7 @@
     }
   },
   "include": [
-    "src/plugins/**/dashboard/*",
+    "src/plugins/**/dashboard/**/*",
     "src/gql/**/*.ts",
     "vite.*.*ts"
   ]

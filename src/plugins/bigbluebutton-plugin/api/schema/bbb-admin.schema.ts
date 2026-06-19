@@ -1,0 +1,384 @@
+import gql from "graphql-tag";
+
+export const adminApiExtensions = gql`
+  type BbbServer {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    name: String!
+    apiUrl: String!
+    enabled: Boolean!
+    healthy: Boolean!
+    currentLoad: Int!
+    maxLoad: Int!
+    lastHealthCheckAt: DateTime
+  }
+
+  type BbbOrganization {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    channelId: ID!
+    ownerUserId: ID
+    slug: String!
+    name: String!
+    concurrentMeetingLimit: Int!
+    maxParticipantsPerMeeting: Int!
+    recordingEnabled: Boolean!
+    suspended: Boolean!
+  }
+
+  type BbbMeeting {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    title: String!
+    state: String!
+    bbbMeetingId: String
+    recordingEnabled: Boolean!
+    provisionedAt: DateTime
+    completedAt: DateTime
+    failureReason: String
+    retryCount: Int!
+    billingCapped: Boolean!
+    billingCapReason: String
+    lastReconciledAt: DateTime
+    reconciliationAttemptCount: Int!
+    organization: BbbOrganization!
+  }
+
+  type BbbMeetingList {
+    items: [BbbMeeting!]!
+    totalItems: Int!
+  }
+
+  type BbbCapacityGrant {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    orderId: ID
+    grantedMinutes: Int!
+    consumedMinutes: Int!
+    validFrom: DateTime!
+    validUntil: DateTime!
+    exhausted: Boolean!
+  }
+
+  # ─── Room types ──────────────────────────────────────────────────────────────
+
+  """
+  A persistent UX abstraction for a recurring meeting space.
+  Rooms are long-lived; meetings are ephemeral runtime records created on-demand.
+  """
+  type BbbRoom {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    organizationId: ID!
+    name: String!
+    description: String
+    slug: String
+    createdByCustomerId: ID
+    recordingEnabled: Boolean!
+    maxParticipants: Int
+    state: String!
+    currentMeetingId: ID
+    retryCount: Int!
+    lastProvisionRequestedAt: DateTime
+  }
+
+  # ─── Product Access (enrollment mapping) ────────────────────────────────────
+
+  """
+  Maps a product variant to a BBB room so that purchasing the variant
+  automatically enrolls the buyer into the room via fulfillment.
+  """
+  type BbbProductAccess {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    productVariantId: ID!
+    room: BbbRoom!
+    accessDays: Int
+  }
+
+  type BbbEnrollment {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    roomId: ID!
+    customerId: ID!
+    customerName: String
+    customerEmail: String
+    orderId: ID
+    active: Boolean!
+    expiresAt: DateTime
+    validFrom: DateTime
+    validUntil: DateTime
+    source: String!
+  }
+
+  type BbbEnrollmentList {
+    items: [BbbEnrollment!]!
+    totalItems: Int!
+  }
+
+  # ─── Member types (M4) ──────────────────────────────────────────────────────
+
+  type BbbOrganizationMember {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    organizationId: ID!
+    customerId: ID!
+    customerName: String
+    customerEmail: String
+    role: String!
+    active: Boolean!
+    keycloakSub: String
+  }
+
+  # ─── Scheduled Session types ─────────────────────────────────────────────────
+
+  type BbbScheduledSession {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    title: String!
+    startTime: DateTime!
+    endTime: DateTime!
+    status: String!
+    organization: BbbOrganization!
+    trainerId: ID!
+    activeMeetingId: ID
+  }
+
+  type BbbServerList {
+    items: [BbbServer!]!
+    totalItems: Int!
+  }
+
+  type BbbOrganizationList {
+    items: [BbbOrganization!]!
+    totalItems: Int!
+  }
+
+  type BbbRoomList {
+    items: [BbbRoom!]!
+    totalItems: Int!
+  }
+
+  type BbbOrganizationMemberList {
+    items: [BbbOrganizationMember!]!
+    totalItems: Int!
+  }
+
+  # ─── Queries ─────────────────────────────────────────────────────────────────
+
+  extend type Query {
+    bbbServers(options: BbbServerListOptions): BbbServerList!
+    bbbServer(id: ID!): BbbServer
+    bbbOrganizations(options: BbbOrganizationListOptions): BbbOrganizationList!
+    bbbOrganization(id: ID!): BbbOrganization
+    bbbMeetings(
+      organizationId: ID
+      options: BbbMeetingListOptions
+    ): BbbMeetingList!
+    bbbMeeting(id: ID!): BbbMeeting
+    bbbCapacityGrants(organizationId: ID!): [BbbCapacityGrant!]!
+    bbbModeratorJoinUrl(meetingId: ID!, moderatorName: String!): String!
+    bbbRooms(organizationId: ID!, options: BbbRoomListOptions): BbbRoomList!
+    bbbRoom(id: ID!): BbbRoom
+    bbbOrganizationMembers(
+      organizationId: ID!
+      options: BbbOrganizationMemberListOptions
+    ): BbbOrganizationMemberList!
+    bbbOrganizationMember(id: ID!): BbbOrganizationMember
+    bbbProductAccessByRoom(roomId: ID!): [BbbProductAccess!]!
+    bbbEnrollmentsByRoom(
+      roomId: ID!
+      options: BbbEnrollmentListOptions
+    ): BbbEnrollmentList!
+    bbbProductVariantSearch(term: String!): [BbbProductVariantResult!]!
+    bbbScheduledSessions(organizationId: ID!): [BbbScheduledSession!]!
+  }
+
+  # ─── Mutations ───────────────────────────────────────────────────────────────
+
+  extend type Mutation {
+    createBbbServer(input: CreateBbbServerInput!): BbbServer!
+    updateBbbServer(id: ID!, input: UpdateBbbServerInput!): BbbServer!
+    createBbbOrganization(input: CreateBbbOrganizationInput!): BbbOrganization!
+    updateBbbOrganization(
+      id: ID!
+      input: UpdateBbbOrganizationInput!
+    ): BbbOrganization!
+    createBbbMeeting(input: CreateBbbMeetingInput!): BbbMeeting!
+    retryBbbMeeting(failedMeetingId: ID!): BbbMeeting!
+    updateBbbMeeting(id: ID!, input: UpdateBbbMeetingInput!): BbbMeeting!
+    deleteBbbMeeting(id: ID!): Boolean!
+    endBbbMeeting(id: ID!): BbbMeeting!
+    deleteBbbServer(id: ID!): Boolean!
+    deleteBbbOrganization(id: ID!): Boolean!
+    createBbbCapacityGrant(
+      input: CreateBbbCapacityGrantInput!
+    ): BbbCapacityGrant!
+    createBbbRoom(input: CreateBbbRoomInput!): BbbRoom!
+    updateBbbRoom(id: ID!, input: UpdateBbbRoomInput!): BbbRoom!
+    deleteBbbRoom(id: ID!): Boolean!
+    resetBbbRoom(id: ID!): BbbRoom!
+    createBbbScheduledSession(
+      input: CreateBbbScheduledSessionInput!
+    ): BbbScheduledSession!
+    cancelBbbScheduledSession(id: ID!): BbbScheduledSession!
+    addBbbMember(input: AddBbbMemberInput!): BbbOrganizationMember!
+    updateBbbMember(
+      id: ID!
+      input: UpdateBbbMemberInput!
+    ): BbbOrganizationMember!
+    removeBbbMember(id: ID!): BbbOrganizationMember!
+    createBbbProductAccess(
+      input: CreateBbbProductAccessInput!
+    ): BbbProductAccess!
+    deleteBbbProductAccess(id: ID!): Boolean!
+    deactivateBbbEnrollment(id: ID!): BbbEnrollment!
+    createBbbEnrollment(input: CreateBbbEnrollmentInput!): BbbEnrollment!
+  }
+
+  # ─── Input Types ─────────────────────────────────────────────────────────────
+
+  input CreateBbbServerInput {
+    name: String!
+    apiUrl: String!
+    apiSecret: String!
+    maxLoad: Int
+  }
+
+  input UpdateBbbServerInput {
+    name: String
+    apiUrl: String
+    apiSecret: String
+    maxLoad: Int
+    enabled: Boolean
+  }
+
+  input CreateBbbOrganizationInput {
+    channelId: ID!
+    slug: String!
+    name: String!
+    concurrentMeetingLimit: Int
+    maxParticipantsPerMeeting: Int
+    recordingEnabled: Boolean
+  }
+
+  input UpdateBbbOrganizationInput {
+    name: String
+    concurrentMeetingLimit: Int
+    maxParticipantsPerMeeting: Int
+    recordingEnabled: Boolean
+    suspended: Boolean
+  }
+
+  input CreateBbbMeetingInput {
+    organizationId: ID!
+    title: String!
+    recordingEnabled: Boolean
+  }
+
+  input UpdateBbbMeetingInput {
+    title: String
+    recordingEnabled: Boolean
+  }
+
+  input AddBbbMemberInput {
+    organizationId: ID!
+    customerId: ID!
+    role: String!
+  }
+
+  input UpdateBbbMemberInput {
+    role: String
+    active: Boolean
+  }
+
+  input BbbServerListOptions {
+    skip: Int
+    take: Int
+  }
+
+  input BbbOrganizationListOptions {
+    skip: Int
+    take: Int
+  }
+
+  input BbbRoomListOptions {
+    skip: Int
+    take: Int
+  }
+
+  input BbbOrganizationMemberListOptions {
+    skip: Int
+    take: Int
+  }
+
+  input BbbMeetingListOptions {
+    skip: Int
+    take: Int
+  }
+
+  input CreateBbbCapacityGrantInput {
+    organizationId: ID!
+    grantedMinutes: Int!
+    validFrom: String
+    validUntil: String
+  }
+
+  input CreateBbbRoomInput {
+    organizationId: ID!
+    name: String!
+    description: String
+    slug: String
+    recordingEnabled: Boolean
+    maxParticipants: Int
+  }
+
+  input UpdateBbbRoomInput {
+    name: String
+    description: String
+    recordingEnabled: Boolean
+    maxParticipants: Int
+  }
+
+  input CreateBbbScheduledSessionInput {
+    organizationId: ID!
+    title: String!
+    startTime: String!
+    endTime: String!
+    trainerId: ID!
+  }
+
+  input CreateBbbProductAccessInput {
+    roomId: ID!
+    productVariantId: ID!
+    accessDays: Int
+  }
+
+  input CreateBbbEnrollmentInput {
+    roomId: ID!
+    customerId: ID!
+    accessDays: Int
+    reason: String
+  }
+
+  type BbbProductVariantResult {
+    id: ID!
+    name: String!
+    sku: String!
+    productName: String!
+  }
+
+  input BbbEnrollmentListOptions {
+    skip: Int
+    take: Int
+  }
+`;

@@ -1,0 +1,402 @@
+// src/plugins/bigbluebutton-plugin/api/bbb-shop.resolver.ts
+// Membership‑first authorization + role‑based join URL routing.
+// Implements M6, S1, and S4 in one pass.
+
+import { Args, Mutation, Query, Resolver } from "@nestjs/graphql";
+import {
+  Allow,
+  Ctx,
+  ForbiddenError,
+  Logger,
+  Permission,
+  RequestContext,
+  TransactionalConnection,
+} from "@vendure/core";
+import { BbbMeetingService } from "../services/bbb-meeting.service";
+import { BbbOrganizationService } from "../services/bbb-organization.service";
+import { BbbRoomService } from "../services/bbb-room.service";
+import { BbbMemberService } from "../services/bbb-member.service";
+import { BbbScheduledSessionService } from "../services/bbb-scheduled-session.service";
+import { BbbMeeting } from "../entities/bbb-meeting.entity";
+import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
+import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
+import { BbbRoom } from "../entities/bbb-room.entity";
+import { Customer } from "@vendure/core";
+
+@Resolver()
+export class BbbShopResolver {
+  constructor(
+    private readonly meetingService: BbbMeetingService,
+    private readonly orgService: BbbOrganizationService,
+    private readonly roomService: BbbRoomService,
+    private readonly memberService: BbbMemberService,
+    private readonly sessionService: BbbScheduledSessionService,
+    private readonly connection: TransactionalConnection,
+  ) {}
+
+  @Query()
+  @Allow(Permission.Authenticated)
+  async myBbbMeetings(
+    @Ctx() ctx: RequestContext,
+    @Args("skip") skip?: number,
+    @Args("take") take?: number,
+  ): Promise<{ items: BbbMeeting[]; totalItems: number }> {
+    if (!ctx.activeUserId) throw new ForbiddenError();
+    const org = await this.orgService.findByChannelId(ctx);
+    if (!org) return { items: [], totalItems: 0 };
+    return this.meetingService.findAll(ctx, org.id, { skip, take });
+  }
+
+  @Query()
+  @Allow(Permission.Authenticated)
+  async myBbbCapacityGrants(
+    @Ctx() ctx: RequestContext,
+  ): Promise<BbbCapacityGrant[]> {
+    if (!ctx.activeUserId) throw new ForbiddenError();
+    const org = await this.orgService.findByChannelId(ctx);
+    if (!org) return [];
+    return this.connection.getRepository(ctx, BbbCapacityGrant).find({
+      where: { organization: { id: org.id } },
+      order: { createdAt: "DESC" },
+    });
+  }
+
+  @Mutation()
+  @Allow(Permission.Authenticated)
+  async bbbJoinMeeting(
+    @Ctx() ctx: RequestContext,
+    @Args("meetingId") meetingId: string,
+    @Args("participantName") participantName: string,
+  ): Promise<string> {
+    if (!ctx.activeUserId) throw new ForbiddenError();
+    return this.meetingService.getJoinUrl(ctx, meetingId, participantName);
+  }
+
+  @Query()
+  @Allow(Permission.Authenticated)
+  async myBbbRooms(@Ctx() ctx: RequestContext) {
+    if (!ctx.activeUserId) throw new ForbiddenError();
+    const customer = await this.connection
+      .getRepository(ctx, Customer)
+      .findOne({ where: { user: { id: ctx.activeUserId as string } } });
+    if (!customer) return [];
+
+    const now = new Date();
+
+    // Enrollment-based rooms (storefront purchase path)
+    const enrollments = await this.connection
+      .getRepository(ctx, BbbEnrollment)
+      .find({
+        where: { customerId: customer.id as string, active: true },
+        relations: ["room"],
+      });
+    const enrolledRoomIds = new Set(
+      enrollments
+        .filter((e) => {
+          if (e.validUntil && e.validUntil < now) return false;
+          if (!e.validUntil && e.expiresAt && e.expiresAt < now) return false;
+          return true;
+        })
+        .map((e) => e.roomId),
+    );
+
+    // Membership-based rooms: staff only (TRAINER, ORG_ADMIN).
+    // STUDENT membership is excluded — students access rooms via enrollment.
+    const memberships = await this.memberService.findActiveByCustomer(
+      ctx,
+      customer.id,
+    );
+    const staffOrgIds = memberships
+      .filter((m) => this.memberService.isModerator(m))
+      .map((m) => m.organization?.id ?? (m as any).organizationId);
+
+    const [enrolledRooms, memberRooms] = await Promise.all([
+      enrolledRoomIds.size > 0
+        ? this.connection
+            .getRepository(ctx, BbbRoom)
+            .findByIds([...enrolledRoomIds])
+        : Promise.resolve([]),
+      staffOrgIds.length > 0
+        ? Promise.all(
+            staffOrgIds.map((orgId) =>
+              this.roomService.findByOrganization(ctx, orgId),
+            ),
+          ).then((r) => r.flat())
+        : Promise.resolve([]),
+    ]);
+
+    // Merge, deduplicate by id
+    const seen = new Set<string>();
+    return [...enrolledRooms, ...memberRooms].filter((r) => {
+      if (seen.has(r.id as string)) return false;
+      seen.add(r.id as string);
+      return true;
+    });
+  }
+
+  @Query()
+  @Allow(Permission.Authenticated)
+  async bbbRoomStatus(@Ctx() ctx: RequestContext, @Args("id") id: string) {
+    if (!ctx.activeUserId) throw new ForbiddenError();
+    const customer = await this.connection
+      .getRepository(ctx, Customer)
+      .findOne({ where: { user: { id: ctx.activeUserId as string } } });
+    if (!customer) throw new ForbiddenError();
+    const room = await this.roomService.findById(ctx, id);
+    if (!room) throw new ForbiddenError();
+
+    // Allow access if customer has either a valid enrollment or an org membership
+    const now = new Date();
+    let [enrollment, member] = await Promise.all([
+      this.connection.getRepository(ctx, BbbEnrollment).findOne({
+        where: { roomId: id, customerId: customer.id as string, active: true },
+      }),
+      this.memberService.findActiveMembership(
+        ctx,
+        customer.id,
+        room.organization.id,
+      ),
+    ]);
+    if (enrollment?.expiresAt && enrollment.expiresAt < now) enrollment = null;
+    const isExpired =
+      (enrollment?.validUntil && enrollment.validUntil < now) ||
+      (!enrollment?.validUntil && enrollment?.expiresAt && enrollment.expiresAt < now);
+    if (isExpired) enrollment = null;
+    if (!enrollment && !member) throw new ForbiddenError();
+
+    return room;
+  }
+
+  @Mutation()
+  @Allow(Permission.Authenticated)
+  async bbbJoinRoom(
+    @Ctx() ctx: RequestContext,
+    @Args("roomId") roomId: string,
+    @Args("participantName") participantName: string,
+  ): Promise<{ status: string; joinUrl?: string }> {
+    if (!ctx.activeUserId) throw new ForbiddenError();
+
+    const customer = await this.connection
+      .getRepository(ctx, Customer)
+      .findOne({ where: { user: { id: ctx.activeUserId as string } } });
+    if (!customer) throw new ForbiddenError();
+
+    const room = await this.roomService.findById(ctx, roomId);
+    if (!room) throw new ForbiddenError();
+
+    // Membership check is enforced inside meetingService.joinRoom via
+    // memberService.assertActiveMembership. No need to check it here too.
+    const result = await this.meetingService.joinRoom(
+      ctx,
+      roomId,
+      participantName,
+      customer.id,
+    );
+    Logger.info(
+      `[bbbJoinRoom] roomId=${roomId} customerId=${customer.id} status=${result.status} hasJoinUrl=${!!result.joinUrl} joinUrlPrefix=${result.joinUrl ? result.joinUrl.substring(0, 60) + "..." : "N/A"}`,
+    );
+    return result;
+  }
+
+  @Query()
+  @Allow(Permission.Authenticated)
+  async myBbbEnrollments(
+    @Ctx() ctx: RequestContext,
+  ): Promise<
+    Array<{
+      id: string;
+      roomId: string;
+      roomName: string;
+      roomState: string;
+      active: boolean;
+      expiresAt: string | null;
+      validFrom: string | null;
+      validUntil: string | null;
+    }>
+  > {
+    if (!ctx.activeUserId) throw new ForbiddenError();
+    const customer = await this.connection
+      .getRepository(ctx, Customer)
+      .findOne({ where: { user: { id: ctx.activeUserId as string } } });
+    if (!customer) return [];
+
+    const enrollments = await this.connection
+      .getRepository(ctx, BbbEnrollment)
+      .find({
+        where: { customerId: customer.id as string, active: true },
+        relations: ["room"],
+      });
+
+    const now = new Date();
+    return enrollments
+      .filter((e) => {
+        if (e.validUntil && e.validUntil < now) return false;
+        if (!e.validUntil && e.expiresAt && e.expiresAt < now) return false;
+        return true;
+      })
+      .map((e) => ({
+        id: e.id as string,
+        roomId: e.roomId,
+        roomName: e.room.name,
+        roomState: e.room.state,
+        active: e.active,
+        expiresAt: e.expiresAt ? e.expiresAt.toISOString() : null,
+        validFrom: e.validFrom ? e.validFrom.toISOString() : null,
+        validUntil: e.validUntil ? e.validUntil.toISOString() : null,
+      }));
+  }
+
+  // ─── Scheduled Sessions ──────────────────────────────────────────────────
+
+  @Query()
+  @Allow(Permission.Authenticated)
+  async myScheduledSessions(@Ctx() ctx: RequestContext): Promise<
+    Array<{
+      id: string;
+      title: string;
+      startTime: string;
+      endTime: string;
+      status: string;
+      trainerName: string | null;
+      activeMeetingId: string | null;
+      joinUrl: string | null;
+    }>
+  > {
+    if (!ctx.activeUserId) throw new ForbiddenError();
+    const sessions = await this.sessionService.findMySessions(ctx);
+
+    // Pre-resolve current customer once, not per-session
+    const currentCustomer = ctx.activeUserId
+      ? await this.connection.getRepository(ctx, Customer).findOne({
+          where: { user: { id: ctx.activeUserId as string } },
+        })
+      : null;
+
+    return Promise.all(
+      sessions.map(async (session) => {
+        let joinUrl: string | null = null;
+        let trainerName: string | null = null;
+
+        // Resolve actual trainer name from Customer entity
+        if (session.trainer) {
+          const trainerCustomer = await this.connection
+            .getRepository(ctx, Customer)
+            .findOne({ where: { id: (session.trainer as any).customerId } });
+          if (trainerCustomer) {
+            trainerName =
+              [trainerCustomer.firstName, trainerCustomer.lastName]
+                .filter(Boolean)
+                .join(" ") || "Trainer";
+          }
+        }
+
+        // If LIVE, generate a join URL using the active meeting
+        if (
+          session.status === "LIVE" &&
+          session.activeMeeting &&
+          currentCustomer
+        ) {
+          try {
+            const name =
+              [currentCustomer.firstName, currentCustomer.lastName]
+                .filter(Boolean)
+                .join(" ") || "Participant";
+            joinUrl = await this.meetingService.getJoinUrl(
+              ctx,
+              session.activeMeeting.id,
+              name,
+            );
+          } catch {
+            // Best-effort — session remains visible even if join fails
+          }
+        }
+
+        return {
+          id: session.id as string,
+          title: session.title,
+          startTime: session.startTime.toISOString(),
+          endTime: session.endTime.toISOString(),
+          status: session.status,
+          trainerName,
+          activeMeetingId: session.activeMeeting?.id
+            ? (session.activeMeeting.id as string)
+            : null,
+          joinUrl,
+        };
+      }),
+    );
+  }
+
+  @Mutation()
+  @Allow(Permission.Authenticated)
+  async startScheduledSession(
+    @Ctx() ctx: RequestContext,
+    @Args("sessionId") sessionId: string,
+  ): Promise<{
+    id: string;
+    title: string;
+    startTime: string;
+    endTime: string;
+    status: string;
+    trainerName: string | null;
+    activeMeetingId: string | null;
+    joinUrl: string | null;
+  }> {
+    if (!ctx.activeUserId) throw new ForbiddenError();
+    const session = await this.sessionService.startSession(ctx, sessionId);
+
+    // startSession calls createAndEnqueue which puts the meeting in PENDING
+    // state and enqueues the provisioning job. The job runs asynchronously.
+    // The meeting is almost certainly not ACTIVE yet, so getJoinUrl would
+    // throw because state !== ACTIVE. Instead, return status: "provisioning"
+    // and let the frontend poll myScheduledSessions for the join URL once
+    // the meeting transitions to ACTIVE.
+    let joinUrl: string | null = null;
+    if (session.status === "LIVE" && session.activeMeeting) {
+      const customer = await this.connection
+        .getRepository(ctx, Customer)
+        .findOne({ where: { user: { id: ctx.activeUserId as string } } });
+      if (customer) {
+        try {
+          const name =
+            [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
+            "Trainer";
+          joinUrl = await this.meetingService.getJoinUrl(
+            ctx,
+            session.activeMeeting.id,
+            name,
+          );
+        } catch {
+          // Best-effort — session remains visible even if join fails
+        }
+      }
+    }
+
+    // Resolve trainer name for response
+    let trainerName: string | null = null;
+    if (session.trainer) {
+      const trainerCustomer = await this.connection
+        .getRepository(ctx, Customer)
+        .findOne({ where: { id: (session.trainer as any).customerId } });
+      if (trainerCustomer) {
+        trainerName =
+          [trainerCustomer.firstName, trainerCustomer.lastName]
+            .filter(Boolean)
+            .join(" ") || "Trainer";
+      }
+    }
+
+    return {
+      id: session.id as string,
+      title: session.title,
+      startTime: session.startTime.toISOString(),
+      endTime: session.endTime.toISOString(),
+      status: session.status,
+      trainerName,
+      activeMeetingId: session.activeMeeting?.id
+        ? (session.activeMeeting.id as string)
+        : null,
+      joinUrl,
+    };
+  }
+}

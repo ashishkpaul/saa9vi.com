@@ -1,0 +1,654 @@
+// src/plugins/bigbluebutton-plugin/api/bbb-admin.resolver.ts
+// CHANGE: Added member queries and mutations (M4). All existing code preserved.
+
+import { Args, Mutation, Query, Resolver } from "@nestjs/graphql";
+import {
+  Allow,
+  Ctx,
+  RequestContext,
+  Transaction,
+  TransactionalConnection,
+} from "@vendure/core";
+import { In } from "typeorm";
+import { BbbServerService } from "../services/bbb-server.service";
+import { BbbOrganizationService } from "../services/bbb-organization.service";
+import { BbbMeetingService } from "../services/bbb-meeting.service";
+import { BbbMemberService } from "../services/bbb-member.service";
+import { BbbScheduledSessionService } from "../services/bbb-scheduled-session.service";
+import { BbbRoomService } from "../services/bbb-room.service";
+import { BbbRoom } from "../entities/bbb-room.entity";
+import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
+import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
+import { BbbOrganization } from "../entities/bbb-organization.entity";
+import { BbbOrganizationMember } from "../entities/bbb-organization-member.entity";
+import { BbbProductAccess } from "../entities/bbb-product-access.entity";
+import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
+import { BbbMeeting } from "../entities/bbb-meeting.entity";
+import { BbbAdminPermission } from "../constants";
+
+import { NotFoundException } from "@nestjs/common";
+import { Customer } from "@vendure/core";
+
+/** Shape returned to GraphQL with augmented customer info */
+interface MemberWithCustomer extends BbbOrganizationMember {
+  customerName?: string | null;
+  customerEmail?: string | null;
+}
+
+@Resolver()
+export class BbbAdminResolver {
+  constructor(
+    private readonly serverService: BbbServerService,
+    private readonly orgService: BbbOrganizationService,
+    private readonly meetingService: BbbMeetingService,
+    private readonly memberService: BbbMemberService,
+    private readonly roomService: BbbRoomService,
+    private readonly scheduledSessionService: BbbScheduledSessionService,
+    private readonly connection: TransactionalConnection,
+  ) {}
+
+  // ─── Servers ────────────────────────────────────────────────────────────────
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  bbbServers(
+    @Ctx() ctx: RequestContext,
+    @Args("options") options?: { skip?: number; take?: number },
+  ) {
+    return this.serverService.findAll(ctx, options);
+  }
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  bbbServer(@Ctx() ctx: RequestContext, @Args("id") id: string) {
+    return this.serverService.findById(ctx, id);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  createBbbServer(@Ctx() ctx: RequestContext, @Args("input") input: any) {
+    return this.serverService.create(ctx, input);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  updateBbbServer(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+    @Args("input") input: any,
+  ) {
+    return this.serverService.update(ctx, id, input);
+  }
+
+  // ─── Organizations ──────────────────────────────────────────────────────────
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  bbbOrganizations(
+    @Ctx() ctx: RequestContext,
+    @Args("options") options?: { skip?: number; take?: number },
+  ) {
+    return this.orgService.findAll(ctx, options);
+  }
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  bbbOrganization(@Ctx() ctx: RequestContext, @Args("id") id: string) {
+    return this.orgService.findById(ctx, id);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  createBbbOrganization(@Ctx() ctx: RequestContext, @Args("input") input: any) {
+    return this.orgService.create(ctx, input);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  updateBbbOrganization(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+    @Args("input") input: any,
+  ) {
+    return this.orgService.update(ctx, id, input);
+  }
+
+  // ─── Members (NEW — M4) ──────────────────────────────────────────────────────
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  async bbbOrganizationMembers(
+    @Ctx() ctx: RequestContext,
+    @Args("organizationId") organizationId: string,
+    @Args("options") options?: { skip?: number; take?: number },
+  ): Promise<{ items: MemberWithCustomer[]; totalItems: number }> {
+    const result = await this.memberService.findByOrganization(
+      ctx,
+      organizationId,
+      options,
+    );
+    // Augment each member with customer display info by fetching Customer records.
+    // Uses rawConnection to bypass channel scoping — we need the raw Customer
+    // record regardless of which channel the admin is scoped to.
+    const customerIds = [
+      ...new Set(result.items.map((m) => m.customerId).filter(Boolean)),
+    ];
+    const customers = customerIds.length
+      ? await this.connection.rawConnection
+          .getRepository(Customer)
+          .findBy({ id: In(customerIds) as any })
+      : [];
+    // Build lookup map with String(id) keys to handle numeric/string type mismatch
+    const customerMap = new Map<string, Customer>();
+    for (const c of customers) {
+      customerMap.set(String(c.id), c);
+    }
+
+    const items = result.items.map((m) => {
+      const c = m.customerId
+        ? customerMap.get(String(m.customerId))
+        : undefined;
+      return {
+        ...m,
+        customerName: c
+          ? [c.firstName, c.lastName].filter(Boolean).join(" ") || null
+          : null,
+        customerEmail: c?.emailAddress ?? null,
+      };
+    });
+    return { items, totalItems: result.totalItems };
+  }
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  async bbbOrganizationMember(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+  ): Promise<MemberWithCustomer | null> {
+    const member = await this.connection
+      .getRepository(ctx, BbbOrganizationMember)
+      .findOne({
+        where: { id },
+      });
+    if (!member || !member.customerId) return member;
+
+    const customer = await this.connection.rawConnection
+      .getRepository(Customer)
+      .findOne({ where: { id: member.customerId as string } });
+
+    return {
+      ...member,
+      customerName: customer
+        ? [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
+          null
+        : null,
+      customerEmail: customer?.emailAddress ?? null,
+    };
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  addBbbMember(@Ctx() ctx: RequestContext, @Args("input") input: any) {
+    return this.memberService.addMember(ctx, input);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  updateBbbMember(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+    @Args("input") input: any,
+  ) {
+    return this.memberService.updateMember(ctx, id, input);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  removeBbbMember(@Ctx() ctx: RequestContext, @Args("id") id: string) {
+    return this.memberService.removeMember(ctx, id);
+  }
+
+  // ─── Retry Meeting (resets room + creates new meeting) ─────────────────────
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async retryBbbMeeting(
+    @Ctx() ctx: RequestContext,
+    @Args("failedMeetingId") failedMeetingId: string,
+  ): Promise<BbbMeeting> {
+    const failed = await this.meetingService.findById(ctx, failedMeetingId);
+    if (!failed) {
+      throw new NotFoundException("Meeting not found");
+    }
+
+    // If the failed meeting has an associated room, reset the room FSM so
+    // the new meeting can be provisioned via the room-based path. This is
+    // critical because the room may be stuck in "Failed" state with
+    // retryCount >= maxAutoRetries, causing requestProvisioning to return
+    // shouldEnqueue=false for storefront users.
+    if (failed.roomId) {
+      await this.roomService.resetFailedRoom(ctx, failed.roomId);
+    }
+
+    return this.meetingService.createAndEnqueue(ctx, {
+      organizationId: failed.organization.id,
+      title: failed.title,
+      recordingEnabled: failed.recordingEnabled,
+    });
+  }
+
+  // ─── Meetings ───────────────────────────────────────────────────────────────
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  bbbMeetings(
+    @Ctx() ctx: RequestContext,
+    @Args("organizationId") orgId?: string,
+    @Args("options") options?: { skip?: number; take?: number },
+  ) {
+    return this.meetingService.findAll(ctx, orgId, options);
+  }
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  bbbMeeting(@Ctx() ctx: RequestContext, @Args("id") id: string) {
+    return this.meetingService.findById(ctx, id);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  createBbbMeeting(@Ctx() ctx: RequestContext, @Args("input") input: any) {
+    return this.meetingService.createAndEnqueue(ctx, input);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  updateBbbMeeting(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+    @Args("input") input: any,
+  ) {
+    return this.meetingService.update(ctx, id, input);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async deleteBbbMeeting(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+  ): Promise<boolean> {
+    await this.meetingService.delete(ctx, id);
+    return true;
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  endBbbMeeting(@Ctx() ctx: RequestContext, @Args("id") id: string) {
+    return this.meetingService.endMeeting(ctx, id);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async deleteBbbServer(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+  ): Promise<boolean> {
+    await this.serverService.delete(ctx, id);
+    return true;
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async deleteBbbOrganization(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+  ): Promise<boolean> {
+    await this.orgService.delete(ctx, id);
+    return true;
+  }
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  async bbbModeratorJoinUrl(
+    @Ctx() ctx: RequestContext,
+    @Args("meetingId") meetingId: string,
+    @Args("moderatorName") moderatorName: string,
+  ): Promise<string> {
+    return this.meetingService.getModeratorJoinUrl(
+      ctx,
+      meetingId,
+      moderatorName,
+    );
+  }
+
+  // ─── Capacity Grants ────────────────────────────────────────────────────────
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  bbbCapacityGrants(
+    @Ctx() ctx: RequestContext,
+    @Args("organizationId") orgId: string,
+  ) {
+    return this.connection.getRepository(ctx, BbbCapacityGrant).find({
+      where: { organization: { id: orgId } },
+      order: { createdAt: "DESC" },
+    });
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async createBbbCapacityGrant(
+    @Ctx() ctx: RequestContext,
+    @Args("input")
+    input: {
+      organizationId: string;
+      grantedMinutes: number;
+      validFrom?: string;
+      validUntil?: string;
+    },
+  ): Promise<BbbCapacityGrant> {
+    const org = await this.connection.getEntityOrThrow(
+      ctx,
+      BbbOrganization,
+      input.organizationId,
+    );
+    const now = new Date();
+    const thirtyDaysOut = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const grant = new BbbCapacityGrant({
+      organization: org,
+      grantedMinutes: input.grantedMinutes ?? 0,
+      consumedMinutes: 0,
+      validFrom: input.validFrom ? new Date(input.validFrom) : now,
+      validUntil: input.validUntil ? new Date(input.validUntil) : thirtyDaysOut,
+      exhausted: false,
+    });
+    return this.connection.getRepository(ctx, BbbCapacityGrant).save(grant);
+  }
+
+  // ─── Rooms ──────────────────────────────────────────────────────────────────
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  bbbRooms(
+    @Ctx() ctx: RequestContext,
+    @Args("organizationId") orgId: string,
+    @Args("options") options?: { skip?: number; take?: number },
+  ) {
+    return this.roomService.findAll(ctx, orgId, options);
+  }
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  bbbRoom(@Ctx() ctx: RequestContext, @Args("id") id: string) {
+    return this.roomService.findById(ctx, id);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  createBbbRoom(@Ctx() ctx: RequestContext, @Args("input") input: any) {
+    return this.roomService.create(ctx, {
+      ...input,
+      createdByCustomerId: undefined,
+    });
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async updateBbbRoom(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+    @Args("input") input: any,
+  ) {
+    await this.connection.getRepository(ctx, BbbRoom).update(id, input);
+    return this.roomService.findById(ctx, id);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async deleteBbbRoom(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+  ): Promise<boolean> {
+    await this.connection.getRepository(ctx, BbbRoom).delete(id);
+    return true;
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  resetBbbRoom(@Ctx() ctx: RequestContext, @Args("id") id: string) {
+    return this.roomService.resetFailedRoom(ctx, id);
+  }
+
+  // ─── Product Access ─────────────────────────────────────────────────────────
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  bbbProductAccessByRoom(
+    @Ctx() ctx: RequestContext,
+    @Args("roomId") roomId: string,
+  ): Promise<BbbProductAccess[]> {
+    return this.connection
+      .getRepository(ctx, BbbProductAccess)
+      .find({ where: { room: { id: roomId } }, relations: ["room"] });
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async createBbbProductAccess(
+    @Ctx() ctx: RequestContext,
+    @Args("input")
+    input: { roomId: string; productVariantId: string; accessDays?: number },
+  ): Promise<BbbProductAccess> {
+    const room = await this.connection.getEntityOrThrow(
+      ctx,
+      BbbRoom,
+      input.roomId,
+    );
+    const access = new BbbProductAccess({
+      room,
+      productVariantId: input.productVariantId,
+      accessDays: input.accessDays ?? null,
+    });
+    return this.connection.getRepository(ctx, BbbProductAccess).save(access);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async deleteBbbProductAccess(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+  ): Promise<boolean> {
+    await this.connection.getRepository(ctx, BbbProductAccess).delete(id);
+    return true;
+  }
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  async bbbEnrollmentsByRoom(
+    @Ctx() ctx: RequestContext,
+    @Args("roomId") roomId: string,
+    @Args("options") options?: { skip?: number; take?: number },
+  ): Promise<{ items: object[]; totalItems: number }> {
+    const take = Math.min(Math.max(options?.take ?? 25, 1), 100);
+    const skip = Math.max(options?.skip ?? 0, 0);
+    const [enrollments, totalItems] = await this.connection
+      .getRepository(ctx, BbbEnrollment)
+      .findAndCount({
+        where: { roomId },
+        order: { createdAt: "DESC" },
+        skip,
+        take,
+      });
+
+    const customerIds = [...new Set(enrollments.map((e) => e.customerId))];
+    const customers = customerIds.length
+      ? await this.connection.rawConnection
+          .getRepository(Customer)
+          .findBy({ id: In(customerIds) as any })
+      : [];
+    const customerMap = new Map(customers.map((c) => [c.id, c]));
+
+    const items = enrollments.map((e) => {
+      const c = customerMap.get(e.customerId);
+      return {
+        ...e,
+        customerName: c
+          ? [c.firstName, c.lastName].filter(Boolean).join(" ") || null
+          : null,
+        customerEmail: c?.emailAddress ?? null,
+      };
+    });
+    return { items, totalItems };
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async deactivateBbbEnrollment(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+  ): Promise<BbbEnrollment> {
+    const enrollment = await this.connection.getEntityOrThrow(
+      ctx,
+      BbbEnrollment,
+      id,
+    );
+    enrollment.active = false;
+    return this.connection.getRepository(ctx, BbbEnrollment).save(enrollment);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async createBbbEnrollment(
+    @Ctx() ctx: RequestContext,
+    @Args("input")
+    input: {
+      roomId: string;
+      customerId: string;
+      accessDays?: number;
+      reason?: string;
+    },
+  ): Promise<BbbEnrollment> {
+    const room = await this.connection.getEntityOrThrow(
+      ctx,
+      BbbRoom,
+      input.roomId,
+    );
+    const expiresAt =
+      input.accessDays != null
+        ? new Date(Date.now() + input.accessDays * 24 * 60 * 60 * 1000)
+        : null;
+
+    // Upsert: re-activate existing deactivated enrollment
+    const existing = await this.connection
+      .getRepository(ctx, BbbEnrollment)
+      .findOne({
+        where: { roomId: input.roomId, customerId: input.customerId },
+      });
+
+    if (existing) {
+      existing.active = true;
+      existing.expiresAt = expiresAt;
+      existing.source = "admin";
+      return this.connection.getRepository(ctx, BbbEnrollment).save(existing);
+    }
+
+    return this.connection.getRepository(ctx, BbbEnrollment).save(
+      new BbbEnrollment({
+        room,
+        roomId: input.roomId,
+        customerId: input.customerId,
+        orderId: null,
+        active: true,
+        expiresAt,
+        source: "admin",
+      }),
+    );
+  }
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  async bbbProductVariantSearch(
+    @Ctx() ctx: RequestContext,
+    @Args("term") term: string,
+  ): Promise<
+    Array<{ id: string; name: string; sku: string; productName: string }>
+  > {
+    const { ProductVariant } = await import("@vendure/core");
+    const variants = await this.connection
+      .getRepository(ctx, ProductVariant)
+      .createQueryBuilder("v")
+      .innerJoinAndSelect("v.product", "p")
+      .innerJoinAndSelect("v.translations", "vt")
+      .innerJoinAndSelect("p.translations", "pt")
+      .where(
+        "v.sku ILIKE :term OR vt.name ILIKE :term OR pt.name ILIKE :term",
+        {
+          term: `%${term}%`,
+        },
+      )
+      .andWhere("v.deletedAt IS NULL")
+      .take(10)
+      .getMany();
+
+    return variants.map((v) => ({
+      id: String(v.id),
+      name: (v.translations?.[0] as any)?.name ?? v.sku,
+      sku: v.sku,
+      productName: (v.product?.translations?.[0] as any)?.name ?? "",
+    }));
+  }
+
+  // ─── Scheduled Sessions ────────────────────────────────────────────────────
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  bbbScheduledSessions(
+    @Ctx() ctx: RequestContext,
+    @Args("organizationId") orgId: string,
+  ) {
+    return this.scheduledSessionService.findByOrganization(ctx, orgId);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  createBbbScheduledSession(
+    @Ctx() ctx: RequestContext,
+    @Args("input") input: any,
+  ) {
+    return this.scheduledSessionService.create(ctx, input);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  cancelBbbScheduledSession(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+  ) {
+    return this.scheduledSessionService.cancel(ctx, id);
+  }
+}
