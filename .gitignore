@@ -9,3 +9,4 @@ static/email/test-emails
 .env
 .vscode/
 *.tsbuildinfo
+.vendure-docs-cache/

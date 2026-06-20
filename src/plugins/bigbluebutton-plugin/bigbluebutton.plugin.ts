@@ -88,7 +88,7 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     resolvers: [BbbAdminResolver],
   },
 
-  dashboard: path.join(__dirname, "dashboard/index.tsx"),
+  dashboard: './dashboard/index.tsx',
 
   shopApiExtensions: {
     schema: shopApiExtensions,
