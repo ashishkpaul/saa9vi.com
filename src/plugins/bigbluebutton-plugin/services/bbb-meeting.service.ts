@@ -109,7 +109,7 @@ export class BbbMeetingService implements OnModuleInit {
         process: async (job) => {
           const { serializedCtx, meetingId } = job.data;
           const ctx = RequestContext.deserialize(serializedCtx);
-          await this.doProvisionMeeting(ctx, meetingId, job.id);
+          await this.doProvisionMeeting(ctx, meetingId, job.id as string);
         },
       });
   }

@@ -123,7 +123,7 @@ export class BbbOrganizationService {
       );
     }
 
-    const { count } = await this.connection
+    const rawCount = await this.connection
       .getRepository(ctx, BbbMeeting)
       .createQueryBuilder("meeting")
       .select("COUNT(meeting.id)", "count")
@@ -133,6 +133,7 @@ export class BbbOrganizationService {
       })
       .getRawOne<{ count: string }>();
 
+    const count = rawCount?.count ?? "0";
     if (parseInt(count, 10) >= locked.concurrentMeetingLimit) {
       throw new Error(
         `Concurrent meeting limit reached (${locked.concurrentMeetingLimit}). ` +
