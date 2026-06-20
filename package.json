@@ -11,18 +11,26 @@
     "build:dashboard": "vite build",
     "start:server": "node ./dist/index.js",
     "start:worker": "node ./dist/index-worker.js",
-    "start": "concurrently npm:start:*"
+    "start": "concurrently npm:start:*",
+    "build:all": "npm run build && npm run build:dashboard",
+    "start:all": "npm run build:all && npm run start"
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
     "@vendure/asset-server-plugin": "3.6.4",
     "@vendure/core": "3.6.4",
     "@vendure/dashboard": "3.6.4",
     "@vendure/email-plugin": "3.6.4",
     "@vendure/graphiql-plugin": "3.6.4",
+    "@vendure/job-queue-plugin": "^3.6.4",
+    "bullmq": "^5.79.0",
     "dotenv": "17.4.2",
-    "pg": "8.21.0"
+    "ioredis": "^5.11.1",
+    "pg": "8.21.0",
+    "xml2js": "^0.6.2"
   },
   "devDependencies": {
+    "@types/xml2js": "^0.4.14",
     "@vendure/cli": "3.6.4",
     "concurrently": "10.0.3",
     "ts-node": "10.9.2",
