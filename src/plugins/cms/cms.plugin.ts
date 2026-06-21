@@ -11,6 +11,7 @@ import { CmsShopResolver } from './api/cms-shop.resolver';
 import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
 
 @VendurePlugin({
+    compatibility: '^3.0.0',
     imports: [PluginCommonModule],
     entities: [Article, Banner, Page],
     providers: [ArticleService, BannerService, PageService],

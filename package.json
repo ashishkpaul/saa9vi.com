@@ -9,11 +9,11 @@
     "dev": "concurrently --kill-others npm:dev:*",
     "build": "tsc",
     "build:dashboard": "vite build",
+    "build:all": "npm run build && npm run build:dashboard",
     "start:server": "node ./dist/index.js",
     "start:worker": "node ./dist/index-worker.js",
     "start": "concurrently npm:start:*",
-    "build:all": "npm run build && npm run build:dashboard",
-    "start:all": "npm run build:all && npm run start"
+    "deploy": "npm run build:all && npm run start"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
