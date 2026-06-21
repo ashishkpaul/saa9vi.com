@@ -16,6 +16,7 @@ import "dotenv/config";
 import path from "path";
 import { BullMQJobQueuePlugin } from "@vendure/job-queue-plugin/package/bullmq";
 import { BigBlueButtonPlugin } from "./plugins/bigbluebutton-plugin";
+import { CmsPlugin } from "./plugins/cms/cms.plugin";
 
 const IS_DEV = process.env.APP_ENV === "dev";
 const serverPort = +process.env.PORT || 3000;
@@ -150,5 +151,6 @@ export const config: VendureConfig = {
         process.env.BBB_PROVISIONING_JOB_BACKOFF_MS ?? 5000,
       ),
     }),
+    CmsPlugin,
   ],
 };
