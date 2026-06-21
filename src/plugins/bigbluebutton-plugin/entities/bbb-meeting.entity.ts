@@ -78,11 +78,11 @@ export class BbbMeeting extends VendureEntity {
   // ─── Deprecated: kept for backward compatibility ────────────────────────
 
   /** @deprecated Use dynamic join from encrypted password */
-  @Column({ nullable: true })
-  attendeeJoinUrl: string;
+  @Column({ type: "varchar", nullable: true })
+  attendeeJoinUrl: string | null;
 
-  @Column({ nullable: true })
-  attendeeJoinUrlExpiresAt: Date;
+  @Column({ type: "timestamp", nullable: true })
+  attendeeJoinUrlExpiresAt: Date | null;
 
   // ─── FSM State ──────────────────────────────────────────────────────────
 
@@ -115,7 +115,7 @@ export class BbbMeeting extends VendureEntity {
   // ─── Room Linkage (nullable — legacy meetings have no room) ────────────
 
   @Column({ nullable: true })
-  roomId: string | null;
+  roomId: string;
 
   // ─── Billing Ceiling ────────────────────────────────────────────────────
 

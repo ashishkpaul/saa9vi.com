@@ -36,7 +36,7 @@ export class BbbRoom extends VendureEntity {
   state: RoomState;
 
   /** FK to the currently active BbbMeeting. Null when Idle/Failed. */
-  @Column({ nullable: true })
+  @Column({ type: "varchar", nullable: true })
   currentMeetingId: string | null;
 
   @Column({ default: 0 })
@@ -49,8 +49,8 @@ export class BbbRoom extends VendureEntity {
    * Last time BBB runtime was positively validated for the linked active meeting.
    * Used as a short TTL cache to avoid hammering isMeetingRunning() under load.
    */
-  @Column({ nullable: true })
-  lastRuntimeValidatedAt: Date;
+  @Column({ type: "timestamp", nullable: true })
+  lastRuntimeValidatedAt: Date | null;
 
   /** Optimistic lock version — prevents concurrent double-provisioning. */
   @VersionColumn()

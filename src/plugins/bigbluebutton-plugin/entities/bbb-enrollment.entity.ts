@@ -26,7 +26,7 @@ export class BbbEnrollment extends VendureEntity {
 
   /** Vendure Order.id that triggered this enrollment, for audit */
   @Column({ nullable: true })
-  orderId: string | null;
+  orderId: string;
 
   @Column({ default: true })
   active: boolean;
@@ -37,13 +37,13 @@ export class BbbEnrollment extends VendureEntity {
    * changes without invalidating existing enrollments.
    */
   @Column({ nullable: true })
-  validFrom: Date | null;
+  validFrom: Date;
 
-  @Column({ nullable: true })
+  @Column({ type: "timestamp", nullable: true })
   validUntil: Date | null;
 
   /** @deprecated Use validUntil = createdAt + accessDays. Kept for migration. */
-  @Column({ nullable: true })
+  @Column({ type: "timestamp", nullable: true })
   expiresAt: Date | null;
 
   /** How the enrollment was created — for audit and future filtering */

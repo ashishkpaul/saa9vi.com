@@ -28,5 +28,5 @@ export class BbbProductAccess extends VendureEntity {
    * Null means no expiry (lifetime access).
    */
   @Column({ nullable: true })
-  accessDays: number | null;
+  accessDays: number;
 }

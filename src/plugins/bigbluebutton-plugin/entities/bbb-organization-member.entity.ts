@@ -57,5 +57,5 @@ export class BbbOrganizationMember extends VendureEntity {
    * Null = using Vendure-native auth; non-null = Keycloak identity confirmed.
    */
   @Column({ nullable: true, unique: true })
-  keycloakSub: string | null;
+  keycloakSub: string;
 }
