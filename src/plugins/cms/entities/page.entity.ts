@@ -1,5 +1,5 @@
 import { Channel, DeepPartial, VendureEntity, ChannelAware } from '@vendure/core';
-import { Column, Entity, JoinTable, ManyToMany } from 'typeorm';
+import { Column, Entity, Index, JoinTable, ManyToMany } from 'typeorm';
 import { PageSection } from '../types';
 
 @Entity()
@@ -8,6 +8,7 @@ export class Page extends VendureEntity implements ChannelAware {
         super(input);
     }
 
+    @Index()
     @Column()
     slug: string;
 
@@ -17,6 +18,7 @@ export class Page extends VendureEntity implements ChannelAware {
     @Column({ nullable: true })
     metaDescription?: string;
 
+    @Index()
     @Column({ default: false })
     isPublished: boolean;
 

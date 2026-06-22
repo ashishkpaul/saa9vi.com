@@ -1,5 +1,5 @@
 import { Asset, Channel, DeepPartial, VendureEntity, ChannelAware, EntityId, ID } from '@vendure/core';
-import { Column, Entity, JoinTable, ManyToMany, ManyToOne } from 'typeorm';
+import { Column, Entity, Index, JoinTable, ManyToMany, ManyToOne } from 'typeorm';
 import { BannerPlacement } from '../types';
 
 @Entity()
@@ -20,6 +20,7 @@ export class Banner extends VendureEntity implements ChannelAware {
     @Column({ nullable: true })
     linkUrl?: string;
 
+    @Index()
     @Column('varchar')
     placement: BannerPlacement;
 
@@ -27,6 +28,7 @@ export class Banner extends VendureEntity implements ChannelAware {
     @Column({ default: 0 })
     priority: number;
 
+    @Index()
     @Column({ default: true })
     isActive: boolean;
 

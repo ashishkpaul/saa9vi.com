@@ -7,6 +7,9 @@ import { Page } from '../entities/page.entity';
 import { ArticleService } from '../services/article.service';
 import { BannerService } from '../services/banner.service';
 import { PageService } from '../services/page.service';
+import { CreateArticleInput, UpdateArticleInput } from '../services/article.service';
+import { CreateBannerInput, UpdateBannerInput } from '../services/banner.service';
+import { CreatePageInput, UpdatePageInput } from '../services/page.service';
 
 @Resolver()
 export class CmsAdminResolver {
@@ -33,14 +36,14 @@ export class CmsAdminResolver {
     @Transaction()
     @Mutation()
     @Allow(articlePermission.Create)
-    createArticle(@Ctx() ctx: RequestContext, @Args('input') input: any) {
+    createArticle(@Ctx() ctx: RequestContext, @Args('input') input: CreateArticleInput) {
         return this.articleService.create(ctx, input);
     }
 
     @Transaction()
     @Mutation()
     @Allow(articlePermission.Update)
-    updateArticle(@Ctx() ctx: RequestContext, @Args('input') input: any) {
+    updateArticle(@Ctx() ctx: RequestContext, @Args('input') input: UpdateArticleInput) {
         return this.articleService.update(ctx, input);
     }
 
@@ -68,14 +71,14 @@ export class CmsAdminResolver {
     @Transaction()
     @Mutation()
     @Allow(bannerPermission.Create)
-    createBanner(@Ctx() ctx: RequestContext, @Args('input') input: any) {
+    createBanner(@Ctx() ctx: RequestContext, @Args('input') input: CreateBannerInput) {
         return this.bannerService.create(ctx, input);
     }
 
     @Transaction()
     @Mutation()
     @Allow(bannerPermission.Update)
-    updateBanner(@Ctx() ctx: RequestContext, @Args('input') input: any) {
+    updateBanner(@Ctx() ctx: RequestContext, @Args('input') input: UpdateBannerInput) {
         return this.bannerService.update(ctx, input);
     }
 
@@ -110,14 +113,14 @@ export class CmsAdminResolver {
     @Transaction()
     @Mutation()
     @Allow(pagePermission.Create)
-    createPage(@Ctx() ctx: RequestContext, @Args('input') input: any) {
+    createPage(@Ctx() ctx: RequestContext, @Args('input') input: CreatePageInput) {
         return this.pageService.create(ctx, input);
     }
 
     @Transaction()
     @Mutation()
     @Allow(pagePermission.Update)
-    updatePage(@Ctx() ctx: RequestContext, @Args('input') input: any) {
+    updatePage(@Ctx() ctx: RequestContext, @Args('input') input: UpdatePageInput) {
         return this.pageService.update(ctx, input);
     }
 

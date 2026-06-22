@@ -1,5 +1,5 @@
 import { Asset, Channel, DeepPartial, VendureEntity, ChannelAware, EntityId, ID } from '@vendure/core';
-import { Column, Entity, JoinTable, ManyToMany, ManyToOne } from 'typeorm';
+import { Column, Entity, Index, JoinTable, ManyToMany, ManyToOne } from 'typeorm';
 
 /**
  * Note: kept single-language for v1. If BuyLits needs localized article
@@ -13,6 +13,7 @@ export class Article extends VendureEntity implements ChannelAware {
         super(input);
     }
 
+    @Index()
     @Column()
     slug: string;
 
@@ -25,6 +26,7 @@ export class Article extends VendureEntity implements ChannelAware {
     @Column('text')
     body: string;
 
+    @Index()
     @Column({ default: false })
     isPublished: boolean;
 
