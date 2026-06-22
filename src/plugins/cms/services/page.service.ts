@@ -5,6 +5,7 @@ import {
     ID,
     ListQueryBuilder,
     ListQueryOptions,
+    Logger,
     RequestContext,
     TransactionalConnection,
     UserInputError,
@@ -13,6 +14,7 @@ import {
 } from '@vendure/core';
 import { Page } from '../entities/page.entity';
 import { PageSection } from '../types';
+import { loggerCtx } from '../constants';
 
 export class PageEvent extends VendureEvent {
     createdAt: Date;
@@ -38,6 +40,7 @@ export interface CreatePageInput {
 
 export interface UpdatePageInput extends Partial<CreatePageInput> {
     id: ID;
+    removeFromChannelIds?: ID[];
 }
 
 @Injectable()
@@ -78,6 +81,7 @@ export class PageService {
     async create(ctx: RequestContext, input: CreatePageInput): Promise<Page> {
         await this.assertSlugIsUnique(ctx, input.slug);
         this.validateSections(input.sections ?? []);
+        Logger.verbose(`Creating Page slug="${input.slug}" channel=${ctx.channelId}`, loggerCtx);
 
         const page = new Page({ ...input, sections: input.sections ?? [] });
         await this.channelService.assignToCurrentChannel(page, ctx);
@@ -93,6 +97,7 @@ export class PageService {
     }
 
     async update(ctx: RequestContext, input: UpdatePageInput): Promise<Page> {
+        Logger.verbose(`Updating Page id=${input.id}`, loggerCtx);
         const page = await this.connection.getEntityOrThrow(ctx, Page, input.id, {
             channelId: ctx.channelId,
         });
@@ -110,6 +115,9 @@ export class PageService {
         if (input.channelIds?.length) {
             await this.channelService.assignToChannels(ctx, Page, updated.id, input.channelIds);
         }
+        if (input.removeFromChannelIds?.length) {
+            await this.channelService.removeFromChannels(ctx, Page, updated.id, input.removeFromChannelIds);
+        }
 
         const updatedResult = await assertFound(this.findOne(ctx, updated.id));
         this.eventBus.publish(new PageEvent(ctx, updatedResult, 'updated'));
@@ -120,6 +128,7 @@ export class PageService {
         const page = await this.connection.getEntityOrThrow(ctx, Page, id, {
             channelId: ctx.channelId,
         });
+        Logger.info(`Deleting Page id=${id} slug="${page.slug}"`, loggerCtx);
         await this.connection.getRepository(ctx, Page).remove(page);
         this.eventBus.publish(new PageEvent(ctx, page, 'deleted'));
         return { result: 'DELETED' as const };
@@ -155,6 +164,34 @@ export class PageService {
                 throw new UserInputError(`Duplicate section id "${section.id}"`);
             }
             ids.add(section.id);
+
+            if (section.type === 'hero') {
+                if (!section.config.headline?.trim()) {
+                    throw new UserInputError(`hero section "${section.id}" requires a non-empty headline`);
+                }
+            }
+            if (section.type === 'richText') {
+                if (!section.config.html?.trim()) {
+                    throw new UserInputError(`richText section "${section.id}" requires html content`);
+                }
+            }
+            if (section.type === 'productGrid') {
+                const limit = section.config.limit;
+                if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+                    throw new UserInputError(`productGrid section "${section.id}" limit must be between 1 and 100`);
+                }
+            }
+            if (section.type === 'articleGrid') {
+                const articleIds = section.config.articleIds;
+                if (!Array.isArray(articleIds) || articleIds.length === 0) {
+                    throw new UserInputError(`articleGrid section "${section.id}" requires at least one articleId`);
+                }
+            }
+            if (section.type === 'bannerSlot') {
+                if (!section.config.placement) {
+                    throw new UserInputError(`bannerSlot section "${section.id}" requires a placement`);
+                }
+            }
         }
     }
 }

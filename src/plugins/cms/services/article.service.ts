@@ -5,12 +5,14 @@ import {
     ID,
     ListQueryBuilder,
     ListQueryOptions,
+    Logger,
     RequestContext,
     TransactionalConnection,
     UserInputError,
     VendureEvent,
     assertFound,
 } from '@vendure/core';
+import { loggerCtx } from '../constants';
 import { Article } from '../entities/article.entity';
 
 export class ArticleEvent extends VendureEvent {
@@ -44,6 +46,7 @@ export interface CreateArticleInput {
 
 export interface UpdateArticleInput extends Partial<CreateArticleInput> {
     id: ID;
+    removeFromChannelIds?: ID[];
 }
 
 @Injectable()
@@ -88,6 +91,7 @@ export class ArticleService {
 
     async create(ctx: RequestContext, input: CreateArticleInput): Promise<Article> {
         await this.assertSlugIsUnique(ctx, input.slug);
+        Logger.verbose(`Creating Article slug="${input.slug}" channel=${ctx.channelId}`, loggerCtx);
 
         const article = new Article({
             ...input,
@@ -110,6 +114,7 @@ export class ArticleService {
     }
 
     async update(ctx: RequestContext, input: UpdateArticleInput): Promise<Article> {
+        Logger.verbose(`Updating Article id=${input.id}`, loggerCtx);
         const article = await this.connection.getEntityOrThrow(ctx, Article, input.id, {
             channelId: ctx.channelId,
         });
@@ -130,6 +135,9 @@ export class ArticleService {
         if (input.channelIds?.length) {
             await this.channelService.assignToChannels(ctx, Article, updated.id, input.channelIds);
         }
+        if (input.removeFromChannelIds?.length) {
+            await this.channelService.removeFromChannels(ctx, Article, updated.id, input.removeFromChannelIds);
+        }
 
         const updatedResult = await assertFound(this.findOne(ctx, updated.id));
         this.eventBus.publish(new ArticleEvent(ctx, updatedResult, 'updated'));
@@ -140,6 +148,7 @@ export class ArticleService {
         const article = await this.connection.getEntityOrThrow(ctx, Article, id, {
             channelId: ctx.channelId,
         });
+        Logger.info(`Deleting Article id=${id} slug="${article.slug}"`, loggerCtx);
         await this.connection.getRepository(ctx, Article).remove(article);
         this.eventBus.publish(new ArticleEvent(ctx, article, 'deleted'));
         return { result: 'DELETED' as const };

@@ -5,6 +5,7 @@ import {
     ID,
     ListQueryBuilder,
     ListQueryOptions,
+    Logger,
     RequestContext,
     TransactionalConnection,
     VendureEvent,
@@ -12,6 +13,7 @@ import {
 } from '@vendure/core';
 import { Banner } from '../entities/banner.entity';
 import { BannerPlacement } from '../types';
+import { loggerCtx } from '../constants';
 
 export class BannerEvent extends VendureEvent {
     createdAt: Date;
@@ -40,6 +42,7 @@ export interface CreateBannerInput {
 
 export interface UpdateBannerInput extends Partial<CreateBannerInput> {
     id: ID;
+    removeFromChannelIds?: ID[];
 }
 
 @Injectable()
@@ -93,6 +96,7 @@ export class BannerService {
     }
 
     async create(ctx: RequestContext, input: CreateBannerInput): Promise<Banner> {
+        Logger.verbose(`Creating Banner placement="${input.placement}" channel=${ctx.channelId}`, loggerCtx);
         const banner = new Banner(input);
         await this.channelService.assignToCurrentChannel(banner, ctx);
         const saved = await this.connection.getRepository(ctx, Banner).save(banner);
@@ -107,6 +111,7 @@ export class BannerService {
     }
 
     async update(ctx: RequestContext, input: UpdateBannerInput): Promise<Banner> {
+        Logger.verbose(`Updating Banner id=${input.id}`, loggerCtx);
         const banner = await this.connection.getEntityOrThrow(ctx, Banner, input.id, {
             channelId: ctx.channelId,
         });
@@ -115,6 +120,9 @@ export class BannerService {
 
         if (input.channelIds?.length) {
             await this.channelService.assignToChannels(ctx, Banner, updated.id, input.channelIds);
+        }
+        if (input.removeFromChannelIds?.length) {
+            await this.channelService.removeFromChannels(ctx, Banner, updated.id, input.removeFromChannelIds);
         }
 
         const updatedResult = await assertFound(this.findOne(ctx, updated.id));
@@ -126,6 +134,7 @@ export class BannerService {
         const banner = await this.connection.getEntityOrThrow(ctx, Banner, id, {
             channelId: ctx.channelId,
         });
+        Logger.info(`Deleting Banner id=${id}`, loggerCtx);
         await this.connection.getRepository(ctx, Banner).remove(banner);
         this.eventBus.publish(new BannerEvent(ctx, banner, 'deleted'));
         return { result: 'DELETED' as const };
