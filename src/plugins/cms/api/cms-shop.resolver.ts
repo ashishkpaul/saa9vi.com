@@ -16,14 +16,7 @@ export class CmsShopResolver {
     @Query()
     @Allow(Permission.Public)
     async cmsArticle(@Ctx() ctx: RequestContext, @Args() args: { slug: string }) {
-        // findAll is already channel-scoped; filter to published + slug here.
-        // For higher-traffic storefronts, swap this for a dedicated
-        // findPublishedBySlug() query method on ArticleService.
-        const { items } = await this.articleService.findAll(ctx, {
-            filter: { slug: { eq: args.slug }, isPublished: { eq: true } } as any,
-            take: 1,
-        });
-        return items[0] ?? null;
+        return this.articleService.findPublishedBySlug(ctx, args.slug);
     }
 
     @Query()

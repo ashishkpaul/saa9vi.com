@@ -1,15 +1,30 @@
 import { Injectable } from '@nestjs/common';
 import {
     ChannelService,
+    EventBus,
     ID,
     ListQueryBuilder,
     ListQueryOptions,
     RequestContext,
     TransactionalConnection,
     UserInputError,
+    VendureEvent,
     assertFound,
 } from '@vendure/core';
 import { Article } from '../entities/article.entity';
+
+export class ArticleEvent extends VendureEvent {
+    createdAt: Date;
+
+    constructor(
+        public ctx: RequestContext,
+        public article: Article,
+        public type: 'created' | 'updated' | 'deleted',
+    ) {
+        super();
+        this.createdAt = new Date();
+    }
+}
 
 export interface CreateArticleInput {
     slug: string;
@@ -37,6 +52,7 @@ export class ArticleService {
         private connection: TransactionalConnection,
         private listQueryBuilder: ListQueryBuilder,
         private channelService: ChannelService,
+        private eventBus: EventBus,
     ) {}
 
     findAll(ctx: RequestContext, options?: ListQueryOptions<Article>) {
@@ -57,6 +73,19 @@ export class ArticleService {
         });
     }
 
+    async findPublishedBySlug(ctx: RequestContext, slug: string): Promise<Article | null> {
+        return this.connection
+            .getRepository(ctx, Article)
+            .createQueryBuilder('article')
+            .innerJoin('article.channels', 'channel', 'channel.id = :channelId', {
+                channelId: ctx.channelId,
+            })
+            .leftJoinAndSelect('article.featuredAsset', 'featuredAsset')
+            .where('article.slug = :slug', { slug })
+            .andWhere('article.isPublished = true')
+            .getOne();
+    }
+
     async create(ctx: RequestContext, input: CreateArticleInput): Promise<Article> {
         await this.assertSlugIsUnique(ctx, input.slug);
 
@@ -75,7 +104,9 @@ export class ArticleService {
             await this.channelService.assignToChannels(ctx, Article, saved.id, input.channelIds);
         }
 
-        return assertFound(this.findOne(ctx, saved.id));
+        const savedResult = await assertFound(this.findOne(ctx, saved.id));
+        this.eventBus.publish(new ArticleEvent(ctx, savedResult, 'created'));
+        return savedResult;
     }
 
     async update(ctx: RequestContext, input: UpdateArticleInput): Promise<Article> {
@@ -100,7 +131,9 @@ export class ArticleService {
             await this.channelService.assignToChannels(ctx, Article, updated.id, input.channelIds);
         }
 
-        return assertFound(this.findOne(ctx, updated.id));
+        const updatedResult = await assertFound(this.findOne(ctx, updated.id));
+        this.eventBus.publish(new ArticleEvent(ctx, updatedResult, 'updated'));
+        return updatedResult;
     }
 
     async delete(ctx: RequestContext, id: ID) {
@@ -108,6 +141,7 @@ export class ArticleService {
             channelId: ctx.channelId,
         });
         await this.connection.getRepository(ctx, Article).remove(article);
+        this.eventBus.publish(new ArticleEvent(ctx, article, 'deleted'));
         return { result: 'DELETED' as const };
     }
 

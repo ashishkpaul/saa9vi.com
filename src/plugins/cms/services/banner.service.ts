@@ -1,15 +1,30 @@
 import { Injectable } from '@nestjs/common';
 import {
     ChannelService,
+    EventBus,
     ID,
     ListQueryBuilder,
     ListQueryOptions,
     RequestContext,
     TransactionalConnection,
+    VendureEvent,
     assertFound,
 } from '@vendure/core';
 import { Banner } from '../entities/banner.entity';
 import { BannerPlacement } from '../types';
+
+export class BannerEvent extends VendureEvent {
+    createdAt: Date;
+
+    constructor(
+        public ctx: RequestContext,
+        public banner: Banner,
+        public type: 'created' | 'updated' | 'deleted',
+    ) {
+        super();
+        this.createdAt = new Date();
+    }
+}
 
 export interface CreateBannerInput {
     title: string;
@@ -33,6 +48,7 @@ export class BannerService {
         private connection: TransactionalConnection,
         private listQueryBuilder: ListQueryBuilder,
         private channelService: ChannelService,
+        private eventBus: EventBus,
     ) {}
 
     findAll(ctx: RequestContext, options?: ListQueryOptions<Banner>) {
@@ -85,7 +101,9 @@ export class BannerService {
             await this.channelService.assignToChannels(ctx, Banner, saved.id, input.channelIds);
         }
 
-        return assertFound(this.findOne(ctx, saved.id));
+        const savedResult = await assertFound(this.findOne(ctx, saved.id));
+        this.eventBus.publish(new BannerEvent(ctx, savedResult, 'created'));
+        return savedResult;
     }
 
     async update(ctx: RequestContext, input: UpdateBannerInput): Promise<Banner> {
@@ -99,7 +117,9 @@ export class BannerService {
             await this.channelService.assignToChannels(ctx, Banner, updated.id, input.channelIds);
         }
 
-        return assertFound(this.findOne(ctx, updated.id));
+        const updatedResult = await assertFound(this.findOne(ctx, updated.id));
+        this.eventBus.publish(new BannerEvent(ctx, updatedResult, 'updated'));
+        return updatedResult;
     }
 
     async delete(ctx: RequestContext, id: ID) {
@@ -107,6 +127,7 @@ export class BannerService {
             channelId: ctx.channelId,
         });
         await this.connection.getRepository(ctx, Banner).remove(banner);
+        this.eventBus.publish(new BannerEvent(ctx, banner, 'deleted'));
         return { result: 'DELETED' as const };
     }
 }

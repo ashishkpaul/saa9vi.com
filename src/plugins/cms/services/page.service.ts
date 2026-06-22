@@ -1,16 +1,31 @@
 import { Injectable } from '@nestjs/common';
 import {
     ChannelService,
+    EventBus,
     ID,
     ListQueryBuilder,
     ListQueryOptions,
     RequestContext,
     TransactionalConnection,
     UserInputError,
+    VendureEvent,
     assertFound,
 } from '@vendure/core';
 import { Page } from '../entities/page.entity';
 import { PageSection } from '../types';
+
+export class PageEvent extends VendureEvent {
+    createdAt: Date;
+
+    constructor(
+        public ctx: RequestContext,
+        public page: Page,
+        public type: 'created' | 'updated' | 'deleted',
+    ) {
+        super();
+        this.createdAt = new Date();
+    }
+}
 
 export interface CreatePageInput {
     slug: string;
@@ -31,6 +46,7 @@ export class PageService {
         private connection: TransactionalConnection,
         private listQueryBuilder: ListQueryBuilder,
         private channelService: ChannelService,
+        private eventBus: EventBus,
     ) {}
 
     findAll(ctx: RequestContext, options?: ListQueryOptions<Page>) {
@@ -71,7 +87,9 @@ export class PageService {
             await this.channelService.assignToChannels(ctx, Page, saved.id, input.channelIds);
         }
 
-        return assertFound(this.findOne(ctx, saved.id));
+        const savedResult = await assertFound(this.findOne(ctx, saved.id));
+        this.eventBus.publish(new PageEvent(ctx, savedResult, 'created'));
+        return savedResult;
     }
 
     async update(ctx: RequestContext, input: UpdatePageInput): Promise<Page> {
@@ -93,7 +111,9 @@ export class PageService {
             await this.channelService.assignToChannels(ctx, Page, updated.id, input.channelIds);
         }
 
-        return assertFound(this.findOne(ctx, updated.id));
+        const updatedResult = await assertFound(this.findOne(ctx, updated.id));
+        this.eventBus.publish(new PageEvent(ctx, updatedResult, 'updated'));
+        return updatedResult;
     }
 
     async delete(ctx: RequestContext, id: ID) {
@@ -101,6 +121,7 @@ export class PageService {
             channelId: ctx.channelId,
         });
         await this.connection.getRepository(ctx, Page).remove(page);
+        this.eventBus.publish(new PageEvent(ctx, page, 'deleted'));
         return { result: 'DELETED' as const };
     }
 
