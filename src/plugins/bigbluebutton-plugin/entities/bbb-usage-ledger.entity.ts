@@ -17,7 +17,7 @@ import { BbbCapacityGrant } from "./bbb-capacity-grant.entity";
  * The unique constraint on (meeting, grant) prevents duplicate billing entries
  * when webhook events or reconciliation tasks retry idempotently.
  */
-@Entity()
+@Entity("bbb_usage_ledger")
 @Index(["meeting", "grant"], { unique: true })
 export class BbbUsageLedger extends VendureEntity {
   constructor(input?: DeepPartial<BbbUsageLedger>) {

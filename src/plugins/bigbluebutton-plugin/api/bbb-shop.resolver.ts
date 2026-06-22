@@ -3,6 +3,7 @@
 // Implements M6, S1, and S4 in one pass.
 
 import { Args, Mutation, Query, Resolver } from "@nestjs/graphql";
+import { In } from "typeorm";
 import {
   Allow,
   Ctx,
@@ -114,7 +115,7 @@ export class BbbShopResolver {
       enrolledRoomIds.size > 0
         ? this.connection
             .getRepository(ctx, BbbRoom)
-            .findByIds([...enrolledRoomIds])
+            .findBy({ id: In([...enrolledRoomIds]) })
         : Promise.resolve([]),
       staffOrgIds.length > 0
         ? Promise.all(
@@ -281,7 +282,7 @@ export class BbbShopResolver {
         if (session.trainer) {
           const trainerCustomer = await this.connection
             .getRepository(ctx, Customer)
-            .findOne({ where: { id: (session.trainer as any).customerId } });
+            .findOne({ where: { id: session.trainer.customerId } });
           if (trainerCustomer) {
             trainerName =
               [trainerCustomer.firstName, trainerCustomer.lastName]
@@ -377,7 +378,7 @@ export class BbbShopResolver {
     if (session.trainer) {
       const trainerCustomer = await this.connection
         .getRepository(ctx, Customer)
-        .findOne({ where: { id: (session.trainer as any).customerId } });
+        .findOne({ where: { id: session.trainer.customerId } });
       if (trainerCustomer) {
         trainerName =
           [trainerCustomer.firstName, trainerCustomer.lastName]

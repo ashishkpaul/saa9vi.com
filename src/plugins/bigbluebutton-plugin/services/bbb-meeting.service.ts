@@ -1,10 +1,10 @@
 import {
   Injectable,
-  NotFoundException,
   OnModuleInit,
   Inject,
   forwardRef,
 } from "@nestjs/common";
+import { EntityNotFoundError, ForbiddenError } from "@vendure/core";
 import {
   Customer,
   EventBus,
@@ -1042,7 +1042,7 @@ export class BbbMeetingService implements OnModuleInit {
     input: { title?: string; recordingEnabled?: boolean },
   ): Promise<BbbMeeting> {
     const meeting = await this.findById(ctx, id);
-    if (!meeting) throw new NotFoundException("Meeting not found");
+    if (!meeting) throw new EntityNotFoundError("BbbMeeting", id);
     if (input.title !== undefined) meeting.title = input.title;
     if (input.recordingEnabled !== undefined)
       meeting.recordingEnabled = input.recordingEnabled;
@@ -1053,7 +1053,7 @@ export class BbbMeetingService implements OnModuleInit {
 
   async delete(ctx: RequestContext, id: ID): Promise<void> {
     const meeting = await this.findById(ctx, id);
-    if (!meeting) throw new NotFoundException("Meeting not found");
+    if (!meeting) throw new EntityNotFoundError("BbbMeeting", id);
     await this.connection.getRepository(ctx, BbbMeeting).remove(meeting);
   }
 

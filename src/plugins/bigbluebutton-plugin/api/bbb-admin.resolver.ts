@@ -689,7 +689,7 @@ export class BbbAdminResolver {
       .innerJoinAndSelect("v.translations", "vt")
       .innerJoinAndSelect("p.translations", "pt")
       .where(
-        "v.sku ILIKE :term OR vt.name ILIKE :term OR pt.name ILIKE :term",
+        "LOWER(v.sku) LIKE LOWER(:term) OR LOWER(vt.name) LIKE LOWER(:term) OR LOWER(pt.name) LIKE LOWER(:term)",
         {
           term: `%${term}%`,
         },

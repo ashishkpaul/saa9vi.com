@@ -1,5 +1,5 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
-import { ForbiddenError } from "@vendure/core";
+import { Injectable } from "@nestjs/common";
+import { EntityNotFoundError, ForbiddenError } from "@vendure/core";
 import {
   ID,
   Logger,
@@ -101,7 +101,7 @@ export class BbbScheduledSessionService {
       .getRepository(ctx, BbbOrganizationMember)
       .findOne({ where: { id: input.trainerId as string } });
     if (!trainer) {
-      throw new NotFoundException("Trainer member not found");
+      throw new EntityNotFoundError("BbbOrganizationMember", input.trainerId);
     }
 
     const session = new BbbScheduledSession({
@@ -128,7 +128,7 @@ export class BbbScheduledSessionService {
 
   async cancel(ctx: RequestContext, id: ID): Promise<BbbScheduledSession> {
     const session = await this.findById(ctx, id);
-    if (!session) throw new NotFoundException("Session not found");
+    if (!session) throw new EntityNotFoundError("BbbScheduledSession", id);
 
     session.status = "CANCELLED";
     const saved = await this.connection
@@ -157,7 +157,7 @@ export class BbbScheduledSessionService {
     if (!customer) throw new ForbiddenError();
 
     const session = await this.findById(ctx, sessionId);
-    if (!session) throw new NotFoundException("Session not found");
+    if (!session) throw new EntityNotFoundError("BbbScheduledSession", sessionId);
 
     // Verify the caller is a moderator (trainer/org-admin) for this org
     const member = await this.memberService.assertActiveMembership(

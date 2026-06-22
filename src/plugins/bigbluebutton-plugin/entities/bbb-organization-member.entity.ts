@@ -56,6 +56,6 @@ export class BbbOrganizationMember extends VendureEntity {
    * Populated when Phase 1 (KeycloakAuthenticationStrategy) is implemented.
    * Null = using Vendure-native auth; non-null = Keycloak identity confirmed.
    */
-  @Column({ nullable: true, unique: true })
+  @Column({ nullable: true })
   keycloakSub: string;
 }
