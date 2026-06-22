@@ -6,7 +6,7 @@ import { Column, Entity } from "typeorm";
  * Represents a BigBlueButton server. The apiSecret is stored encrypted at rest.
  * Use BbbApiService to decrypt before use — never expose via GraphQL.
  */
-@Entity()
+@Entity("bbb_server")
 export class BbbServer extends VendureEntity {
   constructor(input?: DeepPartial<BbbServer>) {
     super(input);

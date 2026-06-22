@@ -5,7 +5,7 @@ import { BbbOrganization } from "./bbb-organization.entity";
 
 export type RoomState = "Idle" | "Provisioning" | "Active" | "Failed";
 
-@Entity()
+@Entity("bbb_room")
 export class BbbRoom extends VendureEntity {
   constructor(input?: DeepPartial<BbbRoom>) {
     super(input);

@@ -9,7 +9,7 @@ export const shopApiExtensions = gql`
     provisionedAt: DateTime
   }
 
-  type BbbMeetingList {
+  type BbbMeetingPublicList {
     items: [BbbMeetingPublic!]!
     totalItems: Int!
   }
@@ -70,7 +70,7 @@ export const shopApiExtensions = gql`
   }
 
   extend type Query {
-    myBbbMeetings(skip: Int, take: Int): BbbMeetingList!
+    myBbbMeetings(skip: Int, take: Int): BbbMeetingPublicList!
     myBbbCapacityGrants: [BbbCapacityGrantPublic!]!
     myBbbRooms: [BbbRoomPublic!]!
     bbbRoomStatus(id: ID!): BbbRoomPublic

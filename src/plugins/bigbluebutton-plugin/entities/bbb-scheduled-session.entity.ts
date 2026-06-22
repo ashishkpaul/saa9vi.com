@@ -24,7 +24,7 @@ import { BbbMeeting } from "./bbb-meeting.entity";
  * - Clear audit trail of planned vs actual meetings
  * - Historical record survives infrastructure teardown
  */
-@Entity()
+@Entity("bbb_scheduled_session")
 export class BbbScheduledSession extends VendureEntity {
   constructor(input?: DeepPartial<BbbScheduledSession>) {
     super(input);

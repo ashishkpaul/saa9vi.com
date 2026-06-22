@@ -10,7 +10,7 @@ import { BbbOrganization } from "./bbb-organization.entity";
  * The FulfillmentHandler writes this; meetings consume from it.
  * This is the separation between commerce (order) and infrastructure (meetings).
  */
-@Entity()
+@Entity("bbb_capacity_grant")
 export class BbbCapacityGrant extends VendureEntity {
   constructor(input?: DeepPartial<BbbCapacityGrant>) {
     super(input);

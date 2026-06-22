@@ -20,7 +20,7 @@ import type { OrgRole } from "../constants";
  * - keycloakSub is nullable — populated when Keycloak integration (Phase 1) is added.
  *   Allows the membership system to work today with Vendure-native auth.
  */
-@Entity()
+@Entity("bbb_organization_member")
 @Index(["organization", "customerId"], { unique: true })
 export class BbbOrganizationMember extends VendureEntity {
   constructor(input?: DeepPartial<BbbOrganizationMember>) {

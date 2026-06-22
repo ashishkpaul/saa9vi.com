@@ -64,6 +64,11 @@ export const adminApiExtensions = gql`
     exhausted: Boolean!
   }
 
+  type BbbCapacityGrantList {
+    items: [BbbCapacityGrant!]!
+    totalItems: Int!
+  }
+
   # ─── Room types ──────────────────────────────────────────────────────────────
 
   """
@@ -185,7 +190,7 @@ export const adminApiExtensions = gql`
       options: BbbMeetingListOptions
     ): BbbMeetingList!
     bbbMeeting(id: ID!): BbbMeeting
-    bbbCapacityGrants(organizationId: ID!): [BbbCapacityGrant!]!
+    bbbCapacityGrants(organizationId: ID!, options: BbbCapacityGrantListOptions): BbbCapacityGrantList!
     bbbModeratorJoinUrl(meetingId: ID!, moderatorName: String!): String!
     bbbRooms(organizationId: ID!, options: BbbRoomListOptions): BbbRoomList!
     bbbRoom(id: ID!): BbbRoom
@@ -322,6 +327,11 @@ export const adminApiExtensions = gql`
   }
 
   input BbbMeetingListOptions {
+    skip: Int
+    take: Int
+  }
+
+  input BbbCapacityGrantListOptions {
     skip: Int
     take: Int
   }

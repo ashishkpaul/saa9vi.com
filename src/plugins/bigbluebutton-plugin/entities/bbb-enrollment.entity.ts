@@ -5,7 +5,7 @@ import { BbbRoom } from "./bbb-room.entity";
 
 export type EnrollmentSource = "purchase" | "admin" | "invite" | "import";
 
-@Entity()
+@Entity("bbb_enrollment")
 @Index(["roomId", "customerId"], { unique: true })
 @Index(["customerId"])
 export class BbbEnrollment extends VendureEntity {

@@ -9,7 +9,7 @@ import { BbbCapacityGrant } from "./bbb-capacity-grant.entity";
 import { BbbOrganizationMember } from "./bbb-organization-member.entity";
 import { BbbRoom } from "./bbb-room.entity";
 
-@Entity()
+@Entity("bbb_organization")
 export class BbbOrganization extends VendureEntity {
   constructor(input?: DeepPartial<BbbOrganization>) {
     super(input);

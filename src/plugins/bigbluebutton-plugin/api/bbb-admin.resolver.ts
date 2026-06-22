@@ -26,13 +26,92 @@ import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbAdminPermission } from "../constants";
 
-import { NotFoundException } from "@nestjs/common";
-import { Customer } from "@vendure/core";
+import { Customer, EntityNotFoundError } from "@vendure/core";
 
 /** Shape returned to GraphQL with augmented customer info */
 interface MemberWithCustomer extends BbbOrganizationMember {
   customerName?: string | null;
   customerEmail?: string | null;
+}
+
+// ─── Typed input interfaces for mutations ──────────────────────────────────
+
+interface CreateBbbServerInput {
+  name: string;
+  apiUrl: string;
+  apiSecret: string;
+  maxLoad?: number;
+}
+
+interface UpdateBbbServerInput {
+  name?: string;
+  apiUrl?: string;
+  apiSecret?: string;
+  maxLoad?: number;
+  enabled?: boolean;
+}
+
+interface CreateBbbOrganizationInput {
+  channelId: string;
+  slug: string;
+  name: string;
+  concurrentMeetingLimit?: number;
+  maxParticipantsPerMeeting?: number;
+  recordingEnabled?: boolean;
+}
+
+interface UpdateBbbOrganizationInput {
+  name?: string;
+  concurrentMeetingLimit?: number;
+  maxParticipantsPerMeeting?: number;
+  recordingEnabled?: boolean;
+  suspended?: boolean;
+}
+
+interface AddBbbMemberInput {
+  organizationId: string;
+  customerId: string;
+  role: 'org-admin' | 'trainer';
+}
+
+interface UpdateBbbMemberInput {
+  role?: 'org-admin' | 'trainer';
+  active?: boolean;
+}
+
+interface CreateBbbMeetingInput {
+  organizationId: string;
+  title: string;
+  recordingEnabled?: boolean;
+}
+
+interface UpdateBbbMeetingInput {
+  title?: string;
+  recordingEnabled?: boolean;
+}
+
+interface CreateBbbRoomInput {
+  organizationId: string;
+  name: string;
+  description?: string;
+  slug?: string;
+  recordingEnabled?: boolean;
+  maxParticipants?: number;
+}
+
+interface UpdateBbbRoomInput {
+  name?: string;
+  description?: string;
+  recordingEnabled?: boolean;
+  maxParticipants?: number;
+}
+
+interface CreateBbbScheduledSessionInput {
+  organizationId: string;
+  title: string;
+  startTime: string;
+  endTime: string;
+  trainerId: string;
 }
 
 @Resolver()
@@ -67,7 +146,7 @@ export class BbbAdminResolver {
   @Mutation()
   @Allow(BbbAdminPermission.Permission)
   @Transaction()
-  createBbbServer(@Ctx() ctx: RequestContext, @Args("input") input: any) {
+  createBbbServer(@Ctx() ctx: RequestContext, @Args("input") input: CreateBbbServerInput) {
     return this.serverService.create(ctx, input);
   }
 
@@ -77,7 +156,7 @@ export class BbbAdminResolver {
   updateBbbServer(
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
-    @Args("input") input: any,
+    @Args("input") input: UpdateBbbServerInput,
   ) {
     return this.serverService.update(ctx, id, input);
   }
@@ -102,7 +181,7 @@ export class BbbAdminResolver {
   @Mutation()
   @Allow(BbbAdminPermission.Permission)
   @Transaction()
-  createBbbOrganization(@Ctx() ctx: RequestContext, @Args("input") input: any) {
+  createBbbOrganization(@Ctx() ctx: RequestContext, @Args("input") input: CreateBbbOrganizationInput) {
     return this.orgService.create(ctx, input);
   }
 
@@ -112,7 +191,7 @@ export class BbbAdminResolver {
   updateBbbOrganization(
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
-    @Args("input") input: any,
+    @Args("input") input: UpdateBbbOrganizationInput,
   ) {
     return this.orgService.update(ctx, id, input);
   }
@@ -132,14 +211,12 @@ export class BbbAdminResolver {
       options,
     );
     // Augment each member with customer display info by fetching Customer records.
-    // Uses rawConnection to bypass channel scoping — we need the raw Customer
-    // record regardless of which channel the admin is scoped to.
     const customerIds = [
       ...new Set(result.items.map((m) => m.customerId).filter(Boolean)),
     ];
     const customers = customerIds.length
-      ? await this.connection.rawConnection
-          .getRepository(Customer)
+      ? await this.connection
+          .getRepository(ctx, Customer)
           .findBy({ id: In(customerIds) as any })
       : [];
     // Build lookup map with String(id) keys to handle numeric/string type mismatch
@@ -176,8 +253,8 @@ export class BbbAdminResolver {
       });
     if (!member || !member.customerId) return member;
 
-    const customer = await this.connection.rawConnection
-      .getRepository(Customer)
+    const customer = await this.connection
+      .getRepository(ctx, Customer)
       .findOne({ where: { id: member.customerId as string } });
 
     return {
@@ -193,7 +270,7 @@ export class BbbAdminResolver {
   @Mutation()
   @Allow(BbbAdminPermission.Permission)
   @Transaction()
-  addBbbMember(@Ctx() ctx: RequestContext, @Args("input") input: any) {
+  addBbbMember(@Ctx() ctx: RequestContext, @Args("input") input: AddBbbMemberInput) {
     return this.memberService.addMember(ctx, input);
   }
 
@@ -203,7 +280,7 @@ export class BbbAdminResolver {
   updateBbbMember(
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
-    @Args("input") input: any,
+    @Args("input") input: UpdateBbbMemberInput,
   ) {
     return this.memberService.updateMember(ctx, id, input);
   }
@@ -226,7 +303,7 @@ export class BbbAdminResolver {
   ): Promise<BbbMeeting> {
     const failed = await this.meetingService.findById(ctx, failedMeetingId);
     if (!failed) {
-      throw new NotFoundException("Meeting not found");
+      throw new EntityNotFoundError("BbbMeeting", failedMeetingId);
     }
 
     // If the failed meeting has an associated room, reset the room FSM so
@@ -266,7 +343,7 @@ export class BbbAdminResolver {
   @Mutation()
   @Allow(BbbAdminPermission.Permission)
   @Transaction()
-  createBbbMeeting(@Ctx() ctx: RequestContext, @Args("input") input: any) {
+  createBbbMeeting(@Ctx() ctx: RequestContext, @Args("input") input: CreateBbbMeetingInput) {
     return this.meetingService.createAndEnqueue(ctx, input);
   }
 
@@ -276,7 +353,7 @@ export class BbbAdminResolver {
   updateBbbMeeting(
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
-    @Args("input") input: any,
+    @Args("input") input: UpdateBbbMeetingInput,
   ) {
     return this.meetingService.update(ctx, id, input);
   }
@@ -339,14 +416,22 @@ export class BbbAdminResolver {
 
   @Query()
   @Allow(BbbAdminPermission.Permission)
-  bbbCapacityGrants(
+  async bbbCapacityGrants(
     @Ctx() ctx: RequestContext,
     @Args("organizationId") orgId: string,
-  ) {
-    return this.connection.getRepository(ctx, BbbCapacityGrant).find({
-      where: { organization: { id: orgId } },
-      order: { createdAt: "DESC" },
-    });
+    @Args("options") options?: { skip?: number; take?: number },
+  ): Promise<{ items: BbbCapacityGrant[]; totalItems: number }> {
+    const take = Math.min(Math.max(options?.take ?? 25, 1), 100);
+    const skip = Math.max(options?.skip ?? 0, 0);
+    const [items, totalItems] = await this.connection
+      .getRepository(ctx, BbbCapacityGrant)
+      .findAndCount({
+        where: { organization: { id: orgId } },
+        order: { createdAt: "DESC" },
+        skip,
+        take,
+      });
+    return { items, totalItems };
   }
 
   @Mutation()
@@ -401,7 +486,7 @@ export class BbbAdminResolver {
   @Mutation()
   @Allow(BbbAdminPermission.Permission)
   @Transaction()
-  createBbbRoom(@Ctx() ctx: RequestContext, @Args("input") input: any) {
+  createBbbRoom(@Ctx() ctx: RequestContext, @Args("input") input: CreateBbbRoomInput) {
     return this.roomService.create(ctx, {
       ...input,
       createdByCustomerId: undefined,
@@ -414,7 +499,7 @@ export class BbbAdminResolver {
   async updateBbbRoom(
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
-    @Args("input") input: any,
+    @Args("input") input: UpdateBbbRoomInput,
   ) {
     await this.connection.getRepository(ctx, BbbRoom).update(id, input);
     return this.roomService.findById(ctx, id);
@@ -503,8 +588,8 @@ export class BbbAdminResolver {
 
     const customerIds = [...new Set(enrollments.map((e) => e.customerId))];
     const customers = customerIds.length
-      ? await this.connection.rawConnection
-          .getRepository(Customer)
+      ? await this.connection
+          .getRepository(ctx, Customer)
           .findBy({ id: In(customerIds) as any })
       : [];
     const customerMap = new Map(customers.map((c) => [c.id, c]));
@@ -637,7 +722,7 @@ export class BbbAdminResolver {
   @Transaction()
   createBbbScheduledSession(
     @Ctx() ctx: RequestContext,
-    @Args("input") input: any,
+    @Args("input") input: CreateBbbScheduledSessionInput,
   ) {
     return this.scheduledSessionService.create(ctx, input);
   }

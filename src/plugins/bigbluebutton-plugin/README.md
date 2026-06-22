@@ -1064,7 +1064,7 @@ All shop queries require `Authenticated` permission (logged-in customer).
 #### Queries
 
 ```graphql
-myBbbMeetings(skip: Int, take: Int): BbbMeetingList!
+myBbbMeetings(skip: Int, take: Int): BbbMeetingPublicList!
 myBbbCapacityGrants: [BbbCapacityGrantPublic!]!    # shows grantedMinutes, consumedMinutes
 myBbbRooms: [BbbRoomPublic!]!
 bbbRoomStatus(id: ID!): BbbRoomPublic              # poll this while status=provisioning

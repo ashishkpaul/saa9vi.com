@@ -10,7 +10,7 @@ import { BbbRoom } from "./bbb-room.entity";
  * Managed via admin API (createBbbProductAccess / deleteBbbProductAccess).
  * A variant can map to exactly one room per channel.
  */
-@Entity()
+@Entity("bbb_product_access")
 @Index(["productVariantId"], { unique: true })
 export class BbbProductAccess extends VendureEntity {
   constructor(input?: DeepPartial<BbbProductAccess>) {

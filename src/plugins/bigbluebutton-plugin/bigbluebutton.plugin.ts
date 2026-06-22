@@ -6,7 +6,6 @@ import {
   RuntimeVendureConfig,
   VendurePlugin,
 } from "@vendure/core";
-import path from "path";
 
 import { BbbServer } from "./entities/bbb-server.entity";
 import { BbbOrganization } from "./entities/bbb-organization.entity";
@@ -25,7 +24,7 @@ import { BbbServerService } from "./services/bbb-server.service";
 import { BbbOrganizationService } from "./services/bbb-organization.service";
 import { BbbMeetingService } from "./services/bbb-meeting.service";
 import { BbbReconciliationService } from "./services/bbb-reconciliation.service";
-import { BbbMemberService } from "./services/bbb-member.service"; // NEW
+import { BbbMemberService } from "./services/bbb-member.service";
 import { BbbRoomService } from "./services/bbb-room.service";
 import { BbbScheduledSessionService } from "./services/bbb-scheduled-session.service";
 import { BbbRoomLockService } from "./services/bbb-room-lock.service";
@@ -36,15 +35,12 @@ import { BbbAdminResolver } from "./api/bbb-admin.resolver";
 import { BbbShopResolver } from "./api/bbb-shop.resolver";
 import { BbbWebhookController } from "./workers/bbb-webhook.controller";
 import { bbbReconciliationTask } from "./jobs/bbb-reconciliation.task";
-
 import {
   bbbFulfillmentHandler,
   bbbOrderProcess,
 } from "./config/bbb-fulfillment";
-
 import { adminApiExtensions } from "./api/schema/bbb-admin.schema";
 import { shopApiExtensions } from "./api/schema/bbb-shop.schema";
-
 import { BigBlueButtonPluginOptions } from "./types";
 import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
 
@@ -127,13 +123,8 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
   compatibility: ">=3.0.0",
 })
 export class BigBlueButtonPlugin implements OnApplicationBootstrap {
+  private static initialized = false;
   static options: BigBlueButtonPluginOptions = {};
-
-  static uiExtensions = {
-    extensionPath: path.join(__dirname, "ui"),
-    routes: [{ route: "bbb", filePath: "routes.ts" }],
-    providers: ["providers.ts"],
-  };
 
   static init(
     options: BigBlueButtonPluginOptions = {},
@@ -145,6 +136,10 @@ export class BigBlueButtonPlugin implements OnApplicationBootstrap {
   constructor(private readonly meetingService: BbbMeetingService) {}
 
   async onApplicationBootstrap() {
+    // Guard: prevent double-initialization when both server and worker
+    // share the same plugin instance and onApplicationBootstrap fires twice.
+    if (BigBlueButtonPlugin.initialized) return;
+    BigBlueButtonPlugin.initialized = true;
     await this.meetingService.init();
   }
 }

@@ -6,7 +6,7 @@ import { BbbServer } from "./bbb-server.entity";
 import { MEETING_STATE } from "../constants";
 import type { MeetingState } from "../constants";
 
-@Entity()
+@Entity("bbb_meeting")
 export class BbbMeeting extends VendureEntity {
   constructor(input?: DeepPartial<BbbMeeting>) {
     super(input);
