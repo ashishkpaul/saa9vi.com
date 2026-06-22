@@ -11,7 +11,7 @@ export class Banner extends VendureEntity implements ChannelAware {
     @Column()
     title: string;
 
-    @ManyToOne(type => Asset)
+    @ManyToOne(type => Asset, { nullable: false, onDelete: 'RESTRICT' })
     image: Asset;
 
     @EntityId()

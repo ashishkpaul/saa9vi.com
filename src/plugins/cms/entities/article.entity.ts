@@ -39,8 +39,8 @@ export class Article extends VendureEntity implements ChannelAware {
     @EntityId({ nullable: true })
     featuredAssetId?: ID;
 
-    /** Simple tag list — promote to a join table only if faceted filtering becomes a requirement */
-    @Column({ type: 'simple-array', nullable: true })
+    /** Simple tag list — simple-json avoids comma-in-tag corruption that simple-array has */
+    @Column({ type: 'simple-json', nullable: true })
     tags?: string[];
 
     // ChannelAware: assigned via ChannelService.assignToCurrentChannel on create.

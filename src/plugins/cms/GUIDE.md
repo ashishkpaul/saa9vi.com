@@ -485,6 +485,32 @@ const data = await client.query(PAGE_QUERY, { slug: params.slug }, {
 });
 ```
 
+### Pre-rendering CMS routes with `generateStaticParams`
+
+Use `generateStaticParams` in pages that are keyed by slug so Next.js can pre-build them at deploy time instead of rendering on first request.
+
+```ts
+// app/blog/[slug]/page.tsx
+import { shopClient } from '@/lib/vendure';
+import { gql } from '@/gql';
+
+const ARTICLES_QUERY = gql`
+  query Articles($options: ArticleListOptions) {
+    cmsArticles(options: $options) {
+      items { slug }
+    }
+  }
+`;
+
+export async function generateStaticParams() {
+  const client = shopClient();
+  const { cmsArticles } = await client.query(ARTICLES_QUERY, { options: { take: 1000 } });
+  return cmsArticles.items.map(a => ({ slug: a.slug }));
+}
+```
+
+The same pattern applies to pages (`app/[slug]/page.tsx`) if you’re using dynamic CMS pages for routes.
+
 ## Troubleshooting & FAQ
 
 **Q: Why is the type prefixed `CmsPage` instead of `Page`?**
