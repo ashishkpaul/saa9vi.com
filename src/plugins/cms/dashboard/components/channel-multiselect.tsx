@@ -1,69 +1,47 @@
-import { api, Badge, Button, Label, useQuery } from '@vendure/dashboard';
-import { graphql } from '@/gql';
-import { useState } from 'react';
+type Option = { value: string; label: string; disabled?: boolean };
 
-const getChannelsDocument = graphql(`
-    query GetChannelsForCmsAssignment {
-        channels {
-            items {
-                id
-                code
-                token
-            }
-        }
-    }
-`);
+export function ChannelMultiselect({
+  value,
+  onChange,
+  options,
+  removeOnly = false,
+}: {
+  value: { channelIds: string[] };
+  onChange: (value: { channelIds: string[] }) => void;
+  options: Option[];
+  removeOnly?: boolean;
+}) {
+  const selected = new Set(value?.channelIds ?? []);
 
-interface ChannelMultiSelectProps {
-    /** Channel ids already assigned (read-only display — current channel is always included) */
-    assignedChannels?: { id: string; code: string }[];
-    value: string[];
-    onChange: (channelIds: string[]) => void;
+  return (
+    <div>
+      <label className="mb-1 block text-sm font-medium text-gray-700">Channels</label>
+      <select
+        multiple={true}
+        value={Array.from(multiValueToArray(value?.channelIds ?? []))}
+        onChange={(e) => {
+          const selectedIds = Array.from(e.target.selectedOptions).map((o) => o.value);
+          onChange({ channelIds: selectedIds });
+        }}
+        className="w-full rounded-md border border-gray-300 bg-white p-2"
+      >
+        {options.map((opt) => (
+          <option key={opt.value} value={opt.value} disabled={removeOnly && !selected.has(opt.value)}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+      <p className="mt-1 text-xs text-gray-500">
+        {removeOnly ? 'Deselect to remove the item from a channel.' : 'Hold Ctrl/Cmd to select multiple channels.'}
+      </p>
+    </div>
+  );
 }
 
-/**
- * Lets a platform admin (operating in the default Channel) additionally
- * publish a piece of content into one or more seller Channels. Seller admins
- * operating from within their own channel won't see other sellers' channels
- * here — the Admin API's `channels` query is itself channel-scoped for
- * non-superadmin roles, same as everywhere else in the Dashboard.
- */
-export function ChannelMultiSelect({ assignedChannels = [], value, onChange }: ChannelMultiSelectProps) {
-    const [open, setOpen] = useState(false);
-    const { data } = useQuery({
-        queryKey: ['cms-channel-list'],
-        queryFn: () => api.query(getChannelsDocument),
-    });
-
-    const allChannels = data?.channels.items ?? [];
-
-    function toggle(id: string) {
-        onChange(value.includes(id) ? value.filter(v => v !== id) : [...value, id]);
-    }
-
-    return (
-        <div className="space-y-2">
-            <Label>Also publish to channels</Label>
-            <div className="flex flex-wrap gap-2">
-                {assignedChannels.map(c => (
-                    <Badge key={c.id} variant="secondary">
-                        {c.code}
-                    </Badge>
-                ))}
-            </div>
-            <div className="flex flex-wrap gap-2">
-                {allChannels.map(channel => (
-                    <Button
-                        key={channel.id}
-                        type="button"
-                        size="sm"
-                        variant={value.includes(channel.id) ? 'default' : 'outline'}
-                        onClick={() => toggle(channel.id)}
-                    >
-                        {channel.code}
-                    </Button>
-                ))}
-            </div>
-        </div>
-    );
+function multiValueToArray(value: string | string[] | undefined): string[] {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  return [value];
 }
+
+export default ChannelMultiselect;
