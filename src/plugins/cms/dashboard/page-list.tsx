@@ -2,9 +2,9 @@ import { ActionBarItem, Badge, Button, DashboardRouteDefinition, DetailPageButto
 import { PlusIcon } from 'lucide-react';
 import { graphql } from '@/gql';
 
-const getPageList = graphql(`
-    query GetPages($options: PageListOptions) {
-        pages(options: $options) {
+const getCmsPageList = graphql(`
+    query GetCmsPages($options: CmsPageListOptions) {
+        cmsPages(options: $options) {
             items {
                 id
                 createdAt
@@ -43,7 +43,7 @@ export const pageList: DashboardRouteDefinition = {
         <ListPage
             pageId="page-list"
             title="Pages"
-            listQuery={getPageList}
+            listQuery={getCmsPageList}
             deleteMutation={deletePageDocument}
             route={route}
             customizeColumns={{

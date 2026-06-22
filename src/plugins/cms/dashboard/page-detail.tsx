@@ -25,9 +25,9 @@ import { ChannelMultiSelect } from './components/channel-multiselect';
 import { PageSectionEditor } from './components/page-section-editor';
 import { useState } from 'react';
 
-const pageDetailDocument = graphql(`
-    query GetPageDetail($id: ID!) {
-        page(id: $id) {
+const cmsPageDetailDocument = graphql(`
+    query GetCmsPageDetail($id: ID!) {
+        cmsPage(id: $id) {
             id
             createdAt
             updatedAt
@@ -64,7 +64,7 @@ const updatePageDocument = graphql(`
 export const pageDetail: DashboardRouteDefinition = {
     path: '/pages/$id',
     loader: detailPageRouteLoader({
-        queryDocument: pageDetailDocument,
+        queryDocument: cmsPageDetailDocument,
         breadcrumb: (isNew, entity) => [
             { path: '/pages', label: 'Pages' },
             isNew ? 'New page' : entity?.title,
@@ -80,7 +80,7 @@ function PageDetailPage({ route }: { route: AnyRoute }) {
     const [extraChannelIds, setExtraChannelIds] = useState<string[]>([]);
 
     const { form, submitHandler, entity, isPending, resetForm } = useDetailPage({
-        queryDocument: pageDetailDocument,
+        queryDocument: cmsPageDetailDocument,
         createDocument: createPageDocument,
         updateDocument: updatePageDocument,
         setValuesForUpdate: page => ({
@@ -185,7 +185,7 @@ function PageDetailPage({ route }: { route: AnyRoute }) {
                     />
                 </PageBlock>
 
-                <CustomFieldsPageBlock column="main" entityType="Page" control={form.control} />
+                <CustomFieldsPageBlock column="main" entityType="CmsPage" control={form.control} />
             </PageLayout>
         </Page>
     );

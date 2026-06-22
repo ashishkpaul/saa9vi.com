@@ -1,6 +1,29 @@
 import gql from 'graphql-tag';
 
-export const adminApiExtensions = gql`
+/**
+ * Types shared between Admin and Shop schemas.
+ *
+ * WHY THIS EXISTS:
+ * Vendure builds two independent GraphQL schemas — admin and shop — so any
+ * type referenced in shopApiExtensions MUST be defined in the shop schema
+ * too; you cannot borrow from adminApiExtensions. We solve this by collecting
+ * all shared entity types here and spreading them into both schemas.
+ *
+ * WHY THE EMPTY `input XxxListOptions` STUBS:
+ * Vendure auto-generates the filter/sort/pagination fields for a list options
+ * input at startup, BUT only when it finds the stub `input XxxListOptions`
+ * already declared in the schema alongside the matching `XxxList implements
+ * PaginatedList` type. Without the stub, the Dashboard's Vite/gql-tada build
+ * throws "Unknown type XxxListOptions" and aborts.
+ *
+ * WHY CmsPage NOT Page:
+ * `Page` collides with an existing type in the Vendure admin schema (or an
+ * installed plugin). Namespacing it as `CmsPage` is idiomatic for plugin
+ * authors — it avoids the collision and makes it clear where the type lives.
+ * The underlying TypeScript/TypeORM class remains `Page` (no rename needed
+ * there — entity table name is unaffected).
+ */
+const sharedTypeExtensions = gql`
     type Article implements Node {
         id: ID!
         createdAt: DateTime!
@@ -24,29 +47,7 @@ export const adminApiExtensions = gql`
 
     input ArticleListOptions {
         skip: Int
-    }
-
-    input CreateArticleInput {
-        slug: String!
-        title: String!
-        excerpt: String
-        body: String!
-        isPublished: Boolean
-        featuredAssetId: ID
-        tags: [String!]
-        channelIds: [ID!]
-    }
-
-    input UpdateArticleInput {
-        id: ID!
-        slug: String
-        title: String
-        excerpt: String
-        body: String
-        isPublished: Boolean
-        featuredAssetId: ID
-        tags: [String!]
-        channelIds: [ID!]
+        take: Int
     }
 
     enum BannerPlacement {
@@ -80,6 +81,68 @@ export const adminApiExtensions = gql`
 
     input BannerListOptions {
         skip: Int
+        take: Int
+    }
+
+    """
+    Sections are stored as a JSON column (discriminated-union of hero, richText,
+    productGrid, articleGrid, bannerSlot blocks). See types.ts for the TS union.
+    Exposed as JSON so new section types don't require a schema migration.
+    """
+    type CmsPage implements Node {
+        id: ID!
+        createdAt: DateTime!
+        updatedAt: DateTime!
+        slug: String!
+        title: String!
+        metaDescription: String
+        isPublished: Boolean!
+        sections: JSON!
+        channels: [Channel!]!
+        customFields: JSON
+    }
+
+    type CmsPageList implements PaginatedList {
+        items: [CmsPage!]!
+        totalItems: Int!
+    }
+
+    input CmsPageListOptions {
+        skip: Int
+        take: Int
+    }
+`;
+
+export const adminApiExtensions = gql`
+    ${sharedTypeExtensions}
+
+    # CmsDeletionResponse uses DeletionResult which is an admin-only enum,
+    # so it must NOT be in sharedTypeExtensions (shop schema doesn't have it).
+    type CmsDeletionResponse {
+        result: DeletionResult!
+    }
+
+    input CreateArticleInput {
+        slug: String!
+        title: String!
+        excerpt: String
+        body: String!
+        isPublished: Boolean
+        featuredAssetId: ID
+        tags: [String!]
+        channelIds: [ID!]
+    }
+
+    input UpdateArticleInput {
+        id: ID!
+        slug: String
+        title: String
+        excerpt: String
+        body: String
+        isPublished: Boolean
+        featuredAssetId: ID
+        tags: [String!]
+        channelIds: [ID!]
     }
 
     input CreateBannerInput {
@@ -107,33 +170,6 @@ export const adminApiExtensions = gql`
         channelIds: [ID!]
     }
 
-    """
-    Sections are stored as JSON. Shape is validated server-side against the
-    PageSection union defined in the plugin's types.ts but exposed here as
-    JSON for flexibility as new section types are added.
-    """
-    type Page implements Node {
-        id: ID!
-        createdAt: DateTime!
-        updatedAt: DateTime!
-        slug: String!
-        title: String!
-        metaDescription: String
-        isPublished: Boolean!
-        sections: JSON!
-        channels: [Channel!]!
-        customFields: JSON
-    }
-
-    type PageList implements PaginatedList {
-        items: [Page!]!
-        totalItems: Int!
-    }
-
-    input PageListOptions {
-        skip: Int
-    }
-
     input CreatePageInput {
         slug: String!
         title: String!
@@ -153,17 +189,14 @@ export const adminApiExtensions = gql`
         channelIds: [ID!]
     }
 
-    type CmsDeletionResponse {
-        result: DeletionResult!
-    }
-
     extend type Query {
         articles(options: ArticleListOptions): ArticleList!
         article(id: ID!): Article
         banners(options: BannerListOptions): BannerList!
         banner(id: ID!): Banner
-        pages(options: PageListOptions): PageList!
-        page(id: ID!): Page
+        # Prefixed to match entity rename (CmsPage) and avoid potential query-name collision
+        cmsPages(options: CmsPageListOptions): CmsPageList!
+        cmsPage(id: ID!): CmsPage
     }
 
     extend type Mutation {
@@ -175,81 +208,26 @@ export const adminApiExtensions = gql`
         updateBanner(input: UpdateBannerInput!): Banner!
         deleteBanner(id: ID!): CmsDeletionResponse!
 
-        createPage(input: CreatePageInput!): Page!
-        updatePage(input: UpdatePageInput!): Page!
+        createPage(input: CreatePageInput!): CmsPage!
+        updatePage(input: UpdatePageInput!): CmsPage!
         deletePage(id: ID!): CmsDeletionResponse!
     }
 `;
 
 /**
- * Shop API only ever needs to *read* published content scoped to the active
- * channel — no mutations, no draft/unpublished visibility.
+ * Shop API: read-only, published content only, no mutations.
  *
- * We define separate types here rather than reusing admin types because the
- * Shop API schema is built independently; admin-only fields (customFields,
- * etc.) are stripped.
+ * Includes sharedTypeExtensions so the shop schema has its own copies of
+ * Article, Banner, CmsPage, BannerPlacement and their ListOptions stubs —
+ * required because admin and shop are separate schemas in Vendure.
  */
 export const shopApiExtensions = gql`
-    enum BannerPlacement {
-        HOMEPAGE_HERO
-        HOMEPAGE_STRIP
-        CATEGORY_TOP
-        SIDEBAR
-        CHECKOUT_PROMO
-    }
-
-    input ArticleListOptions {
-        skip: Int
-    }
-
-    type ShopCmsArticle implements Node {
-        id: ID!
-        slug: String!
-        title: String!
-        excerpt: String
-        body: String!
-        isPublished: Boolean!
-        publishedAt: DateTime
-        featuredAsset: Asset
-        tags: [String!]
-        channels: [Channel!]!
-    }
-
-    type ShopCmsArticleList implements PaginatedList {
-        items: [ShopCmsArticle!]!
-        totalItems: Int!
-    }
-
-    type ShopCmsPage implements Node {
-        id: ID!
-        slug: String!
-        title: String!
-        metaDescription: String
-        isPublished: Boolean!
-        sections: JSON!
-        channels: [Channel!]!
-    }
-
-    type ShopCmsPageList implements PaginatedList {
-        items: [ShopCmsPage!]!
-        totalItems: Int!
-    }
-
-    type ShopCmsBanner implements Node {
-        id: ID!
-        title: String!
-        image: Asset!
-        linkUrl: String
-        placement: BannerPlacement!
-        priority: Int!
-        isActive: Boolean!
-        channels: [Channel!]!
-    }
+    ${sharedTypeExtensions}
 
     extend type Query {
-        cmsArticle(slug: String!): ShopCmsArticle
-        cmsArticles(options: ArticleListOptions): ShopCmsArticleList!
-        cmsPage(slug: String!): ShopCmsPage
-        cmsBanners(placement: BannerPlacement!): [ShopCmsBanner!]!
+        cmsArticle(slug: String!): Article
+        cmsArticles(options: ArticleListOptions): ArticleList!
+        cmsPage(slug: String!): CmsPage
+        cmsBanners(placement: BannerPlacement!): [Banner!]!
     }
 `;

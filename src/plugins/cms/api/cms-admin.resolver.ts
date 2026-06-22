@@ -87,16 +87,23 @@ export class CmsAdminResolver {
     }
 
     // ---------- Pages ----------
+    //
+    // Query method names match the GraphQL schema: `cmsPages` / `cmsPage` (not
+    // `pages` / `page`) for two reasons:
+    //   1. `Page` / `page` collides with an existing type/query in the Vendure
+    //      admin schema — prefixing avoids that.
+    //   2. Consistency with the shop API's `cmsPage(slug: String!)` query, which
+    //      is already prefixed by convention.
 
     @Query()
     @Allow(pagePermission.Read)
-    pages(@Ctx() ctx: RequestContext, @Args() args: { options?: ListQueryOptions<Page> }) {
+    cmsPages(@Ctx() ctx: RequestContext, @Args() args: { options?: ListQueryOptions<Page> }) {
         return this.pageService.findAll(ctx, args.options);
     }
 
     @Query()
     @Allow(pagePermission.Read)
-    page(@Ctx() ctx: RequestContext, @Args() args: { id: ID }) {
+    cmsPage(@Ctx() ctx: RequestContext, @Args() args: { id: ID }) {
         return this.pageService.findOne(ctx, args.id);
     }
 

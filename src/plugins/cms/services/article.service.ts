@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import {
     ChannelService,
-    EventBus,
     ID,
     ListQueryBuilder,
     ListQueryOptions,
@@ -38,7 +37,6 @@ export class ArticleService {
         private connection: TransactionalConnection,
         private listQueryBuilder: ListQueryBuilder,
         private channelService: ChannelService,
-        private eventBus: EventBus,
     ) {}
 
     findAll(ctx: RequestContext, options?: ListQueryOptions<Article>) {
