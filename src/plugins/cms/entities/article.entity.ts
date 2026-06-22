@@ -1,8 +1,6 @@
 import { Asset, Channel, DeepPartial, VendureEntity, ChannelAware, EntityId, ID } from '@vendure/core';
 import { Column, Entity, JoinTable, ManyToMany, ManyToOne } from 'typeorm';
 
-export class ArticleCustomFields {}
-
 /**
  * Note: kept single-language for v1. If BuyLits needs localized article
  * content later, migrate to a Translatable entity (see Vendure's
@@ -51,6 +49,4 @@ export class Article extends VendureEntity implements ChannelAware {
     @JoinTable()
     channels: Channel[];
 
-    @Column(type => ArticleCustomFields)
-    customFields: ArticleCustomFields;
 }

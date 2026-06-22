@@ -37,7 +37,6 @@ const sharedTypeExtensions = gql`
         featuredAsset: Asset
         tags: [String!]
         channels: [Channel!]!
-        customFields: JSON
     }
 
     type ArticleList implements PaginatedList {
@@ -71,7 +70,6 @@ const sharedTypeExtensions = gql`
         startsAt: DateTime
         endsAt: DateTime
         channels: [Channel!]!
-        customFields: JSON
     }
 
     type BannerList implements PaginatedList {
@@ -99,7 +97,6 @@ const sharedTypeExtensions = gql`
         isPublished: Boolean!
         sections: JSON!
         channels: [Channel!]!
-        customFields: JSON
     }
 
     type CmsPageList implements PaginatedList {

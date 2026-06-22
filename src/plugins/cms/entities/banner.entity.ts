@@ -2,8 +2,6 @@ import { Asset, Channel, DeepPartial, VendureEntity, ChannelAware, EntityId, ID 
 import { Column, Entity, JoinTable, ManyToMany, ManyToOne } from 'typeorm';
 import { BannerPlacement } from '../types';
 
-export class BannerCustomFields {}
-
 @Entity()
 export class Banner extends VendureEntity implements ChannelAware {
     constructor(input?: DeepPartial<Banner>) {
@@ -42,6 +40,4 @@ export class Banner extends VendureEntity implements ChannelAware {
     @JoinTable()
     channels: Channel[];
 
-    @Column(type => BannerCustomFields)
-    customFields: BannerCustomFields;
 }

@@ -2,8 +2,6 @@ import { Channel, DeepPartial, VendureEntity, ChannelAware } from '@vendure/core
 import { Column, Entity, JoinTable, ManyToMany } from 'typeorm';
 import { PageSection } from '../types';
 
-export class PageCustomFields {}
-
 @Entity()
 export class Page extends VendureEntity implements ChannelAware {
     constructor(input?: DeepPartial<Page>) {
@@ -34,6 +32,4 @@ export class Page extends VendureEntity implements ChannelAware {
     @JoinTable()
     channels: Channel[];
 
-    @Column(type => PageCustomFields)
-    customFields: PageCustomFields;
 }
