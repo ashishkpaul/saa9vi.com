@@ -382,26 +382,7 @@ interface BigBlueButtonPluginOptions {
 }
 ```
 
-### 4. Register Admin UI Extension
-
-```ts
-// compile-admin-ui.ts
-import path from 'path';
-
-const bigbluebuttonUiExtensions = {
-  id: 'bigbluebutton',
-  extensionPath: path.join(__dirname, 'src/plugins/bigbluebutton-plugin/ui'),
-  providers: ['providers.ts'],
-  routes: [{ route: 'bbb', filePath: 'routes.ts' }],
-  ngModules: [{
-    type: 'shared' as const,
-    ngModuleFileName: 'bbb-ui.module.ts',
-    ngModuleName: 'BbbUiExtensionModule',
-  }],
-};
-```
-
-### 5. Run Migrations
+### 4. Run Migrations
 
 ```bash
 npx vendure migrate
@@ -956,10 +937,10 @@ eventBus.ofType(GrantConsumedEvent).subscribe((event) => {
 
 ## Admin UI
 
-The plugin registers a **BigBlueButton** section in the Admin UI nav (above Settings).
+The plugin registers a **BigBlueButton** section in the Vendure Admin Dashboard. All management is done through the Dashboard UI routes.
 
 | Route | Page | What you can do |
-|-------|------|----------------|
+|-------|------|-----------------|
 | `/extensions/bbb/servers` | Servers | Add BBB servers, view health/load, enable/disable |
 | `/extensions/bbb/organizations` | Organizations | Create orgs, set concurrency + participant limits |
 | `/extensions/bbb/rooms` | Rooms | Create rooms, view FSM state + retry count, delete |
@@ -967,6 +948,8 @@ The plugin registers a **BigBlueButton** section in the Admin UI nav (above Sett
 | `/extensions/bbb/plans` | Plans | **Add/view capacity grants** — remaining hours, usage bars, source (purchase vs manual) |
 | `/extensions/bbb/enrollments` | Enrollments | Map variants to rooms, manually enroll customers, revoke access |
 | `/extensions/bbb/staff` | Staff | Add/remove TRAINER and ORG_ADMIN members, change roles |
+
+The UI is built with the Vendure Dashboard extension system and does not require any additional Angular UI extension configuration.
 
 ---
 
@@ -1144,19 +1127,23 @@ src/plugins/bigbluebutton-plugin/
 ├── __tests__/
 │   └── bbb-billing.spec.ts               # Billing lifecycle test suite
 │
-└── ui/
-    ├── bbb-ui.module.ts                  # Angular NgModule
-    ├── providers.ts                      # Nav menu (7 items)
-    ├── routes.ts                         # 7 route registrations
-    └── components/
-        ├── bbb-server-list.component.ts
-        ├── bbb-organization-list.component.ts
-        ├── bbb-meeting-list.component.ts  # auto-refresh 15s, retry/end/delete actions
-        ├── bbb-room-list.component.ts     # FSM state, retryCount, delete
-        ├── bbb-plan-list.component.ts     # Capacity grant management + usage bars
-        ├── bbb-member-list.component.ts   # Staff CRUD
-        ├── bbb-enrollment-list.component.ts  # Enrollment management
-        └── bbb-paginated-list-base.ts     # Shared paginated list base
+└── dashboard/
+    ├── index.tsx                         # Dashboard extension entry
+    └── routes/
+        ├── servers/
+        │   └── ServersList.tsx
+        ├── organizations/
+        │   └── OrganizationsList.tsx
+        ├── rooms/
+        │   └── RoomsList.tsx
+        ├── meetings/
+        │   └── MeetingsList.tsx           # auto-refresh 15s
+        ├── plans/
+        │   └── PlansList.tsx              # Capacity grant management + usage bars
+        ├── enrollments/
+        │   └── EnrollmentsList.tsx
+        └── members/
+            └── MembersList.tsx
 ```
 
 ---
