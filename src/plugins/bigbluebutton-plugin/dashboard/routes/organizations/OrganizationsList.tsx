@@ -79,6 +79,7 @@ export function OrganizationsList() {
 
   // Create form
   const [newChannelId, setNewChannelId] = useState('');
+  const [newTenantProfileId, setNewTenantProfileId] = useState('');
   const [newSlug, setNewSlug] = useState('');
   const [newName, setNewName] = useState('');
   const [newConcurrentLimit, setNewConcurrentLimit] = useState(5);
@@ -167,6 +168,10 @@ export function OrganizationsList() {
                 <Input id="channelId" value={newChannelId} onChange={(e) => setNewChannelId(e.target.value)} placeholder="Vendure Channel ID" />
               </div>
               <div className="grid gap-2">
+                <Label htmlFor="tenantProfileId">Tenant Profile ID</Label>
+                <Input id="tenantProfileId" value={newTenantProfileId} onChange={(e) => setNewTenantProfileId(e.target.value)} placeholder="TenantProfile ID" />
+              </div>
+              <div className="grid gap-2">
                 <Label htmlFor="slug">Slug</Label>
                 <Input id="slug" value={newSlug} onChange={(e) => setNewSlug(e.target.value)} placeholder="acme-academy" />
               </div>
@@ -187,7 +192,7 @@ export function OrganizationsList() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-              <Button onClick={() => createMutation.mutate({ channelId: newChannelId, slug: newSlug, name: newName, concurrentMeetingLimit: newConcurrentLimit, maxParticipantsPerMeeting: newMaxParticipants })} disabled={!newChannelId || !newSlug || !newName || createMutation.isPending}>
+              <Button onClick={() => createMutation.mutate({ channelId: newChannelId, tenantProfileId: newTenantProfileId, slug: newSlug, name: newName, concurrentMeetingLimit: newConcurrentLimit, maxParticipantsPerMeeting: newMaxParticipants })} disabled={!newChannelId || !newTenantProfileId || !newSlug || !newName || createMutation.isPending}>
                 {createMutation.isPending ? 'Creating...' : 'Create'}
               </Button>
             </DialogFooter>

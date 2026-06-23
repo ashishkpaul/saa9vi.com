@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { RequestContext, TransactionalConnection } from '@vendure/core';
+import { RequestContext, TransactionalConnection, EntityNotFoundError } from '@vendure/core';
 import { MediaResource } from '../entities/media-resource.entity';
 
 @Injectable()
@@ -43,12 +43,19 @@ export class MediaResourceService {
   }
 
   async update(ctx: RequestContext, id: string, input: Partial<MediaResource>): Promise<MediaResource> {
-    const resource = await this.connection.getEntityOrThrow(ctx, MediaResource, id);
+    const resource = await this.connection.getRepository(ctx, MediaResource).findOne({ where: { id: id as string, channelId: ctx.channelId as string } });
+    if (!resource) {
+      throw new EntityNotFoundError(MediaResource.name, id);
+    }
     Object.assign(resource, input);
     return this.connection.getRepository(ctx, MediaResource).save(resource);
   }
 
   async delete(ctx: RequestContext, id: string): Promise<void> {
+    const resource = await this.connection.getRepository(ctx, MediaResource).findOne({ where: { id: id as string, channelId: ctx.channelId as string } });
+    if (!resource) {
+      throw new EntityNotFoundError(MediaResource.name, id);
+    }
     await this.connection.getRepository(ctx, MediaResource).delete(id);
   }
 }
