@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, Input, Label, Switch, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
+import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
 import { toast } from 'sonner';
 import { useState } from 'react';
 
@@ -20,6 +20,22 @@ const GET_ORGANIZATIONS = `
     }
   }
 `;
+
+const GET_CHANNELS = `
+  query GetChannelsForOrg {
+    channels {
+      items {
+        id
+        code
+        token
+      }
+    }
+  }
+`;
+
+// Note: TenantProfile is resolved per-channel via tenantProfile(channelId: String!)
+// There's no bulk list query, so we keep this as a manual input for now.
+// In a future iteration, this could be replaced with a channel-based auto-lookup.
 
 const CREATE_ORGANIZATION = `
   mutation CreateBbbOrganization($input: CreateBbbOrganizationInput!) {
@@ -62,6 +78,18 @@ interface BbbOrganization {
   suspended: boolean;
 }
 
+interface Channel {
+  id: string;
+  code: string;
+  token: string;
+}
+
+interface TenantProfile {
+  id: string;
+  businessName: string;
+  channelId: string;
+}
+
 interface OrgsResponse {
   bbbOrganizations: {
     items: BbbOrganization[];
@@ -98,6 +126,13 @@ export function OrganizationsList() {
       }),
     placeholderData: (prev) => prev,
   });
+
+  const channelsQuery = useQuery<{ channels: { items: Channel[] } }>({
+    queryKey: ['channelsForOrg'],
+    queryFn: () => api.query(GET_CHANNELS),
+  });
+  const channels = channelsQuery.data?.channels?.items ?? [];
+
 
   const organizations = data?.bbbOrganizations?.items ?? [];
   const totalItems = data?.bbbOrganizations?.totalItems ?? 0;
@@ -164,12 +199,27 @@ export function OrganizationsList() {
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
-                <Label htmlFor="channelId">Channel ID</Label>
-                <Input id="channelId" value={newChannelId} onChange={(e) => setNewChannelId(e.target.value)} placeholder="Vendure Channel ID" />
+                <Label htmlFor="channelId">Channel</Label>
+                <Select value={newChannelId} onValueChange={(val) => {
+                  setNewChannelId(val);
+                  // Auto-populate slug from channel code
+                  const ch = channels.find(c => c.id === val);
+                  if (ch && !newSlug) setNewSlug(ch.code.toLowerCase().replace(/\s+/g, '-'));
+                }}>
+                  <SelectTrigger><SelectValue placeholder={channelsQuery.isLoading ? 'Loading channels...' : 'Select channel'} /></SelectTrigger>
+                  <SelectContent>
+                    {channels.map(ch => <SelectItem key={ch.id} value={ch.id}>{ch.code} ({ch.token?.substring(0,12)}...)</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                {newChannelId && channelsQuery.error && <p className="text-xs text-red-500">Channel lookup unavailable</p>}
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="tenantProfileId">Tenant Profile ID</Label>
-                <Input id="tenantProfileId" value={newTenantProfileId} onChange={(e) => setNewTenantProfileId(e.target.value)} placeholder="TenantProfile ID" />
+                <Input id="tenantProfileId" value={newTenantProfileId} onChange={(e) => setNewTenantProfileId(e.target.value)} placeholder="Enter TenantProfile ID (optional)" />
+                <p className="text-xs text-muted-foreground">
+                  Optional — set up via Academy → Tenant Profile first, then enter the ID here. 
+                  Auto-lookup will be added when a bulk query becomes available.
+                </p>
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="slug">Slug</Label>
@@ -192,7 +242,7 @@ export function OrganizationsList() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-              <Button onClick={() => createMutation.mutate({ channelId: newChannelId, tenantProfileId: newTenantProfileId, slug: newSlug, name: newName, concurrentMeetingLimit: newConcurrentLimit, maxParticipantsPerMeeting: newMaxParticipants })} disabled={!newChannelId || !newTenantProfileId || !newSlug || !newName || createMutation.isPending}>
+              <Button onClick={() => createMutation.mutate({ channelId: newChannelId, tenantProfileId: newTenantProfileId || undefined, slug: newSlug, name: newName, concurrentMeetingLimit: newConcurrentLimit, maxParticipantsPerMeeting: newMaxParticipants })} disabled={!newChannelId || !newSlug || !newName || createMutation.isPending}>
                 {createMutation.isPending ? 'Creating...' : 'Create'}
               </Button>
             </DialogFooter>

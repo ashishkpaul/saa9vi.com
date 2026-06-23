@@ -27,6 +27,10 @@ export class BbbCapacityGrant extends VendureEntity {
   @Column({ nullable: true })
   orderLineId: string;
 
+  /** FK to Vendure ProductVariant.id — enables product→capacity analytics without Order joins */
+  @Column({ nullable: true })
+  productVariantId: string;
+
   /** Total meeting minutes granted. UI divides by 60 for display. */
   @Column({ type: "int", default: 600 })
   grantedMinutes: number;

@@ -1,4 +1,4 @@
-import { MonitorIcon, ServerIcon, BuildingIcon, DoorOpenIcon, VideoIcon, UsersIcon, ClipboardIcon, CreditCardIcon } from 'lucide-react';
+import { MonitorIcon, ServerIcon, BuildingIcon, DoorOpenIcon, VideoIcon, UsersIcon, ClipboardIcon, CreditCardIcon, ClipboardCheckIcon } from 'lucide-react';
 import { defineDashboardExtension } from '@vendure/dashboard';
 
 import { ServersList } from './routes/servers';
@@ -8,6 +8,7 @@ import { MeetingsList } from './routes/meetings';
 import { MembersList } from './routes/members';
 import { EnrollmentsList } from './routes/enrollments';
 import { PlansList } from './routes/plans';
+import { TrialRegistrationsList } from './routes/trials/TrialRegistrationsList';
 
 export default defineDashboardExtension({
     navSections: [
@@ -53,7 +54,12 @@ export default defineDashboardExtension({
         {
             path: '/bbb/plans',
             component: () => <PlansList />,
-            navMenuItem: { sectionId: 'bbb', title: 'Plans', icon: CreditCardIcon, id: 'bbb-plans', url: '/bbb/plans', requiresPermission: ['BBBAdmin'] },
+            navMenuItem: { sectionId: 'bbb', title: 'Capacity Grants', icon: CreditCardIcon, id: 'bbb-plans', url: '/bbb/plans', requiresPermission: ['BBBAdmin'] },
+        },
+        {
+            path: '/bbb/trials',
+            component: () => <TrialRegistrationsList />,
+            navMenuItem: { sectionId: 'bbb', title: 'Trial Registrations', icon: ClipboardCheckIcon, id: 'bbb-trials', url: '/bbb/trials', requiresPermission: ['BBBAdmin'] },
         },
     ],
 });

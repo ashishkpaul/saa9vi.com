@@ -57,6 +57,8 @@ export const adminApiExtensions = gql`
     createdAt: DateTime!
     updatedAt: DateTime!
     orderId: ID
+    orderLineId: ID
+    productVariantId: ID
     grantedMinutes: Int!
     consumedMinutes: Int!
     validFrom: DateTime!
@@ -145,6 +147,17 @@ export const adminApiExtensions = gql`
 
   # ─── Scheduled Session types ─────────────────────────────────────────────────
 
+  type BbbTrialRegistration {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    scheduledSessionId: ID!
+    customerId: ID!
+    status: String!
+    registeredAt: DateTime!
+    attendedAt: DateTime
+  }
+
   type BbbScheduledSession {
     id: ID!
     createdAt: DateTime!
@@ -206,6 +219,8 @@ export const adminApiExtensions = gql`
     ): BbbEnrollmentList!
     bbbProductVariantSearch(term: String!): [BbbProductVariantResult!]!
     bbbScheduledSessions(organizationId: ID!): [BbbScheduledSession!]!
+    bbbTrialRegistrationsBySession(sessionId: ID!): [BbbTrialRegistration!]!
+    bbbTrialRegistrationsByOrganization(organizationId: ID!): [BbbTrialRegistration!]!
   }
 
   # ─── Mutations ───────────────────────────────────────────────────────────────
@@ -236,6 +251,7 @@ export const adminApiExtensions = gql`
       input: CreateBbbScheduledSessionInput!
     ): BbbScheduledSession!
     cancelBbbScheduledSession(id: ID!): BbbScheduledSession!
+    updateBbbTrialRegistrationStatus(id: ID!, status: String!): BbbTrialRegistration!
     addBbbMember(input: AddBbbMemberInput!): BbbOrganizationMember!
     updateBbbMember(
       id: ID!

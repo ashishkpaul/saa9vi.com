@@ -12,7 +12,7 @@ const GET_ORGS = `
 const GET_GRANTS = `
   query GetBbbCapacityGrants($organizationId: ID!) {
     bbbCapacityGrants(organizationId: $organizationId) {
-      id grantedMinutes consumedMinutes validFrom validUntil exhausted orderId
+      id grantedMinutes consumedMinutes validFrom validUntil exhausted orderId orderLineId productVariantId
     }
   }
 `;
@@ -28,6 +28,7 @@ const CREATE_GRANT = `
 interface Grant {
   id: string; grantedMinutes: number; consumedMinutes: number;
   validFrom: string; validUntil: string; exhausted: boolean; orderId?: string;
+  orderLineId?: string; productVariantId?: string;
 }
 
 export function PlansList() {
@@ -38,15 +39,21 @@ export function PlansList() {
   const [validityDays, setValidityDays] = useState(30);
   const [saving, setSaving] = useState(false);
 
-  const orgsQuery = useQuery<any>({ queryKey: ['bbbOrgsForPlans'], queryFn: () => api.query(GET_ORGS) });
+  const orgsQuery = useQuery<any>({
+    queryKey: ['bbbOrgsForPlans'],
+    queryFn: () => api.query(GET_ORGS),
+    staleTime: 5 * 60 * 1000, // 5 min — orgs don't change frequently
+  });
   const organizations = orgsQuery.data?.bbbOrganizations?.items ?? [];
 
-  // Select first org by default
+  // Select first org by default — depend on query data, not derived array,
+  // to avoid stale closures when data arrives after initial mount
   useEffect(() => {
-    if (!selectedOrgId && organizations.length > 0) {
-      setSelectedOrgId(organizations[0].id);
+    const items = orgsQuery.data?.bbbOrganizations?.items ?? [];
+    if (!selectedOrgId && items.length > 0) {
+      setSelectedOrgId(items[0].id);
     }
-  }, [organizations]);
+  }, [orgsQuery.data, selectedOrgId]);
 
   const grantsQuery = useQuery<{ bbbCapacityGrants: Grant[] }>({
     queryKey: ['bbbGrants', selectedOrgId],
@@ -109,8 +116,8 @@ export function PlansList() {
   return (
     <div className="p-6">
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">BBB Plans</h1>
-        <Button onClick={() => setShowCreate(!showCreate)}>Add Plan</Button>
+        <h1 className="text-2xl font-bold">Capacity Grants</h1>
+        <Button onClick={() => setShowCreate(!showCreate)}>Grant Capacity (Admin Override)</Button>
       </div>
 
       <div className="max-w-xs mb-6">
@@ -125,9 +132,9 @@ export function PlansList() {
 
       {showCreate && selectedOrgId && (
         <Card className="mb-6 p-4">
-          <h3 className="font-semibold mb-3">Add Plan</h3>
+          <h3 className="font-semibold mb-3">Grant Capacity</h3>
           <p className="text-sm text-muted-foreground mb-4">
-            Plans grant meeting-hour capacity to an organization. Grants are consumed per-provisioned-meeting and picked earliest-expiry-first.
+            Admin override: manually grants meeting-hour capacity to an organization. Normal capacity comes from fulfilled orders. Grants are consumed per-provisioned-meeting, picked earliest-expiry-first.
           </p>
           <div className="grid grid-cols-2 gap-4 max-w-md mb-4">
             <div>
@@ -144,7 +151,7 @@ export function PlansList() {
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>
             <Button onClick={createGrant} disabled={!hours || !validityDays || saving}>
-              {saving ? 'Creating...' : 'Create Plan'}
+              {saving ? 'Granting...' : 'Grant Capacity'}
             </Button>
           </div>
         </Card>
@@ -181,9 +188,9 @@ export function PlansList() {
               <div className="p-4 space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
             ) : grants.length === 0 ? (
               <div className="p-6 text-center">
-                <p className="text-muted-foreground mb-4">No plans yet for this organization.</p>
-                <p className="text-sm text-muted-foreground mb-4">Plans grant meeting-hour capacity. Without an active plan, meeting provisioning will fail.</p>
-                <Button onClick={() => setShowCreate(true)}>Add First Plan</Button>
+                <p className="text-muted-foreground mb-4">No capacity grants yet for this organization.</p>
+                <p className="text-sm text-muted-foreground mb-4">Capacity grants allocate meeting-hour capacity. Without an active grant, meeting provisioning will fail. Grants are normally created via fulfilled orders.</p>
+                <Button onClick={() => setShowCreate(true)}>Grant First Capacity (Admin Override)</Button>
               </div>
             ) : (
               <Table>
@@ -193,7 +200,7 @@ export function PlansList() {
                     <TableHead>Hours Used / Granted</TableHead>
                     <TableHead>Valid From</TableHead>
                     <TableHead>Valid Until</TableHead>
-                    <TableHead>Source</TableHead>
+                      <TableHead>Source / Product</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -222,9 +229,12 @@ export function PlansList() {
                       </TableCell>
                       <TableCell>
                         {g.orderId ? (
-                          <span className="text-sm">Order #{g.orderId}</span>
+                          <div>
+                            <span className="text-sm">Order #{g.orderId}</span>
+                            {g.productVariantId && <div className="text-xs text-muted-foreground">Variant: {g.productVariantId}</div>}
+                          </div>
                         ) : (
-                          <span className="text-sm text-muted-foreground">Manual</span>
+                          <span className="text-sm text-muted-foreground">Admin Override</span>
                         )}
                       </TableCell>
                     </TableRow>

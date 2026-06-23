@@ -25,6 +25,8 @@ import { BbbProductAccess } from "../entities/bbb-product-access.entity";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbAdminPermission } from "../constants";
+import { TrialRegistrationService } from "../services/trial-registration.service";
+import { BbbTrialRegistration } from "../entities/trial-registration.entity";
 
 import { Customer, EntityNotFoundError } from "@vendure/core";
 
@@ -124,6 +126,7 @@ export class BbbAdminResolver {
     private readonly memberService: BbbMemberService,
     private readonly roomService: BbbRoomService,
     private readonly scheduledSessionService: BbbScheduledSessionService,
+    private readonly trialRegistrationService: TrialRegistrationService,
     private readonly connection: TransactionalConnection,
   ) {}
 
@@ -705,6 +708,47 @@ export class BbbAdminResolver {
       sku: v.sku,
       productName: (v.product?.translations?.[0] as any)?.name ?? "",
     }));
+  }
+
+  // ─── Trial Registrations (Admin) ───────────────────────────────────────────
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  async bbbTrialRegistrationsBySession(
+    @Ctx() ctx: RequestContext,
+    @Args("sessionId") sessionId: string,
+  ): Promise<BbbTrialRegistration[]> {
+    const result = await this.trialRegistrationService.findAllBySession(ctx, sessionId);
+    return result.items;
+  }
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  async bbbTrialRegistrationsByOrganization(
+    @Ctx() ctx: RequestContext,
+    @Args("organizationId") orgId: string,
+  ): Promise<BbbTrialRegistration[]> {
+    // Fetch all scheduled sessions for the org, then collect registrations
+    const sessions = await this.scheduledSessionService.findByOrganization(ctx, orgId);
+    const allRegistrations: BbbTrialRegistration[] = [];
+    for (const session of sessions) {
+      const result = await this.trialRegistrationService.findAllBySession(ctx, String(session.id));
+      allRegistrations.push(...result.items);
+    }
+    // Sort by registeredAt DESC
+    allRegistrations.sort((a, b) => b.registeredAt.getTime() - a.registeredAt.getTime());
+    return allRegistrations;
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async updateBbbTrialRegistrationStatus(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+    @Args("status") status: "REGISTERED" | "ATTENDED" | "CANCELLED" | "NO_SHOW",
+  ): Promise<BbbTrialRegistration> {
+    return this.trialRegistrationService.updateStatus(ctx, String(id), status);
   }
 
   // ─── Scheduled Sessions ────────────────────────────────────────────────────

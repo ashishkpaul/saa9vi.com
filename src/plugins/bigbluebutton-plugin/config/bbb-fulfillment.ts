@@ -82,10 +82,18 @@ export const bbbFulfillmentHandler = new FulfillmentHandler({
         const validUntil = new Date(
           Date.now() + (args.validityDays as number) * 24 * 60 * 60 * 1000,
         );
+        // Resolve productVariantId from the order line for traceability
+        const orderLine = order.lines.find(
+          (l) => String(l.id) === String(line.orderLineId),
+        );
+        const productVariantId = orderLine
+          ? String(orderLine.productVariant.id)
+          : undefined;
         const grant = new BbbCapacityGrant({
           organization: org,
           orderId: String(order.id),
           orderLineId: String(line.orderLineId),
+          productVariantId,
           grantedMinutes: (args.grantedHours as number) * 60,
           consumedMinutes: 0,
           validFrom,
@@ -104,8 +112,9 @@ export const bbbFulfillmentHandler = new FulfillmentHandler({
         );
       }
 
-      // ── 2. Room enrollment (new) ───────────────────────────────────────────
-      // Resolve the productVariantId from the order lines.
+      // ── 2. Room enrollment ─────────────────────────────────────────────────
+      // Resolve the productVariantId from the order lines (already fetched above
+      // for the capacity grant, but guard against a missing line just in case).
       const orderLine = order.lines.find(
         (l) => String(l.id) === String(line.orderLineId),
       );
