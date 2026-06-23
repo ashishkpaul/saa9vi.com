@@ -53,7 +53,7 @@ export class InstructorProfileService {
   async findOne(ctx: RequestContext, id: string): Promise<InstructorProfile | null> {
     return this.connection
       .getRepository(ctx, InstructorProfile)
-      .findOne({ where: { id: id as string }, relations: ['customer', 'createdBy'] });
+      .findOne({ where: { id: id as string, channelId: ctx.channelId as string }, relations: ['customer', 'createdBy'] });
   }
 
   async findPublicBySlug(ctx: RequestContext, slug: string): Promise<InstructorProfile | null> {
@@ -83,6 +83,10 @@ export class InstructorProfileService {
   }
 
   async delete(ctx: RequestContext, id: string): Promise<void> {
+    const profile = await this.connection.getRepository(ctx, InstructorProfile).findOne({ where: { id: id as string } });
+    if (!profile || profile.channelId !== ctx.channelId) {
+      throw new EntityNotFoundError(InstructorProfile.name, id);
+    }
     await this.connection.getRepository(ctx, InstructorProfile).delete(id);
   }
 }

@@ -33,7 +33,7 @@ export class MediaResourceService {
   async findOne(ctx: RequestContext, id: string): Promise<MediaResource | null> {
     return this.connection
       .getRepository(ctx, MediaResource)
-      .findOne({ where: { id: id as string } });
+      .findOne({ where: { id: id as string, channelId: ctx.channelId as string } });
   }
 
   async create(ctx: RequestContext, input: Partial<MediaResource>): Promise<MediaResource> {

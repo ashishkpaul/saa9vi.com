@@ -1,10 +1,13 @@
 import { Injectable } from '@nestjs/common';
-import { RequestContext, TransactionalConnection } from '@vendure/core';
+import { RequestContext, TransactionalConnection, ChannelService } from '@vendure/core';
 import { TenantProfile } from '../entities/tenant-profile.entity';
 
 @Injectable()
 export class TenantProfileService {
-  constructor(private readonly connection: TransactionalConnection) {}
+  constructor(
+    private readonly connection: TransactionalConnection,
+    private readonly channelService: ChannelService,
+  ) {}
 
   async findByChannelId(ctx: RequestContext, channelId: string): Promise<TenantProfile | null> {
     return this.connection
@@ -29,6 +32,7 @@ export class TenantProfileService {
       throw new Error(`TenantProfile already exists for channel ${input.channelId}`);
     }
     const profile = new TenantProfile(input);
+    await this.channelService.assignToCurrentChannel(profile, ctx);
     return this.connection.getRepository(ctx, TenantProfile).save(profile);
   }
 

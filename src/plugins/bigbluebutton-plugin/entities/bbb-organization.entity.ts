@@ -1,22 +1,27 @@
-// src/plugins/bigbluebutton-plugin/entities/bbb-organization.entity.ts
-// CHANGE: Added members OneToMany relation (required by M1)
-
 import type { DeepPartial } from "@vendure/common/lib/shared-types";
-import { VendureEntity } from "@vendure/core";
-import { Column, Entity, OneToMany } from "typeorm";
+import { VendureEntity, Channel, ChannelAware } from "@vendure/core";
+import { Column, Entity, Index, ManyToMany, JoinTable, OneToMany } from "typeorm";
 import { BbbMeeting } from "./bbb-meeting.entity";
 import { BbbCapacityGrant } from "./bbb-capacity-grant.entity";
 import { BbbOrganizationMember } from "./bbb-organization-member.entity";
 import { BbbRoom } from "./bbb-room.entity";
 
 @Entity("bbb_organization")
-export class BbbOrganization extends VendureEntity {
+export class BbbOrganization extends VendureEntity implements ChannelAware {
   constructor(input?: DeepPartial<BbbOrganization>) {
     super(input);
   }
 
-  @Column({ unique: true })
+  @ManyToMany(() => Channel)
+  @JoinTable()
+  channels: Channel[];
+
+  @Index({ unique: true })
+  @Column()
   channelId: string;
+
+  @Column({ nullable: true })
+  tenantProfileId: string;
 
   /**
    * The Vendure User.id that owns this organization.
@@ -26,7 +31,8 @@ export class BbbOrganization extends VendureEntity {
   @Column({ nullable: true })
   ownerUserId: string;
 
-  @Column({ unique: true })
+  @Index({ unique: true })
+  @Column()
   slug: string;
 
   @Column()
@@ -50,7 +56,6 @@ export class BbbOrganization extends VendureEntity {
   @OneToMany(() => BbbCapacityGrant, (g) => g.organization)
   grants: BbbCapacityGrant[];
 
-  // ─── ADDED (M1) ─────────────────────────────────────────────────────────────
   @OneToMany(() => BbbOrganizationMember, (m) => m.organization)
   members: BbbOrganizationMember[];
 

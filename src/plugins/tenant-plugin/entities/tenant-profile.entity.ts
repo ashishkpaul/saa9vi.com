@@ -1,21 +1,21 @@
-import { Channel, DeepPartial, VendureEntity, EntityId, ID } from '@vendure/core';
-import { Column, Entity, ManyToOne, JoinColumn, Index } from 'typeorm';
+import { Channel, DeepPartial, VendureEntity, EntityId, ID, ChannelAware } from '@vendure/core';
+import { Column, Entity, ManyToMany, JoinTable, ManyToOne, JoinColumn, Index } from 'typeorm';
 
 @Entity()
-export class TenantProfile extends VendureEntity {
+export class TenantProfile extends VendureEntity implements ChannelAware {
   constructor(input?: DeepPartial<TenantProfile>) {
     super(input);
   }
 
-  @ManyToOne(() => Channel)
-  @JoinColumn()
-  channel: Channel;
+  @ManyToMany(() => Channel)
+  @JoinTable()
+  channels: Channel[];
 
   @Index()
   @Column()
   channelId: string;
 
-  @Column({ unique: true })
+  @Column()
   businessName: string;
 
   @Column({ nullable: true })

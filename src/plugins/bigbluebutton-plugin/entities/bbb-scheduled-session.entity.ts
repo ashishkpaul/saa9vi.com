@@ -65,4 +65,7 @@ export class BbbScheduledSession extends VendureEntity {
   @Index({ unique: true })
   @Column({ type: "varchar", nullable: true })
   slug: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  productVariantId: string | null;
 }

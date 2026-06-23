@@ -2,6 +2,7 @@ import { Channel, Customer, DeepPartial, VendureEntity, EntityId, ID } from '@ve
 import { Column, Entity, Index, ManyToOne, JoinColumn } from 'typeorm';
 
 @Entity()
+@Index(['channelId', 'slug'], { unique: true })
 export class InstructorProfile extends VendureEntity {
   constructor(input?: DeepPartial<InstructorProfile>) {
     super(input);
@@ -31,7 +32,7 @@ export class InstructorProfile extends VendureEntity {
   createdById: string;
 
   @Index()
-  @Column({ unique: true })
+  @Column()
   slug: string;
 
   @Column()

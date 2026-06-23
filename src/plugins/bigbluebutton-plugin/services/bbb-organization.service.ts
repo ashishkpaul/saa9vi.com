@@ -4,6 +4,7 @@ import {
   RequestContext,
   TransactionalConnection,
   EntityNotFoundError,
+  ChannelService,
 } from "@vendure/core";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbOrganizationMember } from "../entities/bbb-organization-member.entity";
@@ -12,6 +13,7 @@ import { MEETING_STATE } from "../constants";
 
 export interface CreateBbbOrganizationInput {
   channelId: string;
+  tenantProfileId: string;
   slug: string;
   name: string;
   concurrentMeetingLimit?: number;
@@ -29,7 +31,10 @@ export interface UpdateBbbOrganizationInput {
 
 @Injectable()
 export class BbbOrganizationService {
-  constructor(private readonly connection: TransactionalConnection) {}
+  constructor(
+    private readonly connection: TransactionalConnection,
+    private readonly channelService: ChannelService,
+  ) {}
 
   async findAll(
     ctx: RequestContext,
@@ -154,12 +159,14 @@ export class BbbOrganizationService {
     }
     const org = new BbbOrganization({
       channelId: input.channelId,
+      tenantProfileId: input.tenantProfileId,
       slug: input.slug,
       name: input.name,
       concurrentMeetingLimit: input.concurrentMeetingLimit ?? 5,
       maxParticipantsPerMeeting: input.maxParticipantsPerMeeting ?? 30,
       recordingEnabled: input.recordingEnabled ?? false,
     });
+    await this.channelService.assignToCurrentChannel(org, ctx);
     return this.connection.getRepository(ctx, BbbOrganization).save(org);
   }
 

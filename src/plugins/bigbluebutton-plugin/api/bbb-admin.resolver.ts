@@ -51,8 +51,9 @@ interface UpdateBbbServerInput {
   enabled?: boolean;
 }
 
-interface CreateBbbOrganizationInput {
+interface AdminCreateBbbOrganizationInput {
   channelId: string;
+  tenantProfileId: string;
   slug: string;
   name: string;
   concurrentMeetingLimit?: number;
@@ -181,7 +182,7 @@ export class BbbAdminResolver {
   @Mutation()
   @Allow(BbbAdminPermission.Permission)
   @Transaction()
-  createBbbOrganization(@Ctx() ctx: RequestContext, @Args("input") input: CreateBbbOrganizationInput) {
+  createBbbOrganization(@Ctx() ctx: RequestContext, @Args("input") input: AdminCreateBbbOrganizationInput) {
     return this.orgService.create(ctx, input);
   }
 
