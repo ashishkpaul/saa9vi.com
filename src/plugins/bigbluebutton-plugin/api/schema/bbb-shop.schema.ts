@@ -59,6 +59,10 @@ export const shopApiExtensions = gql`
     endTime: DateTime!
     status: String!
     trainerName: String
+    isTrial: Boolean!
+    visibility: String!
+    maxAttendees: Int
+    slug: String
     """
     Present only when trainer has started the session
     """
@@ -69,6 +73,15 @@ export const shopApiExtensions = gql`
     joinUrl: String
   }
 
+  type BbbTrialRegistrationPublic {
+    id: ID!
+    sessionId: ID!
+    sessionTitle: String
+    status: String!
+    registeredAt: DateTime!
+    attendedAt: DateTime
+  }
+
   extend type Query {
     myBbbMeetings(skip: Int, take: Int): BbbMeetingPublicList!
     myBbbCapacityGrants: [BbbCapacityGrantPublic!]!
@@ -76,6 +89,8 @@ export const shopApiExtensions = gql`
     bbbRoomStatus(id: ID!): BbbRoomPublic
     myScheduledSessions: [BbbScheduledSessionPublic!]!
     myBbbEnrollments: [BbbEnrollmentPublic!]!
+    myTrialRegistrations: [BbbTrialRegistrationPublic!]!
+    publicScheduledSessions: [BbbScheduledSessionPublic!]!
   }
 
   extend type Mutation {
@@ -85,5 +100,6 @@ export const shopApiExtensions = gql`
     Trainer starts a scheduled session - provisions a BBB meeting
     """
     startScheduledSession(sessionId: ID!): BbbScheduledSessionPublic!
+    registerForTrial(sessionId: ID!): BbbTrialRegistrationPublic!
   }
 `;

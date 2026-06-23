@@ -1,6 +1,6 @@
 type Option = { value: string; label: string; disabled?: boolean };
 
-export function ChannelMultiselect({
+export function ChannelMultiSelect({
   value,
   onChange,
   options,
@@ -12,6 +12,7 @@ export function ChannelMultiselect({
   removeOnly?: boolean;
 }) {
   const selected = new Set(value?.channelIds ?? []);
+  const safeOptions = options ?? [];
 
   return (
     <div>
@@ -25,7 +26,7 @@ export function ChannelMultiselect({
         }}
         className="w-full rounded-md border border-gray-300 bg-white p-2"
       >
-        {options.map((opt) => (
+        {safeOptions.map((opt) => (
           <option key={opt.value} value={opt.value} disabled={removeOnly && !selected.has(opt.value)}>
             {opt.label}
           </option>
@@ -44,4 +45,4 @@ function multiValueToArray(value: string | string[] | undefined): string[] {
   return [value];
 }
 
-export default ChannelMultiselect;
+export default ChannelMultiSelect;

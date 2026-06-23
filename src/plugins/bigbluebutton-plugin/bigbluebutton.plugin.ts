@@ -17,6 +17,8 @@ import { BbbScheduledSession } from "./entities/bbb-scheduled-session.entity";
 import { BbbRoom } from "./entities/bbb-room.entity";
 import { BbbEnrollment } from "./entities/bbb-enrollment.entity";
 import { BbbProductAccess } from "./entities/bbb-product-access.entity";
+import { BbbTrialRegistration } from "./entities/trial-registration.entity";
+import { BbbInstructorAssignment } from "./entities/instructor-assignment.entity";
 
 import { BbbEncryptionService } from "./services/bbb-encryption.service";
 import { BbbApiService } from "./services/bbb-api.service";
@@ -30,6 +32,7 @@ import { BbbScheduledSessionService } from "./services/bbb-scheduled-session.ser
 import { BbbRoomLockService } from "./services/bbb-room-lock.service";
 import { BbbServerSelectionService } from "./services/bbb-server-selection.service";
 import { BbbMetricsService } from "./services/bbb-metrics.service";
+import { TrialRegistrationService } from "./services/trial-registration.service";
 
 import { BbbAdminResolver } from "./api/bbb-admin.resolver";
 import { BbbShopResolver } from "./api/bbb-shop.resolver";
@@ -58,6 +61,8 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     BbbRoom,
     BbbEnrollment,
     BbbProductAccess,
+    BbbTrialRegistration,
+    BbbInstructorAssignment,
   ],
 
   providers: [
@@ -77,6 +82,7 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     BbbMetricsService,
     BbbRoomLockService,
     BbbServerSelectionService,
+    TrialRegistrationService,
   ],
 
   adminApiExtensions: {

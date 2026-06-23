@@ -17,6 +17,7 @@ import path from "path";
 import { BullMQJobQueuePlugin } from "@vendure/job-queue-plugin/package/bullmq";
 import { BigBlueButtonPlugin } from "./plugins/bigbluebutton-plugin";
 import { CmsPlugin } from "./plugins/cms/cms.plugin";
+import { TenantPlugin } from "./plugins/tenant-plugin/tenant-plugin.plugin";
 
 const IS_DEV = process.env.APP_ENV === "dev";
 const serverPort = +process.env.PORT || 3000;
@@ -81,7 +82,7 @@ export const config: VendureConfig = {
       // to be set manually to match your production url.
       assetUrlPrefix: IS_DEV ? undefined : "http://localhost:3000/assets/",
     }),
-    // DefaultSchedulerPlugin.init(),
+    DefaultSchedulerPlugin.init(),
     BullMQJobQueuePlugin.init({
       connection: {
         host: process.env.REDIS_HOST || "localhost",
@@ -116,6 +117,7 @@ export const config: VendureConfig = {
         : path.join(__dirname, "dashboard"),
     }),
 
+    TenantPlugin,
     // BigBlueButtonPlugin - Meeting hosting, joining, and selling access
     // All timing/performance parameters can be configured via .env variables.
     // See BBB_* vars in .env for full reference.

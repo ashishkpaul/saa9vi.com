@@ -52,4 +52,17 @@ export class BbbScheduledSession extends VendureEntity {
   @OneToOne(() => BbbMeeting, { nullable: true })
   @JoinColumn()
   activeMeeting: BbbMeeting | null;
+
+  @Column({ default: false })
+  isTrial: boolean;
+
+  @Column({ default: "PRIVATE" })
+  visibility: string;
+
+  @Column({ type: "int", nullable: true })
+  maxAttendees: number | null;
+
+  @Index({ unique: true })
+  @Column({ type: "varchar", nullable: true })
+  slug: string | null;
 }

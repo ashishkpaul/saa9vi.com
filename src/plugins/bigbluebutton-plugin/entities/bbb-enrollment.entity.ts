@@ -46,6 +46,10 @@ export class BbbEnrollment extends VendureEntity {
   @Column({ type: "timestamp", nullable: true })
   expiresAt: Date | null;
 
+  /**
+   * @deprecated Legacy access control. Future replacement: Entitlement entity.
+   * Continue using for paid fulfillments only.
+   */
   /** How the enrollment was created — for audit and future filtering */
   @Column({ type: "varchar", default: "purchase" })
   source: EnrollmentSource;

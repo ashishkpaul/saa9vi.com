@@ -18,7 +18,10 @@ import { BbbOrganizationService } from "../services/bbb-organization.service";
 import { BbbRoomService } from "../services/bbb-room.service";
 import { BbbMemberService } from "../services/bbb-member.service";
 import { BbbScheduledSessionService } from "../services/bbb-scheduled-session.service";
+import { TrialRegistrationService } from "../services/trial-registration.service";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
+import { BbbTrialRegistration } from "../entities/trial-registration.entity";
+import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbRoom } from "../entities/bbb-room.entity";
@@ -33,6 +36,7 @@ export class BbbShopResolver {
     private readonly memberService: BbbMemberService,
     private readonly sessionService: BbbScheduledSessionService,
     private readonly connection: TransactionalConnection,
+    private readonly trialRegistrationService: TrialRegistrationService,
   ) {}
 
   @Query()
@@ -278,7 +282,7 @@ export class BbbShopResolver {
         let joinUrl: string | null = null;
         let trainerName: string | null = null;
 
-        // Resolve actual trainer name from Customer entity
+        // Resolve actual trainer name from Customer entity via customerId
         if (session.trainer) {
           const trainerCustomer = await this.connection
             .getRepository(ctx, Customer)
@@ -326,6 +330,107 @@ export class BbbShopResolver {
         };
       }),
     );
+  }
+
+  @Query()
+  @Allow(Permission.Public)
+  async publicScheduledSessions(@Ctx() ctx: RequestContext): Promise<
+    Array<{
+      id: string;
+      title: string;
+      startTime: string;
+      endTime: string;
+      status: string;
+      trainerName: string | null;
+      isTrial: boolean;
+      visibility: string;
+      maxAttendees: number | null;
+      slug: string | null;
+      activeMeetingId: string | null;
+      joinUrl: string | null;
+    }>
+  > {
+    const sessions = await this.connection
+      .getRepository(ctx, BbbScheduledSession)
+      .find({
+        where: { visibility: "PUBLIC", isTrial: true },
+        order: { startTime: "ASC" },
+      });
+
+    return sessions.map((s) => ({
+      id: s.id as string,
+      title: s.title,
+      startTime: s.startTime.toISOString(),
+      endTime: s.endTime.toISOString(),
+      status: s.status,
+      trainerName: null,
+      isTrial: s.isTrial,
+      visibility: s.visibility,
+      maxAttendees: s.maxAttendees,
+      slug: s.slug,
+      activeMeetingId: s.activeMeeting?.id ? (s.activeMeeting.id as string) : null,
+      joinUrl: null,
+    }));
+  }
+
+  @Query()
+  @Allow(Permission.Authenticated)
+  async myTrialRegistrations(@Ctx() ctx: RequestContext): Promise<
+    Array<{
+      id: string;
+      sessionId: string;
+      sessionTitle: string | null;
+      status: string;
+      registeredAt: string;
+      attendedAt: string | null;
+    }>
+  > {
+    if (!ctx.activeUserId) throw new Error("Unauthenticated");
+    const customerId = ctx.activeUserId as string;
+    const registrations = await this.connection
+      .getRepository(ctx, BbbTrialRegistration)
+      .find({
+        where: { customerId },
+        order: { registeredAt: "DESC" },
+        relations: ["scheduledSession"],
+      });
+
+    return registrations.map((r) => ({
+      id: r.id as string,
+      sessionId: r.scheduledSessionId,
+      sessionTitle: r.scheduledSession?.title ?? null,
+      status: r.status,
+      registeredAt: r.registeredAt.toISOString(),
+      attendedAt: r.attendedAt ? r.attendedAt.toISOString() : null,
+    }));
+  }
+
+  @Mutation()
+  @Allow(Permission.Authenticated)
+  async registerForTrial(
+    @Ctx() ctx: RequestContext,
+    @Args("sessionId") sessionId: string,
+  ): Promise<{
+    id: string;
+    sessionId: string;
+    sessionTitle: string | null;
+    status: string;
+    registeredAt: string;
+  }> {
+    if (!ctx.activeUserId) throw new Error("Unauthenticated");
+    const registration = await this.trialRegistrationService.register(
+      ctx,
+      sessionId,
+      "",
+      "",
+    );
+    return {
+      id: registration.id as string,
+      sessionId: registration.scheduledSessionId,
+      sessionTitle: null,
+      status: registration.status,
+      registeredAt: registration.registeredAt.toISOString(),
+    };
   }
 
   @Mutation()
