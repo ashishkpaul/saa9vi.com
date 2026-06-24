@@ -72,7 +72,8 @@ interface MeetingsResponse { bbbMeetings: { items: BbbMeeting[]; totalItems: num
 interface OrgsResponse { bbbOrganizations: { items: BbbOrganization[] } }
 
 function formatOrgLabel(org: BbbOrganization) {
-  return `${org.name} (${org.slug})`;
+  const displaySlug = org.slug === '__default_channel__' ? 'default' : org.slug;
+  return `${org.name} (${displaySlug})`;
 }
 
 export function MeetingsList() {
@@ -96,7 +97,7 @@ export function MeetingsList() {
   });
 
   const orgsQuery = useQuery<OrgsResponse>({
-    queryKey: ['bbbOrgsForMeetings'],
+    queryKey: ['bbbOrganizations'],
     queryFn: () => api.query(GET_ORGS),
   });
 
@@ -175,9 +176,13 @@ export function MeetingsList() {
                     <SelectValue placeholder={orgsQuery.isLoading ? 'Loading organizations...' : 'Select organization'} />
                   </SelectTrigger>
                   <SelectContent>
-                    {organizations.map((org) => (
-                      <SelectItem key={org.id} value={org.id}>{formatOrgLabel(org)}</SelectItem>
-                    ))}
+                    {organizations.length === 0 ? (
+                      <SelectItem value="__no-organizations__" disabled>No organizations available</SelectItem>
+                    ) : (
+                      organizations.map((org) => (
+                        <SelectItem key={org.id} value={org.id}>{formatOrgLabel(org)}</SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
                 {orgsQuery.isError && <p className="text-xs text-red-500">Failed to load organizations</p>}
