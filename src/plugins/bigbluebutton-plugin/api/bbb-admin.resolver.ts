@@ -751,6 +751,23 @@ export class BbbAdminResolver {
     return this.trialRegistrationService.updateStatus(ctx, String(id), status);
   }
 
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async convertTrialToEnrollment(
+    @Ctx() ctx: RequestContext,
+    @Args("registrationId") registrationId: string,
+    @Args("roomId") roomId: string,
+    @Args("accessDays") accessDays?: number,
+  ): Promise<BbbEnrollment> {
+    return this.trialRegistrationService.convertToEnrollment(
+      ctx,
+      registrationId,
+      String(roomId),
+      accessDays,
+    );
+  }
+
   // ─── Scheduled Sessions ────────────────────────────────────────────────────
 
   @Query()

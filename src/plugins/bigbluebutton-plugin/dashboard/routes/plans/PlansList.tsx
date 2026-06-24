@@ -12,7 +12,18 @@ const GET_ORGS = `
 const GET_GRANTS = `
   query GetBbbCapacityGrants($organizationId: ID!) {
     bbbCapacityGrants(organizationId: $organizationId) {
-      id grantedMinutes consumedMinutes validFrom validUntil exhausted orderId orderLineId productVariantId
+      items {
+        id
+        grantedMinutes
+        consumedMinutes
+        validFrom
+        validUntil
+        exhausted
+        orderId
+        orderLineId
+        productVariantId
+      }
+      totalItems
     }
   }
 `;
@@ -29,6 +40,11 @@ interface Grant {
   id: string; grantedMinutes: number; consumedMinutes: number;
   validFrom: string; validUntil: string; exhausted: boolean; orderId?: string;
   orderLineId?: string; productVariantId?: string;
+}
+
+interface GrantList {
+  items: Grant[];
+  totalItems: number;
 }
 
 export function PlansList() {
@@ -55,12 +71,12 @@ export function PlansList() {
     }
   }, [orgsQuery.data, selectedOrgId]);
 
-  const grantsQuery = useQuery<{ bbbCapacityGrants: Grant[] }>({
+  const grantsQuery = useQuery<{ bbbCapacityGrants: GrantList }>({
     queryKey: ['bbbGrants', selectedOrgId],
     queryFn: () => api.query(GET_GRANTS, { organizationId: selectedOrgId }),
     enabled: !!selectedOrgId,
   });
-  const grants = grantsQuery.data?.bbbCapacityGrants ?? [];
+  const grants = grantsQuery.data?.bbbCapacityGrants?.items ?? [];
 
   function isActive(g: Grant) {
     if (g.exhausted) return false;

@@ -23,6 +23,8 @@ import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
+import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
+import { BbbTrialRegistration } from "../entities/trial-registration.entity";
 import { BbbApiService } from "./bbb-api.service";
 import { BbbServerService } from "./bbb-server.service";
 import { BbbServerSelectionService } from "./bbb-server-selection.service";
@@ -1114,6 +1116,7 @@ export class BbbMeetingService implements OnModuleInit {
         await this.completeMeetingLifecycle(ctx, meeting, {
           source: "webhook",
         });
+        await this.updateTrialAttendanceForMeeting(ctx, meeting, payload);
         break;
       case BbbMeetingService.BBB_EVENTS.RECORDING_READY: {
         const recordId = payload.recordID as string;
@@ -1136,5 +1139,77 @@ export class BbbMeetingService implements OnModuleInit {
       default:
         Logger.debug(`Unhandled webhook event: ${eventType}`, loggerCtx);
     }
+  }
+
+  private extractWebhookAttendeeCustomerIds(
+    payload: Record<string, unknown>,
+  ): Set<string> {
+    const candidates = [
+      (payload.meeting as any)?.attendees,
+      (payload.event as any)?.data?.attributes?.meeting?.attendees,
+      (payload.event as any)?.data?.attributes?.attendees,
+      (payload as any).attendees,
+    ];
+
+    const attendees = candidates.find((value) => Array.isArray(value)) as
+      | Array<Record<string, unknown>>
+      | undefined;
+
+    const ids = new Set<string>();
+    for (const attendee of attendees ?? []) {
+      const id =
+        attendee.userId ??
+        attendee.userID ??
+        attendee.customerId ??
+        attendee.externalUserId ??
+        (attendee as any).metadata?.customerId;
+      if (id != null) ids.add(String(id));
+    }
+    return ids;
+  }
+
+  private async updateTrialAttendanceForMeeting(
+    ctx: RequestContext,
+    meeting: BbbMeeting,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const session = await this.connection
+      .getRepository(ctx, BbbScheduledSession)
+      .findOne({
+        where: { activeMeeting: { id: meeting.id as string } },
+      });
+
+    if (!session) return;
+
+    const registrationRepo = this.connection.getRepository(
+      ctx,
+      BbbTrialRegistration,
+    );
+    const registrations = await registrationRepo.find({
+      where: { scheduledSessionId: String(session.id) },
+    });
+
+    if (!registrations.length) return;
+
+    const attendeeCustomerIds = this.extractWebhookAttendeeCustomerIds(payload);
+    const now = new Date();
+
+    for (const registration of registrations) {
+      if (attendeeCustomerIds.has(String(registration.customerId))) {
+        registration.status = "ATTENDED";
+        registration.attendedAt = registration.attendedAt ?? now;
+      } else if (registration.status === "REGISTERED") {
+        registration.status = "NO_SHOW";
+      }
+      await registrationRepo.save(registration);
+    }
+
+    session.status = "FINISHED";
+    await this.connection.getRepository(ctx, BbbScheduledSession).save(session);
+
+    Logger.info(
+      `Updated trial attendance for session ${session.id} from meeting-ended webhook: registrations=${registrations.length} attendees=${attendeeCustomerIds.size}`,
+      loggerCtx,
+    );
   }
 }

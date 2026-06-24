@@ -33,6 +33,7 @@ import { BbbRoomLockService } from "./services/bbb-room-lock.service";
 import { BbbServerSelectionService } from "./services/bbb-server-selection.service";
 import { BbbMetricsService } from "./services/bbb-metrics.service";
 import { TrialRegistrationService } from "./services/trial-registration.service";
+import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.listener";
 
 import { BbbAdminResolver } from "./api/bbb-admin.resolver";
 import { BbbShopResolver } from "./api/bbb-shop.resolver";
@@ -83,6 +84,7 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     BbbRoomLockService,
     BbbServerSelectionService,
     TrialRegistrationService,
+    BbbOrderFulfillmentListener,
   ],
 
   adminApiExtensions: {

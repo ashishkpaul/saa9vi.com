@@ -3,7 +3,7 @@ import { VendureEntity } from "@vendure/core";
 import { Column, Entity, Index, ManyToOne } from "typeorm";
 import { BbbRoom } from "./bbb-room.entity";
 
-export type EnrollmentSource = "purchase" | "admin" | "invite" | "import";
+export type EnrollmentSource = "purchase" | "admin" | "invite" | "import" | "trial_conversion";
 
 @Entity("bbb_enrollment")
 @Index(["roomId", "customerId"], { unique: true })

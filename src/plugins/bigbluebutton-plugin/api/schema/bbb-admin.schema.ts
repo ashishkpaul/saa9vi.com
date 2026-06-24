@@ -264,6 +264,10 @@ export const adminApiExtensions = gql`
     deleteBbbProductAccess(id: ID!): Boolean!
     deactivateBbbEnrollment(id: ID!): BbbEnrollment!
     createBbbEnrollment(input: CreateBbbEnrollmentInput!): BbbEnrollment!
+    """
+    Converts a trial attendee into a fully enrolled learner by granting room access.
+    """
+    convertTrialToEnrollment(registrationId: ID!, roomId: ID!, accessDays: Int): BbbEnrollment!
   }
 
   # ─── Input Types ─────────────────────────────────────────────────────────────
