@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, Input, Label, Checkbox, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
+import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, Input, Label, Checkbox, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
 import { toast } from 'sonner';
 import { useState } from 'react';
 
@@ -18,10 +18,16 @@ const GET_MEETINGS = `
       items {
         id createdAt title state bbbMeetingId recordingEnabled
         provisionedAt completedAt failureReason retryCount
-        organization { id }
+        organization { id name slug }
       }
       totalItems
     }
+  }
+`;
+
+const GET_ORGS = `
+  query GetBbbOrgsForMeetings {
+    bbbOrganizations { items { id name slug } }
   }
 `;
 
@@ -56,10 +62,18 @@ interface BbbMeeting {
   bbbMeetingId?: string; recordingEnabled: boolean;
   provisionedAt?: string; completedAt?: string;
   failureReason?: string; retryCount: number;
-  organization: { id: string };
+  organization: BbbOrganization;
 }
 
+interface BbbOrganization { id: string; name: string; slug: string }
+
 interface MeetingsResponse { bbbMeetings: { items: BbbMeeting[]; totalItems: number } }
+
+interface OrgsResponse { bbbOrganizations: { items: BbbOrganization[] } }
+
+function formatOrgLabel(org: BbbOrganization) {
+  return `${org.name} (${org.slug})`;
+}
 
 export function MeetingsList() {
   const queryClient = useQueryClient();
@@ -81,7 +95,13 @@ export function MeetingsList() {
     placeholderData: (prev) => prev,
   });
 
+  const orgsQuery = useQuery<OrgsResponse>({
+    queryKey: ['bbbOrgsForMeetings'],
+    queryFn: () => api.query(GET_ORGS),
+  });
+
   const meetings = data?.bbbMeetings?.items ?? [];
+  const organizations = orgsQuery.data?.bbbOrganizations?.items ?? [];
   const totalItems = data?.bbbMeetings?.totalItems ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
 
@@ -149,8 +169,18 @@ export function MeetingsList() {
             <DialogHeader><DialogTitle>New Meeting</DialogTitle><DialogDescription>Create and provision a new meeting.</DialogDescription></DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
-                <Label htmlFor="meeting-org">Organization ID</Label>
-                <Input id="meeting-org" value={newOrgId} onChange={(e) => setNewOrgId(e.target.value)} placeholder="Organization UUID" />
+                <Label htmlFor="meeting-org">Organization</Label>
+                <Select value={newOrgId} onValueChange={setNewOrgId}>
+                  <SelectTrigger id="meeting-org">
+                    <SelectValue placeholder={orgsQuery.isLoading ? 'Loading organizations...' : 'Select organization'} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {organizations.map((org) => (
+                      <SelectItem key={org.id} value={org.id}>{formatOrgLabel(org)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {orgsQuery.isError && <p className="text-xs text-red-500">Failed to load organizations</p>}
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="meeting-title">Meeting Title</Label>
@@ -184,6 +214,7 @@ export function MeetingsList() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Title</TableHead>
+                  <TableHead>Organization</TableHead>
                   <TableHead>State</TableHead>
                   <TableHead>BBB Meeting ID</TableHead>
                   <TableHead>Provisioned</TableHead>
@@ -198,6 +229,10 @@ export function MeetingsList() {
                     <TableCell>
                       <div className="font-medium">{m.title}</div>
                       <div className="text-xs text-muted-foreground">{new Date(m.createdAt).toLocaleString()}</div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="font-medium">{m.organization.name}</div>
+                      <div className="text-xs text-muted-foreground">{m.organization.slug}</div>
                     </TableCell>
                     <TableCell>
                       <Badge variant={STATE_BADGE[m.state] ?? 'default'}>{m.state}</Badge>
