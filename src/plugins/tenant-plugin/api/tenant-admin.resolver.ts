@@ -15,8 +15,11 @@ export class TenantAdminResolver {
 
   @Query()
   @Allow(tenantProfilePermission.Read)
-  tenantProfile(@Ctx() ctx: RequestContext, @Args() args: { channelId: string }) {
-    return this.tenantProfileService.findByChannelId(ctx, args.channelId);
+  tenantProfile(@Ctx() ctx: RequestContext, @Args() args?: { channelId?: string }) {
+    const channelId = args?.channelId && args.channelId !== '__current__'
+      ? args.channelId
+      : ctx.channelId as string;
+    return this.tenantProfileService.findByChannelId(ctx, channelId);
   }
 
   @Transaction()

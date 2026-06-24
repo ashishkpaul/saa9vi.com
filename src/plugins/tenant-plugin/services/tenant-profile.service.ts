@@ -24,14 +24,15 @@ export class TenantProfileService {
   }
 
   async create(ctx: RequestContext, input: Partial<TenantProfile>): Promise<TenantProfile> {
-    if (!input.channelId) {
+    const channelId = input.channelId || ctx.channelId as string;
+    if (!channelId) {
       throw new Error('channelId is required');
     }
-    const existing = await this.findByChannelId(ctx, input.channelId);
+    const existing = await this.findByChannelId(ctx, channelId);
     if (existing) {
-      throw new Error(`TenantProfile already exists for channel ${input.channelId}`);
+      throw new Error(`TenantProfile already exists for channel ${channelId}`);
     }
-    const profile = new TenantProfile(input);
+    const profile = new TenantProfile({ ...input, channelId });
     await this.channelService.assignToCurrentChannel(profile, ctx);
     return this.connection.getRepository(ctx, TenantProfile).save(profile);
   }

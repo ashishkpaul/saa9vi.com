@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
+import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@vendure/dashboard';
 import { toast } from 'sonner';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { AcademyPageHeader, EmptyState, LoadingRows, PaginationFooter } from '../../shared/academy-dashboard';
 
 const GET_MEDIA = `
   query GetMediaResources($options: MediaResourceListOptions) {
@@ -44,6 +45,8 @@ export function MediaResourcesList() {
   const [page, setPage] = useState(1);
   const pageSize = 25;
   const [createOpen, setCreateOpen] = useState(false);
+  const [ownerTypeFilter, setOwnerTypeFilter] = useState('all');
+  const [search, setSearch] = useState('');
 
   // Create form
   const [newOwnerType, setNewOwnerType] = useState('instructor');
@@ -61,8 +64,8 @@ export function MediaResourcesList() {
   const [editIsActive, setEditIsActive] = useState(true);
 
   const { data, isLoading } = useQuery<{ mediaResources: { items: MediaItem[]; totalItems: number } }>({
-    queryKey: ['mediaResources', page],
-    queryFn: () => api.query(GET_MEDIA, { options: { skip: (page - 1) * pageSize, take: pageSize } }),
+    queryKey: ['mediaResources', page, ownerTypeFilter],
+    queryFn: () => api.query(GET_MEDIA, { options: { skip: (page - 1) * pageSize, take: pageSize, ...(ownerTypeFilter !== 'all' ? { ownerType: ownerTypeFilter } : {}) } }),
     placeholderData: (prev) => prev,
   });
 
@@ -137,10 +140,31 @@ export function MediaResourcesList() {
     });
   }
 
+  const visibleItems = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(item =>
+      item.title.toLowerCase().includes(q) ||
+      item.url.toLowerCase().includes(q) ||
+      item.ownerType.toLowerCase().includes(q) ||
+      item.type.toLowerCase().includes(q),
+    );
+  }, [items, search]);
+
   return (
     <div className="p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Media Resources</h1>
+      <AcademyPageHeader
+        title="Media Library"
+        description="Manage reusable media attached to instructors, tenants, courses, sessions, and future content workflows. Filter by owner type to keep the library domain-oriented."
+      >
+        <Input className="w-64" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search current page..." />
+        <Select value={ownerTypeFilter} onValueChange={(value) => { setOwnerTypeFilter(value); setPage(1); }}>
+          <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All owners</SelectItem>
+            {OWNER_TYPES.map(ot => <SelectItem key={ot} value={ot}>{ot}</SelectItem>)}
+          </SelectContent>
+        </Select>
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>
           <DialogTrigger render={<Button>Add Media</Button>} />
           <DialogContent>
@@ -188,13 +212,15 @@ export function MediaResourcesList() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-      </div>
+      </AcademyPageHeader>
 
       <Card>
         {isLoading ? (
-          <div className="p-4 space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
+          <LoadingRows count={4} />
         ) : items.length === 0 ? (
-          <div className="p-6 text-center text-muted-foreground">No media resources found</div>
+          <EmptyState title="No media resources found" description="Add media to enrich instructor, tenant, course, and session experiences." />
+        ) : visibleItems.length === 0 ? (
+          <EmptyState title="No matches on this page" description="Try a different search term or owner type filter." />
         ) : (
           <>
             <Table>
@@ -210,7 +236,7 @@ export function MediaResourcesList() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map((item) => (
+                {visibleItems.map((item) => (
                   <TableRow key={item.id}>
                     <TableCell className="font-medium">{item.title}</TableCell>
                     <TableCell><Badge variant="outline">{item.type}</Badge></TableCell>
@@ -234,14 +260,7 @@ export function MediaResourcesList() {
                 ))}
               </TableBody>
             </Table>
-            <div className="flex items-center justify-between px-4 py-3 border-t">
-              <div className="text-sm text-muted-foreground">{totalItems} total</div>
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>Previous</Button>
-                <span className="text-sm">Page {page} of {totalPages}</span>
-                <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</Button>
-              </div>
-            </div>
+            <PaginationFooter page={page} totalPages={totalPages} totalItems={totalItems} onPrevious={() => setPage(p => Math.max(1, p - 1))} onNext={() => setPage(p => p + 1)} />
           </>
         )}
       </Card>

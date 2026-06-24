@@ -78,6 +78,7 @@ export const adminApiExtensions = gql`
     ${sharedTypeExtensions}
 
     input CreateTenantProfileInput {
+        channelId: String
         businessName: String!
         tagline: String
         logoAssetId: ID
@@ -148,7 +149,7 @@ export const adminApiExtensions = gql`
     }
 
     extend type Query {
-        tenantProfile(channelId: String!): TenantProfile
+        tenantProfile(channelId: String): TenantProfile
         instructorProfiles(options: InstructorProfileListOptions): InstructorProfileList!
         instructorProfile(id: ID!): InstructorProfile
         mediaResources(options: MediaResourceListOptions): MediaResourceList!

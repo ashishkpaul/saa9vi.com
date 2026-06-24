@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, Input, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton, Textarea } from '@vendure/dashboard';
+import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, Input, Label, Switch, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea } from '@vendure/dashboard';
 import { toast } from 'sonner';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { AcademyPageHeader, EmptyState, LoadingRows, PaginationFooter } from '../../shared/academy-dashboard';
 
 const GET_INSTRUCTORS = `
   query GetInstructorProfiles($options: InstructorProfileListOptions) {
@@ -41,13 +42,16 @@ export function InstructorsList() {
   const [page, setPage] = useState(1);
   const pageSize = 25;
   const [createOpen, setCreateOpen] = useState(false);
+  const [search, setSearch] = useState('');
 
   // Create form
+  const [newCustomerId, setNewCustomerId] = useState('');
   const [newSlug, setNewSlug] = useState('');
   const [newFullName, setNewFullName] = useState('');
   const [newBio, setNewBio] = useState('');
   const [newCredentials, setNewCredentials] = useState('');
   const [newExpertise, setNewExpertise] = useState('');
+  const [newIsPublic, setNewIsPublic] = useState(true);
 
   // Edit state
   const [editing, setEditing] = useState<Instructor | null>(null);
@@ -76,7 +80,7 @@ export function InstructorsList() {
       qc.invalidateQueries({ queryKey: ['instructorProfiles'] });
       setCreateOpen(false);
       toast.success('Instructor created');
-      setNewSlug(''); setNewFullName(''); setNewBio(''); setNewCredentials(''); setNewExpertise('');
+      setNewCustomerId(''); setNewSlug(''); setNewFullName(''); setNewBio(''); setNewCredentials(''); setNewExpertise(''); setNewIsPublic(true);
     },
     onError: (err: Error) => toast.error('Error', { description: err.message }),
   });
@@ -120,13 +124,26 @@ export function InstructorsList() {
 
   function handleCreate() {
     createMutation.mutate({
+      customerId: newCustomerId,
       slug: newSlug,
       fullName: newFullName,
       bio: newBio || undefined,
       credentials: newCredentials || undefined,
       expertiseAreas: newExpertise ? newExpertise.split(',').map(s => s.trim()) : [],
+      isPublic: newIsPublic,
+      isActive: true,
     });
   }
+
+  const visibleInstructors = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return instructors;
+    return instructors.filter(inst =>
+      inst.fullName.toLowerCase().includes(q) ||
+      inst.slug.toLowerCase().includes(q) ||
+      inst.expertiseAreas?.some(area => area.toLowerCase().includes(q)),
+    );
+  }, [instructors, search]);
 
   function handleUpdate() {
     if (!editing) return;
@@ -145,8 +162,11 @@ export function InstructorsList() {
 
   return (
     <div className="p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Instructors</h1>
+      <AcademyPageHeader
+        title="Instructors"
+        description="Manage public teaching profiles for the active academy channel. These profiles become the trust layer for future courses, sessions, marketplace discovery, and media ownership."
+      >
+        <Input className="w-64" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search current page..." />
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>
           <DialogTrigger render={<Button>Add Instructor</Button>} />
           <DialogContent>
@@ -155,6 +175,11 @@ export function InstructorsList() {
               <DialogDescription>Create a new instructor profile.</DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label>Customer ID</Label>
+                <Input value={newCustomerId} onChange={(e) => setNewCustomerId(e.target.value)} placeholder="Vendure customer ID" />
+                <p className="text-xs text-muted-foreground">Instructor profiles are backed by a Vendure Customer. Paste the customer ID for now; a customer picker can be added next.</p>
+              </div>
               <div className="grid gap-2">
                 <Label>Slug</Label>
                 <Input value={newSlug} onChange={(e) => setNewSlug(e.target.value)} placeholder="john-doe" />
@@ -175,22 +200,28 @@ export function InstructorsList() {
                 <Label>Expertise Areas (comma-separated)</Label>
                 <Input value={newExpertise} onChange={(e) => setNewExpertise(e.target.value)} placeholder="Finance, Economics" />
               </div>
+              <div className="flex items-center justify-between rounded-md border p-3">
+                <Label>Public profile</Label>
+                <Switch checked={newIsPublic} onCheckedChange={setNewIsPublic} />
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-              <Button onClick={handleCreate} disabled={!newSlug || !newFullName || createMutation.isPending}>
+              <Button onClick={handleCreate} disabled={!newCustomerId || !newSlug || !newFullName || createMutation.isPending}>
                 {createMutation.isPending ? 'Creating...' : 'Create'}
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
-      </div>
+      </AcademyPageHeader>
 
       <Card>
         {isLoading ? (
-          <div className="p-4 space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
+          <LoadingRows count={4} />
         ) : instructors.length === 0 ? (
-          <div className="p-6 text-center text-muted-foreground">No instructors found</div>
+          <EmptyState title="No instructors found" description="Create the first instructor profile to start building your academy trust layer." />
+        ) : visibleInstructors.length === 0 ? (
+          <EmptyState title="No matches on this page" description="Try a different search term or move to another page." />
         ) : (
           <>
             <Table>
@@ -205,7 +236,7 @@ export function InstructorsList() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {instructors.map((inst) => (
+                {visibleInstructors.map((inst) => (
                   <TableRow key={inst.id}>
                     <TableCell className="font-medium">{inst.fullName}</TableCell>
                     <TableCell className="text-sm">{inst.slug}</TableCell>
@@ -232,14 +263,7 @@ export function InstructorsList() {
                 ))}
               </TableBody>
             </Table>
-            <div className="flex items-center justify-between px-4 py-3 border-t">
-              <div className="text-sm text-muted-foreground">{totalItems} total</div>
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>Previous</Button>
-                <span className="text-sm">Page {page} of {totalPages}</span>
-                <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</Button>
-              </div>
-            </div>
+            <PaginationFooter page={page} totalPages={totalPages} totalItems={totalItems} onPrevious={() => setPage(p => Math.max(1, p - 1))} onNext={() => setPage(p => p + 1)} />
           </>
         )}
       </Card>
