@@ -8,7 +8,5 @@ export interface ReviewTargetProvider {
 
     getTargetDisplayName(ctx: RequestContext, targetId: ID): Promise<string>;
 
-    updateAggregates(ctx: RequestContext, targetId: ID): Promise<void>;
-
     getChannels(ctx: RequestContext, targetId: ID): Promise<string[]>;
 }

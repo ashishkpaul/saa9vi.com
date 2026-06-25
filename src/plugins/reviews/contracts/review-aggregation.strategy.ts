@@ -1,7 +1,14 @@
 import { RequestContext, ID } from "@vendure/core";
-import { ReviewTargetProvider } from "./review-target.provider";
-import { AggregateResult } from "./review-types";
+import { ReviewTargetType } from "../constants";
+
+export interface AggregateResult {
+    averageRating: number;
+    reviewCount: number;
+    verifiedReviewCount: number;
+}
 
 export interface ReviewAggregationStrategy {
+    readonly targetType: ReviewTargetType;
+
     recalculate(ctx: RequestContext, targetId: ID): Promise<AggregateResult>;
 }

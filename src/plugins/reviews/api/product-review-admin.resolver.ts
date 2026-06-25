@@ -142,7 +142,7 @@ export class ProductReviewAdminResolver {
     @Ctx() ctx: RequestContext,
     @Args() { id, reason }: MutationFlagProductReviewArgs,
   ) {
-    return this.productReviewService.flagReview(ctx, id, reason);
+    return this.productReviewService.flagReview(ctx, id, reason ?? undefined);
   }
 
   @Transaction()

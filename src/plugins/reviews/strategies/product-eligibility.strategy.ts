@@ -9,9 +9,9 @@ import {
     OrderLine,
 } from "@vendure/core";
 import { Repository } from "typeorm";
-import { ReviewTargetProvider, EligibilityResult } from "../contracts/review-target.provider";
-import { ReviewEligibilityStrategy } from "../contracts/review-eligibility.strategy";
-import { ReviewVerificationType } from "../constants";
+import { ReviewTargetProvider } from "../contracts/review-target.provider";
+import { ReviewEligibilityStrategy, EligibilityResult } from "../contracts/review-eligibility.strategy";
+import { ReviewTargetType, ReviewVerificationType } from "../constants";
 import { ProductReview } from "../entities/product-review.entity";
 
 const ELIGIBLE_ORDER_STATES = ["Delivered", "Shipped"];
@@ -22,6 +22,8 @@ const ELIGIBLE_ORDER_STATES = ["Delivered", "Shipped"];
  */
 @Injectable()
 export class ProductReviewEligibilityStrategy implements ReviewEligibilityStrategy {
+    readonly targetType = ReviewTargetType.PRODUCT;
+
     constructor(
         private connection: TransactionalConnection,
         private orderService: OrderService,
@@ -33,7 +35,7 @@ export class ProductReviewEligibilityStrategy implements ReviewEligibilityStrate
         targetId: ID,
         provider: ReviewTargetProvider,
     ): Promise<EligibilityResult> {
-        if (provider.targetType !== "PRODUCT") {
+        if (provider.targetType !== this.targetType) {
             return {
                 eligible: false,
                 reason: "This strategy only supports PRODUCT targets",

@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { RequestContext, ID, ProductService } from "@vendure/core";
 import { ReviewAggregationStrategy, AggregateResult } from "../contracts/review-aggregation.strategy";
 import { ReviewAggregationService } from "../services/review-aggregation.service";
+import { ReviewTargetType } from "../constants";
 
 /**
  * Aggregation strategy for Product reviews.
@@ -9,6 +10,8 @@ import { ReviewAggregationService } from "../services/review-aggregation.service
  */
 @Injectable()
 export class ProductReviewAggregationStrategy implements ReviewAggregationStrategy {
+    readonly targetType = ReviewTargetType.PRODUCT;
+
     constructor(
         private reviewAggregationService: ReviewAggregationService,
         private productService: ProductService,

@@ -49,7 +49,7 @@ export class ReviewReward extends VendureEntity {
   @ManyToOne(() => Order, { onDelete: "SET NULL", nullable: true })
   order: Order | null;
 
-  @Column({ nullable: true })
+  @Column({ type: "varchar", nullable: true })
   orderId: string | null;
 
   /**
@@ -85,19 +85,19 @@ export class ReviewReward extends VendureEntity {
   /**
    * When the reward was granted to the customer
    */
-  @Column({ nullable: true })
+  @Column({ type: "timestamp", nullable: true })
   grantedAt: Date | null;
 
   /**
    * When the reward expires (if applicable)
    */
-  @Column({ nullable: true })
+  @Column({ type: "timestamp", nullable: true })
   expiresAt: Date | null;
 
   /**
    * When the reward was redeemed
    */
-  @Column({ nullable: true })
+  @Column({ type: "timestamp", nullable: true })
   redeemedAt: Date | null;
 
   /**

@@ -2,7 +2,6 @@ import { Injectable } from "@nestjs/common";
 import { RequestContext, ProductService, ID } from "@vendure/core";
 import { ReviewTargetProvider } from "../contracts/review-target.provider";
 import { ReviewTargetType } from "../constants";
-import { ProductReviewAggregationStrategy } from "../strategies/product-aggregation.strategy";
 
 /**
  * Adapts Vendure Product entity as a review target.
@@ -14,7 +13,6 @@ export class ProductReviewTargetProvider implements ReviewTargetProvider {
 
     constructor(
         private productService: ProductService,
-        private aggregationStrategy: ProductReviewAggregationStrategy,
     ) {}
 
     async validateTargetExists(ctx: RequestContext, targetId: ID): Promise<boolean> {
@@ -32,10 +30,6 @@ export class ProductReviewTargetProvider implements ReviewTargetProvider {
             return `Unknown Product (${targetId})`;
         }
         return (product as any).productName || (product as any).name || `Product ${targetId}`;
-    }
-
-    async updateAggregates(ctx: RequestContext, targetId: ID): Promise<void> {
-        await this.aggregationStrategy.recalculate(ctx, targetId);
     }
 
     async getChannels(ctx: RequestContext, targetId: ID): Promise<string[]> {

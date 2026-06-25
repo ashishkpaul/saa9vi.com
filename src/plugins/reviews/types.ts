@@ -49,8 +49,16 @@ export interface ReviewVerificationContext {
 
 export interface EligibilityResult {
     eligible: boolean;
-    reason: string;
-    [key: string]: any;
+    reason?: string;
+
+    hasPurchased?: boolean;
+    hasExistingReview?: boolean;
+
+    eligibleOrderId?: ID;
+    eligibleOrderLineId?: ID;
+
+    verificationType?: ReviewVerificationType;
+    verificationContext?: Record<string, any>;
 }
 
 export interface AggregateResult {

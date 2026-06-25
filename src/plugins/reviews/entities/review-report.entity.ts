@@ -64,13 +64,13 @@ export class ReviewReport extends VendureEntity {
   /**
    * Admin who reviewed the report
    */
-  @Column({ nullable: true })
+  @Column({ type: "varchar", nullable: true })
   reviewedByAdminId: string | null;
 
   /**
    * When the report was reviewed
    */
-  @Column({ nullable: true })
+  @Column({ type: "timestamp", nullable: true })
   reviewedAt: Date | null;
 
   /**

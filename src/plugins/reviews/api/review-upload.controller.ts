@@ -137,17 +137,20 @@ export class ReviewUploadController {
         preview: result.preview,
         source: result.source,
       });
-    } catch (error) {
-      Logger.error(`Upload failed: ${error?.message}`, loggerCtx, error?.stack);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error ? error.stack : undefined;
 
-      if (error?.message?.includes("file type")) {
+      Logger.error(`Upload failed: ${message}`, loggerCtx, stack);
+
+      if (message.includes("file type")) {
         return res.status(HttpStatus.BAD_REQUEST).json({
-          error: error.message,
+          error: message,
         });
       }
 
       return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
-        error: `Upload failed: ${error?.message}`,
+        error: `Upload failed: ${message}`,
       });
     }
   }

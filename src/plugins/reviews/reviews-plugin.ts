@@ -22,16 +22,14 @@ import { ReviewAntiFraudService } from "./services/review-antifraud.service";
 import { ReviewEventListener } from "./events/review-event.listener";
 import { ReviewRequestListener } from "./events/review-request.listener";
 import { ReviewService } from "./services/review.service";
+import { ReviewAbstractionBootstrap } from "./infrastructure/review-abstraction.bootstrap";
+import { ReviewAggregationStrategyRegistry } from "./infrastructure/review-aggregation-strategy.registry";
+import { ReviewEligibilityStrategyRegistry } from "./infrastructure/review-eligibility-strategy.registry";
 import { ReviewTargetRegistry } from "./infrastructure/review-target.registry";
 import { ProductReviewTargetProvider } from "./providers/product-review-target.provider";
 import { ProductReviewAggregationStrategy } from "./strategies/product-aggregation.strategy";
 import { ProductReviewEligibilityStrategy } from "./strategies/product-eligibility.strategy";
-import path from "path";
 import { REVIEW_ADMIN_PERMISSION } from "./constants";
-
-// Workaround: ui-devkit compiler types are not installed in this environment.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AdminUiExtension = any;
 
 /**
  * ReviewsPlugin
@@ -70,7 +68,10 @@ type AdminUiExtension = any;
     ReviewRequestListener,
     // Phase 1A: Reputation abstraction layer
     ReviewService,
+    ReviewAbstractionBootstrap,
     ReviewTargetRegistry,
+    ReviewEligibilityStrategyRegistry,
+    ReviewAggregationStrategyRegistry,
     ProductReviewTargetProvider,
     ProductReviewAggregationStrategy,
     ProductReviewEligibilityStrategy,
@@ -133,10 +134,4 @@ type AdminUiExtension = any;
     return config;
   },
 })
-export class ReviewsPlugin {
-  static uiExtensions: AdminUiExtension = {
-    extensionPath: path.join(__dirname, "ui"),
-    providers: ["providers.ts"],
-    routes: [{ route: "product-reviews", filePath: "routes.ts" }],
-  };
-}
+export class ReviewsPlugin {}

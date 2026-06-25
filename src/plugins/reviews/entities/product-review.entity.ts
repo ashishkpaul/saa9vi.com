@@ -58,7 +58,7 @@ export class ProductReview extends VendureEntity {
   @Column()
   authorName: string;
 
-  @Column({ nullable: true })
+  @Column({ type: "varchar", nullable: true })
   authorLocation: string;
 
   @Column({ default: 0 })
@@ -76,13 +76,13 @@ export class ProductReview extends VendureEntity {
   @Column({ default: false })
   isIncentivized: boolean;
 
-  @Column({ nullable: true, default: null })
+  @Column({ type: "timestamp", nullable: true, default: null })
   editedAt: Date;
 
   @Column("text", { nullable: true, default: null })
   response: string;
 
-  @Column({ nullable: true, default: null })
+  @Column({ type: "timestamp", nullable: true, default: null })
   responseCreatedAt: Date;
 
   @OneToMany(() => ReviewVote, (vote) => vote.review)

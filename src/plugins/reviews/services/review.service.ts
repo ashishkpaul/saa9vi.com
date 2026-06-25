@@ -4,15 +4,14 @@ import {
     Customer,
     TransactionalConnection,
     EventBus,
-    ProductService,
     Asset,
 } from "@vendure/core";
 import { Repository } from "typeorm";
 import { ReviewTargetRegistry } from "../infrastructure/review-target.registry";
-import { ReviewTargetProvider } from "../contracts/review-target.provider";
-import { ReviewEligibilityStrategy } from "../contracts/review-eligibility.strategy";
+import { ReviewAggregationStrategyRegistry } from "../infrastructure/review-aggregation-strategy.registry";
+import { ReviewEligibilityStrategyRegistry } from "../infrastructure/review-eligibility-strategy.registry";
 import { ReviewVerificationContext } from "../contracts/review-types";
-import { ReviewVerificationType } from "../constants";
+import { ReviewTargetType, ReviewVerificationType } from "../constants";
 import { ProductReview } from "../entities/product-review.entity";
 import { ReviewCreatedEvent } from "../events/review.events";
 import { ID } from "@vendure/core";
@@ -41,10 +40,10 @@ export interface FindReviewsByTargetInput {
 export class ReviewService {
     constructor(
         private connection: TransactionalConnection,
-        private productService: ProductService,
         private eventBus: EventBus,
         private targetRegistry: ReviewTargetRegistry,
-        private eligibilityStrategies: ReviewEligibilityStrategy[],
+        private eligibilityStrategyRegistry: ReviewEligibilityStrategyRegistry,
+        private aggregationStrategyRegistry: ReviewAggregationStrategyRegistry,
     ) {}
 
     private getReviewRepo(ctx: RequestContext): Repository<ProductReview> {
@@ -90,11 +89,7 @@ export class ReviewService {
         }
 
         // 4. Check eligibility using strategy
-        const strategy = this.eligibilityStrategies.find(s => {
-            // In Phase 1A, we only have ProductEligibilityStrategy
-            // Future: match strategy to target type
-            return true;
-        });
+        const strategy = this.eligibilityStrategyRegistry.getStrategy(input.targetType as ReviewTargetType);
 
         if (!strategy) {
             return { error: "No eligibility strategy configured for this target type", code: "NO_STRATEGY" };
@@ -103,7 +98,7 @@ export class ReviewService {
         const eligibility = await strategy.canReview(ctx, customerId, input.targetId, provider);
 
         if (!eligibility.eligible) {
-            return { error: eligibility.reason, code: "NOT_ELIGIBLE" };
+            return { error: eligibility.reason ?? "Not eligible to review this target", code: "NOT_ELIGIBLE" };
         }
 
         // 5. Get customer details
@@ -159,8 +154,12 @@ export class ReviewService {
         const review = this.getReviewRepo(ctx).create(reviewData);
         const savedReview = await this.getReviewRepo(ctx).save(review);
 
-        // 9. Update aggregates
-        await provider.updateAggregates(ctx, input.targetId);
+        // 9. Update aggregates via target-specific strategy
+        const aggregationStrategy = this.aggregationStrategyRegistry.getStrategy(input.targetType as ReviewTargetType);
+        if (!aggregationStrategy) {
+            return { error: "No aggregation strategy configured for this target type", code: "NO_AGGREGATION_STRATEGY" };
+        }
+        await aggregationStrategy.recalculate(ctx, input.targetId);
 
         // 10. Publish event
         this.eventBus.publish(
@@ -220,7 +219,7 @@ export class ReviewService {
         customerId: ID,
         targetType: string,
         targetId: ID,
-    ): Promise<{ eligible: boolean; reason: string }> {
+    ): Promise<{ eligible: boolean; reason?: string }> {
         const provider = await this.targetRegistry.findProviderForTarget(
             ctx,
             targetType as any,
@@ -231,7 +230,7 @@ export class ReviewService {
             return { eligible: false, reason: "Invalid review target" };
         }
 
-        const strategy = this.eligibilityStrategies.find(s => true);
+        const strategy = this.eligibilityStrategyRegistry.getStrategy(targetType as ReviewTargetType);
         if (!strategy) {
             return { eligible: false, reason: "No eligibility strategy configured" };
         }

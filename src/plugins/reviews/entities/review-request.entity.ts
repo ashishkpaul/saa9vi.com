@@ -39,16 +39,16 @@ export class ReviewRequest extends VendureEntity {
   @Column()
   scheduledAt: Date;
 
-  @Column({ nullable: true })
+  @Column({ type: "timestamp", nullable: true })
   sentAt: Date;
 
-  @Column({ nullable: true })
+  @Column({ type: "timestamp", nullable: true })
   reviewedAt: Date;
 
   @Column({ default: 0 })
   reminderCount: number;
 
-  @Column({ nullable: true })
+  @Column({ type: "timestamp", nullable: true })
   lastReminderAt: Date;
 
   @Column()
@@ -57,13 +57,13 @@ export class ReviewRequest extends VendureEntity {
   @Column({ unique: true })
   reviewToken: string;
 
-  @Column({ nullable: true })
+  @Column({ type: "timestamp", nullable: true })
   openedAt: Date;
 
   @Column({ default: 0 })
   clickCount: number;
 
-  @Column({ nullable: true })
+  @Column({ type: "varchar", nullable: true })
   channelId: string;
 
   @Column({ default: false })

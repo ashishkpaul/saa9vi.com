@@ -102,9 +102,11 @@ export class ReviewEventListener implements OnApplicationBootstrap {
           );
         }
       }
-    } catch (err) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+
       this.logger.error(
-        `Error running fraud analysis on review ${event.reviewId}: ${err?.message}`,
+        `Error running fraud analysis on review ${event.reviewId}: ${message}`,
       );
     }
   }
