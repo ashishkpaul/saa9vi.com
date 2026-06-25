@@ -10,8 +10,9 @@ import {
 import type { RawBodyRequest } from "@nestjs/common";
 import { RequestContextService, TransactionalConnection } from "@vendure/core";
 import * as crypto from "crypto";
-import { BbbMeetingService } from "../services/bbb-meeting.service";
 import { BbbServer } from "../entities/bbb-server.entity";
+import { BbbWebhookEvent } from "../entities/bbb-webhook-event.entity";
+import { BbbWebhookProcessorService } from "../services/bbb-webhook-processor.service";
 import { BbbEncryptionService } from "../services/bbb-encryption.service";
 
 const loggerCtx = "BbbWebhookController";
@@ -23,15 +24,19 @@ const loggerCtx = "BbbWebhookController";
  * https://docs.bigbluebutton.org/development/webhooks
  *
  * All incoming requests are verified via HMAC-SHA256 before processing.
+ * After validation, events are persisted immediately and enqueued for
+ * async processing. This ensures that even if the processor crashes,
+ * the event is safely stored in the DB and can be replayed.
+ *
  * Mount point: POST /bbb/webhook
  */
 @Controller("bbb")
 export class BbbWebhookController {
   constructor(
-    private readonly meetingService: BbbMeetingService,
     private readonly encryptionService: BbbEncryptionService,
     private readonly ctxService: RequestContextService,
     private readonly connection: TransactionalConnection,
+    private readonly webhookProcessor: BbbWebhookProcessorService,
   ) {}
 
   @Post("webhook")
@@ -85,15 +90,45 @@ export class BbbWebhookController {
       return { ok: false };
     }
 
+    // Extract BBB meeting ID for indexed lookup / replay
+    const bbbMeetingId =
+      typeof payload.meetingID === "string" && payload.meetingID
+        ? (payload.meetingID as string)
+        : typeof (payload.event as any)?.data?.attributes?.meeting
+              ?.externalMeetingId === "string"
+          ? ((payload.event as any).data.attributes.meeting
+              .externalMeetingId as string)
+          : null;
+
+    // ─── Persist-first ─────────────────────────────────────────────────────
+    // Write the event to the DB immediately, then enqueue for async processing.
+    // This guarantees no data loss even if the queue or processor is down.
     const ctx = await this.ctxService.create({ apiType: "admin" });
-    try {
-      await this.meetingService.handleWebhookEvent(ctx, eventType, payload);
-    } catch (err) {
-      Logger.error(
-        `Webhook handler error for event "${eventType}": ${(err as Error).message}`,
-        loggerCtx,
-      );
-    }
+    const eventRepo = this.connection.getRepository(ctx, BbbWebhookEvent);
+
+    const savedEvent = await eventRepo.save(
+      new BbbWebhookEvent({
+        eventType,
+        payload: payload as any,
+        receivedAt: new Date(),
+        status: "PENDING",
+        bbbMeetingId,
+      }),
+    );
+
+    Logger.debug(
+      `Webhook event ${savedEvent.id} (${eventType}) persisted, enqueuing for processing`,
+      loggerCtx,
+    );
+
+    // Enqueue for async processing (fire-and-forget — errors are logged by the processor)
+    this.webhookProcessor.enqueueEvent(savedEvent.id as string, ctx).catch(
+      (err) =>
+        Logger.error(
+          `Failed to enqueue webhook event ${savedEvent.id}: ${(err as Error).message}`,
+          loggerCtx,
+        ),
+    );
 
     return { ok: true };
   }

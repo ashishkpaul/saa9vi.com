@@ -104,14 +104,19 @@ export class BbbScheduledSessionService {
       throw new EntityNotFoundError("BbbOrganizationMember", input.trainerId);
     }
 
+    // Set channelId from the request context for tenant isolation
+    const channelId = ctx.channelId as string | undefined;
+
     const session = new BbbScheduledSession({
       organization: org,
+      organizationId: String(org.id),
       title: input.title,
       startTime: new Date(input.startTime),
       endTime: new Date(input.endTime),
       trainer,
       status: "SCHEDULED",
       activeMeeting: null,
+      channelId: channelId ?? null,
     });
 
     const saved = await this.connection
@@ -119,7 +124,7 @@ export class BbbScheduledSessionService {
       .save(session);
 
     Logger.info(
-      `Scheduled session ${saved.id} created for org ${org.id}: "${input.title}"`,
+      `Scheduled session ${saved.id} created for org ${org.id} channel ${channelId ?? "none"}: "${input.title}"`,
       loggerCtx,
     );
 

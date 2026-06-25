@@ -1,12 +1,19 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { RequestContext, TransactionalConnection } from "@vendure/core";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbRoom } from "../entities/bbb-room.entity";
+import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
+import { BbbEntitlementService } from "./bbb-entitlement.service";
+
+const loggerCtx = "TrialRegistrationService";
 
 @Injectable()
 export class TrialRegistrationService {
-  constructor(private readonly connection: TransactionalConnection) {}
+  constructor(
+    private readonly connection: TransactionalConnection,
+    private readonly entitlementService: BbbEntitlementService,
+  ) {}
 
   async findAllBySession(
     ctx: RequestContext,
@@ -50,14 +57,67 @@ export class TrialRegistrationService {
       return existing;
     }
 
+    // Validate the session exists and is a trial-eligible session
+    const session = await this.connection
+      .getRepository(ctx, BbbScheduledSession)
+      .findOne({ where: { id: sessionId } });
+
+    if (!session) {
+      throw new Error(`Scheduled session ${sessionId} not found`);
+    }
+
+    if (!session.isTrial) {
+      throw new Error(`Session ${sessionId} is not a trial session`);
+    }
+
+    // Capacity check: ensure maxAttendees is not exceeded
+    if (session.maxAttendees != null && session.maxAttendees > 0) {
+      const registrationRepo = this.connection.getRepository(ctx, BbbTrialRegistration);
+      const registrationCount = await registrationRepo.count({
+        where: { scheduledSessionId: sessionId },
+      });
+      if (registrationCount >= session.maxAttendees) {
+        throw new Error(
+          `Trial session ${sessionId} has reached maximum capacity (${session.maxAttendees})`,
+        );
+      }
+    }
+
+    const now = new Date();
     const registration = new BbbTrialRegistration({
       scheduledSessionId: sessionId,
       customerId,
       status: "REGISTERED",
-      registeredAt: new Date(),
+      registeredAt: now,
     });
 
-    return this.connection.getRepository(ctx, BbbTrialRegistration).save(registration);
+    const saved = await this.connection
+      .getRepository(ctx, BbbTrialRegistration)
+      .save(registration);
+
+    // ─── Create Entitlement for session access ────────────────────────────
+    // This allows the registered trial student to join the session once LIVE.
+    // Entitlement validUntil matches the session end time.
+    try {
+      await this.entitlementService.create(ctx, {
+        type: "bbb_session",
+        resourceId: sessionId,
+        customerId,
+        source: "trial",
+        validFrom: now,
+        validUntil: session.endTime,
+        channelId: (session as any).channelId ?? null,
+      });
+    } catch (err) {
+      // Non-fatal: entitlement creation failure should not block registration.
+      // The student can still be tracked, and entitlement can be backfilled.
+      Logger.warn(
+        `Failed to create trial entitlement for session ${sessionId} customer ${customerId}: ${(err as Error).message}`,
+        loggerCtx,
+      );
+    }
+
+    return saved;
   }
 
   async updateStatus(

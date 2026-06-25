@@ -180,9 +180,16 @@ export function OrganizationsList() {
     setEditOpen(true);
   }
 
-  function handleDelete(org: BbbOrganization) {
-    if (window.confirm(`Delete organization "${org.name}"? This cannot be undone.`)) {
-      deleteMutation.mutate(org.id);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+
+  function handleDeleteClick(org: BbbOrganization) {
+    setDeleteTargetId(org.id);
+  }
+
+  function handleDeleteConfirm() {
+    if (deleteTargetId) {
+      deleteMutation.mutate(deleteTargetId);
+      setDeleteTargetId(null);
     }
   }
 
@@ -302,7 +309,7 @@ export function OrganizationsList() {
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
                         <Button variant="outline" size="sm" onClick={() => openEdit(org)}>Edit</Button>
-                        <Button variant="destructive" size="sm" onClick={() => handleDelete(org)}>Delete</Button>
+                        <Button variant="destructive" size="sm" onClick={() => handleDeleteClick(org)}>Delete</Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -320,6 +327,21 @@ export function OrganizationsList() {
           </>
         )}
       </Card>
+
+      <Dialog open={!!deleteTargetId} onOpenChange={(o) => !o && setDeleteTargetId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Organization</DialogTitle>
+            <DialogDescription>Are you sure you want to delete this organization? This action cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTargetId(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteConfirm} disabled={deleteMutation.isPending}>
+              {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit Dialog */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>

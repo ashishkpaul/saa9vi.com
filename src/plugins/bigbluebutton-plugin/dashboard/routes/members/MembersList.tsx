@@ -85,6 +85,12 @@ export function MembersList() {
   });
 
   useEffect(() => {
+    if (organizations.length > 0 && !selectedOrgId) {
+      setSelectedOrgId(organizations[0].id);
+    }
+  }, [organizations]);
+
+  useEffect(() => {
     let cancelled = false;
     async function runSearch() {
       setSelectedCustomer(null);

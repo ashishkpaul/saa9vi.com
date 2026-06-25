@@ -112,9 +112,16 @@ export function MediaResourcesList() {
     setEditIsActive(item.isActive);
   }
 
-  function handleDelete(item: MediaItem) {
-    if (window.confirm(`Delete media "${item.title}"?`)) {
-      deleteMutation.mutate(item.id);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+
+  function handleDeleteClick(item: MediaItem) {
+    setDeleteTargetId(item.id);
+  }
+
+  function handleDeleteConfirm() {
+    if (deleteTargetId) {
+      deleteMutation.mutate(deleteTargetId);
+      setDeleteTargetId(null);
     }
   }
 
@@ -250,12 +257,12 @@ export function MediaResourcesList() {
                     <TableCell>
                       <Badge variant={item.isActive ? 'success' : 'warning'}>{item.isActive ? 'Active' : 'Inactive'}</Badge>
                     </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        <Button variant="outline" size="sm" onClick={() => openEdit(item)}>Edit</Button>
-                        <Button variant="destructive" size="sm" onClick={() => handleDelete(item)}>Delete</Button>
-                      </div>
-                    </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Button variant="outline" size="sm" onClick={() => openEdit(item)}>Edit</Button>
+                          <Button variant="destructive" size="sm" onClick={() => handleDeleteClick(item)}>Delete</Button>
+                        </div>
+                      </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -264,6 +271,21 @@ export function MediaResourcesList() {
           </>
         )}
       </Card>
+
+      <Dialog open={!!deleteTargetId} onOpenChange={(o) => !o && setDeleteTargetId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Media</DialogTitle>
+            <DialogDescription>Are you sure you want to delete this media? This action cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTargetId(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteConfirm} disabled={deleteMutation.isPending}>
+              {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit Dialog */}
       {editing && (

@@ -9,22 +9,29 @@ import {
 } from "@vendure/core";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbProductAccess } from "../entities/bbb-product-access.entity";
+import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
+import { BbbEntitlementService } from "../services/bbb-entitlement.service";
 
 const loggerCtx = "BbbOrderFulfillmentListener";
 
 /**
  * Automatically provisions BBB room enrollments when an order is paid.
  *
- * This complements the manual fulfillment handler by making enrollment creation
- * happen directly from the Vendure order lifecycle. It uses the existing
- * BbbProductAccess mapping table rather than ProductVariant custom fields, so
- * it stays aligned with the dashboard-managed product → room configuration.
+ * This handler provides dual-path provisioning:
+ * 1. Session products (BbbScheduledSession.productVariantId match):
+ *    Creates BbbEntitlement for "bbb_session" access type.
+ * 2. Room products (BbbProductAccess → BbbRoom match):
+ *    Creates BbbEnrollment for room access (legacy path).
+ *
+ * Both paths operate idempotently — if access already exists, it is updated
+ * rather than duplicated.
  */
 @Injectable()
 export class BbbOrderFulfillmentListener implements OnApplicationBootstrap {
   constructor(
     private readonly eventBus: EventBus,
     private readonly connection: TransactionalConnection,
+    private readonly entitlementService: BbbEntitlementService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -33,7 +40,7 @@ export class BbbOrderFulfillmentListener implements OnApplicationBootstrap {
 
       this.handlePaymentSettled(event.ctx, event.order as Order).catch((err) => {
         Logger.error(
-          `Failed to provision BBB enrollments for order ${event.order.code}: ${(err as Error).message}`,
+          `Failed to provision BBB access for order ${event.order.code}: ${(err as Error).message}`,
           loggerCtx,
         );
       });
@@ -51,19 +58,47 @@ export class BbbOrderFulfillmentListener implements OnApplicationBootstrap {
 
     if (!order?.customer) {
       Logger.warn(
-        `Order ${eventOrder.code} reached PaymentSettled without a customer; skipping BBB enrollment provisioning`,
+        `Order ${eventOrder.code} reached PaymentSettled without a customer; skipping BBB access provisioning`,
         loggerCtx,
       );
       return;
     }
 
     const customerId = String(order.customer.id);
-    const enrollmentRepo = this.connection.getRepository(ctx, BbbEnrollment);
+    const now = new Date();
 
     for (const line of order.lines ?? []) {
       const productVariantId = String(line.productVariant?.id ?? "");
       if (!productVariantId) continue;
 
+      // ─── Session product path (Entitlement-based) ─────────────────────────
+      // Check if this productVariantId matches a BbbScheduledSession first.
+      // This is the preferred path — session-specific access via Entitlement.
+      const session = await this.connection
+        .getRepository(ctx, BbbScheduledSession)
+        .findOne({
+          where: { productVariantId },
+        });
+
+      if (session) {
+        await this.entitlementService.create(ctx, {
+          type: "bbb_session",
+          resourceId: String(session.id),
+          customerId,
+          source: "purchase",
+          validFrom: now,
+          validUntil: session.endTime,
+          channelId: (session as any).channelId ?? null,
+        });
+
+        Logger.info(
+          `Provisioned session entitlement: customer=${customerId} session=${session.id} order=${order.code}`,
+          loggerCtx,
+        );
+        continue; // Skip room path for session purchases
+      }
+
+      // ─── Room product path (BbbEnrollment-based, legacy) ──────────────────
       const productAccess = await this.connection
         .getRepository(ctx, BbbProductAccess)
         .findOne({
@@ -78,8 +113,8 @@ export class BbbOrderFulfillmentListener implements OnApplicationBootstrap {
         productAccess.accessDays != null
           ? new Date(Date.now() + productAccess.accessDays * 24 * 60 * 60 * 1000)
           : null;
-      const now = new Date();
 
+      const enrollmentRepo = this.connection.getRepository(ctx, BbbEnrollment);
       const existing = await enrollmentRepo.findOne({
         where: { roomId, customerId },
       });

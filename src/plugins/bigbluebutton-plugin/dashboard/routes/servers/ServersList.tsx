@@ -169,9 +169,16 @@ export function ServersList() {
     });
   }
 
-  function handleDelete(server: BbbServer) {
-    if (window.confirm(`Delete server "${server.name}"? This cannot be undone.`)) {
-      deleteMutation.mutate(server.id);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+
+  function handleDeleteClick(server: BbbServer) {
+    setDeleteTargetId(server.id);
+  }
+
+  function handleDeleteConfirm() {
+    if (deleteTargetId) {
+      deleteMutation.mutate(deleteTargetId);
+      setDeleteTargetId(null);
     }
   }
 
@@ -312,7 +319,7 @@ export function ServersList() {
                         <Button
                           variant="destructive"
                           size="sm"
-                          onClick={() => handleDelete(server)}
+                          onClick={() => handleDeleteClick(server)}
                         >
                           Delete
                         </Button>
@@ -353,6 +360,21 @@ export function ServersList() {
           </>
         )}
       </Card>
+
+      <Dialog open={!!deleteTargetId} onOpenChange={(o) => !o && setDeleteTargetId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Server</DialogTitle>
+            <DialogDescription>Are you sure you want to delete this server? This action cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTargetId(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteConfirm} disabled={deleteMutation.isPending}>
+              {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit Dialog */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>

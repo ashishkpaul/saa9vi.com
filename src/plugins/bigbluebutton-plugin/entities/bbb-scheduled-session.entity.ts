@@ -25,6 +25,7 @@ import { BbbMeeting } from "./bbb-meeting.entity";
  * - Historical record survives infrastructure teardown
  */
 @Entity("bbb_scheduled_session")
+@Index(["organizationId", "slug"], { unique: true })
 export class BbbScheduledSession extends VendureEntity {
   constructor(input?: DeepPartial<BbbScheduledSession>) {
     super(input);
@@ -46,6 +47,10 @@ export class BbbScheduledSession extends VendureEntity {
   @ManyToOne(() => BbbOrganization, (org) => org.id)
   organization: BbbOrganization;
 
+  /** Denormalized FK for composite index support */
+  @Column()
+  organizationId: string;
+
   @ManyToOne(() => BbbOrganizationMember, (m) => m.id)
   trainer: BbbOrganizationMember;
 
@@ -62,7 +67,12 @@ export class BbbScheduledSession extends VendureEntity {
   @Column({ type: "int", nullable: true })
   maxAttendees: number | null;
 
-  @Index({ unique: true })
+  /** Denormalized FK for tenant isolation — set at creation from ctx.channelId */
+  @Index()
+  @Column({ type: "varchar", nullable: true })
+  channelId: string | null;
+
+  /** Slug unique within organization (replaces global unique) */
   @Column({ type: "varchar", nullable: true })
   slug: string | null;
 

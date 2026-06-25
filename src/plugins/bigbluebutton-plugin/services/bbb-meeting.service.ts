@@ -25,6 +25,7 @@ import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
+import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
 import { BbbApiService } from "./bbb-api.service";
 import { BbbServerService } from "./bbb-server.service";
 import { BbbServerSelectionService } from "./bbb-server-selection.service";
@@ -699,11 +700,15 @@ export class BbbMeetingService implements OnModuleInit {
   }
 
   /**
-   * Unified role-based join routing (S1):
+   * Unified role-based join routing:
    * - TRAINER / ORG_ADMIN => moderator URL
-   * - STUDENT => attendee URL
+   * - STUDENT with meeting org membership => attendee URL
+   * - STUDENT with session entitlement (trial/purchase) => attendee URL
    *
-   * Membership is enforced before URL generation.
+   * Authorization priority:
+   * 1. Organization membership (moderator)
+   * 2. Organization membership (student → attendee)
+   * 3. BbbEntitlement for "bbb_session" type (via activeMeeting → session)
    */
   async getJoinUrl(
     ctx: RequestContext,
@@ -723,21 +728,64 @@ export class BbbMeetingService implements OnModuleInit {
       throw new Error("Authenticated user has no associated customer profile");
     }
 
-    const member = await this.memberService.assertActiveMembership(
+    // ─── Path 1: Organization membership (moderator or student) ──────────
+    const member = await this.memberService.findActiveMembership(
       ctx,
       customer.id,
       meeting.organization.id,
     );
 
-    if (this.memberService.isModerator(member)) {
-      return this.getModeratorJoinUrl(ctx, meetingId, participantName);
+    if (member) {
+      if (this.memberService.isModerator(member)) {
+        return this.getModeratorJoinUrl(ctx, meetingId, participantName);
+      }
+      return this.getAttendeeJoinUrl(
+        ctx,
+        meetingId,
+        participantName,
+        customer.id as string,
+      );
     }
 
-    return this.getAttendeeJoinUrl(
-      ctx,
-      meetingId,
-      participantName,
-      customer.id as string,
+    // ─── Path 2: Session entitlement (trial/purchase attendee) ───────────
+    // Resolve the BbbScheduledSession linked to this meeting (if any)
+    const session = await this.connection
+      .getRepository(ctx, BbbScheduledSession)
+      .findOne({
+        where: { activeMeeting: { id: meeting.id as string } },
+      });
+
+    if (session) {
+      const hasEntitlement = await this.connection
+        .getRepository(ctx, BbbEntitlement)
+        .findOne({
+          where: {
+            customerId: String(customer.id),
+            type: "bbb_session",
+            resourceId: String(session.id),
+          },
+        });
+
+      if (hasEntitlement) {
+        const now = new Date();
+        // Check time window
+        const valid =
+          (!hasEntitlement.validFrom || hasEntitlement.validFrom <= now) &&
+          (!hasEntitlement.validUntil || hasEntitlement.validUntil >= now);
+
+        if (valid) {
+          return this.getAttendeeJoinUrl(
+            ctx,
+            meetingId,
+            participantName,
+            customer.id as string,
+          );
+        }
+      }
+    }
+
+    throw new Error(
+      "You do not have access to this meeting. Purchase a session or obtain an enrollment to join.",
     );
   }
 

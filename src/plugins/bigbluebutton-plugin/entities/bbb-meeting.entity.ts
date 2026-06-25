@@ -32,6 +32,15 @@ export class BbbMeeting extends VendureEntity {
   @Column({ nullable: true })
   bbbInternalMeetingId: string;
 
+  // ─── Encryption Key Versioning ────────────────────────────────────────────
+
+  /**
+   * Tracks which encryption key version was used to encrypt the passwords below.
+   * Incremented via zero-downtime key rotation (see DA-003).
+   */
+  @Column({ default: 1 })
+  encryptionKeyVersion: number;
+
   // ─── Encrypted Passwords (select: false — never leak through GraphQL) ────
 
   /**

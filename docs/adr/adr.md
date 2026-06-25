@@ -1,10 +1,14 @@
 # Architecture Decision Record
 ## Saa9vi — Multi-Tenant Education Commerce Platform
-### Production Architecture · Version 1.0
+### Production Architecture · Version 1.2
 **Status:** Active  
 **Date:** 2025-06  
 **Authors:** Lead Architect, Platform Engineering  
-**Supersedes:** ADR-012 (alignment assessment), all prior incremental reviews
+**Supersedes:** ADR v1.1 (2025-06)
+
+> **What changed in v1.1:** Full audit against all three plugin codebases (`bigbluebutton-plugin`, `cms-plugin`, `tenant-plugin`). Status fields updated to match actual implementation. Four divergences from v1.0 documented. Three pending ADR items promoted to explicit open issues. No invariants changed.
+>
+> **What changed in v1.2:** Three code-verified corrections incorporated: (1) `convertTrialToEnrollment` → `BbbEnrollment` path added to AC-003 (method exists and is the correct conversion route); (2) EventBus published events corrected — `RoomActivatedEvent` is live, `TrialAttendanceRecordedEvent` is future-only; (3) cipher name corrected to AES-256-GCM (matches `BbbEncryptionService` comments). BUG-015 added for banner queue gap. BUG-015 file attribution corrected to `BigBlueButtonPlugin` / `BannerService` bootstrap, not the resolver. Admin API isolation added as SEC-001 production deployment requirement.
 
 ---
 
@@ -74,6 +78,8 @@ BbbOrganization (BigBlueButtonPlugin)
 
 Every entity that is tenant-scoped **must** implement `ChannelAware` and be persisted via `channelService.assignToCurrentChannel(entity, ctx)` before the first `save()`. Every read against a channel-scoped entity **must** use `ListQueryBuilder` with `RequestContext` or `findOneInChannel`.
 
+**Exceptions documented in the Decision Log (DL-010, DL-011):** `InstructorProfile` and `BbbEntitlement` use scalar `channelId` without full `ChannelAware` implementation. All service methods for these entities must include explicit `channelId` WHERE clauses on every query — this is verified in the code audit.
+
 **Rejection criterion:** Any PR introducing a `tenantId` column that is not `ctx.channelId` is rejected without review.
 
 **Rationale:** Vendure's `RequestContext` carries the active `channelId`. `ListQueryBuilder` and `TransactionalConnection.findOneInChannel` automatically filter by this channel. A parallel identity system creates two sources of truth that drift in production under concurrent writes.
@@ -88,7 +94,7 @@ Every entity that is tenant-scoped **must** implement `ChannelAware` and be pers
 
 All access to paid content — live sessions, recorded courses, workshops, coaching packages — is gated through a single `Entitlement` entity with a uniform `hasAccess(ctx, customerId, type, resourceId)` interface.
 
-**Current status:** `BbbEnrollment` is the interim implementation. It carries `@deprecated` annotation. The generalization to `Entitlement` is Phase 1.5 work and must be completed before any second enrollment type (recorded course access, workshop access) is added.
+**Current status:** `BbbEntitlement` entity and `BbbEntitlementService` are live. The entity supports `bbb_session` and `bbb_room` types with scalar `channelId` (non-ChannelAware). The service provides idempotent `create()`, `hasAccess()`, and `delete()` methods. No admin UI yet. `BbbEnrollment` remains as the legacy room-access path.
 
 **Rejection criterion:** Any new entity named `*Enrollment` or `*Access` that is not `BbbEnrollment` backward-compatibility is rejected.
 
@@ -109,9 +115,26 @@ BullMQ processor
   → update BbbWebhookEvent.status to PROCESSED | FAILED
 ```
 
-**Current status:** `BbbWebhookController` currently processes inline after HMAC verification. This is the highest production risk in the codebase.
+**Current status:** ✅ Implemented and code-verified. `BbbWebhookController` persists events via `BbbWebhookEvent` then enqueues to `bbb-webhook-processor` BullMQ queue. `BbbWebhookProcessorService` loads events, delegates to `BbbMeetingService.handleWebhookEvent()`, and marks `PROCESSED` or `FAILED`. Failed events remain queryable for replay.
 
 **Rejection criterion:** Any webhook controller that calls a service method before persisting the raw event is rejected.
+
+---
+
+## 2A. Code Audit Divergences (v1.0 → v1.2)
+
+The following divergences were found between ADR v1.0 and the plugin code, and corrected across v1.1 and v1.2.
+
+| ID | Location | Earlier ADR Said | Code Reality | Resolution |
+|---|---|---|---|---|
+| DIV-001 | `constants.ts` `MEETING_STATE` | `STALE` state required before production | `STALE` is **absent** from `MEETING_STATE` map and transition table | **Pending fix** — BUG-012 / BB-002 |
+| DIV-002 | `BbbServerSelectionService` | Score = `activeMeetingCount × avgParticipants` (15-min rolling window) | Score = `server.currentLoad` (opaque integer set externally) | **Accepted** — abstraction is superior; documented as DL-014 |
+| DIV-003 | `BbbReconciliationService` | `CapacityExhaustedEvent` published when `billingCapped = true` | Event class **does not exist** | **Pending fix** — BUG-013 / BB-004 |
+| DIV-004 | Dashboard `index.tsx` | `BbbEntitlement` admin UI implied as Phase 1 | No entitlement route registered | **Accepted** — deferred to Phase 1.5 |
+| DIV-005 | `BbbEncryptionService` | Cipher referred to as "AES-GCM" | Code comments explicitly state **AES-256-GCM** | **Corrected** in v1.2 — SEC-003, INF-002 |
+| DIV-006 | `BbbAdminResolver` / `TrialRegistrationService` | AC-003 omitted the trial→enrollment conversion path | `convertTrialToEnrollment` exists and routes to `BbbEnrollment` via `trial_conversion` source | **Added** in v1.2 — AC-003 |
+| DIV-007 | EventBus event table | `TrialAttendanceRecordedEvent` listed as live/pending | No publisher exists yet; `RoomActivatedEvent` was live but omitted | **Corrected** in v1.2 — EQ-002 |
+| DIV-008 | `CmsPlugin` / `BannerService` | Banner queue gap not tracked | `banner-activator`/`banner-deactivator` queues unregistered | **Added** in v1.2 — BUG-015 / CMS-002 |
 
 ---
 
@@ -139,6 +162,7 @@ BullMQ processor
                                             │  BbbCapacityGrant   │
                                             │  BbbUsageLedger     │
                                             │  BbbWebhookEvent    │
+                                            │  BbbEntitlement     │
                                             └─────────────────────┘
                                                       │
                                             ┌─────────▼───────────┐
@@ -164,7 +188,7 @@ Plugins share the NestJS DI container. Cross-plugin injection is permitted with 
 
 ### DA-001: ChannelAware Implementation Pattern
 
-All tenant-scoped entities follow this pattern:
+All tenant-scoped entities follow this pattern (code-verified in `TenantProfile`, `BbbOrganization`, `OrganizationSubscription`):
 
 ```typescript
 @Entity('entity_name')
@@ -193,6 +217,10 @@ async create(ctx: RequestContext, input: CreateInput): Promise<MyEntity> {
 }
 ```
 
+**CMS plugin uses `ListQueryBuilder` + `findOneInChannel`** (code-verified in `ArticleService`, `PageService`, `BannerService`) — these entities are ChannelAware and use the framework tooling correctly.
+
+**`InstructorProfile` exception:** Uses raw `findAndCount` with explicit `WHERE channelId = :channelId`. Acceptable per DL-010.
+
 ### DA-002: Slug Uniqueness
 
 Slugs are scoped per channel, not globally. All slug-bearing entities use a composite unique index:
@@ -208,30 +236,24 @@ export class SlugBearingEntity extends VendureEntity {
 
 Application-level `assertSlugIsUnique` checks are acceptable as UX helpers but the database constraint is the authoritative guard.
 
-**Affected entities that must carry this index:**
+**Affected entities and status:**
 - `InstructorProfile` ✅ Applied
 - `TenantProfile` (by channelId already unique — slug not exposed yet)
-- `Article` ⚠️ Application-level only — migration needed
-- `Page` ⚠️ Application-level only — migration needed
+- `Article` ✅ Fixed — composite unique index `(channelId, slug)` via migration `1782369776476-bugs`
+- `Page` ✅ Fixed — composite unique index `(channelId, slug)` via migration `1782369776476-bugs`
 - `BbbOrganization` (slug is globally unique — 1 org per channel, correct)
-- `BbbScheduledSession` (slug within org — add `(organizationId, slug)` composite)
+- `BbbScheduledSession` ✅ Applied — composite `(organizationId, slug)` unique index, global unique slug dropped
 
 ### DA-003: Encryption Key Versioning
 
-`BbbEncryptionService` encrypts BBB server API secrets and meeting passwords using AES-GCM. Encrypted columns must carry a version field to enable zero-downtime key rotation:
+`BbbEncryptionService` encrypts BBB server API secrets and meeting passwords using AES-GCM. Encrypted columns carry `encryptionKeyVersion` for zero-downtime key rotation.
 
-```typescript
-// Add to BbbMeeting and BbbServer
-@Column({ default: 1 })
-encryptionKeyVersion: number;
-```
+**Current status:** ✅ `encryptionKeyVersion` column present on `BbbMeeting` (line 2966) and `BbbServer` (line 3416) in plugin code. Migration `1782369776476-bugs` applied.
 
 Key rotation procedure:
 1. Increment `ENCRYPTION_KEY_VERSION` env var
 2. Run background job: fetch all records with `encryptionKeyVersion < current`, decrypt with old key, re-encrypt with new key, update version
 3. Remove old key from env after job completes
-
-**Current status:** Version column absent. Must be added before first tenant onboarding.
 
 ### DA-004: Migration Governance
 
@@ -247,60 +269,41 @@ Every schema change ships as a TypeORM migration. Rules:
 
 ## 5. Commerce & Access Control
 
-### AC-001: The Entitlement Model (Target State)
+### AC-001: The Entitlement Model ✅ Implemented (Minimal)
 
-The target access-control entity:
+The implemented `BbbEntitlement` entity (code-verified):
 
 ```typescript
-@Entity('entitlement')
+@Entity('bbb_entitlement')
 @Index(['customerId', 'type', 'resourceId'])
-export class Entitlement extends VendureEntity implements ChannelAware {
-  // What type of access
-  @Column({ enum: ['bbb_room', 'bbb_session', 'recorded_course', 'workshop', 'subscription'] })
-  type: EntitlementType;
-
-  // What resource — FK string, not a TypeORM relation
+@Index(['resourceId', 'type'])
+@Index(['channelId'])
+export class BbbEntitlement extends VendureEntity {
+  @Column() type: 'bbb_session' | 'bbb_room';
   @Column() resourceId: string;
-
-  // Who holds it
   @Column() customerId: string;
-
-  // How it was acquired
-  @Column({ nullable: true }) sourceOrderLineId: string | null;
-  @Column({ nullable: true }) sourceSubscriptionId: string | null;
-  @Column({ enum: ['order', 'trial', 'admin_grant', 'subscription'] })
-  source: EntitlementSource;
-
-  // Validity window
+  @Column() source: 'purchase' | 'trial' | 'admin' | 'import';
   @Column({ nullable: true }) validFrom: Date | null;
-  @Column({ nullable: true }) validUntil: Date | null;  // null = perpetual
-
-  @ManyToMany(() => Channel) @JoinTable() channels: Channel[];
-  @Column() channelId: string;
+  @Column({ nullable: true }) validUntil: Date | null;
+  @Column({ nullable: true }) channelId: string | null;   // scalar, not ChannelAware
 }
 ```
 
-Uniform access check:
-```typescript
-async hasAccess(ctx: RequestContext, customerId: string, type: EntitlementType, resourceId: string): Promise<boolean> {
-  const now = new Date();
-  return this.repo.existsBy({
-    customerId, type, resourceId, channelId: ctx.channelId,
-    ...(now && { validFrom: LessThanOrEqual(now) }),
-    ...(now && [{ validUntil: IsNull() }, { validUntil: MoreThan(now) }]),
-  });
-}
-```
+**Key implementation decisions differing from the ADR target:**
+- Entity named `BbbEntitlement` (prefixed like other BBB entities), not bare `Entitlement`
+- Scalar `channelId` without `ChannelAware` — follows DL-010 pattern (DL-011)
+- No `sourceOrderLineId` or `sourceSubscriptionId` yet — Phase 2
+- No admin UI or expiry cron yet — Phase 1.5
 
-**Migration path from `BbbEnrollment`:**
-1. Create `Entitlement` entity
-2. Migrate existing `BbbEnrollment` rows to `Entitlement` with `type: 'bbb_room'`
-3. Update `BbbMeetingService.joinMeeting` to call `entitlementService.hasAccess`
-4. Keep `BbbEnrollment` table for 2 sprints with `@deprecated` guard, then drop
+**Uniform access check:** `BbbEntitlementService.hasAccess()` — checks `customerId`, `type`, `resourceId`, and `validFrom`/`validUntil` window (code-verified).
 
-### AC-002: Commerce Loop (Checkout → Access)
+**Integration points (all code-verified):**
+1. `BbbOrderFulfillmentListener` creates Entitlement for session purchases ✅
+2. `TrialRegistrationService.register()` creates Entitlement for trial registrations ✅
+3. `BbbMeetingService.getJoinUrl()` checks Entitlement for session-based attendees (membership fallback) ✅
+4. `BbbMeetingService.joinRoom()` still uses legacy `BbbEnrollment` for room access ✅ (interim)
 
-The complete loop for a paid session purchase:
+### AC-002: Commerce Loop (Checkout → Access) ✅ Fixed
 
 ```
 Student adds BbbScheduledSession to cart
@@ -308,19 +311,18 @@ Student adds BbbScheduledSession to cart
   → Order placed, Payment settled
   → OrderStateMachine fires PaymentSettledEvent
   → BbbOrderFulfillmentListener.handlePaymentSettled()
-      → findBbbScheduledSessionByProductVariantId(productVariantId)
-      → create Entitlement { type: 'bbb_session', resourceId: session.id, customerId, sourceOrderLineId }
-      → create BbbCapacityGrant { source: 'order', orderId, orderLineId, productVariantId }
-  → Student joins: BbbMeetingService.joinMeeting()
+      → findBbbScheduledSessionByProductVariantId(productVariantId) — FIRST
+      → create Entitlement { type: 'bbb_session', resourceId: session.id, customerId, source: 'purchase' }
+      → continue to next line (skip room path)
+  → fallback for room products: productVariantId → BbbProductAccess → BbbRoom → BbbEnrollment (legacy)
+  → Student joins: BbbMeetingService.getJoinUrl()
       → entitlementService.hasAccess(ctx, customerId, 'bbb_session', sessionId)
-      → if granted: provision meeting or return existing join URL
+      → if granted: attendee join URL
 ```
 
-**Current gap:** Fulfillment handler resolves `productVariantId → BbbProductAccess → BbbRoom`, bypassing `BbbScheduledSession`. Must be updated before any session-based product is sold.
+**Current status:** ✅ Dual-path fulfillment code-verified. `BbbOrderFulfillmentListener` uses `TransactionalConnection` to look up `BbbScheduledSession` by `productVariantId` first; room products fall through to legacy path.
 
-### AC-003: Trial Session Funnel (Zero-Price Entitlement)
-
-Free trial sessions use the same `Entitlement` model with `source: 'trial'` and `validUntil` set to the session end time:
+### AC-003: Trial Session Funnel (Zero-Price Entitlement) ✅ Fixed
 
 ```
 Student registers for free trial via Shop API mutation
@@ -333,14 +335,20 @@ Student registers for free trial via Shop API mutation
 After session ends (BBB meeting-ended webhook):
   → BbbWebhookProcessor.handleMeetingEnded()
   → update BbbTrialRegistration.status based on attendance data
-  → emit TrialAttendanceRecordedEvent
+  → emit TrialAttendanceRecordedEvent (future — no subscribers yet)
 
-Conversion:
+Conversion path A — direct purchase:
   → Student visits trainer profile, purchases full course
   → Normal Entitlement created via AC-002 commerce loop
+
+Conversion path B — admin-initiated room enrollment:
+  → Admin calls convertTrialToEnrollment(registrationId, roomId, accessDays?)
+  → TrialRegistrationService.convertToEnrollment() creates BbbEnrollment
+    { source: 'trial_conversion', validUntil: now + accessDays }
+  → Student gains legacy BbbEnrollment room access (interim until Phase 1.5 migration)
 ```
 
-**Current gap:** Trial → Entitlement creation is not connected. `BbbTrialRegistration` exists and attendance is updated from webhook, but no `Entitlement` is created on registration.
+**Current status:** ✅ Code-verified. `TrialRegistrationService.register()` validates session existence, `isTrial = true`, `maxAttendees` capacity, creates `BbbTrialRegistration`, then creates `BbbEntitlement` with `type: 'bbb_session', source: 'trial', validUntil: session.endTime`. Entitlement creation failure is non-fatal. `convertTrialToEnrollment` resolver exists (code-verified at `BbbAdminResolver`) and bridges trial registrations to `BbbEnrollment` for room access during the interim period before full Entitlement migration.
 
 ### AC-004: Subscription Billing Model (Phase 2)
 
@@ -375,7 +383,7 @@ export class OrganizationSubscription extends VendureEntity implements ChannelAw
 
 ## 6. BBB Integration Architecture
 
-### BB-001: Webhook Pipeline (Target State)
+### BB-001: Webhook Pipeline ✅ Implemented & Code-Verified
 
 ```typescript
 // BbbWebhookController — only validates and persists
@@ -396,7 +404,7 @@ async handleWebhook(@Req() req, @Headers('x-hub-signature-256') sig: string, @Bo
   return { ok: true };
 }
 
-// BbbWebhookProcessor — BullMQ worker
+// BbbWebhookProcessorService — BullMQ worker
 async processWebhookJob(job: Job<{ eventId: string }>) {
   const event = await this.webhookEventRepo.findOneOrFail({ where: { id: job.data.eventId } });
   try {
@@ -410,80 +418,120 @@ async processWebhookJob(job: Job<{ eventId: string }>) {
 }
 ```
 
-`BbbWebhookEvent` entity:
+`BbbWebhookEvent` entity (code-verified):
 
 ```typescript
 @Entity('bbb_webhook_event')
 export class BbbWebhookEvent extends VendureEntity {
   @Column() eventType: string;
-  @Column({ type: 'jsonb' }) payload: Record<string, unknown>;
+  @Column({ type: 'simple-json' }) payload: Record<string, unknown>;  // simple-json for DB portability (DL-013)
   @Column() receivedAt: Date;
-  @Column({ enum: ['PENDING', 'PROCESSED', 'FAILED'] }) status: string;
+  @Column() status: 'PENDING' | 'PROCESSED' | 'FAILED';
   @Column({ nullable: true }) processedAt: Date | null;
   @Column({ nullable: true, type: 'text' }) errorMessage: string | null;
-  @Index() @Column({ nullable: true }) bbbMeetingId: string | null;   // for fast replay lookup
+  @Index() @Column({ nullable: true }) bbbMeetingId: string | null;
 }
 ```
 
-Replay capability: `SELECT * FROM bbb_webhook_event WHERE status = 'FAILED' ORDER BY received_at` → re-enqueue IDs.
+Replay: `SELECT * FROM bbb_webhook_event WHERE status = 'FAILED' ORDER BY received_at` → re-enqueue IDs.
 
-### BB-002: Meeting FSM
+### BB-002: Meeting FSM ⚠️ STALE State Pending
 
-Current states and transitions are correct. One addition needed for production:
+**Current states (code-verified):**
 
 ```typescript
-// Add STALE as a terminal state for meetings reconciliation marks as permanently unreachable
 export const MEETING_STATE = {
-  ...existing,
-  STALE: 'Stale',
+  PENDING:      'Pending',
+  PROVISIONING: 'Provisioning',
+  ACTIVE:       'Active',
+  COMPLETED:    'Completed',
+  ARCHIVED:     'Archived',
+  FAILED:       'Failed',
 } as const;
-
-// STALE is reachable from any active state during reconciliation
-// It is NOT a billable state — no UsageLedger row is written for STALE meetings
 ```
 
-### BB-003: Server Selection
-
-`BbbServerSelectionService` must weight by participant-minutes load, not meeting count:
+**Missing state — required before production:**
 
 ```typescript
-// Current (inadequate)
-score = server.activeMeetingCount;
+// Add to constants.ts
+STALE: 'Stale',
 
-// Required
-score = server.activeMeetingCount * server.avgParticipantsPerMeeting;
-// where avgParticipantsPerMeeting is computed from BbbMetricsService over a 15-min rolling window
+// Add to MEETING_STATE_TRANSITIONS
+Pending:      ['Provisioning', 'Failed'],
+Provisioning: ['Active', 'Failed'],
+Active:       ['Completed', 'Failed', 'Stale'],   // ← add Stale
+Completed:    ['Archived'],
+Stale:        [],                                   // terminal — not billable
+Archived:     [],
+Failed:       ['Pending'],
 ```
 
-### BB-004: Billing Ceiling Enforcement
+`STALE` is reachable from `Active` (and any state where reconciliation marks a meeting as permanently unreachable). No `BbbUsageLedger` row is written for `STALE` meetings. `BbbReconciliationService` already tracks "stale active" metrics (`recordStaleActiveDetected`, `recordStaleActiveRecovered`) but has no state to transition to — this leaves stale meetings stuck in `Active` forever.
 
-`BbbMeeting.billingCapped` is set when `consumedMinutes >= grant.grantedMinutes`. The reconciliation service correctly handles this. The gap is: when `billingCapped` is set, the system must also **notify the tenant** that their capacity is exhausted. Add an `EventBus` publish of `CapacityExhaustedEvent` that the email plugin handles:
+**Current status:** ⚠️ Pending. `STALE` absent from `constants.ts` and transition map. Reconciliation metrics exist but have no FSM backing.
+
+### BB-003: Server Selection — Load Scoring
+
+**Current implementation (code-verified):**
 
 ```typescript
-// In reconciliation, after marking billingCapped = true
+// BbbServerSelectionService.selectServer()
+.andWhere('server.currentLoad < server.maxLoad')
+.orderBy('server.currentLoad', 'ASC')
+// + random jitter among tied servers
+```
+
+**ADR v1.0 target:** Score = `activeMeetingCount × avgParticipantsPerMeeting` from a 15-min rolling window.
+
+**Accepted divergence (v1.1):** The `currentLoad` / `maxLoad` abstraction is a valid alternative. `currentLoad` is an opaque integer that `BbbReconciliationService` or an external agent can update to any desired metric (participant-minutes, raw meeting count, CPU load, etc.) without changing the selection algorithm. The selection service does not need to know the scoring formula — that is the reconciliation concern.
+
+**Action required:** Document in `BbbServer` entity and `BbbReconciliationService` what `currentLoad` represents and how it is updated. This is operational documentation, not a code change.
+
+### BB-004: Capacity Exhaustion Notification ⚠️ Pending
+
+When `billingCapped = true` is set during reconciliation, the tenant must be notified. The event class does not exist in the codebase.
+
+Required additions:
+```typescript
+// 1. Create event class
+export class CapacityExhaustedEvent extends VendureEvent {
+  constructor(
+    public readonly ctx: RequestContext,
+    public readonly organization: BbbOrganization,
+    public readonly grant: BbbCapacityGrant,
+  ) { super(); }
+}
+
+// 2. Publish from BbbReconciliationService after marking billingCapped = true
 this.eventBus.publish(new CapacityExhaustedEvent(ctx, organization, grant));
-// EmailPlugin handler sends: "Your BBB capacity for this billing period is exhausted"
+
+// 3. EmailPlugin handler: "Your BBB capacity for this billing period is exhausted"
 ```
 
-### BB-005: Encryption Key Version Column
+**Current status:** ⚠️ Pending. Neither `CapacityExhaustedEvent` class nor its publisher exists. `BbbMetricsService` tracks the metric internally but does not emit an EventBus event.
 
-Both `BbbServer.encryptedApiSecret` and `BbbMeeting.encryptedAttendeePassword` / `encryptedModeratorPassword` must carry `encryptionKeyVersion: number` before production. See DA-003.
+### BB-005: Encryption Key Version ✅ Fixed
+
+Both `BbbServer.encryptedApiSecret` and `BbbMeeting.encryptedAttendeePassword` / `encryptedModeratorPassword` carry `encryptionKeyVersion: number`. See DA-003.
+
+**Current status:** ✅ Code-verified. `encryptionKeyVersion` column present on both entities.
 
 ---
 
 ## 7. CMS Architecture
 
-### CMS-001: Slug Uniqueness Migration
+### CMS-001: Slug Uniqueness Migration ✅ Fixed
 
-`Article` and `Page` entities require composite unique indexes. Migration:
+`Article` and `Page` entities have composite unique indexes:
 
 ```sql
--- Drop application-level unique constraints if any
 CREATE UNIQUE INDEX "IDX_article_channel_slug" ON "article" ("channelId", "slug");
 CREATE UNIQUE INDEX "IDX_page_channel_slug" ON "page" ("channelId", "slug");
 ```
 
-### CMS-002: Banner Scheduling via BullMQ
+**Current status:** ✅ Code-verified. Both `ArticleService` and `PageService` use `ListQueryBuilder` + `findOneInChannel` which enforce channel scope. Migration `1782369776476-bugs` applied.
+
+### CMS-002: Banner Scheduling via BullMQ ⚠️ Pending
 
 Replace runtime date filter with precomputed `isCurrentlyActive`:
 
@@ -496,13 +544,15 @@ isCurrentlyActive: boolean;
 // banner-activator: WHERE isActive = true AND startsAt <= NOW() AND isCurrentlyActive = false → set true
 // banner-deactivator: WHERE isCurrentlyActive = true AND endsAt <= NOW() → set false
 
-// Storefront query becomes simply:
+// Storefront query becomes:
 WHERE channelId = :channelId AND isCurrentlyActive = true
 ```
 
-### CMS-003: Page Sections Type Index
+**Current status:** ⚠️ Pending. `BannerService` currently filters by date at query time. `banner-activator` and `banner-deactivator` queues not yet registered.
 
-The `sections: PageSection[]` JSON blob is retained (acceptable for current scale). Add a computed column for queryability:
+### CMS-003: Page Sections Type Index (Phase 2)
+
+The `sections: PageSection[]` JSON blob is retained for current scale. For Phase 2 queryability:
 
 ```typescript
 // Add to Page entity
@@ -512,9 +562,9 @@ sectionTypes: string[];   // e.g. ['hero', 'productGrid', 'bbbSession']
 // Maintained on save: page.sectionTypes = page.sections.map(s => s.type)
 ```
 
-This allows `WHERE 'bbbSession' = ANY(sectionTypes)` without deserializing JSON.
+Enables `WHERE 'bbbSession' = ANY(sectionTypes)` without JSON deserialization.
 
-### CMS-004: BBB Session Section Type
+### CMS-004: BBB Session Section Type (Phase 2)
 
 Add `bbbSession` as a page section type:
 
@@ -527,7 +577,7 @@ export interface BbbSessionSection {
 }
 ```
 
-The storefront `PageRenderer` fetches `BbbScheduledSession` by ID and renders the join CTA, countdown, and instructor card inline. This is the bridge between the CMS and live teaching products.
+The storefront `PageRenderer` fetches `BbbScheduledSession` by ID and renders the join CTA, countdown, and instructor card inline. Bridge between CMS and live teaching products.
 
 ---
 
@@ -535,74 +585,27 @@ The storefront `PageRenderer` fetches `BbbScheduledSession` by ID and renders th
 
 ### TP-001: Bug — `TenantProfileDetail.tsx` `useState` used as `useEffect`
 
-**Severity:** High. Form fields are never populated when editing an existing profile.
-
-**Fix:**
-```typescript
-// Replace
-useState(() => {
-  if (existing) { setChannelId(existing.channelId); ... }
-});
-
-// With
-useEffect(() => {
-  if (existing) {
-    setChannelId(existing.channelId);
-    setBusinessName(existing.businessName);
-    setTagline(existing.tagline ?? '');
-    setTimezone(existing.timezone);
-    setContactEmail(existing.contactEmail);
-  }
-}, [existing]);
-```
+**Status:** ✅ Fixed (prior to this sprint).
 
 ### TP-002: Bug — `tenantProfile` resolver ignores `__current__`
 
-**Severity:** High. `findByChannelId(ctx, '__current__')` returns null always.
-
-**Fix — resolver:**
-```typescript
-@Query()
-@Allow(tenantProfilePermission.Read)
-tenantProfile(@Ctx() ctx: RequestContext, @Args() args?: { channelId?: string }) {
-  const cid = (args?.channelId && args.channelId !== '__current__')
-    ? args.channelId
-    : ctx.channelId as string;
-  return this.tenantProfileService.findByChannelId(ctx, cid);
-}
-```
-
-**Fix — dashboard query:**
-```typescript
-queryFn: () => api.query(GET_PROFILE, {}),  // remove channelId arg entirely; resolver defaults to ctx
-```
-
-**Fix — GraphQL schema:**
-```graphql
-type Query {
-  tenantProfile(channelId: String): TenantProfile   # make arg optional
-}
-```
+**Status:** ✅ Fixed (prior to this sprint). Code-verified: `TenantAdminResolver.tenantProfile()` correctly handles `__current__` by defaulting to `ctx.channelId`.
 
 ### TP-003: `InstructorProfile` is not `ChannelAware`
 
-`InstructorProfile` uses `@ManyToOne channel: Channel` (singular) plus `channelId` scalar. It cannot use `assignToCurrentChannel`. All queries are raw `findAndCount` with explicit `WHERE channelId = :channelId`.
+`InstructorProfile` uses an explicit `channelId` scalar — no `channels[]` join table, no `assignToCurrentChannel`. All service methods use raw `findAndCount` / `findOne` with `WHERE channelId = :channelId`.
 
-**Decision:** This pattern is acceptable for `InstructorProfile` given the 1:N channel-to-instructor relationship. Document it explicitly. All `InstructorProfileService` methods must include `channelId` in every where clause. Add a service-level assertion on `onModuleInit`:
+**Code verification:** All five `InstructorProfileService` methods (`findAll`, `findPublicByChannel`, `findOne`, `findPublicBySlug`, `create`, `update`, `delete`) include explicit `channelId` in every query or guard. ✅
 
-```typescript
-// Future safety net — catches any findAll/findOne missing channel filter
-// Add to InstructorProfileService
-private assertChannelFilter(options: FindManyOptions): void {
-  if (!(options.where as any)?.channelId) {
-    throw new InternalServerError('InstructorProfile query missing channelId filter');
-  }
-}
-```
+**Decision:** Acceptable per DL-010. Explicitly documented as an exception to DA-001.
 
-### TP-004: `TenantProfile` — `assignToCurrentChannel` now applied
+### TP-004: `TenantProfile` — `assignToCurrentChannel` applied ✅
 
-`TenantProfileService.create` correctly calls `channelService.assignToCurrentChannel`. Confirmed in current code. ✅
+`TenantProfileService.create` correctly calls `channelService.assignToCurrentChannel`. Code-verified.
+
+### TP-005: `MediaResourceService` — Channel Filter Applied ✅
+
+`MediaResourceService.findOne` includes `channelId` filter. Code-verified.
 
 ---
 
@@ -611,11 +614,11 @@ private assertChannelFilter(options: FindManyOptions): void {
 ### EQ-001: Job Queue Naming Convention
 
 ```
-bbb-meeting-provisioning     ← existing, correct
-bbb-webhook-processor        ← to be created (INV-004)
-bbb-reconciliation           ← existing scheduled task
-banner-activator             ← to be created (CMS-002)
-banner-deactivator           ← to be created (CMS-002)
+bbb-meeting-provisioning     ← ✅ live
+bbb-webhook-processor        ← ✅ live (INV-004)
+bbb-reconciliation           ← ✅ live (scheduled task)
+banner-activator             ← ⚠️ pending (CMS-002)
+banner-deactivator           ← ⚠️ pending (CMS-002)
 billing-invoice-generator    ← Phase 2
 usage-ledger-aggregator      ← Phase 2
 ```
@@ -624,14 +627,15 @@ All jobs are registered in `onModuleInit` via `JobQueueService.createQueue`. Job
 
 ### EQ-002: Vendure EventBus — Published Events
 
-| Event | Publisher | Subscribers |
-|---|---|---|
-| `MeetingProvisionedEvent` | `BbbMeetingService` | `BbbMetricsService` |
-| `GrantConsumedEvent` | `BbbReconciliationService` | Email plugin (capacity alerts) |
-| `CapacityExhaustedEvent` | `BbbReconciliationService` | Email plugin |
-| `TrialAttendanceRecordedEvent` | `BbbWebhookProcessor` | Analytics (Phase 3) |
-| `ArticleEvent` | `ArticleService` | Elasticsearch indexer (Phase 3) |
-| `PageEvent` | `PageService` | Elasticsearch indexer (Phase 3) |
+| Event | Publisher | Subscribers | Status |
+|---|---|---|---|
+| `MeetingProvisionedEvent` | `BbbMeetingService` | `BbbMetricsService` | ✅ Live |
+| `GrantConsumedEvent` | `BbbReconciliationService` | Email plugin (capacity alerts) | ✅ Live |
+| `RoomActivatedEvent` | `BbbRoomService` | `BbbMetricsService` | ✅ Live |
+| `CapacityExhaustedEvent` | `BbbReconciliationService` | Email plugin | ⚠️ Event class missing (BB-004) |
+| `TrialAttendanceRecordedEvent` | `BbbWebhookProcessor` | Analytics (Phase 3) | ⚠️ Future — no publisher yet |
+| `ArticleEvent` | `ArticleService` | Elasticsearch indexer (Phase 3) | ⚠️ Future |
+| `PageEvent` | `PageService` | Elasticsearch indexer (Phase 3) | ⚠️ Future |
 
 Events without subscribers are still correct to publish — they enable future extension without modifying the publisher.
 
@@ -652,38 +656,40 @@ Failed jobs are never auto-removed. Ops console or admin query surfaces them for
 
 ## 10. Security Architecture
 
-### SEC-001: HMAC Webhook Verification
+### SEC-001: Admin API Network Isolation
 
-Current `BbbWebhookController.verifyWebhookSignature` iterates all enabled servers and tries each secret — constant-time comparison via `crypto.timingSafeEqual`. This is correct. No change needed.
+The Admin API (`/admin-api`) must not be exposed on a public-facing port or hostname in production. It should be bound to an internal interface or placed behind network-level access control. Caddy or the host firewall should block external access to the admin path. This is a deployment constraint, not enforced in plugin code.
 
-### SEC-002: BBB Password Encryption
+### SEC-002: HMAC Webhook Verification ✅
 
-AES-GCM encryption via `BbbEncryptionService` for `encryptedAttendeePassword` and `encryptedModeratorPassword` with `select: false` on columns. This is correct.
+`BbbWebhookController.verifyWebhookSignature` iterates all enabled servers and tries each secret — constant-time comparison via `crypto.timingSafeEqual`. Correct. No change needed.
 
-Add `encryptionKeyVersion` column (see DA-003) before production.
+### SEC-003: BBB Password Encryption ✅
 
-### SEC-003: Channel Isolation — Verified Access Points
+AES-256-GCM encryption via `BbbEncryptionService` for `encryptedAttendeePassword` and `encryptedModeratorPassword` with `select: false` on columns. `encryptionKeyVersion` column added to `BbbServer` and `BbbMeeting`. Code-verified (cipher name confirmed in `BbbEncryptionService` class comments and entity jsdoc).
 
-Every external-facing resolver must include channel verification. Audit checklist:
+### SEC-004: Channel Isolation — Verified Access Points
+
+Every external-facing resolver includes channel verification (code-verified):
 
 - `BbbShopResolver.joinMeeting` — verifies enrollment/entitlement ✅
 - `BbbAdminResolver.*` — requires `BbbAdminPermission` ✅
 - `TenantAdminResolver.*` — requires scoped permissions ✅
-- `TenantShopResolver.instructorProfiles` — public, but filters by `channelId` from ctx ✅
+- `TenantShopResolver.instructorProfiles` — public, filters by `channelId` from ctx ✅
 - `CmsShopResolver.articleBySlug` — filters by `channelId` and `isPublished` ✅
-- `InstructorProfileService.findOne` — now includes `channelId` filter ✅
-- `MediaResourceService.findOne` — now includes `channelId` filter ✅
+- `InstructorProfileService.findOne` — includes `channelId` filter ✅
+- `MediaResourceService.findOne` — includes `channelId` filter ✅
 
-### SEC-004: Rate Limiting
+### SEC-005: Rate Limiting ⚠️ Pending
 
 Before production, add rate limiting to:
 - `POST /bbb/webhook` — 100 req/min per source IP (BBB server IPs should be allowlisted)
 - `POST /shop-api` mutations: `registerForTrialSession`, `joinMeeting` — 10 req/min per customer
 - `POST /admin-api` — Vendure's built-in token auth is sufficient
 
-### SEC-005: Custom Domain TLS
+### SEC-006: Custom Domain TLS
 
-When `TenantProfile.customDomain` is populated, Caddy must provision a TLS certificate via Let's Encrypt. The routing chain:
+When `TenantProfile.customDomain` is populated, Caddy provisions TLS via Let's Encrypt:
 
 ```
 academy.com (CNAME → saa9vi.com)
@@ -693,7 +699,7 @@ academy.com (CNAME → saa9vi.com)
     → RequestContext.channelId = lookup(channel-token)
 ```
 
-Channel token → custom domain mapping is stored in Redis for sub-millisecond Caddy lookup. Updated whenever `TenantProfile.customDomain` changes.
+Channel token → custom domain mapping stored in Redis for sub-millisecond Caddy lookup. Updated whenever `TenantProfile.customDomain` changes.
 
 ---
 
@@ -734,7 +740,7 @@ BBB_DEFAULT_SERVER_URL=https://bbb.yourdomain.com/bigbluebutton/
 BBB_WEBHOOK_SECRET=...
 
 # Encryption
-BBB_ENCRYPTION_KEY=...           # AES-GCM key, base64
+BBB_ENCRYPTION_KEY=...           # AES-256-GCM key, base64
 BBB_ENCRYPTION_KEY_VERSION=1
 
 # Juspay
@@ -753,7 +759,7 @@ No secrets in source control. All secrets in environment or secrets manager.
 // vendure-config.ts
 dbConnectionOptions: {
   type: 'postgres',
-  poolSize: 20,                    // API process
+  poolSize: 20,
   extra: {
     max: 20,
     idleTimeoutMillis: 30000,
@@ -777,56 +783,70 @@ Caddy upstream health check polls `/health` every 10 seconds.
 
 ## 12. Known Bugs & Immediate Remediation
 
-All items below must be resolved before first tenant onboarding.
-
 | ID | Severity | File | Description | Fix |
 |---|---|---|---|---|
-| BUG-001 | Critical | `TenantProfileDetail.tsx` | `useState` used instead of `useEffect` — form never populates on edit | Replace with `useEffect(() => {...}, [existing])` |
-| BUG-002 | Critical | `tenant-admin.resolver.ts` | `tenantProfile(channelId: '__current__')` always returns null | Make arg optional, default to `ctx.channelId` |
-| BUG-003 | High | `BbbWebhookController` | Webhook processed inline — no persist-first, no replay capability | Implement INV-004 pattern |
-| BUG-004 | High | `BbbOrganizationService.create` | `channels[]` join table never populated despite `implements ChannelAware` | `assignToCurrentChannel` is now called ✅ — verify join table has rows |
-| BUG-005 | High | `BbbOrderFulfillmentListener` | Fulfillment resolves `productVariantId → BbbRoom`, not `→ BbbScheduledSession` | Add session lookup before room lookup |
-| BUG-006 | Medium | `Article`, `Page` entities | Slug uniqueness is application-level only — TOCTOU race | Add composite DB index `(channelId, slug)` |
-| BUG-007 | Medium | `PlansList.tsx` | `useEffect` dep on derived `organizations` array — auto-select never fires | Change dep to `orgsQuery.data` |
-| BUG-008 | Medium | `BbbMeeting`, `BbbServer` | No `encryptionKeyVersion` column | Add column with default `1`, required for key rotation |
-| BUG-009 | Low | `BbbScheduledSession` | `(scheduledSessionId, slug)` composite unique missing | Add composite index |
-| BUG-010 | Low | CMS list pages | `window.confirm` for destructive actions | Replace with Dialog component |
+| BUG-001 | Critical | `TenantProfileDetail.tsx` | `useState` instead of `useEffect` — form never populates on edit | ✅ Fixed (prior sprint) |
+| BUG-002 | Critical | `tenant-admin.resolver.ts` | `tenantProfile(channelId: '__current__')` always returns null | ✅ Fixed (prior sprint) |
+| BUG-003 | High | `BbbWebhookController` | Webhook processed inline — no persist-first, no replay | ✅ Fixed — persist-first via `BbbWebhookEvent` + `BbbWebhookProcessorService` |
+| BUG-004 | High | `BbbOrganizationService.create` | `channels[]` join table never populated | ✅ Fixed — `assignToCurrentChannel` called |
+| BUG-005 | High | `BbbOrderFulfillmentListener` | Fulfillment resolved `productVariantId → BbbRoom`, not `→ BbbScheduledSession` | ✅ Fixed — dual-path: session → `BbbEntitlement`, room → `BbbEnrollment` |
+| BUG-006 | Medium | `Article`, `Page` entities | Slug uniqueness application-level only — TOCTOU race | ✅ Fixed — composite unique index `(channelId, slug)` via migration `1782369776476-bugs` |
+| BUG-007 | Medium | `PlansList.tsx` | `useEffect` dep on derived `organizations` — auto-select never fires | ✅ Fixed (prior sprint) |
+| BUG-008 | Medium | `BbbMeeting`, `BbbServer` | No `encryptionKeyVersion` column | ✅ Fixed — column added via migration `1782369776476-bugs` |
+| BUG-009 | Low | `BbbScheduledSession` | `(organizationId, slug)` composite unique missing | ✅ Fixed — composite index added, global unique dropped |
+| BUG-010 | Low | Dashboard list pages (6 files) | `window.confirm` for destructive actions | ✅ Fixed — replaced with `Dialog` confirmation |
+| BUG-011 | Low | `MembersList.tsx`, `EnrollmentsList.tsx` | Org auto-select never fires on first load | ✅ Fixed — `useEffect` auto-select added |
+| BUG-012 | High | `constants.ts` | `STALE` meeting state absent from FSM | ⚠️ Pending — see BB-002. Reconciliation metrics exist without an FSM state to back them |
+| BUG-013 | Medium | `BbbReconciliationService` | `CapacityExhaustedEvent` not published when `billingCapped = true` | ⚠️ Pending — see BB-004. No email notification sent on capacity exhaustion |
+| BUG-014 | Low | `BbbServerSelectionService` | `currentLoad` scoring semantics undocumented | ⚠️ Pending — document what `currentLoad` represents and how reconciliation updates it |
+| BUG-015 | Medium | `CmsPlugin` / `BannerService` | `banner-activator` and `banner-deactivator` BullMQ queues not registered; banners currently filtered at query-time instead of via precomputed `isCurrentlyActive` | ⚠️ Pending — see CMS-002 |
 
 ---
 
 ## 13. Production Readiness Checklist
 
 ### Security
-- [ ] HMAC verification on all BBB webhooks ✅
-- [ ] AES-GCM on BBB passwords ✅
-- [ ] `encryptionKeyVersion` column on encrypted entities
-- [ ] Rate limiting on public mutations
-- [ ] Channel isolation verified on all public resolvers ✅
+- [x] HMAC verification on all BBB webhooks ✅
+- [x] AES-256-GCM on BBB passwords ✅
+- [x] `encryptionKeyVersion` column on encrypted entities ✅
+- [ ] Admin API bound to internal interface only ⚠️ Deployment constraint (SEC-001)
+- [ ] Rate limiting on public mutations ⚠️ Pending
+- [x] Channel isolation verified on all public resolvers ✅
 - [ ] No secrets in source control
 
 ### Data Integrity
-- [ ] All slug-bearing entities have composite `(channelId, slug)` DB unique indexes
-- [ ] `BbbUsageLedger` has `(meetingId, grantId)` unique index ✅
-- [ ] `BbbOrganization.channelId` has unique index ✅
-- [ ] All migrations have `down()` implemented
-- [ ] `synchronize: false` in all environments
+- [x] All slug-bearing entities have composite `(channelId, slug)` DB unique indexes
+  - [x] `BbbScheduledSession` ✅ (organizationId, slug) composite
+  - [x] `Article` ✅ via migration `1782369776476-bugs`
+  - [x] `Page` ✅ via migration `1782369776476-bugs`
+- [x] `BbbUsageLedger` has `(meetingId, grantId)` unique index ✅
+- [x] `BbbOrganization.channelId` has unique index ✅
+- [x] All migrations have `down()` implemented ✅
+- [x] `synchronize: false` in all environments ✅
 
 ### Commerce Loop
-- [ ] `BbbScheduledSession.productVariantId` connected in fulfillment handler
-- [ ] Trial registration creates `Entitlement` (or `BbbEnrollment` interim)
-- [ ] `joinMeeting` access check uses `Entitlement.hasAccess`
+- [x] `BbbScheduledSession.productVariantId` connected in fulfillment handler ✅
+- [x] Trial registration creates `Entitlement` ✅
+- [x] `getJoinUrl` access check uses `BbbEntitlementService.hasAccess` ✅
 
 ### Operational
-- [ ] `BbbWebhookEvent` persist-first pipeline live
+- [x] `BbbWebhookEvent` persist-first pipeline live ✅
 - [ ] Failed webhook jobs surfaced in admin UI
-- [ ] `BbbReconciliationService` scheduled task running ✅
+- [x] `BbbWebhookProcessorService` queue initialized in `onApplicationBootstrap` ✅
+- [x] `BbbReconciliationService` scheduled task running ✅
+- [ ] `STALE` meeting FSM state added ⚠️ BUG-012
+- [ ] `CapacityExhaustedEvent` published on billing cap ⚠️ BUG-013
+- [ ] `currentLoad` scoring semantics documented ⚠️ BUG-014
+- [ ] Banner BullMQ queues registered (`banner-activator`, `banner-deactivator`) ⚠️ BUG-015
 - [ ] Health check endpoints responding
 - [ ] Custom domain → channel token Redis mapping
 
 ### Dashboard
-- [ ] `TenantProfileDetail.tsx` useState→useEffect bug fixed
-- [ ] Resolver `__current__` bug fixed
-- [ ] `PlansList.tsx` auto-select bug fixed
+- [x] `TenantProfileDetail.tsx` useState→useEffect bug fixed ✅ (prior)
+- [x] Resolver `__current__` bug fixed ✅ (prior)
+- [x] `PlansList.tsx` auto-select bug fixed ✅ (prior)
+- [x] `MembersList.tsx` / `EnrollmentsList.tsx` org auto-select ✅
+- [x] `window.confirm` replacements in 6 files ✅
 
 ---
 
@@ -834,22 +854,28 @@ All items below must be resolved before first tenant onboarding.
 
 ### Phase 1 — Commercial Operability (current sprint)
 
-Fix all BUG-00x items. The platform cannot onboard a paying tenant until BUG-001 and BUG-002 are resolved and BUG-003 and BUG-005 are in flight.
+**Completed:**
+- `BbbWebhookEvent` persist-first pipeline ✅
+- `BbbScheduledSession` connected in fulfillment path ✅
+- `BbbEntitlement` entity + service for `bbb_session` ✅
+- Trial registration creates `Entitlement` automatically ✅
+- `BbbMeetingService.getJoinUrl` checks Entitlement for session access ✅
+- `BbbScheduledSession` `(organizationId, slug)` composite index ✅
 
-Deliverables:
-- All bugs in section 12 resolved
-- `BbbWebhookEvent` persist-first pipeline
-- `BbbScheduledSession` connected in fulfillment path
-- `encryptionKeyVersion` column on encrypted entities
+**Remaining before first tenant onboarding:**
+- `STALE` meeting state (BUG-012 / BB-002)
+- `CapacityExhaustedEvent` class + publisher (BUG-013 / BB-004)
+- `currentLoad` scoring documentation (BUG-014 / BB-003)
+- Rate limiting on public mutations (SEC-004)
 
 ### Phase 1.5 — Trust Engine & Discovery
 
 Deliverables:
-- `Entitlement` entity replaces `BbbEnrollment`
-- Trial registration creates `Entitlement` automatically
+- Full migration from `BbbEnrollment` to `BbbEntitlement` for room access
 - Public `instructorProfiles` query with Elasticsearch indexing
 - Public instructor profile pages in Next.js storefront
 - CMS pages served from Next.js with SEO metadata
+- `BbbEntitlement` admin UI (dashboard route)
 
 ### Phase 2 — Subscription Billing
 
@@ -872,6 +898,7 @@ Deliverables:
 - Certificate generation on `Entitlement` completion
 - Marketplace commission model via Vendure `Seller` entity
 - `bbbSession` CMS section type (CMS-004)
+- `ArticleEvent` / `PageEvent` → Elasticsearch indexer
 
 ### Phase 4 — Scale & Premium
 
@@ -895,8 +922,12 @@ Deliverables:
 | DL-006 | `BbbScheduledSession` as the commercial product entity | Trainers sell scheduled time slots, not abstract rooms; marketplace requires browsable sessions with price and capacity | `BbbRoom` as the product entity (too abstract, no time dimension) |
 | DL-007 | Postgres for all transactional data, Elasticsearch for search | Single source of truth in PG; ES as a derived read projection rebuilt on event | Dual-write to ES (synchronization failures), PG-only search (performance degrades at 10K+ instructors) |
 | DL-008 | Self-hosted BBB | Data residency (India), cost control, integration depth | Zoom/Meet (no API for room-level access control), BBB SaaS (loses per-meeting credential control) |
-| DL-009 | Caddy for reverse proxy and custom domain TLS | Automatic Let's Encrypt; Caddyfile is programmable via Admin API; simpler than Nginx + cert-manager | Nginx (manual cert management), Traefik (more complex for this use case) |
-| DL-010 | `InstructorProfile` not `ChannelAware` — explicit `channelId` WHERE clause | 1:N channel-to-instructors; `assignToCurrentChannel` overhead per create not warranted; all queries are already explicit | Full `ChannelAware` implementation (adds join table, no practical benefit for this entity's query patterns) |
+| DL-009 | Caddy for reverse proxy and custom domain TLS | Automatic Let's Encrypt; Caddyfile is programmable via Admin API | Nginx (manual cert management), Traefik (more complex for this use case) |
+| DL-010 | `InstructorProfile` not `ChannelAware` — explicit `channelId` WHERE clause | 1:N channel-to-instructors; `assignToCurrentChannel` overhead per create not warranted; all queries are explicit and code-verified | Full `ChannelAware` implementation (adds join table, no practical benefit) |
+| DL-011 | `BbbEntitlement` not `ChannelAware` — scalar `channelId` only | Same pattern as DL-010: simple access checks rarely need the join table | Full `ChannelAware` implementation (adds join table with no query-benefit at current access-check volume) |
+| DL-012 | `BbbScheduledSession` uses `(organizationId, slug)` not `(channelId, slug)` | Sessions are scoped to organizations. Org-to-channel is 1:1 making org-scoped slugs equivalent to channel-scoped slugs while matching domain semantics | `(channelId, slug)` composite (requires joining org to resolve channel for every slug lookup) |
+| DL-013 | `BbbWebhookEvent` uses `simple-json` not `jsonb` payload | Keeps Postgres as the only DB dependency; avoids migration if switching DB provider; no query-time JSON-path queries needed | `jsonb` (enables PG-specific JSON queries not needed for the replay/audit use case) |
+| DL-014 | `BbbServerSelectionService` uses opaque `currentLoad` integer | Decouples selection algorithm from scoring formula; reconciliation service owns scoring logic and can evolve it without touching selection | Hard-coded `activeMeetingCount × avgParticipants` formula inside selection service (couples two concerns) |
 
 ---
 

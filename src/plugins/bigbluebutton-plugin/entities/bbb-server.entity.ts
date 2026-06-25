@@ -20,6 +20,13 @@ export class BbbServer extends VendureEntity {
   apiUrl: string;
 
   /**
+   * Tracks which encryption key version was used to encrypt the API secret below.
+   * Incremented via zero-downtime key rotation (see DA-003).
+   */
+  @Column({ default: 1 })
+  encryptionKeyVersion: number;
+
+  /**
    * AES-256-GCM encrypted BBB API secret.
    * select: false — never returned in queries by default.
    */

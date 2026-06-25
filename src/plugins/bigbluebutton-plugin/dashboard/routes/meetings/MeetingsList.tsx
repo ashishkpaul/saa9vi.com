@@ -160,6 +160,19 @@ export function MeetingsList() {
     setEditOpen(true);
   }
 
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+
+  function handleDeleteClick(m: BbbMeeting) {
+    setDeleteTargetId(m.id);
+  }
+
+  function handleDeleteConfirm() {
+    if (deleteTargetId) {
+      deleteMutation.mutate(deleteTargetId);
+      setDeleteTargetId(null);
+    }
+  }
+
   return (
     <div className="p-6">
       <div className="mb-6 flex items-center justify-between">
@@ -262,9 +275,7 @@ export function MeetingsList() {
                         {m.state === 'Failed' && (
                           <Button variant="outline" size="sm" onClick={() => retryMutation.mutate(m.id)}>Retry</Button>
                         )}
-                        <Button variant="destructive" size="sm" onClick={() => {
-                          if (window.confirm(`Delete meeting "${m.title}"?`)) deleteMutation.mutate(m.id);
-                        }}>Delete</Button>
+                        <Button variant="destructive" size="sm" onClick={() => handleDeleteClick(m)}>Delete</Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -282,6 +293,21 @@ export function MeetingsList() {
           </>
         )}
       </Card>
+
+      <Dialog open={!!deleteTargetId} onOpenChange={(o) => !o && setDeleteTargetId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Meeting</DialogTitle>
+            <DialogDescription>Are you sure you want to delete this meeting? This action cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTargetId(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteConfirm} disabled={deleteMutation.isPending}>
+              {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent>

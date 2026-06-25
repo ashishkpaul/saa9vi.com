@@ -6,6 +6,7 @@ import { PermissionDefinition } from "@vendure/core";
 export const BBB_PLUGIN_OPTIONS = Symbol("BBB_PLUGIN_OPTIONS");
 
 export const BBB_PROVISIONING_QUEUE = "bbb-meeting-provisioning";
+export const BBB_WEBHOOK_QUEUE = "bbb-webhook-processor";
 
 export const MEETING_STATE = {
   PENDING: "Pending",

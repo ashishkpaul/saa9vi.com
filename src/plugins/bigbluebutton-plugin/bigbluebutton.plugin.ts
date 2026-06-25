@@ -19,6 +19,8 @@ import { BbbEnrollment } from "./entities/bbb-enrollment.entity";
 import { BbbProductAccess } from "./entities/bbb-product-access.entity";
 import { BbbTrialRegistration } from "./entities/trial-registration.entity";
 import { BbbInstructorAssignment } from "./entities/instructor-assignment.entity";
+import { BbbWebhookEvent } from "./entities/bbb-webhook-event.entity";
+import { BbbEntitlement } from "./entities/bbb-entitlement.entity";
 
 import { BbbEncryptionService } from "./services/bbb-encryption.service";
 import { BbbApiService } from "./services/bbb-api.service";
@@ -33,6 +35,8 @@ import { BbbRoomLockService } from "./services/bbb-room-lock.service";
 import { BbbServerSelectionService } from "./services/bbb-server-selection.service";
 import { BbbMetricsService } from "./services/bbb-metrics.service";
 import { TrialRegistrationService } from "./services/trial-registration.service";
+import { BbbWebhookProcessorService } from "./services/bbb-webhook-processor.service";
+import { BbbEntitlementService } from "./services/bbb-entitlement.service";
 import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.listener";
 
 import { BbbAdminResolver } from "./api/bbb-admin.resolver";
@@ -64,6 +68,8 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     BbbProductAccess,
     BbbTrialRegistration,
     BbbInstructorAssignment,
+    BbbWebhookEvent,
+    BbbEntitlement,
   ],
 
   providers: [
@@ -84,6 +90,8 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     BbbRoomLockService,
     BbbServerSelectionService,
     TrialRegistrationService,
+    BbbWebhookProcessorService,
+    BbbEntitlementService,
     BbbOrderFulfillmentListener,
   ],
 
@@ -141,13 +149,19 @@ export class BigBlueButtonPlugin implements OnApplicationBootstrap {
     return BigBlueButtonPlugin;
   }
 
-  constructor(private readonly meetingService: BbbMeetingService) {}
+  constructor(
+    private readonly meetingService: BbbMeetingService,
+    private readonly webhookProcessor: BbbWebhookProcessorService,
+  ) {}
 
   async onApplicationBootstrap() {
     // Guard: prevent double-initialization when both server and worker
     // share the same plugin instance and onApplicationBootstrap fires twice.
     if (BigBlueButtonPlugin.initialized) return;
     BigBlueButtonPlugin.initialized = true;
+
+    // Initialize job queues
     await this.meetingService.init();
+    await this.webhookProcessor.init();
   }
 }

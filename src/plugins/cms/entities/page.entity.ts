@@ -9,6 +9,10 @@ export class Page extends VendureEntity implements ChannelAware {
     }
 
     @Index()
+    @Column({ nullable: true })
+    channelId: string;
+
+    @Index(['channelId', 'slug'], { unique: true })
     @Column()
     slug: string;
 
