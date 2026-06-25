@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
-import { RequestContext, ProductService, ID, Product } from "@vendure/core";
-import { ReviewTargetProvider } from "../../types";
-import { ReviewTargetType } from "../../constants";
+import { RequestContext, ProductService, ID } from "@vendure/core";
+import { ReviewTargetProvider } from "../contracts/review-target.provider";
+import { ReviewTargetType } from "../constants";
 import { ProductReviewAggregationStrategy } from "../strategies/product-aggregation.strategy";
 
 /**

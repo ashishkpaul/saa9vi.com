@@ -9,9 +9,10 @@ import {
     OrderLine,
 } from "@vendure/core";
 import { Repository } from "typeorm";
-import { ReviewTargetProvider, ReviewEligibilityStrategy, EligibilityResult } from "../../types";
-import { ReviewVerificationType } from "../../constants";
-import { ProductReview } from "../../entities/product-review.entity";
+import { ReviewTargetProvider, EligibilityResult } from "../contracts/review-target.provider";
+import { ReviewEligibilityStrategy } from "../contracts/review-eligibility.strategy";
+import { ReviewVerificationType } from "../constants";
+import { ProductReview } from "../entities/product-review.entity";
 
 const ELIGIBLE_ORDER_STATES = ["Delivered", "Shipped"];
 
@@ -32,7 +33,6 @@ export class ProductReviewEligibilityStrategy implements ReviewEligibilityStrate
         targetId: ID,
         provider: ReviewTargetProvider,
     ): Promise<EligibilityResult> {
-        // Only products are supported by this strategy
         if (provider.targetType !== "PRODUCT") {
             return {
                 eligible: false,
@@ -42,7 +42,6 @@ export class ProductReviewEligibilityStrategy implements ReviewEligibilityStrate
 
         const productId = targetId;
 
-        // Check for existing review (any state)
         const reviewRepo = this.connection.getRepository(ctx, ProductReview as any);
         const existingReview = await reviewRepo.findOne({
             where: {
@@ -60,7 +59,6 @@ export class ProductReviewEligibilityStrategy implements ReviewEligibilityStrate
             };
         }
 
-        // Find eligible order with this product
         const orderLineRepo = this.connection.getRepository(ctx, OrderLine);
 
         const orderLines = await orderLineRepo

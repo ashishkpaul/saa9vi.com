@@ -8,8 +8,10 @@ import {
     Asset,
 } from "@vendure/core";
 import { Repository } from "typeorm";
-import { ReviewTargetRegistry } from "./review-target.registry";
-import { ReviewTargetProvider, ReviewEligibilityStrategy, ReviewVerificationContext } from "../types";
+import { ReviewTargetRegistry } from "../infrastructure/review-target.registry";
+import { ReviewTargetProvider } from "../contracts/review-target.provider";
+import { ReviewEligibilityStrategy } from "../contracts/review-eligibility.strategy";
+import { ReviewVerificationContext } from "../contracts/review-types";
 import { ReviewVerificationType } from "../constants";
 import { ProductReview } from "../entities/product-review.entity";
 import { ReviewCreatedEvent } from "../events/review.events";

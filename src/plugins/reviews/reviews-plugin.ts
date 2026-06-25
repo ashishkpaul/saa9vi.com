@@ -22,10 +22,10 @@ import { ReviewAntiFraudService } from "./services/review-antifraud.service";
 import { ReviewEventListener } from "./events/review-event.listener";
 import { ReviewRequestListener } from "./events/review-request.listener";
 import { ReviewService } from "./services/review.service";
-import { ReviewTargetRegistry } from "./services/review-target.registry";
-import { ProductReviewTargetProvider } from "./services/providers/product-review-target.provider";
-import { ProductReviewAggregationStrategy } from "./services/strategies/product-aggregation.strategy";
-import { ProductReviewEligibilityStrategy } from "./services/strategies/product-eligibility.strategy";
+import { ReviewTargetRegistry } from "./infrastructure/review-target.registry";
+import { ProductReviewTargetProvider } from "./providers/product-review-target.provider";
+import { ProductReviewAggregationStrategy } from "./strategies/product-aggregation.strategy";
+import { ProductReviewEligibilityStrategy } from "./strategies/product-eligibility.strategy";
 import path from "path";
 import { REVIEW_ADMIN_PERMISSION } from "./constants";
 

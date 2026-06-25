@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { ID, RequestContext } from "@vendure/core";
-import { ReviewTargetProvider } from "../types";
+import { ReviewTargetProvider } from "../contracts/review-target.provider";
 import { ReviewTargetType } from "../constants";
 
 /**
