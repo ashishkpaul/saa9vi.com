@@ -1,14 +1,16 @@
 # Architecture Decision Record
 ## Saa9vi — Multi-Tenant Education Commerce Platform
-### Production Architecture · Version 1.2
+### Production Architecture · Version 1.3
 **Status:** Active  
-**Date:** 2025-06  
+**Date:** 2026-06  
 **Authors:** Lead Architect, Platform Engineering  
-**Supersedes:** ADR v1.1 (2025-06)
+**Supersedes:** ADR v1.2 (2025-06)
 
 > **What changed in v1.1:** Full audit against all three plugin codebases (`bigbluebutton-plugin`, `cms-plugin`, `tenant-plugin`). Status fields updated to match actual implementation. Four divergences from v1.0 documented. Three pending ADR items promoted to explicit open issues. No invariants changed.
 >
-> **What changed in v1.2:** Three code-verified corrections incorporated: (1) `convertTrialToEnrollment` → `BbbEnrollment` path added to AC-003 (method exists and is the correct conversion route); (2) EventBus published events corrected — `RoomActivatedEvent` is live, `TrialAttendanceRecordedEvent` is future-only; (3) cipher name corrected to AES-256-GCM (matches `BbbEncryptionService` comments). BUG-015 added for banner queue gap. BUG-015 file attribution corrected to `BigBlueButtonPlugin` / `BannerService` bootstrap, not the resolver. Admin API isolation added as SEC-001 production deployment requirement.
+> **What changed in v1.2:** Three code-verified corrections incorporated: (1) `convertTrialToEnrollment` → `BbbEnrollment` path added to AC-003; (2) EventBus published events corrected — `RoomActivatedEvent` is live, `TrialAttendanceRecordedEvent` is future-only; (3) cipher name corrected to AES-256-GCM. BUG-015 added for banner queue gap. Admin API isolation added as SEC-001 production deployment requirement.
+>
+> **What changed in v1.3:** Full audit extended to `reviews` plugin. Plugin inventory updated to four plugins. DIV-009 and DIV-010 added for reviews plugin findings. BUG-016 (TS-2353 — `items` in `navSections`) documented and fixed. BUG-017 (Reviews channel scoping deviation) added. Section 5A (Dashboard Extension Pattern) added as canonical reference. ADR-013 (Frontend Independence & API Evolution) added — defines the single-storefront / stable-API-surface architecture that allows backend plugin evolution without per-tenant frontend redeployments. DL-015 and DL-016 added to decision log.
 
 ---
 
@@ -19,8 +21,10 @@
 3. [Plugin Architecture & Bounded Contexts](#3-plugin-architecture--bounded-contexts)
 4. [Data Layer Decisions](#4-data-layer-decisions)
 5. [Commerce & Access Control](#5-commerce--access-control)
+5A. [Dashboard Extension Pattern](#5a-dashboard-extension-pattern)
 6. [BBB Integration Architecture](#6-bbb-integration-architecture)
 7. [CMS Architecture](#7-cms-architecture)
+7A. [Reviews Plugin Architecture](#7a-reviews-plugin-architecture)
 8. [Tenant & Academy Layer](#8-tenant--academy-layer)
 9. [Event & Job Queue Architecture](#9-event--job-queue-architecture)
 10. [Security Architecture](#10-security-architecture)
@@ -28,6 +32,7 @@
 12. [Known Bugs & Immediate Remediation](#12-known-bugs--immediate-remediation)
 13. [Production Readiness Checklist](#13-production-readiness-checklist)
 14. [Phase Roadmap](#14-phase-roadmap)
+**[ADR-013: Frontend Independence & API Evolution](#adr-013-frontend-independence--api-evolution)**
 15. [Decision Log](#15-decision-log)
 
 ---
@@ -59,6 +64,7 @@ Saa9vi is a **multi-tenant education commerce platform** targeting Indian coachi
 | `BigBlueButtonPlugin` | Live class infrastructure | Production-near |
 | `CmsPlugin` | Articles, pages, banners | Beta |
 | `TenantPlugin` | Tenant profiles, instructors, media | Beta |
+| `ReviewsPlugin` | Product reviews, moderation, fraud detection, reputation aggregation | Beta |
 
 ---
 
@@ -135,6 +141,8 @@ The following divergences were found between ADR v1.0 and the plugin code, and c
 | DIV-006 | `BbbAdminResolver` / `TrialRegistrationService` | AC-003 omitted the trial→enrollment conversion path | `convertTrialToEnrollment` exists and routes to `BbbEnrollment` via `trial_conversion` source | **Added** in v1.2 — AC-003 |
 | DIV-007 | EventBus event table | `TrialAttendanceRecordedEvent` listed as live/pending | No publisher exists yet; `RoomActivatedEvent` was live but omitted | **Corrected** in v1.2 — EQ-002 |
 | DIV-008 | `CmsPlugin` / `BannerService` | Banner queue gap not tracked | `banner-activator`/`banner-deactivator` queues unregistered | **Added** in v1.2 — BUG-015 / CMS-002 |
+| DIV-009 | `ReviewsPlugin` / `dashboard/index.tsx` | Not previously audited | `navSections` entry used `items: [...]` property which does not exist on `DashboardNavSectionDefinition` — TS-2353 compile error, Reviews menu invisible | **Fixed** in v1.3 — BUG-016. Removed `items`, added `navMenuItem` on each route. Root cause was also missing `ReviewAdmin` permission registration in plugin configuration (matched BBB pattern). |
+| DIV-010 | `ReviewsPlugin` entities | Not previously audited | `ProductReview`, `ReviewRequest`, `ReviewReport`, `ReviewReward`, `ReviewVote` do not implement `ChannelAware`. Channel isolation achieved via `ctx.channel.token` string comparison in service queries — no ORM-level enforcement | **Added** in v1.3 — BUG-017. Scheduled for remediation before multi-tenant production |
 
 ---
 
@@ -381,7 +389,77 @@ export class OrganizationSubscription extends VendureEntity implements ChannelAw
 
 ---
 
+## 5A. Dashboard Extension Pattern
+
+This is the canonical pattern for all Vendure React Dashboard extensions on this platform. It is binding. Deviations cause TypeScript compile errors and broken admin navigation.
+
+### Rule: `navSections` defines containers; `navMenuItem` on routes defines links
+
+`DashboardNavSectionDefinition` (from `@vendure/dashboard`) accepts: `id`, `title`, `icon`, `placement`, `order`. It has **no `items` property**. Nav links are registered by adding a `navMenuItem` field to each `DashboardRouteDefinition` that should appear in the sidebar.
+
+### Canonical pattern
+
+```tsx
+// plugin/dashboard/index.tsx
+export default defineDashboardExtension({
+    navSections: [
+        {
+            id: 'my-plugin',       // unique string ID — referenced by route navMenuItems
+            title: 'My Plugin',
+            icon: SomeIcon,
+            placement: 'top',
+            order: 110,
+            // ❌ NEVER add 'items: [...]' here — property does not exist on the type
+        },
+    ],
+    routes: [listRoute, detailRoute],
+});
+
+// plugin/dashboard/list-route.tsx  — appears in sidebar
+export const listRoute: DashboardRouteDefinition = {
+    path: '/my-plugin/items',
+    loader: () => ({ breadcrumb: 'Items' }),
+    component: () => <ItemListPage />,
+    navMenuItem: {
+        sectionId: 'my-plugin',           // must match navSection id above
+        id: 'my-plugin-items',            // unique across ALL plugins
+        title: 'Items',
+        url: '/my-plugin/items',          // must match path
+        requiresPermission: ['MyPluginAdmin'],
+    },
+};
+
+// plugin/dashboard/detail-route.tsx  — drill-through only, no sidebar link
+export const detailRoute: DashboardRouteDefinition = {
+    path: '/my-plugin/items/$id',
+    loader: () => ({ breadcrumb: 'Item detail' }),
+    component: route => <ItemDetailPage route={route} />,
+    // ✅ No navMenuItem — detail routes are never top-level sidebar links
+};
+```
+
+### Compliance status per plugin
+
+| Plugin | navSections | navMenuItems | Status |
+|---|---|---|---|
+| `BigBlueButtonPlugin` | ✅ Section only, no `items` | ✅ On each route | ✅ Compliant |
+| `TenantPlugin` | ✅ Section only, no `items` | ✅ On each route | ✅ Compliant |
+| `CmsPlugin` | ✅ Section only, no `items` | ⚠️ Not verified on all sub-routes | Verify |
+| `ReviewsPlugin` | ✅ Fixed — section only, no `items` | ✅ On all routes | ✅ Compliant |
+
+### Anti-patterns
+
+| Anti-Pattern | Failure Mode |
+|---|---|
+| `navSections[n].items = [...]` | `DashboardNavSectionDefinition` has no `items` → TS-2353 compile error, menu invisible |
+| Route with no `navMenuItem` and no `sectionId` | Route registers but never appears in sidebar |
+| `navMenuItem.sectionId` not matching any section `id` | Link has no parent section — silently invisible |
+| Duplicate `navMenuItem.id` across plugins | Last-registered wins; earlier entry is silently dropped |
+
+---
+
 ## 6. BBB Integration Architecture
+
 
 ### BB-001: Webhook Pipeline ✅ Implemented & Code-Verified
 
@@ -581,7 +659,48 @@ The storefront `PageRenderer` fetches `BbbScheduledSession` by ID and renders th
 
 ---
 
+## 7A. Reviews Plugin Architecture
+
+### RV-001: Plugin Scope
+
+`ReviewsPlugin` provides product reviews, moderation workflows, fraud detection, aggregated reputation scoring, review request campaigns, reward issuance, and a Phase 1A strategy-based abstraction layer for extensible review targets.
+
+**Entities:** `ProductReview`, `ReviewRequest`, `ReviewReport`, `ReviewReward`, `ReviewVote`
+
+**Services:** `ProductReviewService`, `ReviewRequestService`, `ReviewAggregationService`, `ReviewCacheService`, `ReviewEmailService`, `ReviewRewardService`, `ReviewReportService`, `ReviewAntiFraudService`
+
+**Phase 1A abstraction (live):** `ReviewTargetRegistry`, `ReviewEligibilityStrategyRegistry`, `ReviewAggregationStrategyRegistry` — strategy-pattern contracts that allow future review targets (courses, instructors) to plug in without modifying core service code.
+
+### RV-002: Channel Scoping — Deviation from INV-001 (see BUG-017)
+
+Reviews entities do not implement `ChannelAware`. Channel isolation is enforced in service query layers via `WHERE channelId = :channelId` string comparisons against `ctx.channelId`. This is a documented deviation (DIV-010, DL-010 pattern applied to reviews). All service methods have been written with explicit channel filters.
+
+**Remediation target:** Add `ChannelAware` implementation to `ProductReview` at minimum before multi-tenant production launch. Backfill join table from existing `channelId` strings.
+
+### RV-003: Custom Fields on `Product`
+
+On boot, the plugin appends three custom fields to `Product` if absent:
+- `reviewRating` (float, public) — cached aggregate, updated by `ReviewAggregationService`
+- `reviewCount` (float, public) — cached count, same service
+- `featuredReview` (relation to `ProductReview`, public) — pinnable featured review
+
+These are denormalised caches. Authoritative data is always the `ProductReview` rows.
+
+### RV-004: Admin Permission
+
+`ReviewAdmin` custom permission governs all admin API access. All dashboard routes carry `requiresPermission: ['ReviewAdmin']`.
+
+### RV-005: Dashboard Extension — BUG-016 Fixed
+
+See §5A for the canonical pattern. The applied fix:
+- `index.tsx`: `navSections` contains section container only — no `items` array
+- `review-list.tsx`: `reviewList` route gains `navMenuItem: { sectionId: 'reviews', id: 'review-list', ... }`
+- `review-placeholder.tsx`: `reportList`, `rewardList`, `requestList` were already correct
+
+---
+
 ## 8. Tenant & Academy Layer
+
 
 ### TP-001: Bug — `TenantProfileDetail.tsx` `useState` used as `useEffect`
 
@@ -800,6 +919,8 @@ Caddy upstream health check polls `/health` every 10 seconds.
 | BUG-013 | Medium | `BbbReconciliationService` | `CapacityExhaustedEvent` not published when `billingCapped = true` | ⚠️ Pending — see BB-004. No email notification sent on capacity exhaustion |
 | BUG-014 | Low | `BbbServerSelectionService` | `currentLoad` scoring semantics undocumented | ⚠️ Pending — document what `currentLoad` represents and how reconciliation updates it |
 | BUG-015 | Medium | `CmsPlugin` / `BannerService` | `banner-activator` and `banner-deactivator` BullMQ queues not registered; banners currently filtered at query-time instead of via precomputed `isCurrentlyActive` | ⚠️ Pending — see CMS-002 |
+| BUG-016 | High | `ReviewsPlugin` / `dashboard/index.tsx` | `navSections` entry uses `items: [...]` which does not exist on `DashboardNavSectionDefinition` — TS error 2353, Reviews menu invisible in admin dashboard | ✅ Fixed — remove `items` from `navSections`; add `navMenuItem` to `reviewList` route in `review-list.tsx` |
+| BUG-017 | Medium | `ReviewsPlugin` / all review entities | `ProductReview`, `ReviewRequest`, `ReviewReport`, `ReviewReward`, `ReviewVote` do not implement `ChannelAware` — channel isolation relies solely on explicit `ctx.channelId` WHERE clauses in services; ORM provides no guard against missed query paths | ⚠️ Pending — add `ChannelAware` + `@ManyToMany(() => Channel)` to `ProductReview` as minimum; backfill join table from existing `channelId` strings via migration |
 
 ---
 
@@ -847,6 +968,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 - [x] `PlansList.tsx` auto-select bug fixed ✅ (prior)
 - [x] `MembersList.tsx` / `EnrollmentsList.tsx` org auto-select ✅
 - [x] `window.confirm` replacements in 6 files ✅
+- [x] Reviews dashboard nav fix applied (BUG-016) ✅
 
 ---
 
@@ -928,6 +1050,168 @@ Deliverables:
 | DL-012 | `BbbScheduledSession` uses `(organizationId, slug)` not `(channelId, slug)` | Sessions are scoped to organizations. Org-to-channel is 1:1 making org-scoped slugs equivalent to channel-scoped slugs while matching domain semantics | `(channelId, slug)` composite (requires joining org to resolve channel for every slug lookup) |
 | DL-013 | `BbbWebhookEvent` uses `simple-json` not `jsonb` payload | Keeps Postgres as the only DB dependency; avoids migration if switching DB provider; no query-time JSON-path queries needed | `jsonb` (enables PG-specific JSON queries not needed for the replay/audit use case) |
 | DL-014 | `BbbServerSelectionService` uses opaque `currentLoad` integer | Decouples selection algorithm from scoring formula; reconciliation service owns scoring logic and can evolve it without touching selection | Hard-coded `activeMeetingCount × avgParticipants` formula inside selection service (couples two concerns) |
+| DL-015 | `navMenuItem` on route definitions, never `items` inside `navSections` | `DashboardNavSectionDefinition` type constraint enforced by TypeScript; confirmed by BBB and Tenant plugin code audit | `items` array inside section (fails at compile time — TS-2353) |
+| DL-016 | Single shared Next.js storefront served across all tenants; tenant identity resolved from hostname | Eliminates per-tenant code deployments; backend plugin evolution is decoupled from storefront deployments; matches Shopify/Kajabi/Teachable operating model at scale | Per-tenant Next.js fork (500 tenants = 500 deployment pipelines); iframe embedding (SEO dead, mobile broken) |
+
+---
+
+## ADR-013: Frontend Independence & API Evolution
+
+**Status:** Active  
+**Date:** 2026-06  
+**Trigger:** Platform scaling constraint — per-tenant storefront deployments become unmanageable at 50+ tenants. Plugin API surface must not be exposed directly to storefronts.
+
+---
+
+### The Problem This ADR Solves
+
+If the storefront consumes internal plugin entities directly (e.g., queries `bbbEnrollment`, `bbbEntitlement`, `bbbScheduledSession` by name), then every plugin refactor requires a matching storefront deployment. At 500 academies running the same codebase, this is still **one deployment**, but at the code level every GraphQL field rename is still a breaking change. The invariants below prevent that class of breakage entirely.
+
+---
+
+### INV-005: One Shared Storefront. Tenants Own Content, Not Code.
+
+```
+              Saa9vi Cloud
+
+           One Vendure Backend        One Next.js Storefront
+                  │                           │
+        BBB Plugin                   Hostname → Channel Resolver
+        CMS Plugin                           │
+        Tenant Plugin          ┌─────────────┼─────────────┐
+        Reviews Plugin         │             │             │
+                  │       academyA.com  academyB.com  academyC.com
+           Shop GraphQL API
+                  │
+           (stable domain API)
+```
+
+Each academy customises: logo, theme, CMS pages, products, instructors, BBB rooms, custom domain.
+
+Each academy does **not** own: application code, GraphQL queries, business rule evaluation.
+
+**Operational consequence:** A backend plugin deployment (`bbb-plugin v1.5`) takes effect immediately for all tenants. A storefront deployment likewise updates all tenant sites. Neither requires coordinating with individual tenants.
+
+**Rejection criterion:** Any architecture that requires per-tenant code fork, per-tenant build pipeline, or per-tenant deployment of the Next.js storefront is rejected.
+
+---
+
+### INV-006: Storefronts Consume Domain APIs, Not Plugin Internals.
+
+The storefront must query **domain-oriented GraphQL operations** that hide internal plugin structure. Plugin-internal entity names, field names, and relationship traversals are implementation details.
+
+**Good — domain API:**
+```graphql
+query MyLearningDashboard {
+    myLearningDashboard {
+        courses {
+            id
+            title
+            canJoin
+            joinUrl
+            nextSession { startsAt endsAt }
+            progress
+            instructorName
+        }
+    }
+}
+```
+
+**Bad — plugin internals exposed:**
+```graphql
+query {
+    bbbEnrollments { bbbRoom { bbbScheduledSessions { ... } } }
+    bbbEntitlements(type: "bbb_session") { ... }
+}
+```
+
+When `BbbEnrollment` is retired and replaced entirely by `BbbEntitlement` (Phase 1.5), the domain API (`myLearningDashboard`) does not change. The storefront does not redeploy.
+
+**Rejection criterion:** Any Shop API resolver that exposes a plugin-prefixed type (`Bbb*`, `Cms*`) as a top-level storefront query is rejected. These types may exist as internal return types on domain queries.
+
+---
+
+### INV-007: GraphQL Schema Changes Are Additive. Breaking Changes Are Prohibited.
+
+Schema evolution must follow this order:
+
+1. **Add** the new field / argument alongside the old one.
+2. **Mark old field `@deprecated`** with migration guidance in the deprecation message.
+3. **Keep old field working** for at minimum one major release cycle.
+4. **Remove** only after all consumers (storefront queries, mobile clients) have migrated.
+
+```graphql
+# ✅ Correct evolution
+type Query {
+    joinMeeting(input: JoinMeetingInput!): JoinMeetingResult!
+    # @deprecated — use joinSession which supports timezone and device hints
+    joinMeetingLegacy(meetingId: ID!): String
+}
+
+# ❌ Breaking change — prohibited
+type Query {
+    # removed joinMeeting without deprecation period
+    joinScheduledSession(input: JoinSessionInput!): JoinSessionResult!
+}
+```
+
+**Input types evolve via optional fields:**
+```graphql
+# v1 — storefront sends { meetingId }
+# v2 — storefront still sends { meetingId }, new fields are optional
+input JoinMeetingInput {
+    meetingId: ID!
+    timezone: String         # optional, added in v2, old clients send nothing
+    deviceType: DeviceType   # optional, added in v2
+}
+```
+
+**Rejection criterion:** Any PR that removes or renames a GraphQL field or required argument without a prior deprecation cycle is rejected.
+
+---
+
+### INV-008: Business Logic Lives in Vendure. The Storefront Is a Renderer.
+
+Access control, eligibility checks, pricing, capacity enforcement, trial rules, and fulfillment decisions must be evaluated by Vendure plugins — never by the Next.js storefront.
+
+**Bad (logic in storefront):**
+```tsx
+// next.js page component
+if (enrollment) { showJoinButton() }
+else if (trial && !trialExpired) { showTrialJoinButton() }
+else if (subscription?.status === 'active') { showJoinButton() }
+else { showPurchaseButton() }
+```
+
+**Good (logic in Vendure, render in Next.js):**
+```graphql
+query CourseAccess($courseId: ID!) {
+    courseAccess(courseId: $courseId) {
+        canJoin       # Vendure evaluated all paths
+        joinUrl       # populated only when canJoin
+        ctaLabel      # "Join" | "Start trial" | "Purchase"
+        ctaAction     # "join" | "trial" | "checkout"
+    }
+}
+```
+```tsx
+// next.js — pure render
+<Button onClick={() => handleAction(access.ctaAction)}>
+    {access.ctaLabel}
+</Button>
+```
+
+**Rationale:** When the access model changes (new Entitlement type, new subscription tier, new trial logic), Vendure is updated once. The storefront render code does not change. No frontend deployment is required.
+
+---
+
+### Implementation Checklist
+
+- [ ] Define `myLearningDashboard` Shop API query (Phase 1.5) — aggregates across `BbbEntitlement`, `BbbEnrollment`, `BbbScheduledSession` into a single frontend contract
+- [ ] Define `courseAccess(courseId)` Shop API query — returns `{ canJoin, joinUrl, ctaLabel, ctaAction }`
+- [ ] Custom domain → Channel token resolver in Next.js middleware (hostname → `channelToken` via Redis lookup populated by `TenantProfile.customDomain`)
+- [ ] GraphQL deprecation linting rule in CI — fail build if deprecated field is queried in storefront codebase
+- [ ] No `Bbb*` / `Cms*` prefixed types in storefront GraphQL query files (lint rule)
 
 ---
 

@@ -93,10 +93,10 @@ import { REVIEW_ADMIN_PERMISSION } from "./constants";
     ],
   },
   configuration: (config) => {
-    config.authOptions.customPermissions ??= [];
-    if (!config.authOptions.customPermissions.some((p: any) => p?.name === (REVIEW_ADMIN_PERMISSION as any).name)) {
-      config.authOptions.customPermissions.push(REVIEW_ADMIN_PERMISSION);
-    }
+    config.authOptions.customPermissions = [
+      ...(config.authOptions.customPermissions ?? []),
+      REVIEW_ADMIN_PERMISSION,
+    ];
 
     config.customFields.Product ??= [];
     const existingFields = new Set(config.customFields.Product.map((f: any) => f.name));
@@ -133,5 +133,6 @@ import { REVIEW_ADMIN_PERMISSION } from "./constants";
     }
     return config;
   },
+  dashboard: './dashboard/index.tsx',
 })
 export class ReviewsPlugin {}
