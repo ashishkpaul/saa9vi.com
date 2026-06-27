@@ -14,7 +14,10 @@ import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbServerService } from "./bbb-server.service";
 import { BbbApiService } from "./bbb-api.service";
 import { BbbMeetingService } from "./bbb-meeting.service";
-import { GrantConsumedEvent } from "../events/bbb-events";
+import {
+  GrantConsumedEvent,
+  CapacityExhaustedEvent,
+} from "../events/bbb-events";
 import { MEETING_STATE } from "../constants";
 import { BBB_PLUGIN_OPTIONS } from "../constants";
 import type { BigBlueButtonPluginOptions } from "../types";
@@ -97,6 +100,10 @@ export class BbbReconciliationService {
       // allowed duration (e.g. crashed BBB node with orphaned meeting).
       if (meetingAgeMs > this.maxMeetingDurationMs) {
         const capReason = `Exceeded maxMeetingDurationMs (${Math.round(meetingAgeMs / 3600000)}h active)`;
+        const organization = meeting.organization;
+        const grant = await this.connection
+          .getRepository(ctx, BbbCapacityGrant)
+          .findOne({ where: { id: meeting.grantId as string } });
         await this.connection
           .getRepository(ctx, BbbMeeting)
           .update(meeting.id as string, {
@@ -113,6 +120,11 @@ export class BbbReconciliationService {
           `Meeting ${meeting.id} force-completed: billing capped — ${capReason}`,
           loggerCtx,
         );
+        if (organization && grant) {
+          this.eventBus.publish(
+            new CapacityExhaustedEvent(ctx, organization, grant),
+          );
+        }
         continue;
       }
       // ──────────────────────────────────────────────────────────────

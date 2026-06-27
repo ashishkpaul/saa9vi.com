@@ -1,4 +1,6 @@
-import { VendureEvent } from "@vendure/core";
+import { RequestContext, VendureEvent } from "@vendure/core";
+import { BbbOrganization } from "../entities/bbb-organization.entity";
+import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 
 export class MeetingProvisionedEvent extends VendureEvent {
   constructor(
@@ -58,6 +60,16 @@ export class RoomActivatedEvent extends VendureEvent {
     public readonly roomId: string,
     public readonly meetingId: string,
     public readonly organizationId: string,
+  ) {
+    super();
+  }
+}
+
+export class CapacityExhaustedEvent extends VendureEvent {
+  constructor(
+    public readonly ctx: RequestContext,
+    public readonly organization: BbbOrganization,
+    public readonly grant: BbbCapacityGrant,
   ) {
     super();
   }

@@ -135,7 +135,7 @@ The following divergences were found between ADR v1.0 and the plugin code, and c
 |---|---|---|---|---|
 | DIV-001 | `constants.ts` `MEETING_STATE` | `STALE` state required before production | `STALE` is **absent** from `MEETING_STATE` map and transition table | **Pending fix** — BUG-012 / BB-002 |
 | DIV-002 | `BbbServerSelectionService` | Score = `activeMeetingCount × avgParticipants` (15-min rolling window) | Score = `server.currentLoad` (opaque integer set externally) | **Accepted** — abstraction is superior; documented as DL-014 |
-| DIV-003 | `BbbReconciliationService` | `CapacityExhaustedEvent` published when `billingCapped = true` | Event class **does not exist** | **Pending fix** — BUG-013 / BB-004 |
+| DIV-003 | `BbbReconciliationService` | `CapacityExhaustedEvent` published when `billingCapped = true` | Event class added and publisher wired | **Fixed** — BUG-013 / BB-004 |
 | DIV-004 | Dashboard `index.tsx` | `BbbEntitlement` admin UI implied as Phase 1 | No entitlement route registered | **Accepted** — deferred to Phase 1.5 |
 | DIV-005 | `BbbEncryptionService` | Cipher referred to as "AES-GCM" | Code comments explicitly state **AES-256-GCM** | **Corrected** in v1.2 — SEC-003, INF-002 |
 | DIV-006 | `BbbAdminResolver` / `TrialRegistrationService` | AC-003 omitted the trial→enrollment conversion path | `convertTrialToEnrollment` exists and routes to `BbbEnrollment` via `trial_conversion` source | **Added** in v1.2 — AC-003 |
@@ -564,13 +564,12 @@ export const MEETING_STATE_TRANSITIONS: Record<MeetingState, MeetingState[]> = {
 
 **Action required:** Document in `BbbServer` entity and `BbbReconciliationService` what `currentLoad` represents and how it is updated. This is operational documentation, not a code change.
 
-### BB-004: Capacity Exhaustion Notification ⚠️ Pending
+### BB-004: Capacity Exhaustion Notification ✅ Fixed
 
-When `billingCapped = true` is set during reconciliation, the tenant must be notified. The event class does not exist in the codebase.
+When `billingCapped = true` is set during reconciliation, `CapacityExhaustedEvent` is published so downstream subscribers (e.g., EmailPlugin) can notify the tenant.
 
-Required additions:
 ```typescript
-// 1. Create event class
+// Event class
 export class CapacityExhaustedEvent extends VendureEvent {
   constructor(
     public readonly ctx: RequestContext,
@@ -579,13 +578,13 @@ export class CapacityExhaustedEvent extends VendureEvent {
   ) { super(); }
 }
 
-// 2. Publish from BbbReconciliationService after marking billingCapped = true
-this.eventBus.publish(new CapacityExhaustedEvent(ctx, organization, grant));
-
-// 3. EmailPlugin handler: "Your BBB capacity for this billing period is exhausted"
+// Published from BbbReconciliationService billing ceiling path
+if (organization && grant) {
+  this.eventBus.publish(new CapacityExhaustedEvent(ctx, organization, grant));
+}
 ```
 
-**Current status:** ⚠️ Pending. Neither `CapacityExhaustedEvent` class nor its publisher exists. `BbbMetricsService` tracks the metric internally but does not emit an EventBus event.
+**Current status:** ✅ Fixed. `CapacityExhaustedEvent` class added to `bbb-events.ts` and published from `BbbReconciliationService` when a meeting is force-completed with `billingCapped = true`.
 
 ### BB-005: Encryption Key Version ✅ Fixed
 
@@ -750,7 +749,7 @@ All jobs are registered in `onModuleInit` via `JobQueueService.createQueue`. Job
 | `MeetingProvisionedEvent` | `BbbMeetingService` | `BbbMetricsService` | ✅ Live |
 | `GrantConsumedEvent` | `BbbReconciliationService` | Email plugin (capacity alerts) | ✅ Live |
 | `RoomActivatedEvent` | `BbbRoomService` | `BbbMetricsService` | ✅ Live |
-| `CapacityExhaustedEvent` | `BbbReconciliationService` | Email plugin | ⚠️ Event class missing (BB-004) |
+| `CapacityExhaustedEvent` | `BbbReconciliationService` | Email plugin | ✅ Live |
 | `TrialAttendanceRecordedEvent` | `BbbWebhookProcessor` | Analytics (Phase 3) | ⚠️ Future — no publisher yet |
 | `ArticleEvent` | `ArticleService` | Elasticsearch indexer (Phase 3) | ⚠️ Future |
 | `PageEvent` | `PageService` | Elasticsearch indexer (Phase 3) | ⚠️ Future |
@@ -915,7 +914,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 | BUG-010 | Low | Dashboard list pages (6 files) | `window.confirm` for destructive actions | ✅ Fixed — replaced with `Dialog` confirmation |
 | BUG-011 | Low | `MembersList.tsx`, `EnrollmentsList.tsx` | Org auto-select never fires on first load | ✅ Fixed — `useEffect` auto-select added |
 | BUG-012 | High | `constants.ts` | `STALE` meeting state absent from FSM | ✅ Fixed — `STALE` state added to `constants.ts`, transitions wired, reconciliation calls `markMeetingStale()` for missing BBB meetings |
-| BUG-013 | Medium | `BbbReconciliationService` | `CapacityExhaustedEvent` not published when `billingCapped = true` | ⚠️ Pending — see BB-004. No email notification sent on capacity exhaustion |
+| BUG-013 | Medium | `BbbReconciliationService` | `CapacityExhaustedEvent` not published when `billingCapped = true` | ✅ Fixed — `CapacityExhaustedEvent` class added and published from billing ceiling path |
 | BUG-014 | Low | `BbbServerSelectionService` | `currentLoad` scoring semantics undocumented | ⚠️ Pending — document what `currentLoad` represents and how reconciliation updates it |
 | BUG-015 | Medium | `CmsPlugin` / `BannerService` | `banner-activator` and `banner-deactivator` BullMQ queues not registered; banners currently filtered at query-time instead of via precomputed `isCurrentlyActive` | ⚠️ Pending — see CMS-002 |
 | BUG-016 | High | `ReviewsPlugin` / `dashboard/index.tsx` | `navSections` entry uses `items: [...]` which does not exist on `DashboardNavSectionDefinition` — TS error 2353, Reviews menu invisible in admin dashboard | ✅ Fixed — remove `items` from `navSections`; add `navMenuItem` to `reviewList` route in `review-list.tsx` |
@@ -955,7 +954,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 - [x] `BbbWebhookProcessorService` queue initialized in `onApplicationBootstrap` ✅
 - [x] `BbbReconciliationService` scheduled task running ✅
 - [x] `STALE` meeting FSM state added ✅ BUG-012 fixed
-- [ ] `CapacityExhaustedEvent` published on billing cap ⚠️ BUG-013
+- [x] `CapacityExhaustedEvent` published on billing cap ✅ BUG-013 fixed
 - [ ] `currentLoad` scoring semantics documented ⚠️ BUG-014
 - [ ] Banner BullMQ queues registered (`banner-activator`, `banner-deactivator`) ⚠️ BUG-015
 - [ ] Health check endpoints responding
@@ -984,9 +983,10 @@ Caddy upstream health check polls `/health` every 10 seconds.
 - `BbbScheduledSession` `(organizationId, slug)` composite index ✅
 
 **Remaining before first tenant onboarding:**
-- `CapacityExhaustedEvent` class + publisher (BUG-013 / BB-004)
 - `currentLoad` scoring documentation (BUG-014 / BB-003)
 - Rate limiting on public mutations (SEC-004)
+
+Note: `CapacityExhaustedEvent` (BUG-013 / BB-004) is now implemented and published from the reconciliation billing-ceiling path.
 
 ### Phase 1.5 — Trust Engine & Discovery
 
