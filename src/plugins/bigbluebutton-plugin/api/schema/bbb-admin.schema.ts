@@ -286,8 +286,9 @@ export const adminApiExtensions = gql`
     createBbbEnrollment(input: CreateBbbEnrollmentInput!): BbbEnrollment!
     """
     Converts a trial attendee into a fully enrolled learner by granting room access.
+    Returns a BbbEntitlement of type 'bbb_room' for the given room.
     """
-    convertTrialToEnrollment(registrationId: ID!, roomId: ID!, accessDays: Int): BbbEnrollment!
+    convertTrialToEnrollment(registrationId: ID!, roomId: ID!, accessDays: Int): BbbEntitlement!
     createBbbEntitlement(input: CreateBbbEntitlementInput!): BbbEntitlement!
     deleteBbbEntitlement(id: ID!): Boolean!
   }
