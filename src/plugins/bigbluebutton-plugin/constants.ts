@@ -9,23 +9,25 @@ export const BBB_PROVISIONING_QUEUE = "bbb-meeting-provisioning";
 export const BBB_WEBHOOK_QUEUE = "bbb-webhook-processor";
 
 export const MEETING_STATE = {
-  PENDING: "Pending",
+  PENDING:      "Pending",
   PROVISIONING: "Provisioning",
-  ACTIVE: "Active",
-  COMPLETED: "Completed",
-  ARCHIVED: "Archived",
-  FAILED: "Failed",
+  ACTIVE:       "Active",
+  COMPLETED:    "Completed",
+  ARCHIVED:     "Archived",
+  FAILED:       "Failed",
+  STALE:        "Stale",
 } as const;
 
 export type MeetingState = (typeof MEETING_STATE)[keyof typeof MEETING_STATE];
 
 export const MEETING_STATE_TRANSITIONS: Record<MeetingState, MeetingState[]> = {
-  Pending: ["Provisioning", "Failed"],
+  Pending:      ["Provisioning", "Failed"],
   Provisioning: ["Active", "Failed"],
-  Active: ["Completed", "Failed"],
-  Completed: ["Archived"],
-  Archived: [],
-  Failed: ["Pending"],
+  Active:       ["Completed", "Failed", "Stale"],
+  Completed:    ["Archived"],
+  Archived:     [],
+  Failed:       ["Pending"],
+  Stale:        [],
 };
 
 // ─── Organisation Member Roles ───────────────────────────────────────────────

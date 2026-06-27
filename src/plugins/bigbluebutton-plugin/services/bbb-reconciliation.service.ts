@@ -13,7 +13,6 @@ import { BbbUsageLedger } from "../entities/bbb-usage-ledger.entity";
 import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbServerService } from "./bbb-server.service";
 import { BbbApiService } from "./bbb-api.service";
-import { BbbEncryptionService } from "./bbb-encryption.service";
 import { BbbMeetingService } from "./bbb-meeting.service";
 import { GrantConsumedEvent } from "../events/bbb-events";
 import { MEETING_STATE } from "../constants";
@@ -29,7 +28,6 @@ export class BbbReconciliationService {
     private readonly ctxService: RequestContextService,
     private readonly serverService: BbbServerService,
     private readonly bbbApiService: BbbApiService,
-    private readonly encryptionService: BbbEncryptionService,
     @Inject(forwardRef(() => BbbMeetingService))
     private readonly meetingService: BbbMeetingService,
     private readonly eventBus: EventBus,
@@ -144,12 +142,16 @@ export class BbbReconciliationService {
       // prematurely complete perfectly valid meetings that are waiting for
       // their first participant to join.
       if (info === null) {
-        await this.meetingService.completeMeetingLifecycle(ctx, meeting.id, {
-          source: "reconciliation",
-        });
+        // Meeting is permanently unreachable on BBB — mark as STALE instead
+        // of completing, so no BbbUsageLedger is written.
+        await this.meetingService.markMeetingStale(
+          ctx,
+          meeting,
+          "BBB getMeetingInfo returned null — meeting destroyed or expired",
+        );
         reconciled++;
         Logger.info(
-          `Reconciled meeting ${meeting.id}: completed via lifecycle (BBB missing)`,
+          `Reconciled meeting ${meeting.id}: marked as Stale (BBB missing)`,
           loggerCtx,
         );
       }
@@ -372,7 +374,8 @@ export class BbbReconciliationService {
         );
       } else if (
         meeting.state === MEETING_STATE.FAILED ||
-        meeting.state === MEETING_STATE.COMPLETED
+        meeting.state === MEETING_STATE.COMPLETED ||
+        meeting.state === MEETING_STATE.STALE
       ) {
         await this.connection
           .getRepository(ctx, BbbRoom)
@@ -434,6 +437,7 @@ export class BbbReconciliationService {
           MEETING_STATE.COMPLETED,
           MEETING_STATE.ARCHIVED,
           MEETING_STATE.FAILED,
+          MEETING_STATE.STALE,
         ],
       })
       .andWhere("meeting.attendeeJoinUrl IS NOT NULL")

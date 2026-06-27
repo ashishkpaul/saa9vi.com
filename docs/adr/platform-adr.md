@@ -513,9 +513,9 @@ export class BbbWebhookEvent extends VendureEntity {
 
 Replay: `SELECT * FROM bbb_webhook_event WHERE status = 'FAILED' ORDER BY received_at` → re-enqueue IDs.
 
-### BB-002: Meeting FSM ⚠️ STALE State Pending
+### BB-002: Meeting FSM ✅ Fixed
 
-**Current states (code-verified):**
+**Implemented states:**
 
 ```typescript
 export const MEETING_STATE = {
@@ -525,28 +525,27 @@ export const MEETING_STATE = {
   COMPLETED:    'Completed',
   ARCHIVED:     'Archived',
   FAILED:       'Failed',
+  STALE:        'Stale',
 } as const;
 ```
 
-**Missing state — required before production:**
+**Transitions:**
 
 ```typescript
-// Add to constants.ts
-STALE: 'Stale',
-
-// Add to MEETING_STATE_TRANSITIONS
-Pending:      ['Provisioning', 'Failed'],
-Provisioning: ['Active', 'Failed'],
-Active:       ['Completed', 'Failed', 'Stale'],   // ← add Stale
-Completed:    ['Archived'],
-Stale:        [],                                   // terminal — not billable
-Archived:     [],
-Failed:       ['Pending'],
+export const MEETING_STATE_TRANSITIONS: Record<MeetingState, MeetingState[]> = {
+  Pending:      ['Provisioning', 'Failed'],
+  Provisioning: ['Active', 'Failed'],
+  Active:       ['Completed', 'Failed', 'Stale'],
+  Completed:    ['Archived'],
+  Archived:     [],
+  Failed:       ['Pending'],
+  Stale:        [],   // terminal — not billable
+};
 ```
 
-`STALE` is reachable from `Active` (and any state where reconciliation marks a meeting as permanently unreachable). No `BbbUsageLedger` row is written for `STALE` meetings. `BbbReconciliationService` already tracks "stale active" metrics (`recordStaleActiveDetected`, `recordStaleActiveRecovered`) but has no state to transition to — this leaves stale meetings stuck in `Active` forever.
+`STALE` is reachable from `Active` when reconciliation determines a meeting is permanently unreachable on BBB (`getMeetingInfo` returns null). No `BbbUsageLedger` row is written for `STALE` meetings. `BbbReconciliationService` now calls `BbbMeetingService.markMeetingStale()` instead of `completeMeetingLifecycle()` for missing BBB meetings, and `reconcileRooms()` resets rooms to Idle when the linked meeting is STALE.
 
-**Current status:** ⚠️ Pending. `STALE` absent from `constants.ts` and transition map. Reconciliation metrics exist but have no FSM backing.
+**Current status:** ✅ Fixed. `STALE` implemented in `constants.ts`, transitions validated, reconciliation wired to use new state, and `expireJoinLinks()` includes STALE.
 
 ### BB-003: Server Selection — Load Scoring
 
@@ -915,7 +914,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 | BUG-009 | Low | `BbbScheduledSession` | `(organizationId, slug)` composite unique missing | ✅ Fixed — composite index added, global unique dropped |
 | BUG-010 | Low | Dashboard list pages (6 files) | `window.confirm` for destructive actions | ✅ Fixed — replaced with `Dialog` confirmation |
 | BUG-011 | Low | `MembersList.tsx`, `EnrollmentsList.tsx` | Org auto-select never fires on first load | ✅ Fixed — `useEffect` auto-select added |
-| BUG-012 | High | `constants.ts` | `STALE` meeting state absent from FSM | ⚠️ Pending — see BB-002. Reconciliation metrics exist without an FSM state to back them |
+| BUG-012 | High | `constants.ts` | `STALE` meeting state absent from FSM | ✅ Fixed — `STALE` state added to `constants.ts`, transitions wired, reconciliation calls `markMeetingStale()` for missing BBB meetings |
 | BUG-013 | Medium | `BbbReconciliationService` | `CapacityExhaustedEvent` not published when `billingCapped = true` | ⚠️ Pending — see BB-004. No email notification sent on capacity exhaustion |
 | BUG-014 | Low | `BbbServerSelectionService` | `currentLoad` scoring semantics undocumented | ⚠️ Pending — document what `currentLoad` represents and how reconciliation updates it |
 | BUG-015 | Medium | `CmsPlugin` / `BannerService` | `banner-activator` and `banner-deactivator` BullMQ queues not registered; banners currently filtered at query-time instead of via precomputed `isCurrentlyActive` | ⚠️ Pending — see CMS-002 |
@@ -955,7 +954,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 - [ ] Failed webhook jobs surfaced in admin UI
 - [x] `BbbWebhookProcessorService` queue initialized in `onApplicationBootstrap` ✅
 - [x] `BbbReconciliationService` scheduled task running ✅
-- [ ] `STALE` meeting FSM state added ⚠️ BUG-012
+- [x] `STALE` meeting FSM state added ✅ BUG-012 fixed
 - [ ] `CapacityExhaustedEvent` published on billing cap ⚠️ BUG-013
 - [ ] `currentLoad` scoring semantics documented ⚠️ BUG-014
 - [ ] Banner BullMQ queues registered (`banner-activator`, `banner-deactivator`) ⚠️ BUG-015
@@ -985,7 +984,6 @@ Caddy upstream health check polls `/health` every 10 seconds.
 - `BbbScheduledSession` `(organizationId, slug)` composite index ✅
 
 **Remaining before first tenant onboarding:**
-- `STALE` meeting state (BUG-012 / BB-002)
 - `CapacityExhaustedEvent` class + publisher (BUG-013 / BB-004)
 - `currentLoad` scoring documentation (BUG-014 / BB-003)
 - Rate limiting on public mutations (SEC-004)

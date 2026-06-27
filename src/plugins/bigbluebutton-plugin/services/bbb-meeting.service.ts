@@ -4,7 +4,7 @@ import {
   Inject,
   forwardRef,
 } from "@nestjs/common";
-import { EntityNotFoundError, ForbiddenError } from "@vendure/core";
+import { EntityNotFoundError } from "@vendure/core";
 import {
   Customer,
   EventBus,
@@ -27,10 +27,10 @@ import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
 import { BbbApiService } from "./bbb-api.service";
+import { BbbEncryptionService } from "./bbb-encryption.service";
 import { BbbServerService } from "./bbb-server.service";
 import { BbbServerSelectionService } from "./bbb-server-selection.service";
 import { BbbOrganizationService } from "./bbb-organization.service";
-import { BbbEncryptionService } from "./bbb-encryption.service";
 import { BbbMemberService } from "./bbb-member.service";
 import { BbbRoomService } from "./bbb-room.service";
 import { BbbMetricsService } from "./bbb-metrics.service";
@@ -790,6 +790,46 @@ export class BbbMeetingService implements OnModuleInit {
   }
 
   // ─── End Meeting (with billing) ─────────────────────────────────────────────
+
+  /**
+   * Transition a meeting to STALE state when it is permanently unreachable on BBB.
+   * STALE is terminal — no further transitions. No BbbUsageLedger row is written.
+   */
+  async markMeetingStale(
+    ctx: RequestContext,
+    meeting: BbbMeeting,
+    reason: string,
+  ): Promise<BbbMeeting> {
+    Logger.warn(
+      `[STALE] Meeting ${meeting.id} marked as Stale: ${reason}`,
+      loggerCtx,
+    );
+
+    this.assertTransitionAllowed(meeting.state, MEETING_STATE.STALE);
+    meeting.state = MEETING_STATE.STALE;
+    meeting.failureReason = reason;
+
+    // Do NOT set provisionedAt / completedAt — those are for real lifecycle transitions
+    const saved = await this.connection
+      .getRepository(ctx, BbbMeeting)
+      .save(meeting);
+
+    // Structured lifecycle log
+    Logger.info(
+      JSON.stringify({
+        event: "meeting-stale-detected",
+        meetingId: meeting.id,
+        roomId: meeting.roomId,
+        organizationId: meeting.organization?.id as string,
+        previousState: meeting.state,
+        reason,
+        grantId: meeting.grantId,
+      }),
+      loggerCtx,
+    );
+
+    return saved;
+  }
 
   async endMeeting(ctx: RequestContext, meetingId: ID): Promise<BbbMeeting> {
     const meeting = await this.findByIdWithSecrets(ctx, meetingId);
