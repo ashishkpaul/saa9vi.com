@@ -562,7 +562,7 @@ export const MEETING_STATE_TRANSITIONS: Record<MeetingState, MeetingState[]> = {
 
 **Accepted divergence (v1.1):** The `currentLoad` / `maxLoad` abstraction is a valid alternative. `currentLoad` is an opaque integer that `BbbReconciliationService` or an external agent can update to any desired metric (participant-minutes, raw meeting count, CPU load, etc.) without changing the selection algorithm. The selection service does not need to know the scoring formula — that is the reconciliation concern.
 
-**Action required:** Document in `BbbServer` entity and `BbbReconciliationService` what `currentLoad` represents and how it is updated. This is operational documentation, not a code change.
+**Fixed:** Documented in `BbbServer` entity JSDoc. `currentLoad` is an opaque 0–100 score maintained by `BbbReconciliationService` via a composite of active meeting count and participant load. The selection service only needs to filter and sort — it does not need to know the scoring formula.
 
 ### BB-004: Capacity Exhaustion Notification ✅ Fixed
 
@@ -915,7 +915,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 | BUG-011 | Low | `MembersList.tsx`, `EnrollmentsList.tsx` | Org auto-select never fires on first load | ✅ Fixed — `useEffect` auto-select added |
 | BUG-012 | High | `constants.ts` | `STALE` meeting state absent from FSM | ✅ Fixed — `STALE` state added to `constants.ts`, transitions wired, reconciliation calls `markMeetingStale()` for missing BBB meetings |
 | BUG-013 | Medium | `BbbReconciliationService` | `CapacityExhaustedEvent` not published when `billingCapped = true` | ✅ Fixed — `CapacityExhaustedEvent` class added and published from billing ceiling path |
-| BUG-014 | Low | `BbbServerSelectionService` | `currentLoad` scoring semantics undocumented | ⚠️ Pending — document what `currentLoad` represents and how reconciliation updates it |
+| BUG-014 | Low | `BbbServerSelectionService` | `currentLoad` scoring semantics undocumented | ✅ Fixed — documented in `BbbServer` entity JSDoc and BB-003 section |
 | BUG-015 | Medium | `CmsPlugin` / `BannerService` | `banner-activator` and `banner-deactivator` BullMQ queues not registered; banners currently filtered at query-time instead of via precomputed `isCurrentlyActive` | ⚠️ Pending — see CMS-002 |
 | BUG-016 | High | `ReviewsPlugin` / `dashboard/index.tsx` | `navSections` entry uses `items: [...]` which does not exist on `DashboardNavSectionDefinition` — TS error 2353, Reviews menu invisible in admin dashboard | ✅ Fixed — remove `items` from `navSections`; add `navMenuItem` to `reviewList` route in `review-list.tsx` |
 | BUG-017 | Medium | `ReviewsPlugin` / all review entities | `ProductReview`, `ReviewRequest`, `ReviewReport`, `ReviewReward`, `ReviewVote` do not implement `ChannelAware` — channel isolation relies solely on explicit `ctx.channelId` WHERE clauses in services; ORM provides no guard against missed query paths | ⚠️ Pending — add `ChannelAware` + `@ManyToMany(() => Channel)` to `ProductReview` as minimum; backfill join table from existing `channelId` strings via migration |
@@ -983,10 +983,9 @@ Caddy upstream health check polls `/health` every 10 seconds.
 - `BbbScheduledSession` `(organizationId, slug)` composite index ✅
 
 **Remaining before first tenant onboarding:**
-- `currentLoad` scoring documentation (BUG-014 / BB-003)
 - Rate limiting on public mutations (SEC-004)
 
-Note: `CapacityExhaustedEvent` (BUG-013 / BB-004) is now implemented and published from the reconciliation billing-ceiling path.
+Note: `CapacityExhaustedEvent` (BUG-013 / BB-004) is now implemented and published from the reconciliation billing-ceiling path. `currentLoad` scoring semantics are documented in `BbbServer` entity JSDoc and BB-003 section.
 
 ### Phase 1.5 — Trust Engine & Discovery
 

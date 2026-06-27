@@ -36,10 +36,27 @@ export class BbbServer extends VendureEntity {
   @Column({ default: true })
   enabled: boolean;
 
-  /** 0–100 — used by server selection strategy */
+  /**
+   * Current load score for server selection (0–100).
+   *
+   * Updated by `BbbReconciliationService.reconcileServerLoad()` which computes
+   * a composite score from active meetings and participant counts. Lower scores
+   * are preferred during selection.
+   *
+   * The score is intentionally opaque to `BbbServerSelectionService` — that
+   * service only needs to filter (`currentLoad < maxLoad`) and sort by this
+   * column. The reconciliation service owns the scoring formula and can evolve
+   * it without touching the selection algorithm.
+   */
   @Column({ default: 0 })
   currentLoad: number;
 
+  /**
+   * Maximum acceptable load score.
+   *
+   * Servers at or above this threshold are excluded from selection.
+   * Default 100 means the scale is effectively 0–100.
+   */
   @Column({ default: 100 })
   maxLoad: number;
 
