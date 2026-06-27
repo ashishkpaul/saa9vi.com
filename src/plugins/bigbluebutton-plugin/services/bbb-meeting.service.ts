@@ -22,7 +22,6 @@ import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbRoom } from "../entities/bbb-room.entity";
-import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
@@ -35,6 +34,7 @@ import { BbbMemberService } from "./bbb-member.service";
 import { BbbRoomService } from "./bbb-room.service";
 import { BbbMetricsService } from "./bbb-metrics.service";
 import { BbbReconciliationService } from "./bbb-reconciliation.service";
+import { BbbEntitlementService } from "./bbb-entitlement.service";
 import {
   MeetingProvisionedEvent,
   MeetingCompletedEvent,
@@ -99,6 +99,7 @@ export class BbbMeetingService implements OnModuleInit {
     @Inject(forwardRef(() => BbbReconciliationService))
     private readonly reconciliationService: BbbReconciliationService,
     private readonly eventBus: EventBus,
+    private readonly entitlementService: BbbEntitlementService,
   ) {}
 
   async onModuleInit() {
@@ -756,31 +757,20 @@ export class BbbMeetingService implements OnModuleInit {
       });
 
     if (session) {
-      const hasEntitlement = await this.connection
-        .getRepository(ctx, BbbEntitlement)
-        .findOne({
-          where: {
-            customerId: String(customer.id),
-            type: "bbb_session",
-            resourceId: String(session.id),
-          },
-        });
+      const hasSessionAccess = await this.entitlementService.hasAccess(
+        ctx,
+        customer.id,
+        "bbb_session",
+        String(session.id),
+      );
 
-      if (hasEntitlement) {
-        const now = new Date();
-        // Check time window
-        const valid =
-          (!hasEntitlement.validFrom || hasEntitlement.validFrom <= now) &&
-          (!hasEntitlement.validUntil || hasEntitlement.validUntil >= now);
-
-        if (valid) {
-          return this.getAttendeeJoinUrl(
-            ctx,
-            meetingId,
-            participantName,
-            customer.id as string,
-          );
-        }
+      if (hasSessionAccess) {
+        return this.getAttendeeJoinUrl(
+          ctx,
+          meetingId,
+          participantName,
+          customer.id as string,
+        );
       }
     }
 
@@ -1004,41 +994,22 @@ export class BbbMeetingService implements OnModuleInit {
           loggerCtx,
         );
       } else {
-        // Enrollment path: authorized via BbbEnrollment (created by fulfillment or admin).
-        const enrollment = await this.connection
-          .getRepository(ctx, BbbEnrollment)
-          .findOne({
-            where: {
-              roomId: roomId as string,
-              customerId: customerId as string,
-              active: true,
-            },
-          });
+        // Entitlement path: authorized via BbbEntitlement type='bbb_room'.
+        const hasRoomAccess = await this.entitlementService.hasAccess(
+          ctx,
+          customerId,
+          "bbb_room",
+          roomId as string,
+        );
 
-        if (!enrollment) {
+        if (!hasRoomAccess) {
           throw new Error(
-            "You do not have access to this room. Please purchase a plan to enroll.",
+            "You do not have access to this room. Please purchase a plan to join.",
           );
         }
 
-        // Expire check — prefer validFrom/validUntil window; fall back to legacy expiresAt
-        const now = new Date();
-        if (enrollment.validFrom && enrollment.validFrom > now) {
-          throw new Error("Your enrollment for this room has not started yet.");
-        }
-        if (enrollment.validUntil && enrollment.validUntil < now) {
-          throw new Error("Your enrollment for this room has expired.");
-        }
-        // Legacy fallback
-        if (
-          !enrollment.validUntil &&
-          enrollment.expiresAt &&
-          enrollment.expiresAt < now
-        ) {
-          throw new Error("Your enrollment for this room has expired.");
-        }
         Logger.info(
-          `[joinRoom] enrollment path: enrollmentId=${(enrollment as any).id}`,
+          `[joinRoom] entitlement path: customerId=${customerId} roomId=${roomId}`,
           loggerCtx,
         );
       }

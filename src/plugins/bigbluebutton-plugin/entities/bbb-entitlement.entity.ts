@@ -3,7 +3,7 @@ import { VendureEntity } from "@vendure/core";
 import { Column, Entity, Index } from "typeorm";
 
 export type EntitlementType = "bbb_session" | "bbb_room";
-export type EntitlementSource = "purchase" | "trial" | "admin" | "import";
+export type EntitlementSource = "purchase" | "trial" | "trial_conversion" | "admin" | "import";
 
 /**
  * Grant of access to a specific resource.

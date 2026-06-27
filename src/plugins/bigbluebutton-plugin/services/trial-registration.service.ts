@@ -1,9 +1,8 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { RequestContext, TransactionalConnection } from "@vendure/core";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
-import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
-import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
+import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
 import { BbbEntitlementService } from "./bbb-entitlement.service";
 
 const loggerCtx = "TrialRegistrationService";
@@ -142,7 +141,7 @@ export class TrialRegistrationService {
     registrationId: string,
     roomId: string,
     accessDays?: number,
-  ): Promise<BbbEnrollment> {
+  ): Promise<BbbEntitlement> {
     const registration = await this.connection.getEntityOrThrow(
       ctx,
       BbbTrialRegistration,
@@ -153,37 +152,24 @@ export class TrialRegistrationService {
       throw new Error("Only attendees can be converted to enrolled learners.");
     }
 
-    const room = await this.connection.getEntityOrThrow(ctx, BbbRoom, roomId);
-
     const expiresAt = accessDays != null
       ? new Date(Date.now() + accessDays * 24 * 60 * 60 * 1000)
       : null;
 
-    // Check for existing deactivated enrollment to reactivate
-    const existing = await this.connection
-      .getRepository(ctx, BbbEnrollment)
-      .findOne({
-        where: { roomId, customerId: registration.customerId },
-      });
+    const session = await this.connection
+      .getRepository(ctx, BbbScheduledSession)
+      .findOne({ where: { id: registration.scheduledSessionId } });
 
-    if (existing) {
-      existing.active = true;
-      existing.expiresAt = expiresAt;
-      existing.source = "trial_conversion";
-      return this.connection.getRepository(ctx, BbbEnrollment).save(existing);
-    }
+    const channelId = (session as any)?.channelId ?? null;
 
-    // Create fresh enrollment
-    const enrollment = new BbbEnrollment({
-      room,
-      roomId,
+    return this.entitlementService.create(ctx, {
+      type: "bbb_room",
+      resourceId: roomId,
       customerId: registration.customerId,
-      orderId: null,
-      active: true,
-      expiresAt,
       source: "trial_conversion",
+      validFrom: new Date(),
+      validUntil: expiresAt,
+      channelId,
     });
-
-    return this.connection.getRepository(ctx, BbbEnrollment).save(enrollment);
   }
 }

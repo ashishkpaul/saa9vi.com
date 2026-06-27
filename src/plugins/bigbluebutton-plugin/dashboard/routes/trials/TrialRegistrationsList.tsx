@@ -30,7 +30,10 @@ const CONVERT_TO_ENROLLMENT = graphql(`
   mutation ConvertTrialToEnrollment($registrationId: ID!, $roomId: ID!, $accessDays: Int) {
     convertTrialToEnrollment(registrationId: $registrationId, roomId: $roomId, accessDays: $accessDays) {
       id
-      active
+      type
+      resourceId
+      validFrom
+      validUntil
     }
   }
 `);

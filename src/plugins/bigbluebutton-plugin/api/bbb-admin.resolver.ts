@@ -759,7 +759,7 @@ export class BbbAdminResolver {
     @Args("registrationId") registrationId: string,
     @Args("roomId") roomId: string,
     @Args("accessDays") accessDays?: number,
-  ): Promise<BbbEnrollment> {
+  ): Promise<BbbEntitlement> {
     return this.trialRegistrationService.convertToEnrollment(
       ctx,
       registrationId,

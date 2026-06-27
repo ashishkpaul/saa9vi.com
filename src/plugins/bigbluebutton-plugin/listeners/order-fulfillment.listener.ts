@@ -7,7 +7,6 @@ import {
   RequestContext,
   TransactionalConnection,
 } from "@vendure/core";
-import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbProductAccess } from "../entities/bbb-product-access.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbEntitlementService } from "../services/bbb-entitlement.service";
@@ -103,7 +102,7 @@ export class BbbOrderFulfillmentListener implements OnApplicationBootstrap {
         .getRepository(ctx, BbbProductAccess)
         .findOne({
           where: { productVariantId },
-          relations: ["room"],
+          relations: ["room", "room.organization"],
         });
 
       if (!productAccess?.room) continue;
@@ -114,42 +113,21 @@ export class BbbOrderFulfillmentListener implements OnApplicationBootstrap {
           ? new Date(Date.now() + productAccess.accessDays * 24 * 60 * 60 * 1000)
           : null;
 
-      const enrollmentRepo = this.connection.getRepository(ctx, BbbEnrollment);
-      const existing = await enrollmentRepo.findOne({
-        where: { roomId, customerId },
+      const channelId =
+        productAccess.room.organization?.channelId ?? null;
+
+      await this.entitlementService.create(ctx, {
+        type: "bbb_room",
+        resourceId: roomId,
+        customerId,
+        source: "purchase",
+        validFrom: now,
+        validUntil: expiresAt,
+        channelId,
       });
 
-      if (existing) {
-        existing.active = true;
-        existing.orderId = String(order.id);
-        existing.expiresAt = expiresAt;
-        existing.validFrom = now;
-        existing.validUntil = expiresAt;
-        existing.source = "purchase";
-        await enrollmentRepo.save(existing);
-        Logger.info(
-          `Reactivated BBB enrollment room=${roomId} customer=${customerId} order=${order.code}`,
-          loggerCtx,
-        );
-        continue;
-      }
-
-      await enrollmentRepo.save(
-        new BbbEnrollment({
-          room: productAccess.room,
-          roomId,
-          customerId,
-          orderId: String(order.id),
-          active: true,
-          validFrom: now,
-          validUntil: expiresAt,
-          expiresAt,
-          source: "purchase",
-        }),
-      );
-
       Logger.info(
-        `Provisioned BBB enrollment room=${roomId} customer=${customerId} order=${order.code}`,
+        `Provisioned room entitlement: customer=${customerId} room=${roomId} order=${order.code}`,
         loggerCtx,
       );
     }

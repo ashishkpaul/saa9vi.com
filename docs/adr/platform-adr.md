@@ -991,18 +991,22 @@ Note: `CapacityExhaustedEvent` (BUG-013 / BB-004) is now implemented and publish
 
 **Current state (code-verified):**
 - `BbbEntitlement` entity + service exist and are live for `bbb_session` access checks ✅
-- `BbbMeetingService.joinRoom()` still uses legacy `BbbEnrollment` for room access — `BbbEntitlement` room access not yet implemented ⚠️
+- `BbbMeetingService.joinRoom()` migrated to `BbbEntitlement` for room access ✅ `BbbEnrollment` rows retained as audit trail
 - `InstructorProfile` entity exists in `TenantPlugin` with public query `findPublicByChannel` / `findPublicBySlug` ✅
 - Elasticsearch indexing for instructors: ⚠️ pending — entity exists but no indexer job registered
 - Public instructor profile pages in Next.js: ⚠️ pending — storefront rendering not started
 - CMS pages served from Next.js with SEO metadata: ⚠️ pending — `CmsShopResolver` exists but Next.js page renderer not implemented
 - `BbbEntitlement` admin UI: ✅ Added — GraphQL queries/mutations (`bbbEntitlements`, `createBbbEntitlement`, `deleteBbbEntitlement`) and `/bbb/entitlements` dashboard route registered
 
-** blockers before Phase 1.5 completion:**
-1. Replace `BbbEnrollment` room-access path in `joinRoom()` with `BbbEntitlement` room access (requires `bbb_room` entitlement type support)
-2. Register Elasticsearch indexing job for `InstructorProfile`
-3. Build Next.js storefront pages for public instructor profiles and CMS pages
-4. Add `entitlements` dashboard route to `BigBlueButtonPlugin`
+**Phase 1.5 room-access migration complete:**
+- `joinRoom()` auth check uses `entitlementService.hasAccess(ctx, customerId, 'bbb_room', roomId)` ✅
+- `BbbOrderFulfillmentListener` room product path writes `BbbEntitlement { type: 'bbb_room' }` ✅
+- `TrialRegistrationService.convertToEnrollment()` returns `BbbEntitlement` with `source: 'trial_conversion'` ✅
+- Admin resolver and schema updated; dashboard fragment updated ✅
+
+**Remaining blockers before Phase 1.5 completion:**
+1. Register Elasticsearch indexing job for `InstructorProfile`
+2. Build Next.js storefront pages for public instructor profiles and CMS pages
 
 ### Phase 2 — Subscription Billing
 
