@@ -17,12 +17,12 @@ import { BbbMemberService } from "../services/bbb-member.service";
 import { BbbScheduledSessionService } from "../services/bbb-scheduled-session.service";
 import { BbbRoomService } from "../services/bbb-room.service";
 import { BbbRoom } from "../entities/bbb-room.entity";
-import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbOrganizationMember } from "../entities/bbb-organization-member.entity";
 import { BbbProductAccess } from "../entities/bbb-product-access.entity";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
+import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbAdminPermission } from "../constants";
 import { TrialRegistrationService } from "../services/trial-registration.service";
@@ -766,6 +766,63 @@ export class BbbAdminResolver {
       String(roomId),
       accessDays,
     );
+  }
+
+  // ─── Entitlements ─────────────────────────────────────────────────────────
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  async bbbEntitlements(
+    @Ctx() ctx: RequestContext,
+    @Args("options") options?: { skip?: number; take?: number },
+  ): Promise<{ items: BbbEntitlement[]; totalItems: number }> {
+    const take = Math.min(Math.max(options?.take ?? 25, 1), 100);
+    const skip = Math.max(options?.skip ?? 0, 0);
+    const [items, totalItems] = await this.connection
+      .getRepository(ctx, BbbEntitlement)
+      .findAndCount({
+        order: { createdAt: "DESC" },
+        skip,
+        take,
+      });
+    return { items, totalItems };
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async createBbbEntitlement(
+    @Ctx() ctx: RequestContext,
+    @Args("input")
+    input: {
+      customerId: string;
+      type: "bbb_session" | "bbb_room";
+      resourceId: string;
+      source: "purchase" | "trial" | "admin" | "import";
+      validFrom?: string;
+      validUntil?: string;
+    },
+  ): Promise<BbbEntitlement> {
+    const entitlement = new BbbEntitlement({
+      customerId: input.customerId,
+      type: input.type,
+      resourceId: input.resourceId,
+      source: input.source,
+      validFrom: input.validFrom ? new Date(input.validFrom) : null,
+      validUntil: input.validUntil ? new Date(input.validUntil) : null,
+    });
+    return this.connection.getRepository(ctx, BbbEntitlement).save(entitlement);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async deleteBbbEntitlement(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+  ): Promise<boolean> {
+    await this.connection.getRepository(ctx, BbbEntitlement).delete(id);
+    return true;
   }
 
   // ─── Scheduled Sessions ────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { MonitorIcon, ServerIcon, BuildingIcon, DoorOpenIcon, VideoIcon, UsersIcon, ClipboardIcon, CreditCardIcon, ClipboardCheckIcon } from 'lucide-react';
+import { MonitorIcon, ServerIcon, BuildingIcon, DoorOpenIcon, VideoIcon, UsersIcon, ClipboardIcon, CreditCardIcon, ClipboardCheckIcon, KeyIcon } from 'lucide-react';
 import { defineDashboardExtension } from '@vendure/dashboard';
 
 import { ServersList } from './routes/servers';
@@ -9,6 +9,7 @@ import { MembersList } from './routes/members';
 import { EnrollmentsList } from './routes/enrollments';
 import { PlansList } from './routes/plans';
 import { TrialRegistrationsList } from './routes/trials/TrialRegistrationsList';
+import { EntitlementsList } from './routes/entitlements/EntitlementsList';
 
 export default defineDashboardExtension({
     navSections: [
@@ -60,6 +61,11 @@ export default defineDashboardExtension({
             path: '/bbb/trials',
             component: () => <TrialRegistrationsList />,
             navMenuItem: { sectionId: 'bbb', title: 'Trial Registrations', icon: ClipboardCheckIcon, id: 'bbb-trials', url: '/bbb/trials', requiresPermission: ['BBBAdmin'] },
+        },
+        {
+            path: '/bbb/entitlements',
+            component: () => <EntitlementsList />,
+            navMenuItem: { sectionId: 'bbb', title: 'Entitlements', icon: KeyIcon, id: 'bbb-entitlements', url: '/bbb/entitlements', requiresPermission: ['BBBAdmin'] },
         },
     ],
 });
