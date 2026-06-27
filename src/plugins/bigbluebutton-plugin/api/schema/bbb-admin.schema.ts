@@ -130,6 +130,25 @@ export const adminApiExtensions = gql`
     totalItems: Int!
   }
 
+  # ─── Entitlement types ────────────────────────────────────────────────────────
+
+  type BbbEntitlement {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    customerId: ID!
+    type: String!
+    resourceId: ID!
+    source: String!
+    validFrom: DateTime
+    validUntil: DateTime
+  }
+
+  type BbbEntitlementList {
+    items: [BbbEntitlement!]!
+    totalItems: Int!
+  }
+
   # ─── Member types (M4) ──────────────────────────────────────────────────────
 
   type BbbOrganizationMember {
@@ -221,6 +240,7 @@ export const adminApiExtensions = gql`
     bbbScheduledSessions(organizationId: ID!): [BbbScheduledSession!]!
     bbbTrialRegistrationsBySession(sessionId: ID!): [BbbTrialRegistration!]!
     bbbTrialRegistrationsByOrganization(organizationId: ID!): [BbbTrialRegistration!]!
+    bbbEntitlements(options: BbbEntitlementListOptions): BbbEntitlementList!
   }
 
   # ─── Mutations ───────────────────────────────────────────────────────────────
@@ -268,6 +288,8 @@ export const adminApiExtensions = gql`
     Converts a trial attendee into a fully enrolled learner by granting room access.
     """
     convertTrialToEnrollment(registrationId: ID!, roomId: ID!, accessDays: Int): BbbEnrollment!
+    createBbbEntitlement(input: CreateBbbEntitlementInput!): BbbEntitlement!
+    deleteBbbEntitlement(id: ID!): Boolean!
   }
 
   # ─── Input Types ─────────────────────────────────────────────────────────────
@@ -410,5 +432,19 @@ export const adminApiExtensions = gql`
   input BbbEnrollmentListOptions {
     skip: Int
     take: Int
+  }
+
+  input BbbEntitlementListOptions {
+    skip: Int
+    take: Int
+  }
+
+  input CreateBbbEntitlementInput {
+    customerId: ID!
+    type: String!
+    resourceId: ID!
+    source: String!
+    validFrom: String
+    validUntil: String
   }
 `;
