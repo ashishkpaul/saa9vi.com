@@ -38,6 +38,11 @@ export class Banner extends VendureEntity implements ChannelAware {
     @Column({ type: Date, nullable: true })
     endsAt: Date | null;
 
+    /** Scalar channelId for efficient direct queries (see DA-001) */
+    @Index()
+    @Column({ nullable: true })
+    channelId: string;
+
     @ManyToMany(type => Channel)
     @JoinTable()
     channels: Channel[];

@@ -194,9 +194,9 @@ Plugins share the NestJS DI container. Cross-plugin injection is permitted with 
 
 ## 4. Data Layer Decisions
 
-### DA-001: ChannelAware Implementation Pattern
+### DA-001: ChannelAware Implementation Pattern ✅ Done
 
-All tenant-scoped entities follow this pattern (code-verified in `TenantProfile`, `BbbOrganization`, `OrganizationSubscription`):
+All tenant-scoped entities follow this pattern (code-verified in `TenantProfile`, `BbbOrganization`, `OrganizationSubscription`, `Article`, `Page`, `Banner`):
 
 ```typescript
 @Entity('entity_name')
@@ -227,7 +227,11 @@ async create(ctx: RequestContext, input: CreateInput): Promise<MyEntity> {
 
 **CMS plugin uses `ListQueryBuilder` + `findOneInChannel`** (code-verified in `ArticleService`, `PageService`, `BannerService`) — these entities are ChannelAware and use the framework tooling correctly.
 
+**`Banner` was remediated in this audit:** The entity implemented `ChannelAware` with the `@ManyToMany(() => Channel) @JoinTable() channels` join table, but was missing the scalar `channelId` column. Added per the DA-001 pattern.
+
 **`InstructorProfile` exception:** Uses raw `findAndCount` with explicit `WHERE channelId = :channelId`. Acceptable per DL-010.
+
+**Current status:** ✅ All tenant-scoped entities comply with the ChannelAware pattern. Five known exceptions documented: `InstructorProfile` (DL-010), `BbbEntitlement` (DL-011), and reviews plugin entities `ProductReview`, `ReviewRequest`, `ReviewReport`, `ReviewReward`, `ReviewVote` (BUG-017).
 
 ### DA-002: Slug Uniqueness
 
@@ -1203,6 +1207,7 @@ query CourseAccess($courseId: ID!) {
     }
 }
 ```
+
 ```tsx
 // next.js — pure render
 <Button onClick={() => handleAction(access.ctaAction)}>
