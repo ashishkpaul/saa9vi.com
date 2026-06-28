@@ -2,6 +2,9 @@ import { InvariantRunner, AdrChecker, RfcLifecycleChecker, StoryFlowChecker, Che
 import { RuntimeInvariantRunner } from './event-chain/runtime-invariant-runner';
 import { RuntimeTraceStore, RuntimeCausalityValidator } from '../tracing';
 import { CausalityGraphStore, CausalityQueryAPI, LayerReconciler } from '../causality';
+// NOTE: BUG-005 stress tests are now a standalone module and are not imported here
+// to keep the invariant verification CLI lightweight and free of unresolved module coupling.
+// Run stress tests via their own entry point or integration suite instead.
 
 async function main() {
   const runner = new InvariantRunner();
@@ -59,6 +62,7 @@ async function main() {
     process.exitCode = 1;
   }
 }
+
 
 main().catch((err) => {
   console.error('Invariant verification failed to run:', err);

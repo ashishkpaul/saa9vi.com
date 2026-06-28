@@ -19,6 +19,7 @@ import { BigBlueButtonPlugin } from "./plugins/bigbluebutton-plugin";
 import { CmsPlugin } from "./plugins/cms/cms.plugin";
 import { TenantPlugin } from "./plugins/tenant-plugin/tenant-plugin.plugin";
 import { ReviewsPlugin } from "./plugins/reviews/reviews-plugin";
+import { LoadSimulationPlugin } from "./plugins/load-simulation-plugin/load-simulation.plugin";
 
 const IS_DEV = process.env.APP_ENV === "dev";
 const serverPort = +process.env.PORT || 3000;
@@ -160,5 +161,6 @@ export const config: VendureConfig = {
     }),
     CmsPlugin,
     ReviewsPlugin,
+    LoadSimulationPlugin,
   ],
 };
