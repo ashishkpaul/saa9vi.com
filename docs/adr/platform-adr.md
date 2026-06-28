@@ -1,9 +1,9 @@
 # Architecture Decision Record
 ## Saa9vi — Multi-Tenant Education Commerce Platform
 ### Production Architecture · Version 1.5
-**Status:** Active  
-**Date:** 2026-06  
-**Authors:** Lead Architect, Platform Engineering  
+**Status:** Active
+**Date:** 2026-06
+**Authors:** Lead Architect, Platform Engineering
 **Supersedes:** ADR v1.4 (2026-06)
 
 > **What changed in v1.1:** Full audit against all three plugin codebases (`bigbluebutton-plugin`, `cms-plugin`, `tenant-plugin`). Status fields updated to match actual implementation. Four divergences from v1.0 documented. Three pending ADR items promoted to explicit open issues. No invariants changed.
@@ -1082,7 +1082,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 | BUG-015 | Medium | `CmsPlugin` / `BannerService` | `banner-activator` and `banner-deactivator` BullMQ queues not registered; banners currently filtered at query-time instead of via precomputed `isCurrentlyActive` | ⚠️ Pending — see CMS-002 |
 | BUG-016 | High | `ReviewsPlugin` / `dashboard/index.tsx` | `navSections` entry uses `items: [...]` which does not exist on `DashboardNavSectionDefinition` — TS error 2353, Reviews menu invisible in admin dashboard | ✅ Fixed — remove `items` from `navSections`; add `navMenuItem` to `reviewList` route in `review-list.tsx` |
 | BUG-017 | Medium | `ReviewsPlugin` / all review entities | `ProductReview`, `ReviewRequest`, `ReviewReport`, `ReviewReward`, `ReviewVote` do not implement `ChannelAware` — channel isolation relies solely on explicit `ctx.channelId` WHERE clauses in services; ORM provides no guard against missed query paths | ⚠️ Pending — add `ChannelAware` + `@ManyToMany(() => Channel)` to `ProductReview` as minimum; backfill join table from existing `channelId` strings via migration |
-| BUG-018 | Medium | `BbbShopResolver.joinRoom()` | `buildJoinUrl()` moderator role-routing has no trigger path — no entity exists to distinguish staff members from students, so all users receive the attendee password regardless of their organizational role | ⚠️ Pending — blocked on FEAT-001 (`BbbOrganizationMembership`); see OP-002 |
+| BUG-018 | Medium | `BbbShopResolver.joinRoom()` / `BbbMeetingService.joinRoom()` | `buildJoinUrl()` moderator role-routing has no trigger path — no entity exists to distinguish staff members from students, so all users receive the attendee password regardless of their organizational role | ✅ Fixed — FEAT-001 `BbbOrganizationMembership` entity + `BbbMembershipService` created; Gate 1 short-circuit in `joinRoom()` checks active membership before entitlement check; role-based `provisionAndJoin()` routes org_admin/moderator → MODERATOR URL, staff → VIEWER URL |
 
 ---
 
@@ -1318,8 +1318,8 @@ This extends INV-002 (append-only billing truth) to the advertising domain.
 
 ## ADR-013: Frontend Independence & API Evolution
 
-**Status:** Active  
-**Date:** 2026-06  
+**Status:** Active
+**Date:** 2026-06
 **Trigger:** Platform scaling constraint — per-tenant storefront deployments become unmanageable at 50+ tenants. Plugin API surface must not be exposed directly to storefronts.
 
 ---
@@ -1486,8 +1486,8 @@ query CourseAccess($courseId: ID!) {
 
 ## ADR-014: Revenue Model & Marketplace Architecture
 
-**Status:** Active  
-**Date:** 2026-06  
+**Status:** Active
+**Date:** 2026-06
 **Trigger:** Platform strategic review — Phase 1 commerce loop complete, Phase 3 marketplace design requires locking a business model and ruling out incompatible architectural patterns.
 
 ---

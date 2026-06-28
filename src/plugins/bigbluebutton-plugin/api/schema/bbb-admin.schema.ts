@@ -151,6 +151,24 @@ export const adminApiExtensions = gql`
 
   # ─── Member types (M4) ──────────────────────────────────────────────────────
 
+  # ─── Organization Membership types (FEAT-001 / BUG-018) ─────────────────────
+
+  """
+  Internal staff membership for an organization. Enables Archetype B (Internal
+  Staff Meeting flow) — staff can join internal rooms (productVariantId = null)
+  without purchasing.
+  """
+  type BbbOrganizationMembership {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    organizationId: ID!
+    customerId: ID!
+    channelId: ID!
+    role: String!
+    isActive: Boolean!
+  }
+
   type BbbOrganizationMember {
     id: ID!
     createdAt: DateTime!
@@ -241,11 +259,27 @@ export const adminApiExtensions = gql`
     bbbTrialRegistrationsBySession(sessionId: ID!): [BbbTrialRegistration!]!
     bbbTrialRegistrationsByOrganization(organizationId: ID!): [BbbTrialRegistration!]!
     bbbEntitlements(options: BbbEntitlementListOptions): BbbEntitlementList!
+    """
+    List all organization memberships for a given organization (FEAT-001).
+    """
+    bbbOrgMemberships(organizationId: ID!): [BbbOrganizationMembership!]!
   }
 
   # ─── Mutations ───────────────────────────────────────────────────────────────
 
   extend type Mutation {
+    """
+    Create an organization membership (FEAT-001).
+    """
+    createBbbOrgMembership(input: CreateBbbOrgMembershipInput!): BbbOrganizationMembership!
+    """
+    Update an organization membership (FEAT-001).
+    """
+    updateBbbOrgMembership(id: ID!, input: UpdateBbbOrgMembershipInput!): BbbOrganizationMembership!
+    """
+    Remove an organization membership (FEAT-001).
+    """
+    removeBbbOrgMembership(id: ID!): Boolean!
     createBbbServer(input: CreateBbbServerInput!): BbbServer!
     updateBbbServer(id: ID!, input: UpdateBbbServerInput!): BbbServer!
     createBbbOrganization(input: CreateBbbOrganizationInput!): BbbOrganization!
@@ -447,5 +481,19 @@ export const adminApiExtensions = gql`
     source: String!
     validFrom: String
     validUntil: String
+  }
+
+  # ─── Organization Membership Inputs (FEAT-001) ──────────────────────────────
+
+  input CreateBbbOrgMembershipInput {
+    organizationId: ID!
+    customerId: ID!
+    channelId: ID!
+    role: String!
+  }
+
+  input UpdateBbbOrgMembershipInput {
+    role: String
+    isActive: Boolean
   }
 `;

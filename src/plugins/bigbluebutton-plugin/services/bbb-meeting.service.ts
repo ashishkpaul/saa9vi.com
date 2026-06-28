@@ -16,6 +16,7 @@ import {
   SerializedRequestContext,
   TransactionalConnection,
 } from "@vendure/core";
+import { BbbMembershipService } from "./bbb-membership.service";
 import * as crypto from "crypto";
 import { EntityManager } from "typeorm";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
@@ -100,6 +101,7 @@ export class BbbMeetingService implements OnModuleInit {
     private readonly reconciliationService: BbbReconciliationService,
     private readonly eventBus: EventBus,
     private readonly entitlementService: BbbEntitlementService,
+    private readonly membershipService: BbbMembershipService,
   ) {}
 
   async onModuleInit() {
@@ -865,6 +867,33 @@ export class BbbMeetingService implements OnModuleInit {
 
   // ─── Room-based Join ────────────────────────────────────────────────────────
 
+  /**
+   * Generates a role-based join URL for a membership-authenticated staff member.
+   * This is the FEAT-001 provisionAndJoin method — it bypasses the entitlement
+   * check and directly builds a join URL based on the membership role.
+   *
+   * org_admin / moderator → MODERATOR join URL
+   * staff                  → VIEWER (attendee) join URL
+   */
+  private async provisionAndJoin(
+    ctx: RequestContext,
+    meetingId: string,
+    participantName: string,
+    bbbRole: "MODERATOR" | "VIEWER",
+  ): Promise<{ status: string; joinUrl: string }> {
+    Logger.info(
+      `[provisionAndJoin] meetingId=${meetingId} participant=${participantName} role=${bbbRole}`,
+      loggerCtx,
+    );
+
+    const joinUrl =
+      bbbRole === "MODERATOR"
+        ? await this.getModeratorJoinUrl(ctx, meetingId, participantName)
+        : await this.getAttendeeJoinUrl(ctx, meetingId, participantName);
+
+    return { status: "active", joinUrl };
+  }
+
   private async createRoomMeetingAndEnqueue(
     ctx: RequestContext,
     roomId: ID,
@@ -977,9 +1006,27 @@ export class BbbMeetingService implements OnModuleInit {
         loggerCtx,
       );
 
-      // ── Dual-path authorization ─────────────────────────────────────────────
-      // Staff (TRAINER / ORG_ADMIN): authorized via org membership → moderator URL.
-      // Students: authorized via BbbEnrollment (created by fulfillment) → attendee URL.
+      // ── Gate 1 — BbbOrganizationMembership short-circuit (FEAT-001) ─────────
+      // Staff members with an active BbbOrganizationMembership can join internal
+      // rooms without purchasing. They bypass the entitlement check entirely.
+      const membership = await this.membershipService.findActiveMembership(
+        ctx,
+        customerId,
+        room!.organization.id,
+      );
+
+      if (membership) {
+        Logger.info(
+          `[joinRoom] membership short-circuit: customerId=${customerId} orgId=${room!.organization.id} role=${membership.role}`,
+          loggerCtx,
+        );
+        const bbbRole = (["org_admin", "moderator"] as const).includes(membership.role as "org_admin" | "moderator")
+          ? "MODERATOR"
+          : "VIEWER";
+        return this.provisionAndJoin(ctx, String(result.currentMeetingId), participantName, bbbRole);
+      }
+
+      // ── Gate 2 — Existing BbbOrganizationMember (org-admin/trainer) ─────────
       let isModerator = false;
       const staffMember = await this.memberService.findActiveMembership(
         ctx,
@@ -994,7 +1041,7 @@ export class BbbMeetingService implements OnModuleInit {
           loggerCtx,
         );
       } else {
-        // Entitlement path: authorized via BbbEntitlement type='bbb_room'.
+        // Gate 3 — Entitlement path: authorized via BbbEntitlement type='bbb_room'.
         const hasRoomAccess = await this.entitlementService.hasAccess(
           ctx,
           customerId,

@@ -21,6 +21,7 @@ import { BbbTrialRegistration } from "./entities/trial-registration.entity";
 import { BbbInstructorAssignment } from "./entities/instructor-assignment.entity";
 import { BbbWebhookEvent } from "./entities/bbb-webhook-event.entity";
 import { BbbEntitlement } from "./entities/bbb-entitlement.entity";
+import { BbbOrganizationMembership } from "./entities/bbb-organization-membership.entity";
 
 import { BbbEncryptionService } from "./services/bbb-encryption.service";
 import { BbbApiService } from "./services/bbb-api.service";
@@ -37,6 +38,7 @@ import { BbbMetricsService } from "./services/bbb-metrics.service";
 import { TrialRegistrationService } from "./services/trial-registration.service";
 import { BbbWebhookProcessorService } from "./services/bbb-webhook-processor.service";
 import { BbbEntitlementService } from "./services/bbb-entitlement.service";
+import { BbbMembershipService } from "./services/bbb-membership.service";
 import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.listener";
 
 import { BbbAdminResolver } from "./api/bbb-admin.resolver";
@@ -70,6 +72,7 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     BbbInstructorAssignment,
     BbbWebhookEvent,
     BbbEntitlement,
+    BbbOrganizationMembership,
   ],
 
   providers: [
@@ -92,6 +95,7 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     TrialRegistrationService,
     BbbWebhookProcessorService,
     BbbEntitlementService,
+    BbbMembershipService,
     BbbOrderFulfillmentListener,
   ],
 

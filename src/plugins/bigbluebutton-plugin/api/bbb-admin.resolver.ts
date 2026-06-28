@@ -20,12 +20,14 @@ import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbOrganizationMember } from "../entities/bbb-organization-member.entity";
+import { BbbOrganizationMembership } from "../entities/bbb-organization-membership.entity";
 import { BbbProductAccess } from "../entities/bbb-product-access.entity";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbAdminPermission } from "../constants";
 import { TrialRegistrationService } from "../services/trial-registration.service";
+import { BbbMembershipService } from "../services/bbb-membership.service";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
 
 import { Customer, EntityNotFoundError } from "@vendure/core";
@@ -127,6 +129,7 @@ export class BbbAdminResolver {
     private readonly roomService: BbbRoomService,
     private readonly scheduledSessionService: BbbScheduledSessionService,
     private readonly trialRegistrationService: TrialRegistrationService,
+    private readonly membershipService: BbbMembershipService,
     private readonly connection: TransactionalConnection,
   ) {}
 
@@ -294,6 +297,67 @@ export class BbbAdminResolver {
   @Transaction()
   removeBbbMember(@Ctx() ctx: RequestContext, @Args("id") id: string) {
     return this.memberService.removeMember(ctx, id);
+  }
+
+  // ─── Organization Membership CRUD (FEAT-001 / BUG-018) ──────────────────────
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  async bbbOrgMemberships(
+    @Ctx() ctx: RequestContext,
+    @Args("organizationId") organizationId: string,
+  ): Promise<BbbOrganizationMembership[]> {
+    return this.membershipService.listByOrganization(ctx, organizationId);
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async createBbbOrgMembership(
+    @Ctx() ctx: RequestContext,
+    @Args("input")
+    input: {
+      organizationId: string;
+      customerId: string;
+      channelId: string;
+      role: string;
+    },
+  ): Promise<BbbOrganizationMembership> {
+    return this.membershipService.create(ctx, {
+      organizationId: input.organizationId,
+      customerId: input.customerId,
+      channelId: input.channelId,
+      role: input.role as "org_admin" | "moderator" | "staff",
+    });
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async updateBbbOrgMembership(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+    @Args("input")
+    input: {
+      role?: string;
+      isActive?: boolean;
+    },
+  ): Promise<BbbOrganizationMembership> {
+    return this.membershipService.update(ctx, id, {
+      role: input.role as "org_admin" | "moderator" | "staff" | undefined,
+      isActive: input.isActive,
+    });
+  }
+
+  @Mutation()
+  @Allow(BbbAdminPermission.Permission)
+  @Transaction()
+  async removeBbbOrgMembership(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+  ): Promise<boolean> {
+    await this.membershipService.remove(ctx, id);
+    return true;
   }
 
   // ─── Retry Meeting (resets room + creates new meeting) ─────────────────────

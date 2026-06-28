@@ -10,6 +10,7 @@ import { EnrollmentsList } from './routes/enrollments';
 import { PlansList } from './routes/plans';
 import { TrialRegistrationsList } from './routes/trials/TrialRegistrationsList';
 import { EntitlementsList } from './routes/entitlements/EntitlementsList';
+import { MembershipsList } from './routes/memberships/MembershipsList';
 
 export default defineDashboardExtension({
     navSections: [
@@ -66,6 +67,11 @@ export default defineDashboardExtension({
             path: '/bbb/entitlements',
             component: () => <EntitlementsList />,
             navMenuItem: { sectionId: 'bbb', title: 'Entitlements', icon: KeyIcon, id: 'bbb-entitlements', url: '/bbb/entitlements', requiresPermission: ['BBBAdmin'] },
+        },
+        {
+            path: '/bbb/memberships',
+            component: () => <MembershipsList />,
+            navMenuItem: { sectionId: 'bbb', title: 'Memberships', icon: UsersIcon, id: 'bbb-memberships', url: '/bbb/memberships', requiresPermission: ['BBBAdmin'] },
         },
     ],
 });
