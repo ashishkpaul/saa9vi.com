@@ -1,0 +1,90 @@
+# Cline Rules — Saa9vi Academy Platform
+
+## 1. Architecture-First Thinking
+
+* Always reason from architecture constraints before proposing changes.
+* Preserve invariants: Channel=Tenant, entitlement-only access, ledger immutability, meeting FSM, time-driven workflows.
+* Never invert domain model priority: Subscription → Entitlement → Meeting → Ledger → Order.
+* Prefer event-driven design; avoid tight coupling; assume distributed execution.
+
+## 2. Code Exploration Before Editing
+
+* Read relevant files (`README`, `docs/adr`, config, entities, services) before editing.
+* Prefer `list_files` and `read_file` over blind edits.
+* Use `search_files` for symbol lookup before assuming structure.
+
+## 3. Incremental File Changes
+
+* Default to `replace_in_file` for targeted edits.
+* Use `write_to_file` only for new files or full rewrites.
+* Show complete file content on creation; never truncate.
+
+## 4. CLI Commands
+
+* Use `npm run ...` when scripts exist.
+* Use explicit commands when needed (e.g., `npx tsc --noEmit`).
+* Treat failed commands as blocked until resolved.
+
+## 5. Migrations and Entity Changes
+
+* Any schema change requires a new migration file in `src/migrations/`.
+* New entities require an entity file in the plugin’s `entities/` folder.
+* The corresponding plugin service must use the new entity.
+* Always run `npm run build` after changes.
+
+## 6. Big Picture
+
+* Track all system pieces: Vendure, Next.js, BBB, Redis, Postgres, Elasticsearch, BullMQ.
+* Every flow must be traceable end-to-end.
+* Nothing is assumed permanent without reconciliation.
+
+## 7. Vendure Migration Governance (CRITICAL)
+
+* All database schema changes MUST be generated via Vendure CLI migration tooling.
+* NEVER manually create TypeORM migration files inside the project unless Vendure CLI cannot express the required schema change.
+
+### Correct workflow:
+
+```bash
+npx vendure migrate create
+npx vendure migrate up
+```
+
+(or plugin-scoped equivalents per project setup)
+
+### Forbidden:
+
+* Manually writing migration files under `src/migrations/`, `src/plugins/**/migrations/`, or `src/platform/**/migrations/`
+* Direct SQL schema files outside CLI generation flow
+
+### Exception:
+
+Only allowed when:
+
+- Vendure CLI cannot express required schema change
+- AND architecture-level override is documented in ADR
+
+### Enforcement rule:
+
+All schema changes must be traceable to:
+
+- plugin entity definition OR
+- Vendure CLI migration generation
+
+## 8. Plugin Migration Registration
+
+* When adding migrations, update migration paths in:
+  - `src/vendure-config.ts` (`dbConnectionOptions.migrations`)
+  - Or plugin registration if using plugin-scoped migrations
+* Ensure migration arrays include new files before running `migrate up`.
+
+## 9. Invariant System Integration
+
+* New invariants must be documented in `docs/adr/platform-adr.md` before implementation.
+* Invariant checkers must be registered in `src/platform/invariants/cli.ts`.
+* Runtime tracing hooks must remain non-blocking by default (persistence no-ops).
+
+## 10. Documentation Drift Detection
+
+* If ADR/RFC/STORY documents and code disagree, flag the drift via the invariant system.
+* Prefer updating code to match ADR; update ADR only when implementation requires a documented exception.

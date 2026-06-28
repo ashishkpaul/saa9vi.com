@@ -1,16 +1,20 @@
 # Architecture Decision Record
 ## Saa9vi — Multi-Tenant Education Commerce Platform
-### Production Architecture · Version 1.3
+### Production Architecture · Version 1.5
 **Status:** Active  
 **Date:** 2026-06  
 **Authors:** Lead Architect, Platform Engineering  
-**Supersedes:** ADR v1.2 (2025-06)
+**Supersedes:** ADR v1.4 (2026-06)
 
 > **What changed in v1.1:** Full audit against all three plugin codebases (`bigbluebutton-plugin`, `cms-plugin`, `tenant-plugin`). Status fields updated to match actual implementation. Four divergences from v1.0 documented. Three pending ADR items promoted to explicit open issues. No invariants changed.
 >
 > **What changed in v1.2:** Three code-verified corrections incorporated: (1) `convertTrialToEnrollment` → `BbbEnrollment` path added to AC-003; (2) EventBus published events corrected — `RoomActivatedEvent` is live, `TrialAttendanceRecordedEvent` is future-only; (3) cipher name corrected to AES-256-GCM. BUG-015 added for banner queue gap. Admin API isolation added as SEC-001 production deployment requirement.
 >
 > **What changed in v1.3:** Full audit extended to `reviews` plugin. Plugin inventory updated to four plugins. DIV-009 and DIV-010 added for reviews plugin findings. BUG-016 (TS-2353 — `items` in `navSections`) documented and fixed. BUG-017 (Reviews channel scoping deviation) added. Section 5A (Dashboard Extension Pattern) added as canonical reference. ADR-013 (Frontend Independence & API Evolution) added — defines the single-storefront / stable-API-surface architecture that allows backend plugin evolution without per-tenant frontend redeployments. DL-015 and DL-016 added to decision log.
+>
+> **What changed in v1.4:** Archetype B (Internal Staff Meeting flow) assessed and integrated. Two missing features promoted from narrative to tracked gaps: FEAT-001 (`BbbOrganizationMembership` entity — prerequisite for auth waterfall short-circuit and moderator role routing) and FEAT-002 (Overhead Capacity Grant path — null-debit path for internal session consumption). Section 8A (Internal Operations Architecture) added. Phase 1.5 blockers updated to include FEAT-001 and FEAT-002. BUG-018 added (role-routing in `buildJoinUrl` has no trigger path without FEAT-001). Decision Log entries DL-017 and DL-018 added.
+>
+> **What changed in v1.5:** Three strategic decisions formalised following full platform review. (1) Phase 3 Marketplace architecture specified: platform-level Elasticsearch index (spanning all channels), `orderSource` custom field on `Order` for commission attribution, `MarketplaceIndexerPlugin` as a cross-channel read projection, `BayesianRatingService` for ranking. Multivendor plugin explicitly rejected (DL-019). (2) Three-stream revenue model locked: Stream 1 = base subscription, Stream 2 = marketplace commission (5–15%, `orderSource = 'marketplace'` orders only), Stream 3 = marketplace advertising (sponsored listings + marketplace banners). (3) Phase 3 deliverables expanded with FEAT-003 (`MarketplaceAdCampaign` + `AdSpendLedger`) and FEAT-004 (Banner `scope` discriminator). New invariants INV-009 and INV-010 added. Decision Log entries DL-019 through DL-022 added. Section 14 Phase 3 and Phase 4 roadmaps expanded. ADR-014 (Revenue Model & Marketplace Architecture) added.
 
 ---
 
@@ -26,6 +30,7 @@
 7. [CMS Architecture](#7-cms-architecture)
 7A. [Reviews Plugin Architecture](#7a-reviews-plugin-architecture)
 8. [Tenant & Academy Layer](#8-tenant--academy-layer)
+8A. [Internal Operations Architecture](#8a-internal-operations-architecture)
 9. [Event & Job Queue Architecture](#9-event--job-queue-architecture)
 10. [Security Architecture](#10-security-architecture)
 11. [Infrastructure & Deployment](#11-infrastructure--deployment)
@@ -33,6 +38,7 @@
 13. [Production Readiness Checklist](#13-production-readiness-checklist)
 14. [Phase Roadmap](#14-phase-roadmap)
 **[ADR-013: Frontend Independence & API Evolution](#adr-013-frontend-independence--api-evolution)**
+**[ADR-014: Revenue Model & Marketplace Architecture](#adr-014-revenue-model--marketplace-architecture)**
 15. [Decision Log](#15-decision-log)
 
 ---
@@ -80,6 +86,8 @@ Channel (Vendure core)
 TenantProfile (TenantPlugin)
     ↕  1:1
 BbbOrganization (BigBlueButtonPlugin)
+    ↕  1:1
+Seller (Vendure core — Phase 3)    ← platform Seller entity linked to TenantProfile
 ```
 
 Every entity that is tenant-scoped **must** implement `ChannelAware` and be persisted via `channelService.assignToCurrentChannel(entity, ctx)` before the first `save()`. Every read against a channel-scoped entity **must** use `ListQueryBuilder` with `RequestContext` or `findOneInChannel`.
@@ -682,6 +690,7 @@ Reviews entities do not implement `ChannelAware`. Channel isolation is enforced 
 ### RV-003: Custom Fields on `Product`
 
 On boot, the plugin appends three custom fields to `Product` if absent:
+
 - `reviewRating` (float, public) — cached aggregate, updated by `ReviewAggregationService`
 - `reviewCount` (float, public) — cached count, same service
 - `featuredReview` (relation to `ProductReview`, public) — pinnable featured review
@@ -695,6 +704,7 @@ These are denormalised caches. Authoritative data is always the `ProductReview` 
 ### RV-005: Dashboard Extension — BUG-016 Fixed
 
 See §5A for the canonical pattern. The applied fix:
+
 - `index.tsx`: `navSections` contains section container only — no `items` array
 - `review-list.tsx`: `reviewList` route gains `navMenuItem: { sectionId: 'reviews', id: 'review-list', ... }`
 - `review-placeholder.tsx`: `reportList`, `rewardList`, `requestList` were already correct
@@ -729,6 +739,154 @@ See §5A for the canonical pattern. The applied fix:
 `MediaResourceService.findOne` includes `channelId` filter. Code-verified.
 
 ---
+
+## 8A. Internal Operations Architecture
+
+This section defines the design for **Archetype B: Internal Staff Meeting** — the flow by which academy staff (admins, moderators, internal team) join BBB rooms that are not listed in the student product catalogue. It documents what is currently implemented, what is a planned gap, and the precise design required before this flow can be production-ready.
+
+### Overview
+
+Internal rooms are `BbbRoom` entities with `productVariantId = null`. They are not Vendure products. A staff member joining an internal room bypasses the entire commerce loop — no cart, no `OrderLine`, no `BbbEntitlement` from purchase. Access is granted purely on the basis of organizational membership.
+
+```
+Staff member clicks "Join"
+  → joinRoom(roomId) mutation
+  → Auth waterfall: is this customerId a member of the BbbOrganization owning this room?
+      → YES (staff): grant access immediately, assign moderator role
+      → NO (not a member): fall through to entitlement check
+  → Provision room (BbbRoomLockService + BullMQ)
+  → buildJoinUrl() with moderator password
+  → Usage written to BbbUsageLedger against overhead grant
+```
+
+### OP-001: Auth Waterfall Short-Circuit — FEAT-001 Required ⚠️
+
+**Current state:** The `joinRoom()` resolver runs entitlement checks against `BbbEntitlement` rows (`bbb_room`, `bbb_session` types). There is no organizational membership check as a prior gate. A staff member with no purchase record would be **denied** by the existing check, not granted access.
+
+**Required design:**
+
+```typescript
+// FEAT-001: New entity
+@Entity('bbb_organization_membership')
+export class BbbOrganizationMembership extends VendureEntity {
+  @Column() organizationId: string;     // FK → BbbOrganization.id
+  @Column() customerId: string;         // FK → Customer.id (Vendure)
+  @Column() channelId: string;          // scalar, explicit filter (DL-010 pattern)
+  @Column({
+    type: 'enum',
+    enum: ['org_admin', 'moderator', 'staff'],
+  })
+  role: 'org_admin' | 'moderator' | 'staff';
+  @Column({ default: true }) isActive: boolean;
+
+  // Composite index: fast lookup "is this customer a member of this org?"
+  @Index(['organizationId', 'customerId'], { unique: true })
+}
+```
+
+**Auth waterfall (target, requires FEAT-001):**
+
+```typescript
+// BbbShopResolver.joinRoom()
+async joinRoom(ctx, { roomId }) {
+  const room = await this.roomService.findOne(ctx, roomId);
+
+  // Gate 1 — staff short-circuit (FEAT-001 required)
+  const membership = await this.membershipService.findActiveMembership(
+    ctx, ctx.activeUserId, room.organizationId
+  );
+  if (membership) {
+    // Skip all entitlement checks — org membership grants access
+    return this.provisionAndJoin(ctx, room, membership.role);
+  }
+
+  // Gate 2 — commercial entitlement (existing path, unchanged)
+  const hasAccess = await this.entitlementService.hasAccess(
+    ctx, ctx.activeUserId, 'bbb_room', roomId
+  );
+  if (!hasAccess) throw new ForbiddenError();
+
+  return this.provisionAndJoin(ctx, room, 'attendee');
+}
+```
+
+**Blocking status:** FEAT-001 (`BbbOrganizationMembership`) is the single prerequisite for Archetype B. Without it, no part of the internal operations flow can be implemented.
+
+### OP-002: Moderator Role Assignment — depends on FEAT-001 ⚠️
+
+**Current state:** `BbbApiService.buildJoinUrl()` correctly constructs HMAC-signed URLs and supports both attendee and moderator passwords (AES-256-GCM decrypted). The URL-building logic exists and is production-ready. What does **not** exist is the decision logic that routes a given user to the moderator password path.
+
+**Required:** The `provisionAndJoin()` call (above) passes `membership.role` to `buildJoinUrl()`. The mapping:
+
+```typescript
+const bbbRole = membership.role === 'org_admin' || membership.role === 'moderator'
+  ? 'MODERATOR'
+  : 'VIEWER'; // 'staff' gets viewer by default; can be overridden per room
+```
+
+This is a one-line addition once `BbbOrganizationMembership.role` exists. No changes to `BbbEncryptionService` or `buildJoinUrl()` are needed.
+
+### OP-003: Internal Room Detection — Commerce Bypass
+
+**Current state:** ✅ Already correct by design.
+
+`BbbRoom.productVariantId` is nullable. A room without a `productVariantId` cannot be linked to a Vendure product and cannot be added to a cart. The commerce bypass is structurally enforced — it requires no code change.
+
+**Storefront contract:** The internal team portal fires `joinRoom(roomId)` directly, identical to the student mutation. The auth waterfall (OP-001) handles the branching. The storefront does not need to know whether a room is internal or commercial.
+
+### OP-004: Distributed Lock — Already Correct ✅
+
+`BbbRoomLockService` acquires a Redis distributed lock on `roomId` before provisioning. This applies equally to internal rooms. If two staff members click "Join" at the same millisecond, only one provisioning job fires. The second worker finds the room already in `Provisioning` state and waits. No changes needed.
+
+### OP-005: Overhead Consumption Ledger — FEAT-002 Required ⚠️
+
+**Current state:** `BbbUsageLedger` rows are written by `BbbWebhookProcessorService` after every `meeting-ended` webhook. The write path requires a `BbbCapacityGrant` to debit consumed minutes against. For commercial sessions, the grant is created by `BbbOrderFulfillmentListener`. For internal sessions there is **no grant** — the debit would fail or be skipped silently.
+
+**Required design:**
+
+```typescript
+// FEAT-002: Add sourceType discriminator to BbbCapacityGrant
+// Option A (recommended): auto-create an 'internal_overhead' grant per org,
+// flagged as unbounded (grantedMinutes: -1) and exempt from exhaustion checks.
+
+@Column({ default: 'order' })
+sourceType: 'order' | 'subscription' | 'internal_overhead';
+
+// BbbReconciliationService.consumeGrant() gains a branch:
+if (grant.sourceType === 'internal_overhead') {
+  // write ledger row, skip exhaustion check, skip capacity alert
+  await this.ledger.write({ meetingId, consumedMinutes, grantId: grant.id });
+  return;
+}
+```
+
+**Alternative (Option B):** Allow `grantId` to be nullable on `BbbUsageLedger` rows. Internal sessions write a ledger row with `grantId = null`. Simpler, but loses per-organization overhead tracking structure.
+
+**Recommendation:** Option A. An explicit `internal_overhead` grant per org preserves the invariant that every ledger row has a grant reference, keeps billing reports clean, and provides a natural hook for future internal cost accounting.
+
+### OP-006: Compliance Table — Archetype B vs. Architectural Invariants
+
+| Invariant | Archetype B Compliance | Notes |
+|---|---|---|
+| INV-001: Channel = Tenant | ✅ Compliant | `BbbOrganizationMembership.channelId` scalar, DL-010 pattern |
+| INV-002: Append-only ledger | ✅ Compliant | Internal sessions still write ledger rows |
+| INV-003: One access-control system | ✅ Compliant | Membership check is a prior gate that short-circuits before entitlement — it does not replace entitlement |
+| INV-004: Webhooks persist-first | ✅ Compliant | `meeting-ended` webhook path unchanged |
+| INV-008: Business logic in Vendure | ✅ Compliant | All branching logic in `BbbShopResolver`, not in Next.js |
+
+### OP-007: Phase 1.5 Implementation Order
+
+1. **FEAT-001:** Create `BbbOrganizationMembership` entity + migration + `BbbMembershipService` (`findActiveMembership`, `create`, `update`, `delete`)
+2. **FEAT-001:** Add admin mutations (`createOrgMembership`, `updateOrgMembership`, `removeOrgMembership`) and dashboard UI
+3. **FEAT-001:** Update `BbbShopResolver.joinRoom()` to check membership before entitlement
+4. **OP-002:** Wire `membership.role → bbbRole` in `provisionAndJoin()`
+5. **FEAT-002:** Add `sourceType` discriminator to `BbbCapacityGrant`; auto-provision `internal_overhead` grant on `BbbOrganization` create
+6. **FEAT-002:** Update `BbbReconciliationService.consumeGrant()` to handle `internal_overhead` path
+
+Steps 1–4 are a single cohesive unit (FEAT-001). Steps 5–6 are independently shippable (FEAT-002) but should follow closely to avoid untracked internal consumption.
+
+---
+
 
 ## 9. Event & Job Queue Architecture
 
@@ -804,6 +962,7 @@ Every external-facing resolver includes channel verification (code-verified):
 ### SEC-005: Rate Limiting ⚠️ Pending
 
 Before production, add rate limiting to:
+
 - `POST /bbb/webhook` — 100 req/min per source IP (BBB server IPs should be allowlisted)
 - `POST /shop-api` mutations: `registerForTrialSession`, `joinMeeting` — 10 req/min per customer
 - `POST /admin-api` — Vendure's built-in token auth is sufficient
@@ -923,12 +1082,14 @@ Caddy upstream health check polls `/health` every 10 seconds.
 | BUG-015 | Medium | `CmsPlugin` / `BannerService` | `banner-activator` and `banner-deactivator` BullMQ queues not registered; banners currently filtered at query-time instead of via precomputed `isCurrentlyActive` | ⚠️ Pending — see CMS-002 |
 | BUG-016 | High | `ReviewsPlugin` / `dashboard/index.tsx` | `navSections` entry uses `items: [...]` which does not exist on `DashboardNavSectionDefinition` — TS error 2353, Reviews menu invisible in admin dashboard | ✅ Fixed — remove `items` from `navSections`; add `navMenuItem` to `reviewList` route in `review-list.tsx` |
 | BUG-017 | Medium | `ReviewsPlugin` / all review entities | `ProductReview`, `ReviewRequest`, `ReviewReport`, `ReviewReward`, `ReviewVote` do not implement `ChannelAware` — channel isolation relies solely on explicit `ctx.channelId` WHERE clauses in services; ORM provides no guard against missed query paths | ⚠️ Pending — add `ChannelAware` + `@ManyToMany(() => Channel)` to `ProductReview` as minimum; backfill join table from existing `channelId` strings via migration |
+| BUG-018 | Medium | `BbbShopResolver.joinRoom()` | `buildJoinUrl()` moderator role-routing has no trigger path — no entity exists to distinguish staff members from students, so all users receive the attendee password regardless of their organizational role | ⚠️ Pending — blocked on FEAT-001 (`BbbOrganizationMembership`); see OP-002 |
 
 ---
 
 ## 13. Production Readiness Checklist
 
 ### Security
+
 - [x] HMAC verification on all BBB webhooks ✅
 - [x] AES-256-GCM on BBB passwords ✅
 - [x] `encryptionKeyVersion` column on encrypted entities ✅
@@ -938,6 +1099,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 - [ ] No secrets in source control
 
 ### Data Integrity
+
 - [x] All slug-bearing entities have composite `(channelId, slug)` DB unique indexes
   - [x] `BbbScheduledSession` ✅ (organizationId, slug) composite
   - [x] `Article` ✅ via migration `1782369776476-bugs`
@@ -948,11 +1110,13 @@ Caddy upstream health check polls `/health` every 10 seconds.
 - [x] `synchronize: false` in all environments ✅
 
 ### Commerce Loop
+
 - [x] `BbbScheduledSession.productVariantId` connected in fulfillment handler ✅
 - [x] Trial registration creates `Entitlement` ✅
 - [x] `getJoinUrl` access check uses `BbbEntitlementService.hasAccess` ✅
 
 ### Operational
+
 - [x] `BbbWebhookEvent` persist-first pipeline live ✅
 - [ ] Failed webhook jobs surfaced in admin UI
 - [x] `BbbWebhookProcessorService` queue initialized in `onApplicationBootstrap` ✅
@@ -965,6 +1129,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 - [ ] Custom domain → channel token Redis mapping
 
 ### Dashboard
+
 - [x] `TenantProfileDetail.tsx` useState→useEffect bug fixed ✅ (prior)
 - [x] Resolver `__current__` bug fixed ✅ (prior)
 - [x] `PlansList.tsx` auto-select bug fixed ✅ (prior)
@@ -979,6 +1144,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 ### Phase 1 — Commercial Operability (current sprint)
 
 **Completed:**
+
 - `BbbWebhookEvent` persist-first pipeline ✅
 - `BbbScheduledSession` connected in fulfillment path ✅
 - `BbbEntitlement` entity + service for `bbb_session` ✅
@@ -987,6 +1153,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 - `BbbScheduledSession` `(organizationId, slug)` composite index ✅
 
 **Remaining before first tenant onboarding:**
+
 - Rate limiting on public mutations (SEC-004)
 
 Note: `CapacityExhaustedEvent` (BUG-013 / BB-004) is now implemented and published from the reconciliation billing-ceiling path. `currentLoad` scoring semantics are documented in `BbbServer` entity JSDoc and BB-003 section.
@@ -994,6 +1161,7 @@ Note: `CapacityExhaustedEvent` (BUG-013 / BB-004) is now implemented and publish
 ### Phase 1.5 — Trust Engine & Discovery
 
 **Current state (code-verified):**
+
 - `BbbEntitlement` entity + service exist and are live for `bbb_session` access checks ✅
 - `BbbMeetingService.joinRoom()` migrated to `BbbEntitlement` for room access ✅ `BbbEnrollment` rows retained as audit trail
 - `InstructorProfile` entity exists in `TenantPlugin` with public query `findPublicByChannel` / `findPublicBySlug` ✅
@@ -1003,18 +1171,23 @@ Note: `CapacityExhaustedEvent` (BUG-013 / BB-004) is now implemented and publish
 - `BbbEntitlement` admin UI: ✅ Added — GraphQL queries/mutations (`bbbEntitlements`, `createBbbEntitlement`, `deleteBbbEntitlement`) and `/bbb/entitlements` dashboard route registered
 
 **Phase 1.5 room-access migration complete:**
+
 - `joinRoom()` auth check uses `entitlementService.hasAccess(ctx, customerId, 'bbb_room', roomId)` ✅
 - `BbbOrderFulfillmentListener` room product path writes `BbbEntitlement { type: 'bbb_room' }` ✅
 - `TrialRegistrationService.convertToEnrollment()` returns `BbbEntitlement` with `source: 'trial_conversion'` ✅
 - Admin resolver and schema updated; dashboard fragment updated ✅
 
 **Remaining blockers before Phase 1.5 completion:**
+
 1. Register Elasticsearch indexing job for `InstructorProfile`
 2. Build Next.js storefront pages for public instructor profiles and CMS pages
+3. **FEAT-001:** Implement `BbbOrganizationMembership` entity + service + admin UI (prerequisite for Archetype B internal staff flow — see §8A)
+4. **FEAT-002:** Add `internal_overhead` capacity grant path to `BbbCapacityGrant` and `BbbReconciliationService` (prerequisite for internal session billing — see §8A OP-005)
 
 ### Phase 2 — Subscription Billing
 
 Deliverables:
+
 - `SubscriptionPlan` and `OrganizationSubscription` entities
 - `BbbCapacityGrant.sourceType` discriminator
 - Monthly invoice generation job
@@ -1026,22 +1199,91 @@ Deliverables:
 
 ### Phase 3 — Marketplace & Retention
 
-Deliverables:
-- `Review` entity with composite ranking materialized view
-- Elasticsearch instructor/course search with channel-scoped indices
+**Model:** Shopify/Kajabi model (NOT multivendor order-split model — see DL-019). Each academy is an isolated storefront. The marketplace is a platform-level discovery layer, not a cross-academy cart.
+
+**Revenue Streams enabled by Phase 3:**
+
+- **Stream 2:** Marketplace commission (5–15%) on `orderSource = 'marketplace'` orders only. Zero commission on direct traffic.
+- **Stream 3A:** Sponsored listings — `BbbScheduledSession` and `TenantProfile` promoted in Elasticsearch results via bid-boost multiplier.
+- **Stream 3B:** Marketplace banners — `Banner.scope = 'marketplace'` banners served on `marketplace.saa9vi.com`.
+
+**Deliverables:**
+
+*Discovery Layer*
+
+- `MarketplaceIndexerPlugin` — BullMQ background job reading across all channels, writing `saa9vi_marketplace_sessions` and `saa9vi_marketplace_instructors` Elasticsearch indices (platform-level, not per-tenant)
+- `MarketplaceSearchResolver` (Shop API, no channel context) — public discovery queries
+- `MarketplaceAcademyPage` — aggregated view: `TenantProfile` + public sessions + review rating
+- `MarketplaceCategoryIndex` — subject taxonomy (JEE, NEET, CA, coding, language, fitness, etc.)
+- `RankingMaterializedView` (Postgres) — `BayesianRatingService` score refreshed by indexer; prevents review gaming
+
+*Attribution & Commission*
+
+- `Order.customFields.orderSource: 'marketplace' | 'direct' | 'referral'` — set at checkout from session referrer
+- `CommissionLedger` — append-only, records platform fee per `orderSource = 'marketplace'` order
+
+*Advertising (Stream 3)*
+
+- **FEAT-003:** `MarketplaceAdCampaign` + `AdSpendLedger` entities (see INV-010)
+- **FEAT-003:** `AdWallet` + `AdWalletLedger` — prepaid wallet per academy, top-up via Juspay
+- **FEAT-004:** `Banner.scope: 'tenant' | 'marketplace'` discriminator + `MarketplaceBannerService`
+- Elasticsearch bid-boost for sponsored sessions (see INV-009)
+- Self-serve campaign dashboard (admin UI extension)
+
+*Engagement & Retention*
+
+- `Review` entity with composite ranking materialised view
+- Elasticsearch instructor/course search with channel-scoped indices (per-tenant) + platform index
 - Attendance analytics dashboard
 - Certificate generation on `Entitlement` completion
-- Marketplace commission model via Vendure `Seller` entity
 - `bbbSession` CMS section type (CMS-004)
 - `ArticleEvent` / `PageEvent` → Elasticsearch indexer
+
+*Vendure Seller Integration*
+
+- Ensure `TenantProfile` has 1:1 FK to Vendure `Seller` entity
+- Use `Seller`-scoped admin roles for per-academy dashboard access (no custom RBAC needed)
+- Do **not** install the example `multivendor-plugin` (DL-019)
 
 ### Phase 4 — Scale & Premium
 
 Deliverables:
+
 - White-label theming via `TenantProfile.theme`
 - TimescaleDB for BBB event-heavy analytics
-- AI features (meeting summary, CMS content writer) — feature flags on stable data model
+- AI features (meeting summary, CMS content writer, review summarisation) — feature flags on stable data model
 - Multi-BBB-server geographic routing
+- Student Corner (CMS-native) — career options, placement partners, internship listings as `PageSection` types; no new plugin required; channel-scoped CMS pages per academy
+- Cross-academy placement network (requires deliberate break of channel isolation — ADR-level decision deferred)
+- 3CX telephony bridge for academy CRM (operator-facing Admin API integration, not student-facing)
+
+---
+
+## 2B. Phase 3 Architectural Invariants
+
+### INV-009: Marketplace Indices Are Read Projections. No Marketplace Write Bypasses Channel Context.
+
+The platform-level Elasticsearch indices (`saa9vi_marketplace_sessions`, `saa9vi_marketplace_instructors`) are derived read projections. Authoritative data always lives in channel-scoped PostgreSQL tables.
+
+```
+PostgreSQL (authoritative, channel-scoped)
+    ↓ async read by MarketplaceIndexerPlugin
+Elasticsearch platform index (derived, cross-channel read only)
+    ↓
+MarketplaceSearchResolver (public, no channel context on reads)
+```
+
+No marketplace write operation may bypass channel context. `OrderLine` creation, entitlement creation, and billing writes always go through the channel-scoped Vendure Shop API.
+
+**Rejection criterion:** Any mutation that creates or modifies a channel-scoped entity without a `RequestContext.channelId` is rejected.
+
+### INV-010: Ad Spend Truth Is the AdSpendLedger. Campaign.spentInPaise Is a Denormalised Cache Only.
+
+`AdSpendLedger` rows are never updated, never deleted. `MarketplaceAdCampaign.spentInPaise` is a convenience cache maintained for fast budget-check queries. Discrepancies are resolved in favour of `SUM(AdSpendLedger.amountInPaise) WHERE campaignId = X`.
+
+This extends INV-002 (append-only billing truth) to the advertising domain.
+
+**Rejection criterion:** Any service method that calls `.update()` on an `AdSpendLedger` row is rejected.
 
 ---
 
@@ -1065,6 +1307,12 @@ Deliverables:
 | DL-014 | `BbbServerSelectionService` uses opaque `currentLoad` integer | Decouples selection algorithm from scoring formula; reconciliation service owns scoring logic and can evolve it without touching selection | Hard-coded `activeMeetingCount × avgParticipants` formula inside selection service (couples two concerns) |
 | DL-015 | `navMenuItem` on route definitions, never `items` inside `navSections` | `DashboardNavSectionDefinition` type constraint enforced by TypeScript; confirmed by BBB and Tenant plugin code audit | `items` array inside section (fails at compile time — TS-2353) |
 | DL-016 | Single shared Next.js storefront served across all tenants; tenant identity resolved from hostname | Eliminates per-tenant code deployments; backend plugin evolution is decoupled from storefront deployments; matches Shopify/Kajabi/Teachable operating model at scale | Per-tenant Next.js fork (500 tenants = 500 deployment pipelines); iframe embedding (SEO dead, mobile broken) |
+| DL-017 | `BbbOrganizationMembership` uses scalar `channelId` without `ChannelAware` (DL-010 pattern) | Membership checks are high-frequency, low-data-volume queries. The join table overhead of full `ChannelAware` implementation adds no practical channel-safety benefit since all queries include explicit `organizationId` which already implies the channel via the 1:1 org-to-channel mapping | Full `ChannelAware` implementation (adds join table, redundant with org-scoped filter) |
+| DL-018 | Internal room access via organizational membership check as a waterfall gate prior to entitlement check, not as a separate access-control system | Preserves INV-003 (one access-control system). Membership short-circuits the waterfall rather than replacing it. Commercial and internal access paths are additive, not competing | Separate `InternalRoomAccess` entity (creates a second access-control system, violates INV-003); adding `isInternal` flag to `BbbRoom` and bypassing all checks (no audit trail) |
+| DL-019 | Vendure `multivendor-plugin` (example plugin) rejected for Saa9vi marketplace | The plugin implements cross-vendor order splitting (`OrderSellerStrategy`, `ShippingLineAssignmentStrategy`, aggregate order FSM) for the Amazon/Etsy model where a single cart contains products from multiple sellers. Saa9vi uses the Shopify/Kajabi model — each academy is an isolated storefront; cross-academy carts do not exist. Installing the plugin would conflict with `BbbOrderFulfillmentListener` and `TenantProfileService`. The Saa9vi marketplace is a platform-level Elasticsearch read projection, not a cross-channel commerce engine | Vendure multivendor-plugin (wrong data model); separate marketplace microservice (operational overhead, dual source of truth) |
+| DL-020 | Platform-level Elasticsearch index spans all channels for marketplace discovery | Marketplace discovery requires reading across tenant boundaries. A single platform index (`saa9vi_marketplace_sessions`) is a derived read projection — PG remains authoritative per-channel. INV-001 (Channel = Tenant for writes) is preserved | Per-tenant index only (no cross-tenant discovery); PG-only search (performance degrades at 10K+ sessions) |
+| DL-021 | Three-stream revenue model: subscription + commission + advertising | Streams are additive and reinforce each other. Subscription provides predictable base revenue. Commission aligns Saa9vi's growth with academy growth. Advertising creates a self-serve high-margin stream. Zero commission on direct traffic protects academy relationships | Single-stream SaaS only (leaves growth revenue on table); commission on all traffic (penalises academies for existing students, risks churn) |
+| DL-022 | Sponsored listings use Elasticsearch function-score bid-boost, not position injection | Bid-boost multiplier (`weight: 3.0` on `isSponsored: true`) integrates cleanly with existing `bayesianRating` function score. Organic ranking below sponsored results. Organic ordering is never manipulated. | Position injection (couples ranking and ad logic, fragile); separate sponsored endpoint (bad UX, no interleaving) |
 
 ---
 
@@ -1114,6 +1362,7 @@ Each academy does **not** own: application code, GraphQL queries, business rule 
 The storefront must query **domain-oriented GraphQL operations** that hide internal plugin structure. Plugin-internal entity names, field names, and relationship traversals are implementation details.
 
 **Good — domain API:**
+
 ```graphql
 query MyLearningDashboard {
     myLearningDashboard {
@@ -1131,6 +1380,7 @@ query MyLearningDashboard {
 ```
 
 **Bad — plugin internals exposed:**
+
 ```graphql
 query {
     bbbEnrollments { bbbRoom { bbbScheduledSessions { ... } } }
@@ -1153,6 +1403,7 @@ Schema evolution must follow this order:
 3. **Keep old field working** for at minimum one major release cycle.
 4. **Remove** only after all consumers (storefront queries, mobile clients) have migrated.
 
+
 ```graphql
 # ✅ Correct evolution
 type Query {
@@ -1169,6 +1420,7 @@ type Query {
 ```
 
 **Input types evolve via optional fields:**
+
 ```graphql
 # v1 — storefront sends { meetingId }
 # v2 — storefront still sends { meetingId }, new fields are optional
@@ -1197,6 +1449,7 @@ else { showPurchaseButton() }
 ```
 
 **Good (logic in Vendure, render in Next.js):**
+
 ```graphql
 query CourseAccess($courseId: ID!) {
     courseAccess(courseId: $courseId) {
@@ -1226,6 +1479,145 @@ query CourseAccess($courseId: ID!) {
 - [ ] Custom domain → Channel token resolver in Next.js middleware (hostname → `channelToken` via Redis lookup populated by `TenantProfile.customDomain`)
 - [ ] GraphQL deprecation linting rule in CI — fail build if deprecated field is queried in storefront codebase
 - [ ] No `Bbb*` / `Cms*` prefixed types in storefront GraphQL query files (lint rule)
+
+---
+
+---
+
+## ADR-014: Revenue Model & Marketplace Architecture
+
+**Status:** Active  
+**Date:** 2026-06  
+**Trigger:** Platform strategic review — Phase 1 commerce loop complete, Phase 3 marketplace design requires locking a business model and ruling out incompatible architectural patterns.
+
+---
+
+### The Three-Stream Revenue Model
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    SAAAVI REVENUE STREAMS                        │
+├──────────────────┬──────────────────┬───────────────────────────┤
+│  Stream 1        │  Stream 2        │  Stream 3                 │
+│  Subscription    │  Commission      │  Advertising              │
+│                  │                  │                           │
+│  ₹999–₹4999/mo  │  5–15% of        │  A: Sponsored listings    │
+│  per academy     │  marketplace     │     (CPC/CPM/flat bid)    │
+│  (Phase 2)       │  orders only     │  B: Marketplace banners   │
+│                  │  (Phase 3)       │     (prepaid wallet)      │
+│  Predictable     │  Growth-aligned  │  Self-serve, scalable     │
+│  recurring base  │  platform moat   │  (Phase 3)                │
+└──────────────────┴──────────────────┴───────────────────────────┘
+```
+
+**Key property:** Zero commission on direct traffic. A student who goes directly to `mehta.saa9vi.com` never generates a platform commission. Only `orderSource = 'marketplace'` orders are subject to Stream 2. This is the merchant-friendly design that prevents churn.
+
+---
+
+### Marketplace Data Architecture
+
+```
+                    SAAAVI MARKETPLACE
+
+Per-tenant (existing)              Platform-level (Phase 3)
+═════════════════════              ════════════════════════
+channel_A → PostgreSQL      ──┐
+channel_B → PostgreSQL      ──┼──→ MarketplaceIndexerPlugin (BullMQ)
+channel_C → PostgreSQL      ──┘         │
+                                         ▼
+                              saa9vi_marketplace_sessions (ES)
+                              saa9vi_marketplace_instructors (ES)
+                                         │
+                                         ▼
+                              MarketplaceSearchResolver
+                              (public Shop API, no channel token)
+                                         │
+                              ┌──────────┼──────────┐
+                              │          │          │
+                         Organic    Sponsored   Banners
+                         Results    (bid-boost) (scope=marketplace)
+```
+
+**INV-009 enforced:** The Elasticsearch indices are read-only projections. All writes (orders, entitlements, billing) go through channel-scoped Vendure Shop API as always.
+
+---
+
+### FEAT-003: Marketplace Advertising Entities
+
+```typescript
+// Entities defined in a new MarketplacePlugin (Phase 3)
+
+@Entity('marketplace_ad_campaign')
+export class MarketplaceAdCampaign extends VendureEntity {
+  @Column() channelId: string;                        // owning academy
+  @Column({ enum: ['sponsored_listing', 'banner'] })
+  type: 'sponsored_listing' | 'banner';
+  @Column({ enum: ['draft', 'active', 'paused', 'exhausted'] })
+  status: 'draft' | 'active' | 'paused' | 'exhausted';
+  @Column() budgetInPaise: number;
+  @Column() spentInPaise: number;                     // cache only — truth is AdSpendLedger
+  @Column({ nullable: true }) targetSubject: string | null;
+  @Column({ nullable: true }) targetCity: string | null;
+  @Column() startsAt: Date;
+  @Column() endsAt: Date;
+}
+
+@Entity('ad_spend_ledger')                            // append-only (INV-010)
+export class AdSpendLedger extends VendureEntity {
+  @Column() campaignId: string;
+  @Column({ enum: ['impression', 'click', 'conversion'] })
+  eventType: 'impression' | 'click' | 'conversion';
+  @Column() amountInPaise: number;
+  @Column() occurredAt: Date;
+  @Column({ nullable: true }) orderId: string | null; // populated on conversion
+}
+
+@Entity('ad_wallet')
+export class AdWallet extends VendureEntity {
+  @Column() channelId: string;                        // one per academy
+  @Column() balanceInPaise: number;                   // cache only — truth is AdWalletLedger
+}
+
+@Entity('ad_wallet_ledger')                           // append-only
+export class AdWalletLedger extends VendureEntity {
+  @Column() walletId: string;
+  @Column({ enum: ['topup', 'spend', 'refund'] })
+  type: 'topup' | 'spend' | 'refund';
+  @Column() amountInPaise: number;                    // positive=topup, negative=spend
+  @Column() occurredAt: Date;
+  @Column({ nullable: true }) campaignId: string | null;
+  @Column({ nullable: true }) orderId: string | null; // Juspay order for top-up
+}
+```
+
+**Billing loop:** Academies top up their `AdWallet` via Juspay (existing `JuspayPlugin` — no new payment integration). Each impression/click writes an `AdSpendLedger` row, decrements the wallet cache. When `balanceInPaise <= 0`, campaign status → `exhausted`, listing de-sponsored immediately. No credit risk.
+
+---
+
+### FEAT-004: Banner Scope Discriminator
+
+```typescript
+// Added to existing Banner entity (CmsPlugin)
+@Column({ default: 'tenant' })
+scope: 'tenant' | 'marketplace';
+
+// Marketplace-specific targeting (nullable — tenant banners ignore these)
+@Column({ nullable: true }) targetSubject: string | null;
+@Column({ nullable: true }) targetCity: string | null;
+@Column({ nullable: true }) campaignId: string | null; // FK → MarketplaceAdCampaign
+```
+
+`BannerService.findActiveForPlacement()` defaults to `scope = 'tenant'` — existing queries are unchanged. New `MarketplaceBannerService.findActiveForPlacement()` queries only `scope = 'marketplace'` banners, ordered by campaign wallet balance (higher spenders get priority when multiple banners compete for the same slot).
+
+---
+
+### Multivendor Plugin Rejection (DL-019)
+
+The Vendure example `multivendor-plugin` implements order splitting for a marketplace where a single cart contains products from multiple sellers. This is the **Amazon/Etsy model**.
+
+Saa9vi uses the **Shopify/Kajabi model** — each academy is a completely isolated storefront. A student on `mehta.saa9vi.com` never sees products from `verma.saa9vi.com` in their cart. Cross-academy carts do not exist. The plugin's entire machinery (`OrderSellerStrategy`, `ShippingLineAssignmentStrategy`, aggregate order FSM, seller order splitting) solves a problem Saa9vi does not have.
+
+**Use the plugin as a reference for Vendure `Seller` API patterns. Do not install it.**
 
 ---
 

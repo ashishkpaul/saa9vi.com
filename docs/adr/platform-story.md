@@ -1,5 +1,7 @@
 # System Architecture & User Flows: Saa9vi Academy Platform
 
+> **v2 — Updated:** Archetype B (Internal Staff Meeting) added as Section 9. Phase 3 Marketplace flow added as Section 10. Revenue model narrative added. References updated to ADR v1.5.
+
 ---
 
 ## 1. Academy Setup
@@ -266,3 +268,91 @@ The story has six chapters, each showing what fires in the background when a per
 **Chapter 6 — Reviews and conversion.** Five days after purchase, the review email fires. The student clicks the token link, submits a review, and `ReviewCreatedEvent` fires. `ReviewAntiFraudService` immediately runs five checks — velocity, duplicate content similarity (Levenshtein), account age, rating pattern, unverified purchase — producing a risk score. Score ≥ 50 auto-flags the review for the trainer. When the trainer approves it, `reviewAggregationService.recalculateForProduct()` recomputes the channel's average rating and updates `Product.customFields.reviewRating` — the single float the storefront renders on the session card. For trial students who attended the session, the admin converts them to full room access with one click: `convertToEnrollment()` creates a `bbb_room` entitlement. The student can now join the standing room on any future date.
 
 The thing to notice across all of this: the storefront makes zero decisions. It asks Vendure what the CTA should be, which banners are active, whether a student has access. Logic changes — a new entitlement type, a new trial rule, a new billing tier — happen in one place in the backend and take effect for all 500 academies on the next deployment.
+
+---
+
+## 9. Archetype B: Internal Staff Meeting
+
+*This flow shows what happens when a staff member (not a student) joins an internal BBB room that has no product listing and bypasses the commerce loop entirely.*
+
+### Staff member authenticates via the Shop API
+
+* **Actor:** Staff Member
+* **Description:** The staff member navigates to the academy's Next.js storefront and logs into the internal team portal. The Admin API is not exposed publicly. Authentication happens via the public Shop API — the Next.js storefront decodes the session token, detects the `OrgAdmin` or `Moderator` role from the staff member's `BbbOrganizationMembership`, and renders the internal dashboard instead of the student view.
+* **System/Code Detail:** Shop API auth + `BbbOrganizationMembership.role` check (FEAT-001 — pending implementation, see §8A).
+
+### Staff selects an internal room with no product listing
+
+* **Actor:** Staff Member
+* **Description:** The staff member selects "Engineering Weekly Sync" — a `BbbRoom` with `productVariantId = null`. This room does not exist in the Vendure product catalogue. It cannot be added to a cart. The storefront fires `joinRoom(roomId)`.
+* **System/Code Detail:** `BbbRoom.productVariantId = null` — commerce bypass is structurally enforced. No code change required (✅ already works).
+
+### Auth waterfall short-circuits on org membership
+
+* **Actor:** System
+* **Description:** `joinRoom()` resolver runs the waterfall. Gate 1: is this `customerId` an active member of the `BbbOrganization` owning this room? `BbbMembershipService.findActiveMembership()` returns a match with `role: 'moderator'`. Access granted. The entitlement check (Gate 2) is never reached.
+* **System/Code Detail:** FEAT-001 required. Without `BbbOrganizationMembership`, the waterfall falls through to Gate 2 and denies the staff member. See §8A OP-001.
+
+### Lock dance and provisioning — identical to commercial flow
+
+* **Actor:** System
+* **Description:** `BbbRoomLockService` acquires a Redis distributed lock on the `roomId`. The room transitions from Idle to Provisioning. A BullMQ worker selects the BBB server with the lowest `currentLoad` and calls `createMeeting`.
+* **System/Code Detail:** Identical to §5 commercial flow. No changes needed (✅).
+
+### Staff joins as moderator
+
+* **Actor:** System
+* **Description:** Because `membership.role = 'moderator'`, `buildJoinUrl()` uses the decrypted moderator password (AES-256-GCM). The staff member's browser receives a HMAC-signed URL granting full moderator controls — screen sharing, recording, whiteboard.
+* **System/Code Detail:** FEAT-001 required for role-routing. `buildJoinUrl()` itself already supports moderator path (✅). See §8A OP-002 and BUG-018.
+
+### Internal consumption written to overhead grant
+
+* **Actor:** System
+* **Description:** The BBB `meeting-ended` webhook follows the same persist-first pipeline (INV-004). Duration is calculated and written to `BbbUsageLedger` — append-only, always. Because there is no student `OrderLine`, the ledger row debits against the academy's `internal_overhead` `BbbCapacityGrant` (`sourceType: 'internal_overhead'`). No billing alert is triggered.
+* **System/Code Detail:** FEAT-002 required. Without the `internal_overhead` grant, there is nothing to debit against. See §8A OP-005.
+
+---
+
+## 10. Phase 3 Preview: Student Discovers Academy via Marketplace
+
+*This flow shows how a student who has never heard of Mehta Coaching finds and purchases a session through Saa9vi's marketplace — and how that discovery generates platform commission.*
+
+### Student searches on marketplace.saa9vi.com
+
+* **Actor:** Student (new, no academy in mind)
+* **Description:** A student searches "JEE Mathematics coaching Delhi" on the Saa9vi marketplace. The `MarketplaceSearchResolver` queries the platform-level `saa9vi_marketplace_sessions` Elasticsearch index — a cross-channel read projection that surfaces public sessions from all academies. Results are ranked by `bayesianRating` (from `ReviewsPlugin` aggregates). Sponsored sessions appear above organic results via bid-boost multiplier.
+* **System/Code Detail:** `MarketplaceSearchResolver` (no channel token) → `saa9vi_marketplace_sessions` ES index. Index refreshed by `MarketplaceIndexerPlugin` (BullMQ background job). Sponsored listings: `isSponsored: true → weight: 3.0` function-score boost (INV-009).
+
+### Student views Mehta Coaching's marketplace listing
+
+* **Actor:** Student
+* **Description:** The student clicks Mehta Coaching's result. A marketplace academy page aggregates `TenantProfile` (name, logo, city), public `BbbScheduledSession` listings with prices, `InstructorProfile` cards, and the academy's cached `reviewRating` (4.7 stars, 143 reviews from `ReviewsPlugin`). The "Sponsored" badge is visible if `MarketplaceAdCampaign` is active for this listing.
+* **System/Code Detail:** `MarketplaceAcademyPage` query — reads across `TenantPlugin`, `BigBlueButtonPlugin`, `ReviewsPlugin`. All read from PG; ES provides the discovery path only.
+
+### Student registers for a free trial from the marketplace
+
+* **Actor:** Student
+* **Description:** The student clicks "Try a free class" from the marketplace listing. They're redirected to `mehta.saa9vi.com` — the academy's own storefront, now with the channel token set. They call `registerForTrialSession()`. The same `AC-003` trial flow fires: `BbbTrialRegistration` created, `BbbEntitlement { source: 'trial' }` created.
+* **System/Code Detail:** `TrialRegistrationService.register()` — identical to Phase 1. The marketplace is a discovery layer only; the transaction happens on the academy's channel.
+
+### Student purchases the full course — commission attributed
+
+* **Actor:** Student
+* **Description:** After the trial, the student buys the React Masterclass. At checkout, the session referrer (`marketplace.saa9vi.com`) is captured and written to `Order.customFields.orderSource = 'marketplace'`. `BbbOrderFulfillmentListener` creates the `BbbEntitlement` as normal. Separately, `CommissionLedger` records a platform fee (e.g., 10% of ₹499 = ₹49.90) against this order.
+* **System/Code Detail:** `orderSource` custom field set at checkout. `CommissionLedger` (append-only, Phase 3). Zero changes to Phase 1 fulfillment path.
+
+---
+
+## How the platform actually works — Updated Summary (v2)
+
+The story now has eight chapters (plus two preview flows), each showing what fires in the background when a person takes an action.
+
+**Chapters 1–6** remain unchanged from v1 — Academy setup, Content creation, Student discovery and purchase, Live class day, Session billing, Reviews and conversion.
+
+**Chapter 7 — Trial conversion.** Unchanged from v1.
+
+**Chapter 8 — Archetype B (Internal Staff Meeting).** The auth waterfall has a new Gate 1: org membership check via `BbbOrganizationMembership`. Staff members short-circuit the entitlement check and receive the moderator join URL. Internal consumption is recorded against an `internal_overhead` capacity grant. The commerce loop is bypassed entirely. Two features are required before this flow is operational: FEAT-001 (`BbbOrganizationMembership`) and FEAT-002 (overhead grant path).
+
+**Chapter 9 — Phase 3 Marketplace.** Students who don't know any academy can discover Mehta Coaching via the Saa9vi marketplace search — a platform-level Elasticsearch index that spans all channels, ranked by Bayesian review score. Sponsored academies appear at the top via bid-boost. The transaction itself still happens on `mehta.saa9vi.com` (the academy's channel). The platform captures `orderSource = 'marketplace'` and records a commission. Mehta Coaching pays for promoted visibility from a prepaid `AdWallet`, topped up via Juspay.
+
+The thing to notice across all of this: **the storefront makes zero decisions** (INV-008), **all billing facts are immutable ledger rows** (INV-002, INV-010), and **the marketplace is a read projection** — it never bypasses channel isolation for writes (INV-009). Logic changes in any one layer take effect for all academies on the next deployment, without touching the others.

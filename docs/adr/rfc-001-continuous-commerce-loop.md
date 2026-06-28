@@ -1,10 +1,14 @@
 # RFC-001: Continuous Commerce Loop (Phase 2 — Subscription Billing)
 
-**Status:** Draft  
+**Status:** Draft v2  
 **Date:** 2026-06  
 **Authors:** Lead Architect, Platform Engineering  
-**Supersedes:** N/A — standalone design artifact  
-**Phase 1 Reference:** `platform-adr.md` v1.3 (authoritative ground truth)  
+**Supersedes:** RFC-001 v1 (2026-06)  
+**Phase 1 Reference:** `platform-adr.md` v1.5 (authoritative ground truth)  
+
+---
+
+> **What changed in v2:** Six assessment findings from peer review incorporated. (1) Q-009 (`GrantReaderService` union gap) and Q-010 (notification transport for dunning events) formalised in Section 7. (2) ASCII FSM diagram updated to include `CANCELLED` as explicit terminal box. (3) `SubscriptionInvoice` idempotency protection specified — `UNIQUE` constraint on `(enrollmentId, periodStart)` with `status = 'paid'` guard. (4) Recovery path period-end recalculation rule committed: original-cycle-anchor semantics (see Section 4.3). (5) Phase 1 reference updated to ADR v1.5. (6) Appendix C added — Phase 3 marketplace integration points for subscription tenants.
 
 ---
 
@@ -524,6 +528,14 @@ Queue: subscription-grace-expiry         (concurrency: 2)
          │  ACTIVE        ├───────────────────────────────────┘
          │  (recovered)   │
          └────────────────┘
+
+         ┌────────────────┐  ← TERMINAL STATE (no further transitions)
+         │  CANCELLED     │    Student-initiated. Sets cancelledAt.
+         │  (period end)  │    Access continues until currentPeriodEnd,
+         └────────────────┘    then revoked. No dunning. No recovery.
+              ↑
+              │ from any of: ACTIVE, RETRY_1..4, IN_GRACE, SUSPENDED
+              │ (see transition table below)
 ```
 
 **States (including CANCELLED terminal state):**
@@ -562,7 +574,16 @@ When a `SUSPENDED` student pays the outstanding invoice:
 1. Shop API mutation: `recoverSubscription(enrollmentId: ID!, paymentMethod: String!): SubscriptionRecoveredResult`
 2. System processes payment against the existing `SubscriptionInvoice` (status: `failed`)
 3. On success: publish `SubscriptionRecoveredEvent`, transition to `ACTIVE`, create a new `RecurringCapacityGrant` for the current period
-4. The next daily renewal scheduler recalculates the period end based on the original cycle (not a new cycle start)
+4. Period-end recalculation uses **original-cycle-anchor semantics**: the next `currentPeriodEnd` is calculated from the enrollment's original `currentPeriodStart` anchor, not from the recovery date. Example: a monthly subscriber whose cycle anchors on the 1st recovers on the 22nd — their next billing date is the 1st of next month, not 22nd+30 days. This preserves the predictable billing cadence and prevents cycle drift during dunning.
+
+```typescript
+// Recovery period-end calculation
+const anchorDay = enrollment.originalPeriodAnchor; // day of month (1–28)
+const nextPeriodEnd = nextOccurrenceOfDay(anchorDay, after: new Date());
+enrollment.currentPeriodEnd = nextPeriodEnd;
+```
+
+`originalPeriodAnchor` is a new column on `SubscriptionEnrollment` (day of month integer, set at enrollment creation, never mutated).
 
 ---
 
@@ -649,6 +670,16 @@ BullMQ's `jobId` is deterministic: `renew-${enrollmentId}-${periodStart.getTime(
 #### INV-SUB-004: Billing Truth Is the Invoice
 
 A `SubscriptionInvoice` with `status: paid` is the authoritative record. The webhook handler never creates an invoice -- only transitions existing ones.
+
+**Idempotency protection:** Two concurrent `JuspayPaymentProcessor` jobs processing the same webhook (e.g., Juspay retry delivery) could both attempt to transition the same invoice from `pending → paid`. The `SubscriptionEnrollment.version` optimistic lock protects the enrollment row but not the invoice row. Therefore `SubscriptionInvoice` carries a `UNIQUE` constraint:
+
+```sql
+CREATE UNIQUE INDEX "IDX_subscription_invoice_enrollment_period_paid"
+  ON "subscription_invoice" ("enrollmentId", "periodStart")
+  WHERE status = 'paid';
+```
+
+This ensures that only one `paid` invoice can exist per enrollment per period. A second attempt to mark the same invoice `paid` fails with a unique constraint violation, which the job handler catches and treats as a no-op (idempotent success).
 
 #### INV-SUB-005: Grace Period Access Is Reversible
 
@@ -747,6 +778,29 @@ Admin actions on subscriptions must be auditable.
 
 - **Recommendation:** Use a `SubscriptionAuditLog` entity deferred to implementation.
 
+### Q-009: `consumeGrant()` Union Gap (⚠️ Open Seam — blocks Phase 2 ship)
+
+`BbbReconciliationService.consumeGrant()` reads specifically from `BbbCapacityGrant` by `meeting.grantId`. It does not natively union with `RecurringCapacityGrant`. This creates a load-bearing gap: meetings provisioned under a subscription grant will fail to debit correctly unless this is resolved before Phase 2 ships.
+
+**Resolution options:**
+- **Option A (recommended):** Add a `GrantReaderService` that unions both `BbbCapacityGrant` and `RecurringCapacityGrant` tables before calling `consumeGrant()`. No Phase 1 code is modified.
+- **Option B:** Modify `consumeGrant()` to accept an abstract `CapacityGrantLike` interface. Requires touching Phase 1 code.
+
+**Decision required before Phase 2 implementation begins.**
+
+### Q-010: Notification Transport for Dunning Events
+
+Every dunning state transition (`SubscriptionPaymentFailedEvent`, `SubscriptionGracePeriodStartedEvent`, `SubscriptionSuspendedEvent`) implies a student notification. The RFC defines the events but the transport layer is unspecified.
+
+**Options for India:**
+- SMS via MSG91 / fast2sms (high open rate, recommended for payment alerts)
+- WhatsApp Business API (highest engagement, requires WABA approval)
+- Email via Vendure `EmailPlugin` (existing infrastructure, lower urgency channel)
+
+**Recommendation:** Email for initial scope (zero new infrastructure — `EmailPlugin` already planned). SMS as Phase 3 upgrade. WhatsApp deferred until WABA approval obtained.
+
+**Decision required before dunning job implementation begins.**
+
 ---
 
 ## Appendix A: Phase 1 Entity Reference
@@ -780,4 +834,28 @@ Every entity proposed above references one or more Phase 1 entities (from `platf
 
 ---
 
-*This RFC is a design artifact. It proposes interfaces, contracts, and architectural decisions for Phase 2. No code implementing these proposals exists in the repository. Phase 1 documentation (`platform-adr.md`) remains the authoritative ground truth for what is currently built.*
+## Appendix C: Phase 3 Marketplace Integration Points for Subscription Tenants
+
+The Phase 3 marketplace (ADR-014) intersects with Phase 2 subscription billing in three specific ways. These are not Phase 2 deliverables, but the Phase 2 schema must not block them.
+
+### C-1: Subscription Plan as a Marketplace-Discoverable Product
+
+A `SubscriptionPlan` with `isPublic = true` should be indexable in the `saa9vi_marketplace_sessions` Elasticsearch index as a purchasable offering. The `MarketplaceIndexerPlugin` (Phase 3) reads `SubscriptionPlan.channelId`, `name`, `amount`, and `billingInterval` to create a `MarketplacePlan` document.
+
+**Phase 2 schema requirement:** `SubscriptionPlan.isPublic: boolean` (default `false`) must be present from Phase 2 launch. This is a nullable addition — existing plans default to not indexed.
+
+### C-2: `orderSource` Attribution on Subscription Checkout
+
+When a student discovers a subscription plan via the marketplace and checks out, the resulting `SubscriptionEnrollment` must carry `orderSource: 'marketplace'` for Stream 2 commission attribution.
+
+**Phase 2 schema requirement:** `SubscriptionEnrollment.orderSource: 'marketplace' | 'direct' | 'referral' | null` (nullable, set at enrollment creation from session referrer). This mirrors the `Order.customFields.orderSource` field (ADR-014).
+
+### C-3: Review Aggregation on Subscription Plans
+
+A student subscribed to an academy has verified, ongoing engagement — they are the highest-quality review source. `ReviewsPlugin` eligibility should eventually include `SubscriptionEnrollment.status IN ('active', 'cancelled')` as a valid purchase proof.
+
+**Phase 2 requirement:** None. `ReviewsPlugin` currently checks `OrderLine` state. The subscription path is a Phase 3 extension to `ReviewEligibilityStrategyRegistry`.
+
+---
+
+*This RFC is a design artifact. It proposes interfaces, contracts, and architectural decisions for Phase 2. No code implementing these proposals exists in the repository. Phase 1 documentation (`platform-adr.md` v1.5) remains the authoritative ground truth for what is currently built.*
