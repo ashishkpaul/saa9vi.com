@@ -1,4 +1,4 @@
-kk#!/bin/bash
+k#!/bin/bash
 
 # Configuration
 SRC_DIR="./src"
@@ -6,6 +6,7 @@ PLUGINS_DIR="$SRC_DIR/plugins"
 DOMAIN_DIR="$SRC_DIR/domain"
 ES9_CONFIG_DIR="$SRC_DIR/es9-config"
 CONFIG_DIR="$SRC_DIR/config"
+PLATFORM_DIR="$SRC_DIR/platform"
 SCRIPTS_DIR="./scripts"
 OUTPUT_BASE_DIR="$HOME/Documents/vendure/plugins"
 
@@ -140,6 +141,24 @@ if [ -d "$CONFIG_DIR" ]; then
     echo "  Done: $config_output"
 else
     echo "  Warning: $CONFIG_DIR not found, skipping."
+fi
+
+# ---------------------------
+# Export platform folder
+# ---------------------------
+echo "Exporting platform folder..."
+platform_output="$OUTPUT_BASE_DIR/platform_complete_code.txt"
+if [ -d "$PLATFORM_DIR" ]; then
+    > "$platform_output"
+    find "$PLATFORM_DIR" -type f -print0 | while IFS= read -r -d '' file; do
+        if ! is_excluded "$file"; then
+            echo "--- $file ---" >> "$platform_output"
+            cat "$file" >> "$platform_output"
+        fi
+    done
+    echo "  Done: $platform_output"
+else
+    echo "  Warning: $PLATFORM_DIR not found, skipping."
 fi
 
 # ---------------------------

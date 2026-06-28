@@ -2,34 +2,40 @@ import { Injectable } from "@nestjs/common";
 import { EventBus, VendureEvent } from "@vendure/core";
 import { LifecycleStep } from "../../../platform/stress-test/lifecycle-simulator";
 import { CausalMapper, GraphQLRequest } from "./causal-mapper";
+import { GraphQLExecutor } from "../executor/graphql.executor";
+import { MetricsCollector, LoadMetrics } from "../observability/metrics.collector";
 
 @Injectable()
 export class LoadOrchestrator {
-  constructor(private eventBus: EventBus) {}
+  constructor(
+    private eventBus: EventBus,
+    private executor: GraphQLExecutor,
+  ) {}
 
   async run(lifecycle: LifecycleStep[], profile: LoadProfile): Promise<LoadRunResult> {
     const startTime = Date.now();
     const results: ExecutionResult[] = [];
+    const collector = new MetricsCollector();
 
     const workers: Promise<void>[] = [];
 
     for (let i = 0; i < profile.concurrency; i++) {
-      workers.push(this.executeWorker(i, lifecycle, profile, results));
+      workers.push(this.executeWorker(i, lifecycle, profile, results, collector));
     }
 
     await Promise.all(workers);
 
     const duration = Date.now() - startTime;
-    const errors = results.filter(r => !r.success);
-    const successCount = results.filter(r => r.success).length;
+    const metrics = collector.report();
 
     return {
       profile: profile.name,
       duration,
-      totalRequests: results.length,
-      successCount,
-      errorCount: errors.length,
-      errorRate: results.length > 0 ? errors.length / results.length : 0,
+      metrics,
+      totalRequests: metrics.totalRequests,
+      successCount: metrics.totalRequests - Math.round(metrics.errorRate * metrics.totalRequests),
+      errorCount: Math.round(metrics.errorRate * metrics.totalRequests),
+      errorRate: metrics.errorRate,
       results,
     };
   }
@@ -39,14 +45,29 @@ export class LoadOrchestrator {
     lifecycle: LifecycleStep[],
     profile: LoadProfile,
     results: ExecutionResult[],
+    collector: MetricsCollector,
   ): Promise<void> {
     const workerStart = Date.now();
 
     while (Date.now() - workerStart < profile.durationMs) {
       for (const step of lifecycle) {
         const request = CausalMapper.map(step);
-        const result = await this.executeRequest(request, step);
+        // Skip Phase 2 pending steps gracefully
+        if (request.isPending || request.mutation === null) {
+          const skipResult: ExecutionResult = {
+            step: step.name,
+            success: true,
+            latencyMs: 0,
+            error: null,
+          };
+          results.push(skipResult);
+          collector.record({ latencyMs: 0, success: true });
+          this.eventBus.publish(new LoadStepCompletedEvent(workerId, step.name, true));
+          continue;
+        }
+        const result = await this.executeRequest(request);
         results.push(result);
+        collector.record({ latencyMs: result.latencyMs, success: result.success });
 
         // Emit event for observability
         this.eventBus.publish(new LoadStepCompletedEvent(workerId, step.name, result.success));
@@ -60,35 +81,30 @@ export class LoadOrchestrator {
     }
   }
 
-  private async executeRequest(request: GraphQLRequest, step: LifecycleStep): Promise<ExecutionResult> {
+  private async executeRequest(request: GraphQLRequest): Promise<ExecutionResult> {
+    if (!request.mutation) {
+      return { step: request.context, success: true, latencyMs: 0, error: null };
+    }
     const start = Date.now();
     try {
-      // Placeholder — in production this would use Vendure's GraphQL client
-      await this.simulateExecution(request);
+      const result = await this.executor.execute(
+        request.mutation,
+        request.variables ?? {},
+        request.context,
+      );
       return {
-        step: step.name,
-        success: true,
-        latencyMs: Date.now() - start,
-        error: null,
+        step: request.context,
+        success: result.success,
+        latencyMs: result.latencyMs,
+        error: result.errors?.[0]?.message ?? null,
       };
     } catch (err) {
       return {
-        step: step.name,
+        step: request.context,
         success: false,
         latencyMs: Date.now() - start,
         error: err instanceof Error ? err.message : String(err),
       };
-    }
-  }
-
-  private async simulateExecution(_request: GraphQLRequest): Promise<void> {
-    // Simulate variable latency: 10-100ms
-    const latency = 10 + Math.random() * 90;
-    await this.sleep(latency);
-
-    // Simulate occasional failures (2% error rate)
-    if (Math.random() < 0.02) {
-      throw new Error("Simulated execution failure");
     }
   }
 
@@ -103,6 +119,7 @@ export interface LoadProfile {
   durationMs: number;
   rampUpMs?: number;
   requestsPerSecond?: number;
+  requiresMultipleInstances?: boolean;
 }
 
 export interface ExecutionResult {
@@ -115,6 +132,7 @@ export interface ExecutionResult {
 export interface LoadRunResult {
   profile: string;
   duration: number;
+  metrics: LoadMetrics;
   totalRequests: number;
   successCount: number;
   errorCount: number;
