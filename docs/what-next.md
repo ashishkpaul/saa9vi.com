@@ -22,6 +22,8 @@ The following tasks from the previous iteration have been verified complete in t
 | BUG-019 — `LoadSimulationPlugin` DoS vector on Shop API | ✅ Done | Moved to `adminApiExtensions`, `@Allow(Permission.SuperAdmin)` added to resolver. |
 | BUG-020 — `CausalMapper` fires non-existent `simulateBbbWebhook` | ✅ Done | `BbbWebhookEvent` step marked `isPending: true` — skipped cleanly until resolver implemented. |
 | FEAT-002 entity + service — `sourceType`/`isUnbounded` on `BbbCapacityGrant` | ✅ Done | Columns added to entity. `bbb-organization.service.ts` auto-provisions `internal_overhead` grant on org create. `bbb-reconciliation.service.ts` skips exhaustion/alerts for overhead grants. **Migration pending:** run `npx vendure migrate create` then `npx vendure migrate up`. |
+| Task 4 — `RedisCachePlugin` in `vendure-config.ts` | ✅ Done | `RedisCachePlugin.init()` present in plugins array, reads from `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` env vars. |
+| Task 5 — `InstructorProfile` Elasticsearch indexer | ✅ Done | `InstructorIndexerService` wired. ES client fixed to use `ELASTICSEARCH_NODE` + `ELASTICSEARCH_PASSWORD`. |
 
 ---
 
@@ -56,89 +58,15 @@ Also add `sourceType` and `isUnbounded` fields to the `BbbCapacityGrant` GraphQL
 
 ### Status
 
-`CorrelationContext` now uses `AsyncLocalStorage` instead of static class properties. `CorrelationInterceptor` wraps each request in `CorrelationContext.run()` and is registered as a global `APP_INTERCEPTOR`.
+`CorrelationContext` now uses `AsyncLocalStorage`. `CorrelationInterceptor` wraps each request in `CorrelationContext.run()` and is registered as `APP_INTERCEPTOR` inside `BigBlueButtonPlugin`.
 
-### Verification
-
-- Two concurrent requests never share a `correlationId`
-- `BullMQTracer` and `EventBusInterceptor` receive request-scoped correlation IDs
-- Existing `CorrelationContext.set/get/pop/getParent/reset` API is unchanged — callers don't need updating
+⚠️ **Scope gap:** `CorrelationInterceptor` is registered only inside `BigBlueButtonPlugin`'s providers. Requests handled by other plugins (CmsPlugin, TenantPlugin, ReviewsPlugin) do not inherit a correlation context. To fully close this, register `CorrelationInterceptor` as a global `APP_INTERCEPTOR` at the root module level, not inside a plugin.
 
 ### What was done
 
-Replaced static properties with Node.js `AsyncLocalStorage`:
-
-```typescript
-import { AsyncLocalStorage } from 'async_hooks';
-
-interface CorrelationState {
-  current: string | null;
-  parent: string | null;
-  stack: string[];
-}
-
-const storage = new AsyncLocalStorage<CorrelationState>();
-
-export class CorrelationContext {
-  private static getState(): CorrelationState {
-    return storage.getStore() ?? { current: null, parent: null, stack: [] };
-  }
-
-  static run<T>(fn: () => T): T {
-    return storage.run({ current: null, parent: null, stack: [] }, fn);
-  }
-
-  static set(correlationId: string): void {
-    const state = this.getState();
-    if (!state.current) {
-      state.current = correlationId;
-    } else {
-      state.stack.push(state.current);
-      state.parent = state.current;
-      state.current = correlationId;
-    }
-  }
-
-  static get(): string | null {
-    return this.getState().current;
-  }
-
-  static getParent(): string | null {
-    return this.getState().parent;
-  }
-
-  static pop(): void {
-    const state = this.getState();
-    const previous = state.stack.pop();
-    if (previous) {
-      state.current = previous;
-      state.parent = state.stack.length > 0 ? state.stack[state.stack.length - 1] : null;
-    } else {
-      state.current = null;
-      state.parent = null;
-    }
-  }
-
-  static reset(): void {
-    const state = this.getState();
-    state.current = null;
-    state.parent = null;
-    state.stack = [];
-  }
-
-  static generateId(): string {
-    return `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
-  }
-}
-```
-
-Add a NestJS middleware or interceptor to wrap each request in `CorrelationContext.run()`.
-
-### Acceptance criteria
-
-- Two concurrent requests never share a `correlationId`
-- `BullMQTracer` and `EventBusInterceptor` receive request-scoped correlation IDs
-- Existing `CorrelationContext.set/get/pop/getParent/reset` API is unchanged — callers don't need updating
+- `src/platform/tracing/correlation-context.ts` — replaced static properties with `AsyncLocalStorage<CorrelationState>`; `run()`, `set()`, `get()`, `getParent()`, `pop()`, `reset()`, `generateId()` all preserved
+- `src/platform/tracing/correlation-interceptor.ts` — `CorrelationInterceptor` wraps each request in `CorrelationContext.run()`
+- `BigBlueButtonPlugin` — registers `CorrelationInterceptor` as `APP_INTERCEPTOR` (partial scope — see gap above)
 
 ---
 
@@ -146,52 +74,14 @@ Add a NestJS middleware or interceptor to wrap each request in `CorrelationConte
 
 **Files:** `src/platform/tracing/bullmq-tracer.ts`, `src/platform/tracing/webhook-recorder.ts`
 
-### Problem
+### What was done
 
-Both `persistLog()` and `persist()` are explicitly left as no-ops. `EventLog` records are never written to the database, making BUG-003 (runtime tracing) inert. `RuntimeCausalityValidator` queries an empty store.
+Both classes are now `@Injectable()` with `TransactionalConnection` injected. `persistLog()` and `persist()` call `connection.rawConnection.getRepository(EventLog).save(log)` with non-fatal error handling — a persist failure logs a warning and never propagates to the caller.
 
-### What to do
-
-Both classes need an injected `EventLog` repository. Since these are plain classes (not NestJS injectables), the cleanest approach is to make them NestJS `@Injectable()` and add them to the appropriate plugin's providers array.
-
-For `BullMQTracer`:
-
-```typescript
-import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';  // or TransactionalConnection
-import { Repository } from 'typeorm';
-
-@Injectable()
-export class BullMQTracer {
-  constructor(
-    @InjectRepository(EventLog)
-    private readonly eventLogRepo: Repository<EventLog>,
-  ) {}
-
-  private async persistLog(log: EventLog): Promise<void> {
-    try {
-      await this.eventLogRepo.save(log);
-    } catch (err) {
-      // Non-fatal — tracing must never break production flows
-      console.warn('[BullMQTracer] Failed to persist event log:', err);
-    }
-  }
-  // ... rest unchanged
-}
-```
-
-Apply the same pattern to `WebhookRecorder.persist()`.
-
-Register both as providers in the platform module (or inject via `BigBlueButtonPlugin` providers, wherever `EventLog` entity is registered).
-
-Add `EventLog` entity to the plugin's `entities` array if not already present.
-
-### Acceptance criteria
-
-- BullMQ job events appear in the `event_log` table after job execution
-- Webhook received/processed events appear in `event_log`
-- `RuntimeCausalityValidator` can query real traces from Postgres
-- Tracing failure is non-fatal — an exception in `persistLog` never propagates to the caller
+- `BullMQTracer` — `@Injectable()`, constructor receives `TransactionalConnection`, `persistLog()` saves to `event_log` table
+- `WebhookRecorder` — same pattern, `persist()` saves received/processed webhook events
+- Both are registered in `BigBlueButtonPlugin` providers
+- `RuntimeCausalityValidator` can now query real traces from Postgres
 
 ---
 
@@ -237,49 +127,111 @@ RedisCachePlugin.init({
 
 **Reference:** ADR v1.6 §14 Phase 1.5 remaining blocker item 1
 
-### Status
+### What was done
 
-Elasticsearch indexing for `InstructorProfile` is implemented in the `TenantPlugin`. `InstructorProfileService` now directly calls `InstructorIndexerService` on create/update/delete with non-fatal error handling. The index mapping is created on plugin boot via `OnModuleInit`. A daily reconciliation cron job is registered in the plugin configuration (implementation note: Vendure's `scheduledTasks` plugin option may need adjustment per runtime API).
+- `InstructorIndexerService` manages `instructor_profiles` index — `ensureIndexExists()`, `indexProfile()`, `deleteProfile()`, `fullReindex()`. Uses `@elastic/elasticsearch` client.
+- `InstructorProfileService.create()`, `update()`, `delete()` call the indexer non-fatally.
+- Index mapping created on `onModuleInit` (non-blocking — app starts even if ES unreachable).
+- `TenantPlugin` registers `InstructorIndexerService` as a provider.
+- ES client now reads `ELASTICSEARCH_NODE` + `ELASTICSEARCH_PASSWORD` from env (fixed in this session).
 
-### What to do
+### Scope clarification — per-tenant vs marketplace discovery
 
-Register a BullMQ job `index-instructor-profile` that fires on `InstructorProfileCreatedEvent` and `InstructorProfileUpdatedEvent`. Job writes to an `instructor_profiles` index in Elasticsearch 9.x.
+The `instructor_profiles` index is **per-tenant scoped** (filtered by `channelId`). It powers search within a single academy's storefront (e.g. `mehta.saa9vi.com`).
 
-Index document shape:
+**Marketplace discovery** — a student arriving at `marketplace.saa9vi.com` who doesn't know any academy — requires the **platform-level** `saa9vi_marketplace_instructors` index spanning all channels. This is Phase 3 work (`MarketplaceIndexerPlugin`, ADR §14 Phase 3 / DL-020 / INV-009). The per-tenant index in Phase 1.5 and the platform index in Phase 3 are **two separate indices with different scopes** — one is not a replacement for the other.
+
+**Do not install `@vendure-community/elasticsearch-plugin`** — it indexes Vendure `Product`/`ProductVariant` only. `InstructorProfile` and `BbbScheduledSession` are custom entities and require custom indexing, which `InstructorIndexerService` already provides correctly.
+
+### How a student discovers a tenant via marketplace (Phase 3 flow)
+
+```
+Student searches "JEE maths coach Delhi" on marketplace.saa9vi.com
+  → MarketplaceSearchResolver (no channel token)
+  → saa9vi_marketplace_instructors ES index (cross-channel read projection)
+  → Result: "Mehta Coaching — Rajesh Mehta, JEE Maths, Delhi"
+  → Student clicks → routed to mehta.saa9vi.com
+  → All subsequent commerce (checkout, entitlement, billing) happens
+    on mehta.saa9vi.com with channel context — INV-001 preserved
+```
+
+`InstructorIndexerService.indexProfile()` feeds the per-tenant index. `MarketplaceIndexerPlugin` (Phase 3) will read the same Postgres data and feed the platform index separately — no code change to Phase 1.5 indexer needed.
+
+---
+
+## Task 5b — Phase 3 Prerequisite: `MarketplaceIndexerPlugin` scaffold
+
+**Reference:** ADR v1.6 §14 Phase 3, DL-020, INV-009
+**Priority:** Phase 3 — do not implement before Phase 1.5 is otherwise complete.
+
+### Architectural insight: use Vendure's Product/ProductVariant as the bridge
+
+`BbbScheduledSession.productVariantId` already links a session to a Vendure `ProductVariant`. Vendure's `ProductEvent` and `ProductVariantEvent` fire on the EventBus whenever any product changes — across all channels. This means the `MarketplaceIndexerPlugin` does **not** need to poll raw Postgres tables. It subscribes to events Vendure already emits.
+
+```
+Tenant admin creates BbbScheduledSession with productVariantId
+  → Vendure ProductVariant is channel-scoped to mehta's channel
+  → ProductEvent fires on EventBus
+
+MarketplaceIndexerPlugin.onApplicationBootstrap()
+  → subscribes to ProductVariantEvent
+  → on event: reads Product.customFields.bbbSessionId + instructorProfileId
+  → looks up BbbScheduledSession + InstructorProfile
+  → writes to saa9vi_marketplace_sessions + saa9vi_marketplace_instructors (ES)
+```
+
+Vendure's default channel behaviour: new products are assigned to the default channel AND the tenant channel. For multi-tenant production this must be configured so **session products are only on the tenant channel** (not the default channel) — otherwise a student on the default channel could see all academies' products in a raw product list. The marketplace ES index provides the correct cross-tenant discovery surface; the default channel product list is not that surface.
+
+### Required `Product` custom fields (add to `vendure-config.ts`)
 
 ```typescript
-{
-  id: string;
-  channelId: string;
-  channelToken: string;
-  name: string;
-  bio: string;
-  slug: string;
-  photoUrl: string | null;
-  subjectTags: string[];
-  reviewRating: number | null;
-  isPublic: boolean;
+customFields: {
+  Product: [
+    { name: 'bbbSessionId',        type: 'string', nullable: true, public: false },
+    { name: 'instructorProfileId', type: 'string', nullable: true, public: false },
+  ],
 }
 ```
 
-Write a minimal `InstructorIndexerService` that calls the ES client directly (do not introduce `@vendure/elasticsearch-plugin` unless it is already installed — check `package.json` first).
+Set these in `BbbScheduledSessionService.create()` when `productVariantId` is provided — after the product is created. This gives the `MarketplaceIndexerPlugin` a clean join key.
 
-Register a reconciliation cron job (daily) that full-reindexes all `isPublic: true` instructors from Postgres — recovery path if events are missed.
+### What to build
 
-Register `instructor_profiles` index mapping on plugin boot if index doesn't exist.
+A new `MarketplaceIndexerPlugin` with:
 
-### What was done
+| Index | Trigger | Source |
+|---|---|---|
+| `saa9vi_marketplace_sessions` | `ProductVariantEvent` where `Product.customFields.bbbSessionId != null` | `BbbScheduledSession` + `TenantProfile` |
+| `saa9vi_marketplace_instructors` | `InstructorProfileCreatedEvent` / `InstructorProfileUpdatedEvent` | `InstructorProfile` + `TenantProfile` |
 
-- `src/plugins/tenant-plugin/events/tenant-events.ts` — added `InstructorProfileCreatedEvent` and `InstructorProfileUpdatedEvent` (for future event-driven wiring)
-- `src/plugins/tenant-plugin/services/instructor-indexer.service.ts` — `InstructorIndexerService` manages `instructor_profiles` index with `ensureIndexExists()`, `indexProfile()`, `deleteProfile()`, and `fullReindex()`. Uses `@elastic/elasticsearch` client pointed at `ELASTICSEARCH_URL` env var. `onModuleInit` wraps index creation in try/catch so the app starts even if Elasticsearch is unreachable; indexing is skipped until ES becomes available.
-- `src/plugins/tenant-plugin/services/instructor-profile.service.ts` — `create()`, `update()`, `delete()` now call `InstructorIndexerService` with try/catch so failures are non-fatal.
-- `src/plugins/tenant-plugin/tenant-plugin.plugin.ts` — registered `InstructorIndexerService` in providers.
+Key design rules (INV-009):
+- Index writes via BullMQ jobs only — never in the HTTP request path
+- Authoritative data stays in Postgres; ES is a derived read projection
+- `MarketplaceSearchResolver` queries ES with no channel token — public, unauthenticated
+- All commerce (checkout, entitlement) routes to `mehta.saa9vi.com` channel — INV-001 preserved
 
-### Acceptance criteria
+`saa9vi_marketplace_sessions` document shape:
+```typescript
+{
+  id: string;                  // BbbScheduledSession.id
+  productVariantId: string;    // Vendure ProductVariant.id — checkout target
+  channelToken: string;        // for storefront routing → mehta.saa9vi.com
+  title: string;
+  startTime: Date;
+  endTime: Date;
+  priceInPaise: number;        // from ProductVariant.price
+  academyName: string;         // from TenantProfile.name
+  academySlug: string;
+  instructorName: string | null;
+  subjectTags: string[];
+  bayesianRating: number;      // from ReviewsPlugin aggregate
+  isSponsored: boolean;        // Phase 3: from MarketplaceAdCampaign
+  sponsorBoost: number;        // function-score multiplier (DL-022)
+}
+```
 
-- Creating or updating a public `InstructorProfile` causes an ES document to be created/updated within 5 seconds ✅
-- `InstructorProfileService.findPublicByChannel` can optionally query ES (feature-flagged) — `InstructorIndexerService` exists for future integration
-- Index mapping registered on plugin boot ✅
+
+
 
 ---
 
@@ -550,20 +502,96 @@ Create a `load-testing/` directory at the project root:
 
 ---
 
+## Task 10 — SEC-004: Rate Limiting on Public Mutations
+
+**Reference:** ADR v1.6 §13 Production Readiness Checklist (⚠️ Pending)
+**Blocking:** First tenant onboarding — this is the last remaining Phase 1 blocker
+
+### What to do
+
+Add rate limiting to three surfaces via a NestJS `ThrottlerModule` or a Caddy/reverse-proxy layer:
+
+| Surface | Limit | Reason |
+|---|---|---|
+| `POST /bbb/webhook` | 100 req/min per source IP | BBB server IPs should be allowlisted |
+| `registerForTrialSession` mutation | 10 req/min per customer | Abuse vector for free trial seats |
+| `joinMeeting` mutation | 10 req/min per customer | Prevents join-URL farming |
+
+The simplest Vendure-native approach is `@nestjs/throttler` registered as a global guard. For `POST /bbb/webhook`, configure an IP allowlist for known BBB server IPs and apply a stricter rate on unknown IPs.
+
+---
+
+## Task 11 — Custom Domain → Channel Token Redis Mapping
+
+**Reference:** ADR v1.6 §13 Production Readiness Checklist (⚠️ Pending), SEC-006
+**Blocking:** Custom domain tenants — without this, `mehta.saa9vi.com` cannot resolve to the correct channel
+
+### What to do
+
+When `TenantProfile.customDomain` is set or updated, write a Redis key:
+
+```typescript
+// key: `channel-token:${customDomain}`  value: channelToken
+await redis.set(`channel-token:${customDomain}`, channel.token);
+```
+
+In Next.js middleware, resolve hostname → channelToken:
+
+```typescript
+const channelToken = await redis.get(`channel-token:${hostname}`);
+// Set as X-Vendure-Token header on all requests
+```
+
+Invalidate the Redis key when `TenantProfile.customDomain` changes.
+
+---
+
+## Task 12 — CorrelationInterceptor Global Scope Fix
+
+**Reference:** what-next Task 2 scope gap
+
+### Problem
+
+`CorrelationInterceptor` is registered as `APP_INTERCEPTOR` only inside `BigBlueButtonPlugin`. Requests handled by `CmsPlugin`, `TenantPlugin`, and `ReviewsPlugin` do not inherit a correlation context — their BullMQ traces will have no `correlationId`.
+
+### What to do
+
+Move the `APP_INTERCEPTOR` registration to the root bootstrap or a shared platform module so it applies globally across all plugins:
+
+```typescript
+// In vendure-config.ts or a root AppModule if one exists:
+// Add to providers at the VendureConfig level via configuration callback
+```
+
+The simplest approach in Vendure's plugin architecture: add to `BigBlueButtonPlugin`'s `configuration` callback:
+
+```typescript
+configuration: (config) => {
+  // Already done — APP_INTERCEPTOR is global when registered in any plugin's providers
+  // via NestJS DI — verify this is actually global by testing a TenantPlugin request
+  return config;
+}
+```
+
+Verify by checking that a `TenantPlugin` resolver call creates an `event_log` row with a `correlationId`.
+
+---
+
 ## Priority Order Summary
 
 Execute in this order. Each task unlocks the next.
 
 ```
-PHASE 1.5 BLOCKERS (unblocks first tenant onboarding)
-  Task 1 — FEAT-002 Overhead Capacity Grant              [ADR §8A OP-005]
-  Task 4 — RedisCachePlugin in vendure-config.ts         [Vendure multi-instance]
-  Task 5 — InstructorProfile Elasticsearch indexer       [ADR §14 P1.5]
+PHASE 1 FINAL BLOCKERS (last items before first tenant onboarding)
+  Task 10 — SEC-004 Rate limiting                        [ADR §13 last Phase 1 blocker]
+  Task 11 — Custom domain Redis mapping                  [SEC-006, multi-tenant routing]
+
+PHASE 1.5 BLOCKERS (unblocks full tenant experience)
+  Task 1 — FEAT-002 Overhead Capacity Grant (migration)  [ADR §8A OP-005]
   Task 6 — myLearningDashboard domain API                [ADR-013 INV-006]
 
 CORRECTNESS / RELIABILITY
-  Task 2 — CorrelationContext AsyncLocalStorage fix       [thread-safety]
-  Task 3 — BullMQTracer + WebhookRecorder persist         [BUG-003 activation]
+  Task 12 — CorrelationInterceptor global scope fix      [all-plugin tracing]
   Task 7 — GrantReaderService scaffold                   [RFC-001 Q-009]
 
 CAPACITY INTELLIGENCE (new in ADR v1.6)

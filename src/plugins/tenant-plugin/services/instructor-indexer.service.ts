@@ -22,8 +22,11 @@ export class InstructorIndexerService implements OnModuleInit {
   private readonly indexName = 'instructor_profiles';
 
   constructor() {
+    const node = process.env.ELASTICSEARCH_NODE || process.env.ELASTICSEARCH_URL || 'http://localhost:9200';
+    const password = process.env.ELASTICSEARCH_PASSWORD;
     this.client = new Client({
-      node: process.env.ELASTICSEARCH_URL || 'http://localhost:9200',
+      node,
+      ...(password ? { auth: { username: 'elastic', password } } : {}),
     });
   }
 

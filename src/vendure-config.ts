@@ -71,6 +71,14 @@ export const config: VendureConfig = {
   // When adding or altering custom field definitions, the database will
   // need to be updated. See the "Migrations" section in README.md.
   customFields: {
+    // bbbSessionId and instructorProfileId are Phase 3 prerequisite fields.
+    // MarketplaceIndexerPlugin reads these to join Product → BbbScheduledSession
+    // and Product → InstructorProfile when building the platform-level ES indices.
+    // Must be set in BbbScheduledSessionService.create() when productVariantId is provided.
+    Product: [
+      { name: 'bbbSessionId',        type: 'string' as const, nullable: true, public: false },
+      { name: 'instructorProfileId', type: 'string' as const, nullable: true, public: false },
+    ],
     Article: [],
     Banner: [],
     Page: [],

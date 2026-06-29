@@ -15,16 +15,19 @@ import { CorrelationContext } from './correlation-context';
 @Injectable()
 export class CorrelationInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
-    const request = context.switchToHttp().getRequest();
-    const existingCorrelationId = request.headers['x-correlation-id'];
+    const httpContext = context.switchToHttp();
+    const request = httpContext.getRequest();
+    const existingCorrelationId = request?.headers?.['x-correlation-id'];
 
     return CorrelationContext.run(() => {
       // If no correlation ID provided, generate one
       const correlationId = existingCorrelationId || CorrelationContext.generateId();
       CorrelationContext.set(correlationId);
 
-      // Attach to request for downstream access
-      request['correlationId'] = correlationId;
+      // Attach to request for downstream access (only if request exists)
+      if (request) {
+        request['correlationId'] = correlationId;
+      }
 
       return next.handle().pipe(
         tap({

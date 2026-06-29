@@ -322,7 +322,7 @@ The thing to notice across all of this: the storefront makes zero decisions. It 
 
 * **Actor:** Student (new, no academy in mind)
 * **Description:** A student searches "JEE Mathematics coaching Delhi" on the Saa9vi marketplace. The `MarketplaceSearchResolver` queries the platform-level `saa9vi_marketplace_sessions` Elasticsearch index — a cross-channel read projection that surfaces public sessions from all academies. Results are ranked by `bayesianRating` (from `ReviewsPlugin` aggregates). Sponsored sessions appear above organic results via bid-boost multiplier.
-* **System/Code Detail:** `MarketplaceSearchResolver` (no channel token) → `saa9vi_marketplace_sessions` ES index. Index refreshed by `MarketplaceIndexerPlugin` (BullMQ background job). Sponsored listings: `isSponsored: true → weight: 3.0` function-score boost (INV-009).
+* **System/Code Detail:** `MarketplaceSearchResolver` (no channel token) → `saa9vi_marketplace_sessions` ES index. Index kept fresh by `MarketplaceIndexerPlugin` subscribing to Vendure's `ProductVariantEvent` — reads `Product.customFields.bbbSessionId` to join `BbbScheduledSession` data. Session products are channel-scoped to the tenant channel only (DL-027 — not the default channel). Sponsored listings: `isSponsored: true → weight: 3.0` function-score boost (INV-009).
 
 ### Student views Mehta Coaching's marketplace listing
 
@@ -339,8 +339,8 @@ The thing to notice across all of this: the storefront makes zero decisions. It 
 ### Student purchases the full course — commission attributed
 
 * **Actor:** Student
-* **Description:** After the trial, the student buys the React Masterclass. At checkout, the session referrer (`marketplace.saa9vi.com`) is captured and written to `Order.customFields.orderSource = 'marketplace'`. `BbbOrderFulfillmentListener` creates the `BbbEntitlement` as normal. Separately, `CommissionLedger` records a platform fee (e.g., 10% of ₹499 = ₹49.90) against this order.
-* **System/Code Detail:** `orderSource` custom field set at checkout. `CommissionLedger` (append-only, Phase 3). Zero changes to Phase 1 fulfillment path.
+* **Description:** After the trial, the student buys the React Masterclass. At checkout, the storefront passes `utm_source=marketplace` as a raw parameter to the order mutation; Vendure-side `OrderProcess` logic stamps `Order.customFields.orderSource = 'marketplace'` (INV-008 — storefront never makes this business decision). `BbbOrderFulfillmentListener` creates the `BbbEntitlement` as normal. Separately, `CommissionLedger` records a platform fee (e.g., 10% of ₹499 = ₹49.90) against this order.
+* **System/Code Detail:** Storefront passes `referrerCode` or `utm_source` → Vendure `OrderProcess` classifies and stamps `orderSource`. `CommissionLedger` (append-only, Phase 3). Zero changes to Phase 1 fulfillment path.
 
 ---
 
