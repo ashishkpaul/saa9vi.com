@@ -1,6 +1,6 @@
 # System Architecture & User Flows: Saa9vi Academy Platform
 
-> **v2 — Updated:** Archetype B (Internal Staff Meeting) added as Section 9. Phase 3 Marketplace flow added as Section 10. Revenue model narrative added. References updated to ADR v1.5.
+> **v4 — Updated:** Section 11 (Wallet & Capacity Intelligence) updated to reflect ADR v1.6 Capacity Intelligence System (§6A). CTA logic note in Section 3 corrected to reflect current code reality vs. ADR target. References updated to ADR v1.6 / RFC-001 v3.
 
 ---
 
@@ -85,6 +85,7 @@
 * **Actor:** Student
 * **Description:** The page shows the session date, time, price, capacity, and the instructor card. The CTA is determined by Vendure — has the student already purchased? Is there a trial available? The storefront renders whichever CTA Vendure returns.
 * **System/Code Detail:** Shop API: `bbbScheduledSession(id)` — storefront is a renderer, not a decision-maker (INV-008).
+* **Current code reality:** The unified `courseAccess(courseId)` resolver that returns `{ canJoin, joinUrl, ctaLabel, ctaAction }` is the ADR target (INV-008) but is not yet implemented. The current Shop API exposes `myScheduledSessions` and `bbbRoomStatus` as separate raw entity queries — the Next.js storefront currently stitches the CTA from these. This is the one area where the storefront is temporarily doing logic it should not. The `courseAccess` resolver is a Phase 1.5 deliverable (ADR §13 implementation checklist).
 
 ### Student adds session to cart and checks out
 
@@ -191,9 +192,9 @@
 ### Reconciliation runs every minute in the background
 
 * **Actor:** System
-* **Description:** `BbbReconciliationService` has three loops: 
-  1. `reconcileActiveMeetings` — checks BBB `getMeetingInfo` for every Active meeting; marks stale if BBB has no record. 
-  2. `reconcileProvisioning` — resets or fails meetings stuck in Provisioning past timeout. 
+* **Description:** `BbbReconciliationService` has three loops:
+  1. `reconcileActiveMeetings` — checks BBB `getMeetingInfo` for every Active meeting; marks stale if BBB has no record.
+  2. `reconcileProvisioning` — resets or fails meetings stuck in Provisioning past timeout.
   3. `reconcileRooms` — fixes room/meeting state drift.
 * **System/Code Detail:** Scheduled task — grace period guards + billing ceiling (`maxMeetingDurationMs`) + `CapacityExhaustedEvent`.
 
@@ -356,3 +357,97 @@ The story now has eight chapters (plus two preview flows), each showing what fir
 **Chapter 9 — Phase 3 Marketplace.** Students who don't know any academy can discover Mehta Coaching via the Saa9vi marketplace search — a platform-level Elasticsearch index that spans all channels, ranked by Bayesian review score. Sponsored academies appear at the top via bid-boost. The transaction itself still happens on `mehta.saa9vi.com` (the academy's channel). The platform captures `orderSource = 'marketplace'` and records a commission. Mehta Coaching pays for promoted visibility from a prepaid `AdWallet`, topped up via Juspay.
 
 The thing to notice across all of this: **the storefront makes zero decisions** (INV-008), **all billing facts are immutable ledger rows** (INV-002, INV-010), and **the marketplace is a read projection** — it never bypasses channel isolation for writes (INV-009). Logic changes in any one layer take effect for all academies on the next deployment, without touching the others.
+---
+
+## 11. The Infrastructure That Makes It All Sustainable
+
+*This section shows what happens in the background that academy owners never see — the wallet, the server pool, and the intelligence system that keeps the platform running as it grows.*
+
+### A new academy arrives
+
+When Mehta Coaching signs up, three things happen automatically before the founder even logs in:
+
+- A `BbbWallet` is created with 10,000 attendee-minutes of free credit — roughly 10 hours of class time with a typical cohort of 17 students
+- A `BbbCapacityGrant` is issued against that credit, making those minutes immediately available for provisioning
+- The academy is assigned to the `shared` server pool — the pool of BBB servers where all starter academies run
+
+The founder sees none of this. They see "You have 10 hours of free class time. Get started."
+
+**System/Code Detail:** `BbbOrganizationService.create()` → `WalletService.createWithWelcomeCredit(org, 10_000)` → `BbbWalletLedger { type: 'welcome_credit', direction: 'credit', minutes: 10_000 }` → `WalletService.issueGrant()` → `BbbCapacityGrant { sourceType: 'wallet', grantedAttendeeMinutes: 10_000 }`. No admin action required.
+
+### A class runs — billing in attendee-minutes
+
+Mehta runs a 60-minute JEE session with 42 students. When the meeting ends, the BBB server fires a `meeting-ended` webhook. The persist-first pipeline (INV-004) saves the event to `BbbWebhookEvent`, enqueues it to BullMQ, and returns `ok: true` immediately.
+
+The BullMQ processor calculates:
+
+```
+attendeeMinutes = peakParticipantCount × durationMinutes
+               = 42 × 60
+               = 2,520 attendee-minutes
+```
+
+This is debited from the capacity grant. The `BbbUsageLedger` row is appended — never updated. The wallet cache is decremented. The billing truth is always the ledger, never the cache (INV-011).
+
+**Why attendee-minutes?** A solo instructor testing an empty room for 5 minutes costs 5 units. That same room with 42 students for 60 minutes costs 2,520 units — 504× more. That ratio reflects the actual infrastructure load: more streams, more CPU, more bandwidth. Host-minutes (the old model) would charge both the same rate per minute.
+
+### The wallet runs low
+
+After a few weeks of classes, Mehta's wallet approaches zero. The `WalletLowBalanceEvent` fires. An email goes out: "Your class credits are running low. Top up to keep teaching without interruption."
+
+The founder clicks the email, chooses the ₹899 package (6,000 attendee-minutes — 50 students × 2 hours), and pays via Juspay. The payment settles, `WalletService.credit()` runs, a new `BbbCapacityGrant` is issued, the `BbbWalletLedger` records both the credit and the grant issuance. The academy never stops running.
+
+**System/Code Detail:** Top-up flows through the existing `JuspayPlugin`. `PaymentSettledEvent` → `WalletTopUpListener` → `WalletService.credit(walletId, 6_000, 'topup', { orderId })` → `BbbWalletLedger { type: 'topup', direction: 'credit' }` → `WalletService.issueGrant()` → `BbbCapacityGrant { sourceType: 'wallet' }`. No new payment integration.
+
+### What the platform operator sees
+
+While Mehta is teaching, the platform operator (Saa9vi admin) has a dashboard showing the live health of every server pool. Right now, at 6:00 PM IST, 23 academies are running simultaneous sessions across the shared pool. The dashboard shows:
+
+```
+Shared Pool — 3 servers
+Server A:  ████████░░  78% load  (14 meetings, 312 participants, 89 cameras)
+Server B:  ██████░░░░  61% load  (11 meetings, 247 participants, 71 cameras)
+Server C:  ████░░░░░░  43% load  ( 9 meetings, 198 participants, 54 cameras)
+Pool avg:  ██████░░░░  61%  ← amber threshold at 65%
+```
+
+The forecast panel shows that tomorrow at 10:00 AM, 31 academies have scheduled sessions simultaneously — a projected 89% pool load. The recommendation card reads:
+
+> **Add 1 server before tomorrow 09:30 AM**
+> Peak load of 847 virtual units will reach 89% of current capacity.
+> Add 1 standard server (capacity: 200) to maintain 70% headroom.
+> Urgency: **Soon**
+
+The operator spins up a server, adds it to the pool. The next forecast recalculates: projected load drops to 71%. The recommendation clears.
+
+**System/Code Detail:** `CapacityAlertJob` (CI-005, ADR §6A) runs every 15 minutes. `CapacityIntelligenceService.buildForecast(48h)` queries `BbbScheduledSession` across all orgs, builds 30-minute load windows using the PILOS virtual load formula (videos×3 + mics×2 + listeners×1, with configurable `cameraRatio: 0.40`, `micRatio: 0.70` defaults). `CapacityRecommendation` target utilisation is 70% of pool capacity: `serversNeeded = Math.ceil((peakLoad / 0.70 - currentCapacity) / BbbServer.capacity)`. `BbbCapacityAlertLog` row appended on every check — append-only, never updated (INV-002 extended). If urgency = 'immediate', `CapacityAlertEvent` published → email to platform admin. Virtual load denominator is `SUM(BbbServer.capacity)` across the pool — `BbbServer.capacity` is the new operator-configured hardware ceiling (CI-001, separate from `maxLoad` admission threshold).
+
+### Why the platform never blocks a class
+
+The system warns. It recommends. It alerts. It never blocks.
+
+If the operator ignores three days of "soon" warnings and the pool reaches 95% load during peak hours, BBB sessions degrade — some participants get choppy video. That is bad. But it is recoverable: the operator adds a server, load redistributes within minutes.
+
+If instead the platform blocked Mehta's 6:00 PM class because the pool was at 85%, 42 students lose their session. Mehta refunds the class, loses trust, and considers leaving the platform. That is not recoverable.
+
+**INV-012 (ADR v1.6):** Meetings are never blocked for capacity reasons. The intelligence system informs; operators act. See ADR §6A and DL-025 for full rationale.
+
+---
+
+## How the platform actually works — Updated Summary (v3)
+
+The story now has eleven chapters, each showing what fires when a person takes an action.
+
+**Chapters 1–8** unchanged from v2 — Academy setup, content, commerce loop, live class, billing, reviews, trial conversion, internal staff meetings.
+
+**Chapter 9 — Phase 3 Marketplace.** Unchanged from v2.
+
+**Chapter 10 — Phase 3 Marketplace (student side).** Unchanged from v2.
+
+**Chapter 11 — Wallet & Capacity Intelligence.** The three systems that make the platform self-sustaining at scale:
+
+- **Wallet:** Every academy gets 10,000 attendee-minutes free. Top-ups flow through Juspay. `BbbCapacityGrant` is auto-issued by `WalletService` — never manually created. Subscription renewals credit the wallet. The academy sees a balance; the platform manages grants invisibly.
+- **Attendee-minutes billing:** `participants × duration`, computed once at `meeting-ended` time. Proportional to real infrastructure cost. Intuitive to educators who think in "students × hours."
+- **Capacity intelligence:** 48-hour forecast from scheduled session data. PILOS virtual load formula (videos×3 + mics×2 + listeners×1). Plain-English recommendation. 15-minute alert job. The platform warns — the operator acts. No class is ever blocked.
+
+The thing to notice across all eleven chapters: **the academy owner's experience is simple** (wallet, balance, top up) while **the platform's infrastructure is sophisticated** (ledgers, grants, pool routing, forecasting). The architecture is designed so the complexity is invisible to the people using it and auditable for the people running it.
