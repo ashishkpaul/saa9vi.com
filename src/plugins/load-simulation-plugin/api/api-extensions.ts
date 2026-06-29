@@ -1,6 +1,6 @@
 import gql from 'graphql-tag';
 
-export const shopApiExtensions = gql`
+export const adminApiExtensions = gql`
   type LoadMetrics {
     avgLatency: Float!
     p95: Float!

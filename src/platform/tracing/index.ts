@@ -1,5 +1,6 @@
 export { EventLog, EventLogSource, EventLogStatus } from "./entities/event-log.entity";
 export { CorrelationContext } from "./correlation-context";
+export { CorrelationInterceptor } from "./correlation-interceptor";
 export { EventBusInterceptor } from "./eventbus-interceptor";
 export { BullMQTracer } from "./bullmq-tracer";
 export { WebhookRecorder } from "./webhook-recorder";

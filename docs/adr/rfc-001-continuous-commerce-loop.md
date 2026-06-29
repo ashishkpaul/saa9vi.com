@@ -1,14 +1,16 @@
 # RFC-001: Continuous Commerce Loop (Phase 2 — Subscription Billing)
 
-**Status:** Draft v2  
-**Date:** 2026-06  
-**Authors:** Lead Architect, Platform Engineering  
-**Supersedes:** RFC-001 v1 (2026-06)  
-**Phase 1 Reference:** `platform-adr.md` v1.5 (authoritative ground truth)  
+**Status:** Draft v3
+**Date:** 2026-06
+**Authors:** Lead Architect, Platform Engineering
+**Supersedes:** RFC-001 v2 (2026-06)
+**Phase 1 Reference:** `platform-adr.md` v1.6 (authoritative ground truth)
 
 ---
 
 > **What changed in v2:** Six assessment findings from peer review incorporated. (1) Q-009 (`GrantReaderService` union gap) and Q-010 (notification transport for dunning events) formalised in Section 7. (2) ASCII FSM diagram updated to include `CANCELLED` as explicit terminal box. (3) `SubscriptionInvoice` idempotency protection specified — `UNIQUE` constraint on `(enrollmentId, periodStart)` with `status = 'paid'` guard. (4) Recovery path period-end recalculation rule committed: original-cycle-anchor semantics (see Section 4.3). (5) Phase 1 reference updated to ADR v1.5. (6) Appendix C added — Phase 3 marketplace integration points for subscription tenants.
+>
+> **What changed in v3:** Capacity Intelligence System integration points added. (1) Appendix C-4: `RecurringCapacityGrant` in capacity forecasts — `CapacityIntelligenceService.buildForecast()` adds trailing 4-week attendee-minute signal for subscription academies with sparse scheduled session data; reads from `BbbUsageLedger WHERE enrollmentId IS NOT NULL`. (2) Appendix C-5: `GrantReaderService` (Q-009 resolution) must expose `getRemainingMinutes(organizationId)` consumed by `CapacityIntelligenceService` to reflect subscription quota headroom in pool dashboard. Phase 1 reference updated to ADR v1.6.
 
 ---
 
@@ -49,7 +51,7 @@ Phase 1 (current) models commerce as a **transactional event**: a student clicks
 
 The fundamental shift is:
 
-> Phase 1: **Student clicks → system responds**  
+> Phase 1: **Student clicks → system responds**
 > Phase 2: **Time advances → system acts → student state evolves**
 
 This means the platform becomes an **always-on operator** — it must:
@@ -783,7 +785,9 @@ Admin actions on subscriptions must be auditable.
 `BbbReconciliationService.consumeGrant()` reads specifically from `BbbCapacityGrant` by `meeting.grantId`. It does not natively union with `RecurringCapacityGrant`. This creates a load-bearing gap: meetings provisioned under a subscription grant will fail to debit correctly unless this is resolved before Phase 2 ships.
 
 **Resolution options:**
+
 - **Option A (recommended):** Add a `GrantReaderService` that unions both `BbbCapacityGrant` and `RecurringCapacityGrant` tables before calling `consumeGrant()`. No Phase 1 code is modified.
+
 - **Option B:** Modify `consumeGrant()` to accept an abstract `CapacityGrantLike` interface. Requires touching Phase 1 code.
 
 **Decision required before Phase 2 implementation begins.**
@@ -855,6 +859,20 @@ When a student discovers a subscription plan via the marketplace and checks out,
 A student subscribed to an academy has verified, ongoing engagement — they are the highest-quality review source. `ReviewsPlugin` eligibility should eventually include `SubscriptionEnrollment.status IN ('active', 'cancelled')` as a valid purchase proof.
 
 **Phase 2 requirement:** None. `ReviewsPlugin` currently checks `OrderLine` state. The subscription path is a Phase 3 extension to `ReviewEligibilityStrategyRegistry`.
+
+---
+
+### C-4: `RecurringCapacityGrant` in Capacity Intelligence Forecasts
+
+`CapacityIntelligenceService` (§6A in ADR v1.6) forecasts load from `BbbScheduledSession` data. In Phase 2, subscription academies may have recurring sessions not yet entered as `BbbScheduledSession` rows (e.g., always-on rooms billed by attendee-minutes). The forecasting layer must account for historical attendee-minute patterns from `BbbUsageLedger WHERE enrollmentId IS NOT NULL` when session data is sparse.
+
+**Phase 2 requirement:** `CapacityIntelligenceService.buildForecast()` adds a secondary signal: trailing 4-week average attendee-minutes per subscription academy, blended with scheduled session data. No schema changes needed — `BbbUsageLedger.enrollmentId` (RFC Section 2.2) provides the lookup.
+
+### C-5: `GrantReaderService` (Q-009) Must Include Capacity Intelligence
+
+When Q-009 (`consumeGrant()` union gap) is resolved by implementing `GrantReaderService`, that service becomes the single source of truth for all active grants. `CapacityIntelligenceService` should read pool headroom from `GrantReaderService` — specifically `SUM(grantedMinutes - consumedMinutes) WHERE exhausted = false AND validUntil > now()` across both `BbbCapacityGrant` and `RecurringCapacityGrant`. This ensures the capacity dashboard reflects subscription quota headroom alongside prepaid grant headroom.
+
+**Phase 2 requirement:** `GrantReaderService` (Q-009 resolution) exposes a `getRemainingMinutes(organizationId)` method that `CapacityIntelligenceService` consumes.
 
 ---
 

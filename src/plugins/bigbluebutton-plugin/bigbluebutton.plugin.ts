@@ -41,6 +41,7 @@ import { BbbEntitlementService } from "./services/bbb-entitlement.service";
 import { BbbMembershipService } from "./services/bbb-membership.service";
 import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.listener";
 
+import { CorrelationInterceptor } from "../../platform/tracing/correlation-interceptor";
 import { BbbAdminResolver } from "./api/bbb-admin.resolver";
 import { BbbShopResolver } from "./api/bbb-shop.resolver";
 import { BbbWebhookController } from "./workers/bbb-webhook.controller";
@@ -80,6 +81,7 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
       provide: BBB_PLUGIN_OPTIONS,
       useFactory: () => BigBlueButtonPlugin.options,
     },
+    CorrelationInterceptor,
     BbbEncryptionService,
     BbbApiService,
     BbbServerService,
@@ -97,6 +99,10 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     BbbEntitlementService,
     BbbMembershipService,
     BbbOrderFulfillmentListener,
+    {
+      provide: 'APP_INTERCEPTOR',
+      useClass: CorrelationInterceptor,
+    },
   ],
 
   adminApiExtensions: {

@@ -4,11 +4,13 @@ import { Column, Entity, ManyToOne } from "typeorm";
 import { BbbOrganization } from "./bbb-organization.entity";
 
 /**
- * Written when a customer purchases a BBB plan. Tracks what capacity the
- * organization is entitled to and how much has been consumed.
+ * Written when a customer purchases a BBB plan, or auto-created as an
+ * 'internal_overhead' grant when a BbbOrganization is first provisioned.
  *
- * The FulfillmentHandler writes this; meetings consume from it.
- * This is the separation between commerce (order) and infrastructure (meetings).
+ * sourceType discriminator (FEAT-002 / ADR §8A OP-005):
+ * - 'order'             — created by BbbOrderFulfillmentListener on purchase
+ * - 'subscription'      — Phase 2: created by RecurringCapacityGrant renewal
+ * - 'internal_overhead' — auto-created per org; isUnbounded=true; never exhausted
  */
 @Entity("bbb_capacity_grant")
 export class BbbCapacityGrant extends VendureEntity {
@@ -19,11 +21,11 @@ export class BbbCapacityGrant extends VendureEntity {
   @ManyToOne(() => BbbOrganization, (org) => org.grants, { nullable: false })
   organization: BbbOrganization;
 
-  /** FK to Vendure Order.id — nullable for admin-manual grants */
+  /** FK to Vendure Order.id — nullable for admin-manual and overhead grants */
   @Column({ nullable: true })
   orderId: string;
 
-  /** FK to Vendure OrderLine.id — nullable for admin-manual grants */
+  /** FK to Vendure OrderLine.id — nullable for admin-manual and overhead grants */
   @Column({ nullable: true })
   orderLineId: string;
 
@@ -31,7 +33,7 @@ export class BbbCapacityGrant extends VendureEntity {
   @Column({ nullable: true })
   productVariantId: string;
 
-  /** Total meeting minutes granted. UI divides by 60 for display. */
+  /** Total meeting minutes granted. Ignored when isUnbounded = true. */
   @Column({ type: "int", default: 600 })
   grantedMinutes: number;
 
@@ -47,4 +49,18 @@ export class BbbCapacityGrant extends VendureEntity {
 
   @Column({ default: false })
   exhausted: boolean;
+
+  /**
+   * Source discriminator — controls billing path in consumeGrantHours().
+   * 'internal_overhead' grants skip exhaustion checks and capacity alerts.
+   */
+  @Column({ default: "order" })
+  sourceType: "order" | "subscription" | "internal_overhead";
+
+  /**
+   * When true, grantedMinutes is ignored and the grant never exhausts.
+   * Set to true for all 'internal_overhead' grants.
+   */
+  @Column({ default: false })
+  isUnbounded: boolean;
 }

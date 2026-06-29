@@ -1,3 +1,4 @@
+import { Allow, Permission } from "@vendure/core";
 import { Query, Resolver } from "@nestjs/graphql";
 import { LoadSimulationService } from "./load-simulation.service";
 
@@ -5,6 +6,7 @@ import { LoadSimulationService } from "./load-simulation.service";
 export class LoadSimulationResolver {
   constructor(private service: LoadSimulationService) {}
 
+  @Allow(Permission.SuperAdmin)
   @Query()
   async runLoadTest(_: any, args: { profile: string }) {
     return this.service.run(args.profile);

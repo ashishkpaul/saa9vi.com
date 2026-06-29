@@ -39,9 +39,13 @@ export class CausalMapper {
         };
 
       case "BbbWebhookEvent":
+        // BUG-020: simulateBbbWebhook resolver not yet implemented in BbbAdminResolver.
+        // Mark pending so LoadOrchestrator skips rather than firing against a non-existent field.
+        // Remove isPending and restore SIMULATE_BBB_WEBHOOK_MUTATION once the resolver exists.
         return {
-          mutation: SIMULATE_BBB_WEBHOOK_MUTATION,
+          mutation: null,
           context: "admin",
+          isPending: true,
           variables,
         };
 

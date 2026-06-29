@@ -4,7 +4,7 @@ import { LoadSimulationResolver } from "./api/load-simulation.resolver";
 import { LoadOrchestrator } from "./engine/load-orchestrator";
 import { GraphQLExecutor } from "./executor/graphql.executor";
 import { VendureHttpClient } from "./executor/vendure-http.client";
-import { shopApiExtensions } from "./api/api-extensions";
+import { adminApiExtensions } from "./api/api-extensions";
 
 @VendurePlugin({
   imports: [PluginCommonModule],
@@ -24,8 +24,8 @@ import { shopApiExtensions } from "./api/api-extensions";
       },
     },
   ],
-  shopApiExtensions: {
-    schema: shopApiExtensions,
+  adminApiExtensions: {
+    schema: adminApiExtensions,
     resolvers: [LoadSimulationResolver],
   },
 })

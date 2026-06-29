@@ -1,41 +1,58 @@
+import { AsyncLocalStorage } from 'async_hooks';
+
+interface CorrelationState {
+  current: string | null;
+  parent: string | null;
+  stack: string[];
+}
+
+const storage = new AsyncLocalStorage<CorrelationState>();
+
 export class CorrelationContext {
-  private static current: string | null = null;
-  private static parent: string | null = null;
-  private static stack: string[] = [];
+  private static getState(): CorrelationState {
+    return storage.getStore() ?? { current: null, parent: null, stack: [] };
+  }
+
+  static run<T>(fn: () => T): T {
+    return storage.run({ current: null, parent: null, stack: [] }, fn);
+  }
 
   static set(correlationId: string): void {
-    if (!this.current) {
-      this.current = correlationId;
+    const state = this.getState();
+    if (!state.current) {
+      state.current = correlationId;
     } else {
-      this.stack.push(this.current);
-      this.parent = this.current;
-      this.current = correlationId;
+      state.stack.push(state.current);
+      state.parent = state.current;
+      state.current = correlationId;
     }
   }
 
   static get(): string | null {
-    return this.current;
+    return this.getState().current;
   }
 
   static getParent(): string | null {
-    return this.parent;
+    return this.getState().parent;
   }
 
   static pop(): void {
-    const previous = this.stack.pop();
+    const state = this.getState();
+    const previous = state.stack.pop();
     if (previous) {
-      this.current = previous;
-      this.parent = this.stack.length > 0 ? this.stack[this.stack.length - 1] : null;
+      state.current = previous;
+      state.parent = state.stack.length > 0 ? state.stack[state.stack.length - 1] : null;
     } else {
-      this.current = null;
-      this.parent = null;
+      state.current = null;
+      state.parent = null;
     }
   }
 
   static reset(): void {
-    this.current = null;
-    this.parent = null;
-    this.stack = [];
+    const state = this.getState();
+    state.current = null;
+    state.parent = null;
+    state.stack = [];
   }
 
   static generateId(): string {

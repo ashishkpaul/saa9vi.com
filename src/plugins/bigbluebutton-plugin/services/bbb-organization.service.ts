@@ -9,6 +9,7 @@ import {
 import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbOrganizationMember } from "../entities/bbb-organization-member.entity";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
+import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { MEETING_STATE } from "../constants";
 
 export interface CreateBbbOrganizationInput {
@@ -167,7 +168,24 @@ export class BbbOrganizationService {
       recordingEnabled: input.recordingEnabled ?? false,
     });
     await this.channelService.assignToCurrentChannel(org, ctx);
-    return this.connection.getRepository(ctx, BbbOrganization).save(org);
+    const saved = await this.connection.getRepository(ctx, BbbOrganization).save(org);
+
+    // FEAT-002: Auto-provision an internal_overhead grant for this org.
+    // This grant is unbounded — internal sessions always have something to debit against.
+    await this.connection.getRepository(ctx, BbbCapacityGrant).save(
+      new BbbCapacityGrant({
+        organization: saved,
+        sourceType: "internal_overhead",
+        isUnbounded: true,
+        grantedMinutes: -1,   // sentinel — ignored when isUnbounded
+        consumedMinutes: 0,
+        exhausted: false,
+        validFrom: new Date(),
+        validUntil: new Date("2099-12-31"),
+      }),
+    );
+
+    return saved;
   }
 
   async update(

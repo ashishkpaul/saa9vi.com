@@ -297,6 +297,11 @@ export class BbbReconciliationService {
           }),
         );
 
+        // internal_overhead grants: write ledger row only, skip exhaustion logic
+        if (grant.sourceType === "internal_overhead") {
+          return;
+        }
+
         // Atomic increment on minutes columns
         await em
           .getRepository(BbbCapacityGrant)
@@ -317,6 +322,11 @@ export class BbbReconciliationService {
       `Billed meeting ${meeting.id}: ${durationMinutes}min consumed${meeting.billingCapped ? " (CAPPED)" : ""} (${(grant.consumedMinutes ?? 0) + durationMinutes}/${grant.grantedMinutes}min)`,
       loggerCtx,
     );
+
+    // internal_overhead grants don't participate in quota alerts
+    if (grant.sourceType === "internal_overhead") {
+      return;
+    }
 
     const remainingMinutes =
       (grant.grantedMinutes ?? 0) - ((grant.consumedMinutes ?? 0) + durationMinutes);
