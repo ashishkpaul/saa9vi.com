@@ -195,7 +195,7 @@ Add `EventLog` entity to the plugin's `entities` array if not already present.
 
 ---
 
-## Task 4 — Production Readiness: `RedisCachePlugin` Missing
+## Task 4 — Production Readiness: `RedisCachePlugin` Missing ✅ Done
 
 **Reference:** Vendure docs — horizontal-scaling (https://docs.vendure.io/current/core/reference/typescript-api/cache/redis-cache-plugin and https://docs.vendure.io/current/core/deployment/horizontal-scaling)
 **File:** `src/vendure-config.ts`
@@ -203,6 +203,10 @@ Add `EventLog` entity to the plugin's `entities` array if not already present.
 ### Problem
 
 `vendure-config.ts` confirms `BullMQJobQueuePlugin` and env-var `COOKIE_SECRET`. However, `RedisCachePlugin` is absent — the in-memory default cache is used. This means session and channel cache will be inconsistent when multiple Vendure instances run behind a load balancer (multi-instance deployment).
+
+### Status
+
+`RedisCachePlugin` is now added to `vendure-config.ts`, configured with Redis options sourced from environment variables (`REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`) and placed after `BullMQJobQueuePlugin` in the plugins array.
 
 ### What to do
 

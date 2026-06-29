@@ -3,6 +3,7 @@ import {
   DefaultSchedulerPlugin,
   DefaultSearchPlugin,
   VendureConfig,
+  RedisCachePlugin,
 } from "@vendure/core";
 import {
   defaultEmailHandlers,
@@ -94,6 +95,13 @@ export const config: VendureConfig = {
       },
     }),
     DefaultSearchPlugin.init({ bufferUpdates: false, indexStockStatus: true }),
+    RedisCachePlugin.init({
+      redisOptions: {
+        host: process.env.REDIS_HOST || 'localhost',
+        port: Number(process.env.REDIS_PORT) || 6379,
+        password: process.env.REDIS_PASSWORD || undefined,
+      },
+    }),
     EmailPlugin.init({
       devMode: true,
       outputPath: path.join(__dirname, "../static/email/test-emails"),
