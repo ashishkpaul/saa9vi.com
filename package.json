@@ -17,6 +17,7 @@
     "verify:invariants": "ts-node ./src/platform/invariants/cli.ts"
   },
   "dependencies": {
+    "@elastic/elasticsearch": "^9.4.2",
     "@opentelemetry/api": "^1.9.1",
     "@types/glob": "^8.1.0",
     "@vendure/asset-server-plugin": "3.6.4",

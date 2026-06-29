@@ -10,6 +10,7 @@ import { MediaResource } from './entities/media-resource.entity';
 import { TenantProfileService } from './services/tenant-profile.service';
 import { InstructorProfileService } from './services/instructor-profile.service';
 import { MediaResourceService } from './services/media-resource.service';
+import { InstructorIndexerService } from './services/instructor-indexer.service';
 import { TenantAdminResolver } from './api/tenant-admin.resolver';
 import { TenantShopResolver } from './api/tenant-shop.resolver';
 import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
@@ -22,6 +23,7 @@ import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
     TenantProfileService,
     InstructorProfileService,
     MediaResourceService,
+    InstructorIndexerService,
   ],
   adminApiExtensions: {
     schema: adminApiExtensions,

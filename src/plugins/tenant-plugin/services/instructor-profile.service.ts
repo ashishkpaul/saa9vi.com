@@ -6,12 +6,14 @@ import {
   EntityNotFoundError,
 } from '@vendure/core';
 import { InstructorProfile } from '../entities/instructor-profile.entity';
+import { InstructorIndexerService } from './instructor-indexer.service';
 
 @Injectable()
 export class InstructorProfileService {
   constructor(
     private readonly connection: TransactionalConnection,
     private readonly channelService: ChannelService,
+    private readonly indexerService: InstructorIndexerService,
   ) {}
 
   async findAll(ctx: RequestContext, options?: { skip?: number; take?: number }): Promise<{ items: InstructorProfile[]; totalItems: number }> {
@@ -70,16 +72,41 @@ export class InstructorProfileService {
     const profile = new InstructorProfile(input);
     profile.channelId = ctx.channelId as string;
     profile.createdById = ctx.activeUserId as string;
-    return this.connection.getRepository(ctx, InstructorProfile).save(profile);
+    const saved = await this.connection.getRepository(ctx, InstructorProfile).save(profile);
+
+    // Index in Elasticsearch if public
+    if (saved.isPublic) {
+      try {
+        await this.indexerService.indexProfile(saved);
+      } catch (err) {
+        // Non-fatal: indexing failure should not break profile creation
+        console.warn(`Failed to index instructor profile ${saved.id}: ${err}`);
+      }
+    }
+
+    return saved;
   }
 
   async update(ctx: RequestContext, id: string, input: Partial<InstructorProfile>): Promise<InstructorProfile> {
-    const profile = await this.connection.getEntityOrThrow(ctx, InstructorProfile, id);
-    if (profile.channelId !== ctx.channelId) {
+    const profile = await this.connection.getRepository(ctx, InstructorProfile).findOne({ where: { id: id as string } });
+    if (!profile || profile.channelId !== ctx.channelId) {
       throw new EntityNotFoundError(InstructorProfile.name, id);
     }
     Object.assign(profile, input);
-    return this.connection.getRepository(ctx, InstructorProfile).save(profile);
+    const saved = await this.connection.getRepository(ctx, InstructorProfile).save(profile);
+
+    // Re-index or delete from index based on isPublic status
+    try {
+      if (saved.isPublic) {
+        await this.indexerService.indexProfile(saved);
+      } else {
+        await this.indexerService.deleteProfile(saved.id as string);
+      }
+    } catch (err) {
+      console.warn(`Failed to update Elasticsearch index for profile ${saved.id}: ${err}`);
+    }
+
+    return saved;
   }
 
   async delete(ctx: RequestContext, id: string): Promise<void> {
@@ -88,5 +115,12 @@ export class InstructorProfileService {
       throw new EntityNotFoundError(InstructorProfile.name, id);
     }
     await this.connection.getRepository(ctx, InstructorProfile).delete(id);
+
+    // Remove from Elasticsearch
+    try {
+      await this.indexerService.deleteProfile(String(id));
+    } catch (err) {
+      console.warn(`Failed to delete instructor profile ${id} from Elasticsearch: ${err}`);
+    }
   }
 }

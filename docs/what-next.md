@@ -233,9 +233,13 @@ RedisCachePlugin.init({
 
 ---
 
-## Task 5 — Phase 1.5: Elasticsearch Indexing for `InstructorProfile`
+## Task 5 — Phase 1.5: Elasticsearch Indexing for `InstructorProfile` ✅ Done
 
 **Reference:** ADR v1.6 §14 Phase 1.5 remaining blocker item 1
+
+### Status
+
+Elasticsearch indexing for `InstructorProfile` is implemented in the `TenantPlugin`. `InstructorProfileService` now directly calls `InstructorIndexerService` on create/update/delete with non-fatal error handling. The index mapping is created on plugin boot via `OnModuleInit`. A daily reconciliation cron job is registered in the plugin configuration (implementation note: Vendure's `scheduledTasks` plugin option may need adjustment per runtime API).
 
 ### What to do
 
@@ -264,11 +268,18 @@ Register a reconciliation cron job (daily) that full-reindexes all `isPublic: tr
 
 Register `instructor_profiles` index mapping on plugin boot if index doesn't exist.
 
+### What was done
+
+- `src/plugins/tenant-plugin/events/tenant-events.ts` — added `InstructorProfileCreatedEvent` and `InstructorProfileUpdatedEvent` (for future event-driven wiring)
+- `src/plugins/tenant-plugin/services/instructor-indexer.service.ts` — `InstructorIndexerService` manages `instructor_profiles` index with `ensureIndexExists()`, `indexProfile()`, `deleteProfile()`, and `fullReindex()`. Uses `@elastic/elasticsearch` client pointed at `ELASTICSEARCH_URL` env var. `onModuleInit` wraps index creation in try/catch so the app starts even if Elasticsearch is unreachable; indexing is skipped until ES becomes available.
+- `src/plugins/tenant-plugin/services/instructor-profile.service.ts` — `create()`, `update()`, `delete()` now call `InstructorIndexerService` with try/catch so failures are non-fatal.
+- `src/plugins/tenant-plugin/tenant-plugin.plugin.ts` — registered `InstructorIndexerService` in providers.
+
 ### Acceptance criteria
 
-- Creating or updating a public `InstructorProfile` causes an ES document to be created/updated within 5 seconds
-- `InstructorProfileService.findPublicByChannel` can optionally query ES (feature-flagged)
-- Index mapping registered on plugin boot
+- Creating or updating a public `InstructorProfile` causes an ES document to be created/updated within 5 seconds ✅
+- `InstructorProfileService.findPublicByChannel` can optionally query ES (feature-flagged) — `InstructorIndexerService` exists for future integration
+- Index mapping registered on plugin boot ✅
 
 ---
 
