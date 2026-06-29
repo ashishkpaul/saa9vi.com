@@ -22,6 +22,7 @@ import { BbbInstructorAssignment } from "./entities/instructor-assignment.entity
 import { BbbWebhookEvent } from "./entities/bbb-webhook-event.entity";
 import { BbbEntitlement } from "./entities/bbb-entitlement.entity";
 import { BbbOrganizationMembership } from "./entities/bbb-organization-membership.entity";
+import { EventLog } from "../../platform/tracing/entities/event-log.entity";
 
 import { BbbEncryptionService } from "./services/bbb-encryption.service";
 import { BbbApiService } from "./services/bbb-api.service";
@@ -42,6 +43,8 @@ import { BbbMembershipService } from "./services/bbb-membership.service";
 import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.listener";
 
 import { CorrelationInterceptor } from "../../platform/tracing/correlation-interceptor";
+import { BullMQTracer } from "../../platform/tracing/bullmq-tracer";
+import { WebhookRecorder } from "../../platform/tracing/webhook-recorder";
 import { BbbAdminResolver } from "./api/bbb-admin.resolver";
 import { BbbShopResolver } from "./api/bbb-shop.resolver";
 import { BbbWebhookController } from "./workers/bbb-webhook.controller";
@@ -74,6 +77,7 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     BbbWebhookEvent,
     BbbEntitlement,
     BbbOrganizationMembership,
+    EventLog,
   ],
 
   providers: [
@@ -83,6 +87,8 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     },
     CorrelationInterceptor,
     BbbEncryptionService,
+    BullMQTracer,
+    WebhookRecorder,
     BbbApiService,
     BbbServerService,
     BbbOrganizationService,

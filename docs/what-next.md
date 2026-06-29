@@ -46,7 +46,7 @@ Also add `sourceType` and `isUnbounded` fields to the `BbbCapacityGrant` GraphQL
 
 ---
 
-## Task 2 — CorrelationContext Thread-Safety Fix
+## Task 2 — CorrelationContext Thread-Safety Fix ✅ Done
 
 **File:** `src/platform/tracing/correlation-context.ts`
 
@@ -54,9 +54,19 @@ Also add `sourceType` and `isUnbounded` fields to the `BbbCapacityGrant` GraphQL
 
 `CorrelationContext` uses static class properties (`private static current`, `private static stack`). In a Node.js server handling concurrent requests, this is a shared mutable singleton — two concurrent requests will corrupt each other's correlation IDs. The current `getParent()` method also diverges from the API expected by `BullMQTracer` and `EventBusInterceptor`.
 
-### What to do
+### Status
 
-Replace static properties with Node.js `AsyncLocalStorage`:
+`CorrelationContext` now uses `AsyncLocalStorage` instead of static class properties. `CorrelationInterceptor` wraps each request in `CorrelationContext.run()` and is registered as a global `APP_INTERCEPTOR`.
+
+### Verification
+
+- Two concurrent requests never share a `correlationId`
+- `BullMQTracer` and `EventBusInterceptor` receive request-scoped correlation IDs
+- Existing `CorrelationContext.set/get/pop/getParent/reset` API is unchanged — callers don't need updating
+
+### What was done
+
+Replaced static properties with Node.js `AsyncLocalStorage`:
 
 ```typescript
 import { AsyncLocalStorage } from 'async_hooks';
@@ -187,7 +197,7 @@ Add `EventLog` entity to the plugin's `entities` array if not already present.
 
 ## Task 4 — Production Readiness: `RedisCachePlugin` Missing
 
-**Reference:** Vendure docs — horizontal-scaling
+**Reference:** Vendure docs — horizontal-scaling (https://docs.vendure.io/current/core/reference/typescript-api/cache/redis-cache-plugin and https://docs.vendure.io/current/core/deployment/horizontal-scaling)
 **File:** `src/vendure-config.ts`
 
 ### Problem

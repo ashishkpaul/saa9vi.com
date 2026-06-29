@@ -1,7 +1,11 @@
 import { EventLog, EventLogSource } from "./entities/event-log.entity";
 import { CorrelationContext } from "./correlation-context";
+import { Injectable } from "@nestjs/common";
+import { Repository } from "typeorm";
 
+@Injectable()
 export class BullMQTracer {
+  constructor(private readonly eventLogRepo: Repository<EventLog>) {}
   async traceJob<T>(
     jobName: string,
     jobId: string,
@@ -66,9 +70,12 @@ export class BullMQTracer {
   }
 
   private async persistLog(log: EventLog): Promise<void> {
-    // Delegate to a repository injected at composition root.
-    // Kept as no-op here so the tracer can be used without a live DB
-    // during static analysis or tests.
+    try {
+      await this.eventLogRepo.save(log);
+    } catch (err) {
+      // Non-fatal — tracing must never break production flows
+      console.warn("[BullMQTracer] Failed to persist event log:", err);
+    }
   }
 
   private sanitize(value: unknown): unknown {
