@@ -1,11 +1,20 @@
 import { EventLog, EventLogSource } from "./entities/event-log.entity";
 import { CorrelationContext } from "./correlation-context";
 import { Injectable } from "@nestjs/common";
-import { Repository } from "typeorm";
+import { TransactionalConnection } from "@vendure/core";
 
 @Injectable()
 export class WebhookRecorder {
-  constructor(private readonly eventLogRepo: Repository<EventLog>) {}
+  constructor(private readonly connection: TransactionalConnection) {}
+
+  private async persist(log: EventLog): Promise<void> {
+    try {
+      await this.connection.rawConnection.getRepository(EventLog).save(log);
+    } catch (err) {
+      // Non-fatal: tracing must not break production flows
+      console.warn("[WebhookRecorder] Failed to persist event log:", err);
+    }
+  }
   async recordReceived(
     eventType: string,
     payload: Record<string, unknown>,
@@ -46,12 +55,4 @@ export class WebhookRecorder {
     this.persist(log);
   }
 
-  private async persist(log: EventLog): Promise<void> {
-    try {
-      await this.eventLogRepo.save(log);
-    } catch (err) {
-      // Non-fatal: tracing must not break production flows
-      console.warn("[WebhookRecorder] Failed to persist event log:", err);
-    }
-  }
 }

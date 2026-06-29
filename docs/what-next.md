@@ -142,7 +142,7 @@ Add a NestJS middleware or interceptor to wrap each request in `CorrelationConte
 
 ---
 
-## Task 3 — `BullMQTracer.persistLog()` and `WebhookRecorder.persist()` are No-Ops
+## Task 3 — `BullMQTracer.persistLog()` and `WebhookRecorder.persist()` are No-Ops ✅ Done
 
 **Files:** `src/platform/tracing/bullmq-tracer.ts`, `src/platform/tracing/webhook-recorder.ts`
 

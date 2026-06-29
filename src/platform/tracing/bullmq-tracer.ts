@@ -1,11 +1,20 @@
 import { EventLog, EventLogSource } from "./entities/event-log.entity";
 import { CorrelationContext } from "./correlation-context";
 import { Injectable } from "@nestjs/common";
-import { Repository } from "typeorm";
+import { TransactionalConnection } from "@vendure/core";
 
 @Injectable()
 export class BullMQTracer {
-  constructor(private readonly eventLogRepo: Repository<EventLog>) {}
+  constructor(private readonly connection: TransactionalConnection) {}
+
+  private async persistLog(log: EventLog): Promise<void> {
+    try {
+      await this.connection.rawConnection.getRepository(EventLog).save(log);
+    } catch (err) {
+      // Non-fatal — tracing must never break production flows
+      console.warn("[BullMQTracer] Failed to persist event log:", err);
+    }
+  }
   async traceJob<T>(
     jobName: string,
     jobId: string,
@@ -69,14 +78,6 @@ export class BullMQTracer {
     }
   }
 
-  private async persistLog(log: EventLog): Promise<void> {
-    try {
-      await this.eventLogRepo.save(log);
-    } catch (err) {
-      // Non-fatal — tracing must never break production flows
-      console.warn("[BullMQTracer] Failed to persist event log:", err);
-    }
-  }
 
   private sanitize(value: unknown): unknown {
     if (value instanceof Date) return value.toISOString();
