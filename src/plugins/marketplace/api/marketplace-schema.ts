@@ -52,7 +52,6 @@ export const shopApiExtensions = gql`
     Queries platform-level Elasticsearch indices for cross-tenant discovery.
     """
     marketplaceSearch(input: MarketplaceSearchInput!): MarketplaceSearchResult!
-      @Allow(Permission.Public)
   }
 `;
 
@@ -62,6 +61,6 @@ export const adminApiExtensions = gql`
     Trigger a full reindex of all marketplace ES indices.
     Requires SuperAdmin permission.
     """
-    marketplaceFullReindex: Boolean! @Allow(Permission.SuperAdmin)
+    marketplaceFullReindex: Boolean!
   }
 `;
