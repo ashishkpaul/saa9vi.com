@@ -52,18 +52,6 @@ export class MarketplaceSearchResolver {
     }
   }
 
-  @Query()
-  @Allow(Permission.SuperAdmin)
-  async marketplaceFullReindex(): Promise<boolean> {
-    try {
-      await this.indexerService.fullReindex();
-      return true;
-    } catch (err: any) {
-      Logger.error(`Marketplace full reindex failed: ${err.message}`, loggerCtx, err.stack);
-      return false;
-    }
-  }
-
   private async searchSessions(
     query: string,
     subjectTags?: string[],

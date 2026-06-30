@@ -2,6 +2,7 @@ import { OnApplicationBootstrap } from '@nestjs/common';
 import { PluginCommonModule, VendurePlugin } from '@vendure/core';
 import { MarketplaceIndexerService } from './services/marketplace-indexer.service';
 import { MarketplaceSearchResolver } from './api/marketplace-search.resolver';
+import { MarketplaceAdminResolver } from './api/marketplace-admin.resolver';
 import { MarketplaceEventListener } from './listeners/marketplace-event.listener';
 import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema';
 
@@ -34,6 +35,7 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
   providers: [
     MarketplaceIndexerService,
     MarketplaceSearchResolver,
+    MarketplaceAdminResolver,
     MarketplaceEventListener,
   ],
   shopApiExtensions: {
@@ -42,7 +44,7 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
   },
   adminApiExtensions: {
     schema: adminApiExtensions,
-    resolvers: [MarketplaceSearchResolver],
+    resolvers: [MarketplaceAdminResolver],
   },
   configuration: (config) => {
     return config;
