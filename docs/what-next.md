@@ -176,76 +176,67 @@ Student searches "JEE maths coach Delhi" on marketplace.saa9vi.com
 
 ---
 
-## Task 5b — Phase 3 Prerequisite: `MarketplaceIndexerPlugin` scaffold
+## Task 5b — Phase 3 Prerequisite: `MarketplaceIndexerPlugin` ✅ Done
 
 **Reference:** ADR v1.6 §14 Phase 3, DL-020, INV-009
-**Priority:** Phase 3 — do not implement before Phase 1.5 is otherwise complete.
+**Priority:** Phase 3 — scaffold complete. Full Phase 3 features (sponsored listings, Bayesian rating, price from ProductVariant) are deferred.
 
-### Architectural insight: use Vendure's Product/ProductVariant as the bridge
+### What was built
 
-`BbbScheduledSession.productVariantId` already links a session to a Vendure `ProductVariant`. Vendure's `ProductEvent` and `ProductVariantEvent` fire on the EventBus whenever any product changes — across all channels. This means the `MarketplaceIndexerPlugin` does **not** need to poll raw Postgres tables. It subscribes to events Vendure already emits.
+A new `MarketplaceIndexerPlugin` in `src/plugins/marketplace/` with:
 
-```
-Tenant admin creates BbbScheduledSession with productVariantId
-  → Vendure ProductVariant is channel-scoped to mehta's channel
-  → ProductEvent fires on EventBus
-
-MarketplaceIndexerPlugin.onApplicationBootstrap()
-  → subscribes to ProductVariantEvent
-  → on event: reads Product.customFields.bbbSessionId + instructorProfileId
-  → looks up BbbScheduledSession + InstructorProfile
-  → writes to saa9vi_marketplace_sessions + saa9vi_marketplace_instructors (ES)
-```
-
-Vendure's default channel behaviour: new products are assigned to the default channel AND the tenant channel. For multi-tenant production this must be configured so **session products are only on the tenant channel** (not the default channel) — otherwise a student on the default channel could see all academies' products in a raw product list. The marketplace ES index provides the correct cross-tenant discovery surface; the default channel product list is not that surface.
-
-### Required `Product` custom fields (add to `vendure-config.ts`)
-
-```typescript
-customFields: {
-  Product: [
-    { name: 'bbbSessionId',        type: 'string', nullable: true, public: false },
-    { name: 'instructorProfileId', type: 'string', nullable: true, public: false },
-  ],
-}
-```
-
-Set these in `BbbScheduledSessionService.create()` when `productVariantId` is provided — after the product is created. This gives the `MarketplaceIndexerPlugin` a clean join key.
-
-### What to build
-
-A new `MarketplaceIndexerPlugin` with:
-
-| Index | Trigger | Source |
+| Component | File | Purpose |
 |---|---|---|
-| `saa9vi_marketplace_sessions` | `ProductVariantEvent` where `Product.customFields.bbbSessionId != null` | `BbbScheduledSession` + `TenantProfile` |
-| `saa9vi_marketplace_instructors` | `InstructorProfileCreatedEvent` / `InstructorProfileUpdatedEvent` | `InstructorProfile` + `TenantProfile` |
+| Plugin | `marketplace-indexer.plugin.ts` | Vendure plugin registration, ES index creation on bootstrap |
+| Indexer service | `services/marketplace-indexer.service.ts` | ES client, `indexSession()`, `indexInstructor()`, `deleteSession()`, `deleteInstructor()`, `fullReindex()` |
+| Search resolver | `api/marketplace-search.resolver.ts` | `marketplaceSearch` (public Shop API) + `marketplaceFullReindex` (SuperAdmin) |
+| GraphQL schema | `api/marketplace-schema.ts` | `MarketplaceSession`, `MarketplaceInstructor`, `MarketplaceSearchResult`, `MarketplaceSearchInput` types |
+| Event listener | `listeners/marketplace-event.listener.ts` | Subscribes to `InstructorProfileCreatedEvent` / `InstructorProfileUpdatedEvent` → triggers marketplace index update |
 
-Key design rules (INV-009):
-- Index writes via BullMQ jobs only — never in the HTTP request path
-- Authoritative data stays in Postgres; ES is a derived read projection
-- `MarketplaceSearchResolver` queries ES with no channel token — public, unauthenticated
-- All commerce (checkout, entitlement) routes to `mehta.saa9vi.com` channel — INV-001 preserved
+### Event-driven architecture
 
-`saa9vi_marketplace_sessions` document shape:
-```typescript
-{
-  id: string;                  // BbbScheduledSession.id
-  productVariantId: string;    // Vendure ProductVariant.id — checkout target
-  channelToken: string;        // for storefront routing → mehta.saa9vi.com
-  title: string;
-  startTime: Date;
-  endTime: Date;
-  priceInPaise: number;        // from ProductVariant.price
-  academyName: string;         // from TenantProfile.name
-  academySlug: string;
-  instructorName: string | null;
-  subjectTags: string[];
-  bayesianRating: number;      // from ReviewsPlugin aggregate
-  isSponsored: boolean;        // Phase 3: from MarketplaceAdCampaign
-  sponsorBoost: number;        // function-score multiplier (DL-022)
+```
+InstructorProfileService.create()
+  → publishes InstructorProfileCreatedEvent (Vendure EventBus)
+  → MarketplaceEventListener.handleInstructorCreated()
+  → MarketplaceIndexerService.indexInstructor()
+  → writes to saa9vi_marketplace_instructors ES index
+```
+
+### Indices created
+
+| Index | Document shape | Trigger |
+|---|---|---|
+| `saa9vi_marketplace_sessions` | `{ id, productVariantId, channelToken, channelId, title, startTime, endTime, priceInPaise, academyName, academySlug, instructorName, subjectTags, bayesianRating, isSponsored, sponsorBoost }` | `ProductVariantEvent` (Phase 3 — not yet wired) |
+| `saa9vi_marketplace_instructors` | `{ id, channelId, channelToken, name, bio, slug, photoUrl, subjectTags, reviewRating, academyName, academySlug }` | `InstructorProfileCreatedEvent` / `InstructorProfileUpdatedEvent` ✅ Live |
+
+### Search query
+
+```graphql
+query SearchMarketplace($input: MarketplaceSearchInput!) {
+  marketplaceSearch(input: $input) {
+    sessions { id title academyName priceInPaise bayesianRating isSponsored }
+    instructors { id name academyName subjectTags }
+    totalSessions
+    totalInstructors
+  }
 }
 ```
+
+Results are ranked by `function_score` combining `bayesianRating` (log1p) with a 3× weight boost for `isSponsored: true` sessions.
+
+### Registration
+
+`MarketplaceIndexerPlugin` is registered in `vendure-config.ts` plugins array.
+
+### Phase 3 gaps (not yet implemented)
+
+- Sponsored listing bid-boost from `MarketplaceAdCampaign` entity
+- Bayesian rating from `ReviewsPlugin` aggregate
+- Price from `ProductVariant.price` (currently hardcoded to 0)
+- `ProductVariantEvent` subscription for session index updates
+- BullMQ job queue for async index writes (currently inline in event handlers)
+- `Product.customFields.bbbSessionId` and `instructorProfileId` — defined in `vendure-config.ts` but not yet populated in `BbbScheduledSessionService.create()`
 
 
 

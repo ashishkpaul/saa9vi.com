@@ -4,9 +4,11 @@ import {
   TransactionalConnection,
   ChannelService,
   EntityNotFoundError,
+  EventBus,
 } from '@vendure/core';
 import { InstructorProfile } from '../entities/instructor-profile.entity';
 import { InstructorIndexerService } from './instructor-indexer.service';
+import { InstructorProfileCreatedEvent, InstructorProfileUpdatedEvent } from '../events/tenant-events';
 
 @Injectable()
 export class InstructorProfileService {
@@ -14,6 +16,7 @@ export class InstructorProfileService {
     private readonly connection: TransactionalConnection,
     private readonly channelService: ChannelService,
     private readonly indexerService: InstructorIndexerService,
+    private readonly eventBus: EventBus,
   ) {}
 
   async findAll(ctx: RequestContext, options?: { skip?: number; take?: number }): Promise<{ items: InstructorProfile[]; totalItems: number }> {
@@ -84,6 +87,17 @@ export class InstructorProfileService {
       }
     }
 
+    // Publish event for marketplace indexer and other subscribers
+    try {
+      this.eventBus.publish(new InstructorProfileCreatedEvent(
+        String(saved.id),
+        saved.channelId,
+      ));
+    } catch (err) {
+      // Non-fatal: event publishing failure should not break profile creation
+      console.warn(`Failed to publish InstructorProfileCreatedEvent for ${saved.id}: ${err}`);
+    }
+
     return saved;
   }
 
@@ -104,6 +118,17 @@ export class InstructorProfileService {
       }
     } catch (err) {
       console.warn(`Failed to update Elasticsearch index for profile ${saved.id}: ${err}`);
+    }
+
+    // Publish event for marketplace indexer and other subscribers
+    try {
+      this.eventBus.publish(new InstructorProfileUpdatedEvent(
+        String(saved.id),
+        saved.channelId,
+        Object.keys(input),
+      ));
+    } catch (err) {
+      console.warn(`Failed to publish InstructorProfileUpdatedEvent for ${saved.id}: ${err}`);
     }
 
     return saved;
