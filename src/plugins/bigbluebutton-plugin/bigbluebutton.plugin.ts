@@ -42,6 +42,7 @@ import { BbbEntitlementService } from "./services/bbb-entitlement.service";
 import { BbbMembershipService } from "./services/bbb-membership.service";
 import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.listener";
 
+import { PlatformTracingModule } from "../../platform/tracing/platform-tracing.module";
 import { CorrelationInterceptor } from "../../platform/tracing/correlation-interceptor";
 import { BullMQTracer } from "../../platform/tracing/bullmq-tracer";
 import { WebhookRecorder } from "../../platform/tracing/webhook-recorder";
@@ -59,7 +60,7 @@ import { BigBlueButtonPluginOptions } from "./types";
 import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
 
 @VendurePlugin({
-  imports: [PluginCommonModule],
+  imports: [PluginCommonModule, PlatformTracingModule],
 
   entities: [
     BbbServer,
@@ -105,10 +106,6 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     BbbEntitlementService,
     BbbMembershipService,
     BbbOrderFulfillmentListener,
-    {
-      provide: 'APP_INTERCEPTOR',
-      useClass: CorrelationInterceptor,
-    },
   ],
 
   adminApiExtensions: {

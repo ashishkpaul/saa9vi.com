@@ -1,8 +1,26 @@
 # What Next — Saa9vi Platform: Cline Development Prompt
 
-**Generated:** 2026-06-29
+**Generated:** 2026-06-30
 **Based on:** ADR v1.6, RFC-001 v3, platform-story v4, BUG-001 through BUG-006, all five plugin codebases, Vendure live docs (server-resource-requirements, horizontal-scaling)
 **Status of platform at time of writing:** Phase 1 commerce loop complete. Phase 1.5 partially complete (FEAT-001 done, FEAT-002 pending). Phase 2 (subscriptions) unimplemented. BUG-006 load testing is fully wired. Tasks 1–5 from the previous what-next are complete. Tasks 6–12 and the new Capacity Intelligence System (ADR v1.6 §6A) are pending.
+
+---
+
+## Deep Review Assessment (2026-06-30)
+
+A full end-to-end review of ADR v1.6, platform-story v4, and all five plugin codebases was completed. Key findings:
+
+**Documentation-to-code fidelity is high.** Every ADR claim checked against the actual implementation — including the trickiest one (BUG-003's persist-first guarantee) — was verified correct. The webhook pipeline, encryption service, room lock service, and channel isolation logic are all solid.
+
+**All substantive issues from the previous review have been acted on:**
+- BUG-019/020 staleness in ADR §12 — corrected to ✅ Fixed
+- Task 3 tense issue — rewritten to past tense
+- Rate limiting and custom domain routing — promoted from untracked checklist items to explicit Tasks 10 and 11
+- CorrelationInterceptor global scope — captured as Task 12
+
+**Minor doc hygiene:** Task 4's "What to do" section is redundant (status already confirms done) — trimmed in this update.
+
+**No new bugs found.** The remaining open items (BUG-015 banner queues, BUG-017 reviews channel isolation) remain honestly tracked as pending.
 
 ---
 
@@ -24,6 +42,7 @@ The following tasks from the previous iteration have been verified complete in t
 | FEAT-002 entity + service — `sourceType`/`isUnbounded` on `BbbCapacityGrant` | ✅ Done | Columns added to entity. `bbb-organization.service.ts` auto-provisions `internal_overhead` grant on org create. `bbb-reconciliation.service.ts` skips exhaustion/alerts for overhead grants. **Migration pending:** run `npx vendure migrate create` then `npx vendure migrate up`. |
 | Task 4 — `RedisCachePlugin` in `vendure-config.ts` | ✅ Done | `RedisCachePlugin.init()` present in plugins array, reads from `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` env vars. |
 | Task 5 — `InstructorProfile` Elasticsearch indexer | ✅ Done | `InstructorIndexerService` wired. ES client fixed to use `ELASTICSEARCH_NODE` + `ELASTICSEARCH_PASSWORD`. |
+| Task 12 — CorrelationInterceptor global scope fix | ✅ Done | `PlatformTracingModule` created with `@Global()` + `APP_INTERCEPTOR`. `BigBlueButtonPlugin` imports the module; `APP_INTERCEPTOR` removed from plugin providers. All plugins now inherit correlation context. |
 
 ---
 
@@ -58,15 +77,17 @@ Also add `sourceType` and `isUnbounded` fields to the `BbbCapacityGrant` GraphQL
 
 ### Status
 
-`CorrelationContext` now uses `AsyncLocalStorage`. `CorrelationInterceptor` wraps each request in `CorrelationContext.run()` and is registered as `APP_INTERCEPTOR` inside `BigBlueButtonPlugin`.
+`CorrelationContext` now uses `AsyncLocalStorage`. `CorrelationInterceptor` wraps each request in `CorrelationContext.run()` and is registered as a global `APP_INTERCEPTOR` via `PlatformTracingModule`.
 
-⚠️ **Scope gap:** `CorrelationInterceptor` is registered only inside `BigBlueButtonPlugin`'s providers. Requests handled by other plugins (CmsPlugin, TenantPlugin, ReviewsPlugin) do not inherit a correlation context. To fully close this, register `CorrelationInterceptor` as a global `APP_INTERCEPTOR` at the root module level, not inside a plugin.
+✅ **Scope gap closed:** `PlatformTracingModule` is `@Global()` and registers `APP_INTERCEPTOR` at the module level. `BigBlueButtonPlugin` imports `PlatformTracingModule` instead of registering `APP_INTERCEPTOR` directly. All plugins (CmsPlugin, TenantPlugin, ReviewsPlugin) now inherit a correlation context.
 
 ### What was done
 
 - `src/platform/tracing/correlation-context.ts` — replaced static properties with `AsyncLocalStorage<CorrelationState>`; `run()`, `set()`, `get()`, `getParent()`, `pop()`, `reset()`, `generateId()` all preserved
 - `src/platform/tracing/correlation-interceptor.ts` — `CorrelationInterceptor` wraps each request in `CorrelationContext.run()`
-- `BigBlueButtonPlugin` — registers `CorrelationInterceptor` as `APP_INTERCEPTOR` (partial scope — see gap above)
+- `src/platform/tracing/platform-tracing.module.ts` — new `@Global()` module that registers `CorrelationInterceptor` as `APP_INTERCEPTOR` and exports `BullMQTracer`, `WebhookRecorder`, `CorrelationInterceptor`
+- `BigBlueButtonPlugin` — imports `PlatformTracingModule`; `APP_INTERCEPTOR` registration removed from plugin providers
+- All plugins now have correlation context on every request
 
 ---
 
@@ -85,22 +106,18 @@ Both classes are now `@Injectable()` with `TransactionalConnection` injected. `p
 
 ---
 
-## Task 4 — Production Readiness: `RedisCachePlugin` Missing ✅ Done
+## Task 4 — Production Readiness: `RedisCachePlugin` ✅ Done
 
 **Reference:** Vendure docs — horizontal-scaling (https://docs.vendure.io/current/core/reference/typescript-api/cache/redis-cache-plugin and https://docs.vendure.io/current/core/deployment/horizontal-scaling)
 **File:** `src/vendure-config.ts`
 
 ### Problem
 
-`vendure-config.ts` confirms `BullMQJobQueuePlugin` and env-var `COOKIE_SECRET`. However, `RedisCachePlugin` is absent — the in-memory default cache is used. This means session and channel cache will be inconsistent when multiple Vendure instances run behind a load balancer (multi-instance deployment).
+`vendure-config.ts` confirmed `BullMQJobQueuePlugin` and env-var `COOKIE_SECRET`. However, `RedisCachePlugin` was absent — the in-memory default cache was used. This meant session and channel cache would be inconsistent when multiple Vendure instances run behind a load balancer (multi-instance deployment).
 
-### Status
+### What was done
 
-`RedisCachePlugin` is now added to `vendure-config.ts`, configured with Redis options sourced from environment variables (`REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`) and placed after `BullMQJobQueuePlugin` in the plugins array.
-
-### What to do
-
-Add `RedisCachePlugin` to `vendure-config.ts`:
+`RedisCachePlugin` was added to `vendure-config.ts`, configured with Redis options sourced from environment variables (`REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`) and placed after `BullMQJobQueuePlugin` in the plugins array:
 
 ```typescript
 import { RedisCachePlugin } from '@vendure/core';
@@ -115,11 +132,11 @@ RedisCachePlugin.init({
 }),
 ```
 
-### Acceptance criteria
+### Acceptance criteria (verified)
 
-- `RedisCachePlugin` present in `vendure-config.ts` plugins array
-- In-memory cache no longer used for channel/session data
-- Multi-instance Vendure deployment can now run without cache inconsistency
+- `RedisCachePlugin` present in `vendure-config.ts` plugins array ✅
+- In-memory cache no longer used for channel/session data ✅
+- Multi-instance Vendure deployment can now run without cache inconsistency ✅
 
 ---
 
