@@ -6,8 +6,8 @@ import { LoadSimulationService } from "./load-simulation.service";
 export class LoadSimulationResolver {
   constructor(private service: LoadSimulationService) {}
 
-  @Allow(Permission.SuperAdmin)
   @Query()
+  @Allow(Permission.SuperAdmin)
   async runLoadTest(_: any, args: { profile: string }) {
     return this.service.run(args.profile);
   }

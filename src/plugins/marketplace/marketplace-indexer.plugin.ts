@@ -13,6 +13,16 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
  * - `saa9vi_marketplace_sessions` — public BbbScheduledSession listings
  * - `saa9vi_marketplace_instructors` — public InstructorProfile listings
  *
+ * ⚠️ DEPENDENCY REQUIREMENTS (registration order is critical):
+ * - **TenantPlugin** must be registered FIRST — this plugin queries
+ *   `TenantProfile` and `InstructorProfile` via TransactionalConnection,
+ *   which are TypeORM entities registered by TenantPlugin. If TenantPlugin
+ *   is absent, TypeORM metadata resolution fails, cascading into a
+ *   GraphQL schema-merge crash.
+ * - **BigBlueButtonPlugin** must be registered FIRST — this plugin queries
+ *   `BbbScheduledSession` via TransactionalConnection, a BBB entity.
+ *   Same TypeORM metadata dependency applies.
+ *
  * Key design rules (INV-009):
  * - ES indices are derived read projections. Authoritative data stays in Postgres.
  * - All commerce (checkout, entitlement) routes to the tenant's channel — INV-001 preserved.
@@ -34,8 +44,6 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
   entities: [],
   providers: [
     MarketplaceIndexerService,
-    MarketplaceSearchResolver,
-    MarketplaceAdminResolver,
     MarketplaceEventListener,
   ],
   shopApiExtensions: {
