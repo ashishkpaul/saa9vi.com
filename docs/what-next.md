@@ -188,51 +188,26 @@ Results are ranked by `function_score` combining `bayesianRating` (log1p) with a
 
 ---
 
-## Task 6 — Phase 1.5: `myLearningDashboard` Shop API Query
+## Task 6 — Phase 1.5: `myLearningDashboard` Shop API Query ✅ Done
 
 **Reference:** ADR v1.7 ADR-013 Implementation Checklist item 1; INV-006
 
-### What to do
+**Status:** ✅ Implemented. `LearningDashboardService` aggregates `BbbEntitlement` rows for the current customer, fetches linked `BbbScheduledSession` data, resolves `instructorName` from `InstructorProfile`, checks `canJoin` via `BbbEntitlementService.hasAccess()` combined with session LIVE status, and generates `joinUrl` only when `canJoin = true`. The GraphQL types (`LearningDashboard`, `LearningCourse`, `SessionWindow`) have no `Bbb*` prefix — INV-006 enforced.
 
-Add a `myLearningDashboard` Shop API query that aggregates:
+### Files changed
 
-- Active `BbbEntitlement` rows for the current customer
-- Linked `BbbScheduledSession` data (title, startsAt, endsAt)
-- `canJoin` boolean (calls `entitlementService.hasAccess()` internally)
-- `joinUrl` (populated only when `canJoin = true` and session is LIVE)
-- `instructorName` (from `InstructorProfile` if linked)
-
-```graphql
-type Query {
-  myLearningDashboard: LearningDashboard! @Allow(Permission.Authenticated)
-}
-
-type LearningDashboard {
-  courses: [LearningCourse!]!
-}
-
-type LearningCourse {
-  id: ID!
-  title: String!
-  canJoin: Boolean!
-  joinUrl: String
-  nextSession: SessionWindow
-  instructorName: String
-  entitlementType: String!
-  entitlementSource: String!
-}
-
-type SessionWindow {
-  startsAt: DateTime!
-  endsAt: DateTime!
-}
-```
+| File | Change |
+|---|---|
+| `src/plugins/bigbluebutton-plugin/services/learning-dashboard.service.ts` | **New** — Domain API service aggregating entitlements, sessions, instructor names, and join URLs |
+| `src/plugins/bigbluebutton-plugin/api/schema/bbb-shop.schema.ts` | Added `LearningDashboard`, `LearningCourse`, `SessionWindow` types and `myLearningDashboard` query |
+| `src/plugins/bigbluebutton-plugin/api/bbb-shop.resolver.ts` | Added `myLearningDashboard` resolver method + `LearningDashboardService` injection |
+| `src/plugins/bigbluebutton-plugin/bigbluebutton.plugin.ts` | Registered `LearningDashboardService` in providers |
 
 ### Acceptance criteria
 
-- Storefront can call `myLearningDashboard` without querying `bbbEntitlements` directly (INV-008)
-- `canJoin` correctly returns `false` for future sessions, `true` only when session is LIVE and entitlement is valid
-- No `Bbb*` or `Cms*` prefixed type appears as a top-level storefront query (INV-006 lint rule)
+- ✅ Storefront can call `myLearningDashboard` without querying `bbbEntitlements` directly (INV-008)
+- ✅ `canJoin` correctly returns `false` for future sessions, `true` only when session is LIVE and entitlement is valid
+- ✅ No `Bbb*` or `Cms*` prefixed type appears as a top-level storefront query (INV-006 lint rule)
 
 ---
 

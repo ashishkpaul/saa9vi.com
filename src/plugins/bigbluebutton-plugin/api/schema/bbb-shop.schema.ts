@@ -82,6 +82,29 @@ export const shopApiExtensions = gql`
     attendedAt: DateTime
   }
 
+  # ─── Learning Dashboard (Phase 1.5, ADR-013 INV-006) ──────────────────────
+  # Domain API — no Bbb* prefix. Storefront-facing contract.
+
+  type SessionWindow {
+    startsAt: DateTime!
+    endsAt: DateTime!
+  }
+
+  type LearningCourse {
+    id: ID!
+    title: String!
+    canJoin: Boolean!
+    joinUrl: String
+    nextSession: SessionWindow
+    instructorName: String
+    entitlementType: String!
+    entitlementSource: String!
+  }
+
+  type LearningDashboard {
+    courses: [LearningCourse!]!
+  }
+
   extend type Query {
     myBbbMeetings(skip: Int, take: Int): BbbMeetingPublicList!
     myBbbCapacityGrants: [BbbCapacityGrantPublic!]!
@@ -91,6 +114,11 @@ export const shopApiExtensions = gql`
     myBbbEnrollments: [BbbEnrollmentPublic!]!
     myTrialRegistrations: [BbbTrialRegistrationPublic!]!
     publicScheduledSessions: [BbbScheduledSessionPublic!]!
+    """
+    Student learning dashboard — aggregates entitlements, sessions, and join URLs
+    into a single domain API. No Bbb* types exposed (INV-006).
+    """
+    myLearningDashboard: LearningDashboard! @Allow(Permission.Authenticated)
   }
 
   extend type Mutation {

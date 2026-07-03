@@ -40,6 +40,7 @@ import { TrialRegistrationService } from "./services/trial-registration.service"
 import { BbbWebhookProcessorService } from "./services/bbb-webhook-processor.service";
 import { BbbEntitlementService } from "./services/bbb-entitlement.service";
 import { BbbMembershipService } from "./services/bbb-membership.service";
+import { LearningDashboardService } from "./services/learning-dashboard.service";
 import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.listener";
 
 import { PlatformTracingModule } from "../../platform/tracing/platform-tracing.module";
@@ -105,6 +106,7 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     BbbWebhookProcessorService,
     BbbEntitlementService,
     BbbMembershipService,
+    LearningDashboardService,
     BbbOrderFulfillmentListener,
   ],
 

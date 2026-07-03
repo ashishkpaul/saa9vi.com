@@ -19,6 +19,7 @@ import { BbbRoomService } from "../services/bbb-room.service";
 import { BbbMemberService } from "../services/bbb-member.service";
 import { BbbScheduledSessionService } from "../services/bbb-scheduled-session.service";
 import { TrialRegistrationService } from "../services/trial-registration.service";
+import { LearningDashboardService } from "../services/learning-dashboard.service";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
@@ -37,6 +38,7 @@ export class BbbShopResolver {
     private readonly sessionService: BbbScheduledSessionService,
     private readonly connection: TransactionalConnection,
     private readonly trialRegistrationService: TrialRegistrationService,
+    private readonly learningDashboardService: LearningDashboardService,
   ) {}
 
   @Query()
@@ -431,6 +433,25 @@ export class BbbShopResolver {
       status: registration.status,
       registeredAt: registration.registeredAt.toISOString(),
     };
+  }
+
+  // ─── Learning Dashboard (Phase 1.5, ADR-013 INV-006) ──────────────────────
+
+  @Query()
+  @Allow(Permission.Authenticated)
+  async myLearningDashboard(
+    @Ctx() ctx: RequestContext,
+  ): Promise<{ courses: Array<{
+    id: string;
+    title: string;
+    canJoin: boolean;
+    joinUrl: string | null;
+    nextSession: { startsAt: string; endsAt: string } | null;
+    instructorName: string | null;
+    entitlementType: string;
+    entitlementSource: string;
+  }> }> {
+    return this.learningDashboardService.getDashboard(ctx);
   }
 
   @Mutation()
