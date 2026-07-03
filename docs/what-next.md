@@ -211,72 +211,26 @@ Results are ranked by `function_score` combining `bayesianRating` (log1p) with a
 
 ---
 
-## Task 7 — RFC-001 Q-009: `GrantReaderService` (Phase 2 prerequisite scaffold)
+## Task 7 — RFC-001 Q-009: `GrantReaderService` (Phase 2 prerequisite scaffold) ✅ Done
 
 **Reference:** RFC-001 v3 §7 Q-009
 **Priority:** Scaffold now. Required before Phase 2 implementation begins.
 
-### What to do
+**Status:** ✅ Implemented. `GrantReaderService` provides `resolveGrantForMeeting()`, `resolveEntityForMeeting()`, `findEarliestValidGrant()`, and `getRemainingMinutes()`. `BbbReconciliationService.consumeGrantHours()` now calls `grantReader.resolveEntityForMeeting()` instead of directly querying `BbbCapacityGrant`. The Q-009 seam is closed — adding `RecurringCapacityGrant` in Phase 2 requires only one new branch in `resolveGrantForMeeting()`.
 
-Create `src/plugins/bigbluebutton-plugin/services/grant-reader.service.ts`:
+### Files changed
 
-```typescript
-export interface CapacityGrantLike {
-  id: string;
-  grantedMinutes: number;
-  consumedMinutes: number;
-  validFrom: Date;
-  validUntil: Date;
-  exhausted: boolean;
-  isUnbounded: boolean;
-  sourceType: 'order' | 'subscription' | 'internal_overhead';
-}
-
-@Injectable()
-export class GrantReaderService {
-  constructor(
-    @InjectRepository(BbbCapacityGrant)
-    private phase1GrantRepo: Repository<BbbCapacityGrant>,
-  ) {}
-
-  async resolveGrantForMeeting(
-    grantId: string,
-    sourceType: 'order' | 'subscription' | 'internal_overhead',
-  ): Promise<CapacityGrantLike | null> {
-    if (sourceType === 'order' || sourceType === 'internal_overhead') {
-      return this.phase1GrantRepo.findOneBy({ id: grantId });
-    }
-    // Phase 2: query RecurringCapacityGrant table
-    throw new Error('RecurringCapacityGrant not yet implemented — Phase 2');
-  }
-
-  async findEarliestValidGrant(
-    organizationId: string,
-    sourceTypes: Array<'order' | 'subscription' | 'internal_overhead'>,
-  ): Promise<CapacityGrantLike | null> {
-    return this.phase1GrantRepo.findOne({
-      where: { organization: { id: organizationId }, exhausted: false },
-      order: { validUntil: 'ASC' },
-    });
-  }
-
-  /** Phase 2 integration point for CapacityIntelligenceService (RFC-001 Appendix C-5) */
-  async getRemainingMinutes(organizationId: string): Promise<number> {
-    const grants = await this.phase1GrantRepo.find({
-      where: { organization: { id: organizationId }, exhausted: false },
-    });
-    return grants.reduce((sum, g) => sum + (g.isUnbounded ? Infinity : g.grantedMinutes - g.consumedMinutes), 0);
-  }
-}
-```
-
-Update `BbbReconciliationService.consumeGrant()` to call `GrantReaderService.resolveGrantForMeeting()` instead of directly querying `BbbCapacityGrant` repository.
+| File | Change |
+|---|---|
+| `src/plugins/bigbluebutton-plugin/services/grant-reader.service.ts` | **New** — Abstracted grant resolution seam with `CapacityGrantLike` interface, `resolveGrantForMeeting()`, `resolveEntityForMeeting()`, `findEarliestValidGrant()`, `getRemainingMinutes()` |
+| `src/plugins/bigbluebutton-plugin/services/bbb-reconciliation.service.ts` | Injected `GrantReaderService`; `consumeGrantHours()` now calls `grantReader.resolveEntityForMeeting()` |
+| `src/plugins/bigbluebutton-plugin/bigbluebutton.plugin.ts` | Registered `GrantReaderService` in providers |
 
 ### Acceptance criteria
 
-- `consumeGrant()` calls `GrantReaderService`, not `BbbCapacityGrant` repo directly
-- Q-009 seam closed — adding `RecurringCapacityGrant` in Phase 2 requires only one new branch in `GrantReaderService`
-- RFC-001 Q-009 marked resolved
+- ✅ `consumeGrantHours()` calls `GrantReaderService`, not `BbbCapacityGrant` repo directly
+- ✅ Q-009 seam closed — adding `RecurringCapacityGrant` in Phase 2 requires only one new branch in `resolveGrantForMeeting()`
+- ✅ RFC-001 Q-009 marked resolved
 
 ---
 

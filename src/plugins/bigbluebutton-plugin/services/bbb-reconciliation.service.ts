@@ -14,6 +14,7 @@ import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbServerService } from "./bbb-server.service";
 import { BbbApiService } from "./bbb-api.service";
 import { BbbMeetingService } from "./bbb-meeting.service";
+import { GrantReaderService } from "./grant-reader.service";
 import {
   GrantConsumedEvent,
   CapacityExhaustedEvent,
@@ -34,6 +35,7 @@ export class BbbReconciliationService {
     @Inject(forwardRef(() => BbbMeetingService))
     private readonly meetingService: BbbMeetingService,
     private readonly eventBus: EventBus,
+    private readonly grantReader: GrantReaderService,
     @Inject(BBB_PLUGIN_OPTIONS)
     private readonly options: BigBlueButtonPluginOptions,
   ) {}
@@ -257,11 +259,12 @@ export class BbbReconciliationService {
     // Round up to nearest minute; minimum 1 minute.
     const durationMinutes = Math.max(1, Math.ceil(effectiveDurationMs / (1000 * 60)));
 
-    const grant = await this.connection
-      .getRepository(ctx, BbbCapacityGrant)
-      .findOne({ where: { id: meeting.grantId as string } });
+    // Resolve grant via GrantReaderService (RFC-001 Q-009 seam)
+    const grantEntity = await this.grantReader.resolveEntityForMeeting(
+      meeting.grantId as string,
+    );
 
-    if (!grant) {
+    if (!grantEntity) {
       Logger.warn(
         `Meeting ${meeting.id}: stored grantId ${meeting.grantId} not found`,
         loggerCtx,
@@ -269,13 +272,15 @@ export class BbbReconciliationService {
       return;
     }
 
+    const sourceType = grantEntity.sourceType;
+
     // Transactional: ledger + grant update must succeed or fail together
     await this.connection.rawConnection.transaction(
       async (em: EntityManager) => {
         const existing = await em.getRepository(BbbUsageLedger).findOne({
           where: {
             meeting: { id: meeting.id as string } as any,
-            grant: { id: grant.id as string } as any,
+            grant: { id: grantEntity.id as string } as any,
           },
         });
 
@@ -290,7 +295,7 @@ export class BbbReconciliationService {
         await em.getRepository(BbbUsageLedger).save(
           new BbbUsageLedger({
             meeting,
-            grant,
+            grant: grantEntity,
             consumedMinutes: durationMinutes,
             startedAt: provisionedAt,
             completedAt: endedAt,
@@ -298,7 +303,7 @@ export class BbbReconciliationService {
         );
 
         // internal_overhead grants: write ledger row only, skip exhaustion logic
-        if (grant.sourceType === "internal_overhead") {
+        if (sourceType === "internal_overhead") {
           return;
         }
 
@@ -312,29 +317,29 @@ export class BbbReconciliationService {
             exhausted: () =>
               `CASE WHEN ("consumedMinutes" + :increment) >= "grantedMinutes" THEN TRUE ELSE FALSE END`,
           })
-          .where("id = :id", { id: grant.id as string })
+          .where("id = :id", { id: grantEntity.id as string })
           .setParameters({ increment: durationMinutes })
           .execute();
       },
     );
 
     Logger.info(
-      `Billed meeting ${meeting.id}: ${durationMinutes}min consumed${meeting.billingCapped ? " (CAPPED)" : ""} (${(grant.consumedMinutes ?? 0) + durationMinutes}/${grant.grantedMinutes}min)`,
+      `Billed meeting ${meeting.id}: ${durationMinutes}min consumed${meeting.billingCapped ? " (CAPPED)" : ""} (${(grantEntity.consumedMinutes ?? 0) + durationMinutes}/${grantEntity.grantedMinutes}min)`,
       loggerCtx,
     );
 
     // internal_overhead grants don't participate in quota alerts
-    if (grant.sourceType === "internal_overhead") {
+    if (sourceType === "internal_overhead") {
       return;
     }
 
     const remainingMinutes =
-      (grant.grantedMinutes ?? 0) - ((grant.consumedMinutes ?? 0) + durationMinutes);
+      (grantEntity.grantedMinutes ?? 0) - ((grantEntity.consumedMinutes ?? 0) + durationMinutes);
     this.eventBus.publish(
       new GrantConsumedEvent(
-        grant.id as string,
+        grantEntity.id as string,
         meeting.id as string,
-        (grant.organization?.id as string) ?? "",
+        (grantEntity.organization?.id as string) ?? "",
         durationMinutes,
         Math.max(0, remainingMinutes),
       ),
