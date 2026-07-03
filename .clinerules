@@ -43,11 +43,10 @@
 * All database schema changes MUST be generated via Vendure CLI migration tooling.
 * NEVER manually create TypeORM migration files inside the project unless Vendure CLI cannot express the required schema change.
 
-### Correct workflow:
+### Check Correct workflow:
 
 ```bash
-npx vendure migrate create
-npx vendure migrate up
+npx vendure migrate --help
 ```
 
 (or plugin-scoped equivalents per project setup)

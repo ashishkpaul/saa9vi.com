@@ -4,10 +4,16 @@ import { MarketplaceIndexerService } from './services/marketplace-indexer.servic
 import { MarketplaceSearchResolver } from './api/marketplace-search.resolver';
 import { MarketplaceAdminResolver } from './api/marketplace-admin.resolver';
 import { MarketplaceEventListener } from './listeners/marketplace-event.listener';
+import { MarketplaceIndexQueueService } from './services/marketplace-index-queue.service';
+import { MarketplaceAdService } from './services/marketplace-ad.service';
+import { BayesianRatingService } from './services/bayesian-rating.service';
+import { MarketplaceAdCampaign } from './entities/marketplace-ad-campaign.entity';
+import { AdSpendLedger } from './entities/ad-spend-ledger.entity';
+import { AdWallet } from './entities/ad-wallet.entity';
 import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema';
 
 /**
- * MarketplaceIndexerPlugin — Phase 3 scaffold.
+ * MarketplaceIndexerPlugin — Phase 3.
  *
  * Provides platform-level Elasticsearch indices for cross-tenant discovery:
  * - `saa9vi_marketplace_sessions` — public BbbScheduledSession listings
@@ -32,19 +38,28 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
  * - `ProductVariantEvent` (Vendure EventBus) for session changes
  * - `InstructorProfileCreatedEvent` / `InstructorProfileUpdatedEvent` for instructor changes
  *
- * Phase 3 additions (not yet implemented):
- * - Sponsored listing bid-boost from MarketplaceAdCampaign
- * - Bayesian rating from ReviewsPlugin aggregate
- * - Price from ProductVariant.price
- * - BullMQ job queue for async index writes (currently inline in event handlers)
+ * Phase 3 additions (implemented):
+ * - Sponsored listing bid-boost from MarketplaceAdCampaign entity ✅
+ * - Bayesian rating from ReviewsPlugin aggregate ✅
+ * - Price from ProductVariant.price ✅
+ * - ProductVariantEvent subscription for session index updates ✅
+ * - BullMQ job queue for async index writes ✅
+ * - Product.customFields.bbbSessionId and instructorProfileId populated ✅
  */
 @VendurePlugin({
   compatibility: '^3.0.0',
   imports: [PluginCommonModule],
-  entities: [],
+  entities: [
+    MarketplaceAdCampaign,
+    AdSpendLedger,
+    AdWallet,
+  ],
   providers: [
     MarketplaceIndexerService,
     MarketplaceEventListener,
+    MarketplaceIndexQueueService,
+    MarketplaceAdService,
+    BayesianRatingService,
   ],
   shopApiExtensions: {
     schema: shopApiExtensions,

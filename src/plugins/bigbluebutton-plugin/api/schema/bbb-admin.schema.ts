@@ -206,6 +206,7 @@ export const adminApiExtensions = gql`
     organization: BbbOrganization!
     trainerId: ID!
     activeMeetingId: ID
+    productVariantId: ID
   }
 
   type BbbServerList {

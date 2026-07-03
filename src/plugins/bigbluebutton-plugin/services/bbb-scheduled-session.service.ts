@@ -12,7 +12,7 @@ import { BbbMeetingService } from "./bbb-meeting.service";
 import { BbbMemberService } from "./bbb-member.service";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbOrganizationMember } from "../entities/bbb-organization-member.entity";
-import { Customer } from "@vendure/core";
+import { Customer, Product, ProductVariant } from "@vendure/core";
 
 const loggerCtx = "BbbScheduledSessionService";
 
@@ -89,6 +89,7 @@ export class BbbScheduledSessionService {
       startTime: string;
       endTime: string;
       trainerId: ID;
+      productVariantId?: string;
     },
   ): Promise<BbbScheduledSession> {
     const org = await this.connection.getEntityOrThrow(
@@ -117,11 +118,48 @@ export class BbbScheduledSessionService {
       status: "SCHEDULED",
       activeMeeting: null,
       channelId: channelId ?? null,
+      productVariantId: input.productVariantId ?? null,
     });
 
     const saved = await this.connection
       .getRepository(ctx, BbbScheduledSession)
       .save(session);
+
+    // ─── Gap 6: Populate Product.customFields.bbbSessionId and instructorProfileId ──
+    if (input.productVariantId) {
+      try {
+        const variant = await this.connection
+          .getRepository(ctx, ProductVariant)
+          .findOne({
+            where: { id: input.productVariantId as any },
+            relations: ['product'],
+          });
+
+        if (variant) {
+          const product = (variant as any).product;
+          if (product) {
+            const productRepo = this.connection.getRepository(ctx, Product);
+            await productRepo.save({
+              ...product,
+              customFields: {
+                ...(product as any).customFields,
+                bbbSessionId: String(saved.id),
+                instructorProfileId: input.trainerId ? String(input.trainerId) : null,
+              },
+            });
+            Logger.info(
+              `Updated Product ${product.id} customFields: bbbSessionId=${saved.id}, instructorProfileId=${input.trainerId}`,
+              loggerCtx,
+            );
+          }
+        }
+      } catch (err: any) {
+        Logger.warn(
+          `Failed to update Product customFields for variant ${input.productVariantId}: ${err.message}`,
+          loggerCtx,
+        );
+      }
+    }
 
     Logger.info(
       `Scheduled session ${saved.id} created for org ${org.id} channel ${channelId ?? "none"}: "${input.title}"`,

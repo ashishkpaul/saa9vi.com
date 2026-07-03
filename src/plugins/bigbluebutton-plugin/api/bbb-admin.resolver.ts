@@ -117,6 +117,7 @@ interface CreateBbbScheduledSessionInput {
   startTime: string;
   endTime: string;
   trainerId: string;
+  productVariantId?: string;
 }
 
 @Resolver()

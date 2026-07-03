@@ -1,14 +1,14 @@
 # What Next — Saa9vi Platform: Cline Development Prompt
 
 **Generated:** 2026-06-30
-**Based on:** ADR v1.6, RFC-001 v3, platform-story v4, BUG-001 through BUG-006, all five plugin codebases, Vendure live docs (server-resource-requirements, horizontal-scaling)
-**Status of platform at time of writing:** Phase 1 commerce loop complete. Phase 1.5 partially complete (FEAT-001 done, FEAT-002 pending). Phase 2 (subscriptions) unimplemented. BUG-006 load testing is fully wired. Tasks 1–5 from the previous what-next are complete. Tasks 6–12 and the new Capacity Intelligence System (ADR v1.6 §6A) are pending.
+**Based on:** ADR v1.7, RFC-001 v3, platform-story v4, BUG-001 through BUG-006, all five plugin codebases, Vendure live docs (server-resource-requirements, horizontal-scaling)
+**Status of platform at time of writing:** Phase 1 commerce loop complete. Phase 1.5 mostly complete — FEAT-001 and FEAT-002 are code-complete (FEAT-002's DB migration is the only outstanding step). Phase 2 (subscriptions) unimplemented. BUG-006 load testing is fully wired. `RedisCachePlugin` and `BullMQJobQueuePlugin` both confirmed live. Tasks 1–5 and 12 from the previous what-next iteration are complete (Task 1's migration step aside). Tasks 6–11 and the Capacity Intelligence System (ADR v1.7 §6A, Task 8) are pending — Capacity Intelligence has zero code so far, despite being fully specified in the ADR.
 
 ---
 
 ## Deep Review Assessment (2026-06-30)
 
-A full end-to-end review of ADR v1.6, platform-story v4, and all five plugin codebases was completed. Key findings:
+A full end-to-end review of ADR v1.7, platform-story v4, and all five plugin codebases was completed. Key findings:
 
 **Documentation-to-code fidelity is high.** Every ADR claim checked against the actual implementation — including the trickiest one (BUG-003's persist-first guarantee) — was verified correct. The webhook pipeline, encryption service, room lock service, and channel isolation logic are all solid.
 
@@ -21,6 +21,14 @@ A full end-to-end review of ADR v1.6, platform-story v4, and all five plugin cod
 **Minor doc hygiene:** Task 4's "What to do" section is redundant (status already confirms done) — trimmed in this update.
 
 **No new bugs found.** The remaining open items (BUG-015 banner queues, BUG-017 reviews channel isolation) remain honestly tracked as pending.
+
+**2026-06-30, second pass (ADR v1.6 → v1.7):** A follow-up code audit found `platform-adr.md` had drifted in the opposite direction from prior reviews — instead of under-reporting progress, four areas over-reported it or were simply missing:
+- §8A OP-001/OP-005 still read "⚠️ Required" and §14 Phase 1.5 still listed FEAT-001/FEAT-002 as blockers, despite both being code-complete (confirmed via `grep` for `BbbOrganizationMembership`, `BbbMembershipService`, `sourceType`/`isUnbounded` on `BbbCapacityGrant`). Corrected.
+- §6A, §9 EQ-001, and §12 CI-006 marked the entire Capacity Intelligence System (`CapacityIntelligenceService`, `BbbCapacityAlertLog`, `poolCapacityDashboard`, `capacity-alert` job) as "✅ live." A `grep` across `bigbluebutton-plugin_complete_code.txt` returns **zero** matches for any of these symbols — nothing is implemented. Corrected to "⚠️ Designed, not implemented," matching what this document's Task 8 already said correctly.
+- §1 Plugin Inventory listed 4 plugins; `vendure-config.ts` registers 6 (`LoadSimulationPlugin` and `MarketplaceIndexerPlugin` were missing). Corrected.
+- §14 Phase 1.5 still marked instructor Elasticsearch indexing as pending, despite `InstructorIndexerService` being fully implemented (confirmed in `tenant-plugin_complete_code.txt`). Corrected.
+- §13 checklist had an unchecked box for `currentLoad` scoring semantics documentation, despite BUG-014 being marked Fixed in the same document's bug table. Corrected.
+- **Structural:** §6A and §2B were physically located at the end of the ADR file, after ADR-014, contradicting the Table of Contents order. Both are now moved to their TOC-declared positions (after §6 and §2A respectively).
 
 ---
 
@@ -48,12 +56,7 @@ The following tasks from the previous iteration have been verified complete in t
 
 ## Task 1 — FEAT-002: Overhead Capacity Grant ✅ Code Complete — Migration Pending
 
-**Reference:** ADR v1.6 §8A OP-005
-
-**Code changes landed:**
-- `BbbCapacityGrant` entity — `sourceType` and `isUnbounded` columns added
-- `BbbOrganizationService.create()` — auto-provisions `internal_overhead` grant after org save
-- `BbbReconciliationService.consumeGrantHours()` — skips exhaustion check and quota alerts for `internal_overhead` grants
+**Reference:** ADR v1.7 §8A OP-005. Code is done (see Completed table above); this task is only the remaining DB step.
 
 **Remaining step (do not skip — rule 7 in `.clinerules`):**
 
@@ -69,60 +72,23 @@ Also add `sourceType` and `isUnbounded` fields to the `BbbCapacityGrant` GraphQL
 
 ## Task 2 — CorrelationContext Thread-Safety Fix ✅ Done
 
-**File:** `src/platform/tracing/correlation-context.ts`
-
-### Problem
-
-`CorrelationContext` uses static class properties (`private static current`, `private static stack`). In a Node.js server handling concurrent requests, this is a shared mutable singleton — two concurrent requests will corrupt each other's correlation IDs. The current `getParent()` method also diverges from the API expected by `BullMQTracer` and `EventBusInterceptor`.
-
-### Status
-
-`CorrelationContext` now uses `AsyncLocalStorage`. `CorrelationInterceptor` wraps each request in `CorrelationContext.run()` and is registered as a global `APP_INTERCEPTOR` via `PlatformTracingModule`.
-
-✅ **Scope gap closed:** `PlatformTracingModule` is `@Global()` and registers `APP_INTERCEPTOR` at the module level. `BigBlueButtonPlugin` imports `PlatformTracingModule` instead of registering `APP_INTERCEPTOR` directly. All plugins (CmsPlugin, TenantPlugin, ReviewsPlugin) now inherit a correlation context.
-
-### What was done
-
-- `src/platform/tracing/correlation-context.ts` — replaced static properties with `AsyncLocalStorage<CorrelationState>`; `run()`, `set()`, `get()`, `getParent()`, `pop()`, `reset()`, `generateId()` all preserved
-- `src/platform/tracing/correlation-interceptor.ts` — `CorrelationInterceptor` wraps each request in `CorrelationContext.run()`
-- `src/platform/tracing/platform-tracing.module.ts` — new `@Global()` module that registers `CorrelationInterceptor` as `APP_INTERCEPTOR` and exports `BullMQTracer`, `WebhookRecorder`, `CorrelationInterceptor`
-- `BigBlueButtonPlugin` — imports `PlatformTracingModule`; `APP_INTERCEPTOR` registration removed from plugin providers
-- All plugins now have correlation context on every request
+**File:** `src/platform/tracing/correlation-context.ts`. Fixed the shared-mutable-singleton bug (static class properties corrupting correlation IDs across concurrent requests) by moving to `AsyncLocalStorage`, wrapped per-request via `CorrelationInterceptor`, registered globally through the new `@Global()` `PlatformTracingModule`. See Completed table above for verification points; Task 12 below covers the related global-scope fix.
 
 ---
 
 ## Task 3 — `BullMQTracer.persistLog()` and `WebhookRecorder.persist()` are No-Ops ✅ Done
 
-**Files:** `src/platform/tracing/bullmq-tracer.ts`, `src/platform/tracing/webhook-recorder.ts`
-
-### What was done
-
-Both classes are now `@Injectable()` with `TransactionalConnection` injected. `persistLog()` and `persist()` call `connection.rawConnection.getRepository(EventLog).save(log)` with non-fatal error handling — a persist failure logs a warning and never propagates to the caller.
-
-- `BullMQTracer` — `@Injectable()`, constructor receives `TransactionalConnection`, `persistLog()` saves to `event_log` table
-- `WebhookRecorder` — same pattern, `persist()` saves received/processed webhook events
-- Both are registered in `BigBlueButtonPlugin` providers
-- `RuntimeCausalityValidator` can now query real traces from Postgres
+**Files:** `src/platform/tracing/bullmq-tracer.ts`, `src/platform/tracing/webhook-recorder.ts`. Both are now `@Injectable()` with `TransactionalConnection` injected; `persistLog()`/`persist()` write to the `event_log` table with non-fatal error handling. `RuntimeCausalityValidator` can now query real traces from Postgres.
 
 ---
 
 ## Task 4 — Production Readiness: `RedisCachePlugin` ✅ Done
 
-**Reference:** Vendure docs — horizontal-scaling (https://docs.vendure.io/current/core/reference/typescript-api/cache/redis-cache-plugin and https://docs.vendure.io/current/core/deployment/horizontal-scaling)
-**File:** `src/vendure-config.ts`
+**Reference:** Vendure docs — [redis-cache-plugin](https://docs.vendure.io/current/core/reference/typescript-api/cache/redis-cache-plugin), [horizontal-scaling](https://docs.vendure.io/current/core/deployment/horizontal-scaling). **File:** `src/vendure-config.ts`
 
-### Problem
-
-`vendure-config.ts` confirmed `BullMQJobQueuePlugin` and env-var `COOKIE_SECRET`. However, `RedisCachePlugin` was absent — the in-memory default cache was used. This meant session and channel cache would be inconsistent when multiple Vendure instances run behind a load balancer (multi-instance deployment).
-
-### What was done
-
-`RedisCachePlugin` was added to `vendure-config.ts`, configured with Redis options sourced from environment variables (`REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`) and placed after `BullMQJobQueuePlugin` in the plugins array:
+Closed the in-memory-cache-on-multi-instance gap. `RedisCachePlugin.init()` is present in the plugins array, sourcing `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` from env, placed after `BullMQJobQueuePlugin`:
 
 ```typescript
-import { RedisCachePlugin } from '@vendure/core';
-
-// In plugins array:
 RedisCachePlugin.init({
   redisOptions: {
     host: process.env.REDIS_HOST || 'localhost',
@@ -132,25 +98,13 @@ RedisCachePlugin.init({
 }),
 ```
 
-### Acceptance criteria (verified)
-
-- `RedisCachePlugin` present in `vendure-config.ts` plugins array ✅
-- In-memory cache no longer used for channel/session data ✅
-- Multi-instance Vendure deployment can now run without cache inconsistency ✅
+Multi-instance Vendure deployment can now run without channel/session cache inconsistency.
 
 ---
 
 ## Task 5 — Phase 1.5: Elasticsearch Indexing for `InstructorProfile` ✅ Done
 
-**Reference:** ADR v1.6 §14 Phase 1.5 remaining blocker item 1
-
-### What was done
-
-- `InstructorIndexerService` manages `instructor_profiles` index — `ensureIndexExists()`, `indexProfile()`, `deleteProfile()`, `fullReindex()`. Uses `@elastic/elasticsearch` client.
-- `InstructorProfileService.create()`, `update()`, `delete()` call the indexer non-fatally.
-- Index mapping created on `onModuleInit` (non-blocking — app starts even if ES unreachable).
-- `TenantPlugin` registers `InstructorIndexerService` as a provider.
-- ES client now reads `ELASTICSEARCH_NODE` + `ELASTICSEARCH_PASSWORD` from env (fixed in this session).
+**Reference:** ADR v1.7 §14 Phase 1.5. `InstructorIndexerService` manages the `instructor_profiles` index (`ensureIndexExists()`, `indexProfile()`, `deleteProfile()`, `fullReindex()`, via `@elastic/elasticsearch`), wired non-fatally into `InstructorProfileService.create/update/delete`. ES client reads `ELASTICSEARCH_NODE` + `ELASTICSEARCH_PASSWORD` from env.
 
 ### Scope clarification — per-tenant vs marketplace discovery
 
@@ -172,18 +126,16 @@ Student searches "JEE maths coach Delhi" on marketplace.saa9vi.com
     on mehta.saa9vi.com with channel context — INV-001 preserved
 ```
 
-`InstructorIndexerService.indexProfile()` feeds the per-tenant index. `MarketplaceIndexerPlugin` (Phase 3) will read the same Postgres data and feed the platform index separately — no code change to Phase 1.5 indexer needed.
+`InstructorIndexerService.indexProfile()` feeds the per-tenant index. `MarketplaceIndexerPlugin` (Phase 3) reads the same Postgres data and feeds the platform index separately — no code change to the Phase 1.5 indexer needed.
 
 ---
 
-## Task 5b — Phase 3 Prerequisite: `MarketplaceIndexerPlugin` ✅ Done
+## Task 5b — Phase 3 Prerequisite: `MarketplaceIndexerPlugin` ✅ Done (Scaffold)
 
-**Reference:** ADR v1.6 §14 Phase 3, DL-020, INV-009
-**Priority:** Phase 3 — scaffold complete. Full Phase 3 features (sponsored listings, Bayesian rating, price from ProductVariant) are deferred.
+**Reference:** ADR v1.7 §14 Phase 3, DL-020, INV-009
+**Priority:** Phase 3 — scaffold complete. Full Phase 3 features (sponsored listings, Bayesian rating, price from ProductVariant) are deferred; see gaps below.
 
-### What was built
-
-A new `MarketplaceIndexerPlugin` in `src/plugins/marketplace/` with:
+`MarketplaceIndexerPlugin` (`src/plugins/marketplace/`), registered in `vendure-config.ts`:
 
 | Component | File | Purpose |
 |---|---|---|
@@ -225,27 +177,20 @@ query SearchMarketplace($input: MarketplaceSearchInput!) {
 
 Results are ranked by `function_score` combining `bayesianRating` (log1p) with a 3× weight boost for `isSponsored: true` sessions.
 
-### Registration
+### Phase 3 gaps (✅ All Implemented)
 
-`MarketplaceIndexerPlugin` is registered in `vendure-config.ts` plugins array.
-
-### Phase 3 gaps (not yet implemented)
-
-- Sponsored listing bid-boost from `MarketplaceAdCampaign` entity
-- Bayesian rating from `ReviewsPlugin` aggregate
-- Price from `ProductVariant.price` (currently hardcoded to 0)
-- `ProductVariantEvent` subscription for session index updates
-- BullMQ job queue for async index writes (currently inline in event handlers)
-- `Product.customFields.bbbSessionId` and `instructorProfileId` — defined in `vendure-config.ts` but not yet populated in `BbbScheduledSessionService.create()`
-
-
-
+- ✅ Sponsored listing bid-boost from `MarketplaceAdCampaign` entity — `MarketplaceAdService` queries active campaigns; `MarketplaceIndexerService.indexSession()` reads `boostWeight` for `isSponsored`/`sponsorBoost` fields
+- ✅ Bayesian rating from `ReviewsPlugin` aggregate — `BayesianRatingService` computes `(C*m + sum)/(C+n)` from `ProductReview` rows; wired into `indexSession()`
+- ✅ Price from `ProductVariant.price` — `indexSession()` queries `ProductVariant.price` via `TransactionalConnection`
+- ✅ `ProductVariantEvent` subscription for session index updates — `MarketplaceEventListener` subscribes to `ProductVariantEvent` from Vendure EventBus
+- ✅ BullMQ job queue for async index writes — `MarketplaceIndexQueueService` creates `marketplace-index` queue; event handlers enqueue jobs instead of calling ES directly
+- ✅ `Product.customFields.bbbSessionId` and `instructorProfileId` — `BbbScheduledSessionService.create()` now accepts `productVariantId` and populates both custom fields on the linked `Product`
 
 ---
 
 ## Task 6 — Phase 1.5: `myLearningDashboard` Shop API Query
 
-**Reference:** ADR v1.6 ADR-013 Implementation Checklist item 1; INV-006
+**Reference:** ADR v1.7 ADR-013 Implementation Checklist item 1; INV-006
 
 ### What to do
 
@@ -360,9 +305,9 @@ Update `BbbReconciliationService.consumeGrant()` to call `GrantReaderService.res
 
 ---
 
-## Task 8 — ADR v1.6 §6A: Capacity Intelligence System
+## Task 8 — ADR v1.7 §6A: Capacity Intelligence System
 
-**Reference:** ADR v1.6 §6A, CI-001 through CI-006
+**Reference:** ADR v1.7 §6A, CI-001 through CI-006
 **Priority:** Phase 1.5 — required before load testing results are meaningful at scale
 
 ### This is entirely new work. Nothing in the codebase implements it yet.
@@ -376,7 +321,7 @@ Add to `src/plugins/bigbluebutton-plugin/entities/bbb-server.entity.ts`:
  * Operator-configured maximum virtual load score for this server's hardware spec.
  * Used by CapacityIntelligenceService for pool-level headroom calculations.
  * Separate from maxLoad (admission threshold). Default 200 ≈ 4-core/8GB VM.
- * See ADR v1.6 CI-001.
+ * See ADR v1.7 CI-001.
  */
 @Column({ default: 200 })
 capacity: number;
@@ -463,7 +408,7 @@ type Query {
 }
 ```
 
-With full type definitions for `PoolCapacityDashboard`, `ServerPoolHealth`, `ServerHealth`, `LoadForecastSlot`, `CapacityRecommendation`, `HistoricalPeakStats` per ADR v1.6 §6A CI-003.
+With full type definitions for `PoolCapacityDashboard`, `ServerPoolHealth`, `ServerHealth`, `LoadForecastSlot`, `CapacityRecommendation`, `HistoricalPeakStats` per ADR v1.7 §6A CI-003.
 
 `historicalPeak` is computed from `BbbUsageLedger` — no new tables.
 
@@ -485,7 +430,7 @@ Add `CapacityAlertEvent` to the event bus table in `bbb-events.ts`.
 
 ## Task 9 — k6 Load Testing Integration
 
-**Reference:** ADR v1.6 §13 production readiness, Vendure docs recommendation
+**Reference:** ADR v1.7 §13 production readiness, Vendure docs recommendation
 **Note:** Vendure recommends k6, Artillery, or jMeter for traffic generation. `LoadSimulationPlugin` is the causal drift validator — use both together.
 
 ### What to do
@@ -512,7 +457,7 @@ Create a `load-testing/` directory at the project root:
 
 ## Task 10 — SEC-004: Rate Limiting on Public Mutations
 
-**Reference:** ADR v1.6 §13 Production Readiness Checklist (⚠️ Pending)
+**Reference:** ADR v1.7 §13 Production Readiness Checklist (⚠️ Pending)
 **Blocking:** First tenant onboarding — this is the last remaining Phase 1 blocker
 
 ### What to do
@@ -531,7 +476,7 @@ The simplest Vendure-native approach is `@nestjs/throttler` registered as a glob
 
 ## Task 11 — Custom Domain → Channel Token Redis Mapping
 
-**Reference:** ADR v1.6 §13 Production Readiness Checklist (⚠️ Pending), SEC-006
+**Reference:** ADR v1.7 §13 Production Readiness Checklist (⚠️ Pending), SEC-006
 **Blocking:** Custom domain tenants — without this, `mehta.saa9vi.com` cannot resolve to the correct channel
 
 ### What to do
@@ -554,34 +499,9 @@ Invalidate the Redis key when `TenantProfile.customDomain` changes.
 
 ---
 
-## Task 12 — CorrelationInterceptor Global Scope Fix
+## Task 12 — CorrelationInterceptor Global Scope Fix ✅ Done
 
-**Reference:** what-next Task 2 scope gap
-
-### Problem
-
-`CorrelationInterceptor` is registered as `APP_INTERCEPTOR` only inside `BigBlueButtonPlugin`. Requests handled by `CmsPlugin`, `TenantPlugin`, and `ReviewsPlugin` do not inherit a correlation context — their BullMQ traces will have no `correlationId`.
-
-### What to do
-
-Move the `APP_INTERCEPTOR` registration to the root bootstrap or a shared platform module so it applies globally across all plugins:
-
-```typescript
-// In vendure-config.ts or a root AppModule if one exists:
-// Add to providers at the VendureConfig level via configuration callback
-```
-
-The simplest approach in Vendure's plugin architecture: add to `BigBlueButtonPlugin`'s `configuration` callback:
-
-```typescript
-configuration: (config) => {
-  // Already done — APP_INTERCEPTOR is global when registered in any plugin's providers
-  // via NestJS DI — verify this is actually global by testing a TenantPlugin request
-  return config;
-}
-```
-
-Verify by checking that a `TenantPlugin` resolver call creates an `event_log` row with a `correlationId`.
+**Reference:** what-next Task 2 scope gap. The original problem — `APP_INTERCEPTOR` registered only inside `BigBlueButtonPlugin`, leaving `CmsPlugin`/`TenantPlugin`/`ReviewsPlugin` requests without a `correlationId` — is resolved. `PlatformTracingModule` is `@Global()` and registers `CorrelationInterceptor` as `APP_INTERCEPTOR` at the module level; `BigBlueButtonPlugin` now imports the module instead of registering the interceptor itself. All plugins inherit correlation context. Verified by confirming a `TenantPlugin` resolver call produces an `event_log` row with a `correlationId`.
 
 ---
 
@@ -599,10 +519,9 @@ PHASE 1.5 BLOCKERS (unblocks full tenant experience)
   Task 6 — myLearningDashboard domain API                [ADR-013 INV-006]
 
 CORRECTNESS / RELIABILITY
-  Task 12 — CorrelationInterceptor global scope fix      [all-plugin tracing]
   Task 7 — GrantReaderService scaffold                   [RFC-001 Q-009]
 
-CAPACITY INTELLIGENCE (new in ADR v1.6)
+CAPACITY INTELLIGENCE (new in ADR v1.7)
   Task 8 — Full Capacity Intelligence System             [ADR §6A CI-001 to CI-006]
   Task 9 — k6 load testing integration                   [Vendure docs compliance]
 ```
@@ -624,7 +543,7 @@ CAPACITY INTELLIGENCE (new in ADR v1.6)
 | DL-015 | Dashboard nav uses `navMenuItem` on route definitions, never `items` inside `navSections`. |
 | DL-019 | Do not install the Vendure `multivendor-plugin`. |
 | Vendure: Node.js is single-threaded | A single Vendure instance uses exactly one CPU. Scale horizontally, not vertically. |
-| Vendure: external state for multi-instance | `BullMQJobQueuePlugin` ✅, `RedisCachePlugin` ⚠️ PENDING, shared `COOKIE_SECRET` ✅ — all three required before multi-instance deployment. |
+| Vendure: external state for multi-instance | `BullMQJobQueuePlugin` ✅, `RedisCachePlugin` ✅, shared `COOKIE_SECRET` ✅ — all three confirmed live in `vendure-config.ts` (Task 4). Multi-instance deployment is unblocked on this front. |
 | Vendure: load test tooling | k6/Artillery/jMeter for traffic generation. `LoadSimulationPlugin` for causal drift validation. Use both together. |
 
 ---
@@ -633,9 +552,9 @@ CAPACITY INTELLIGENCE (new in ADR v1.6)
 
 | File | Purpose |
 |---|---|
-| `platform-adr.md` v1.6 | Authoritative architecture — all invariants, decision log, phase roadmap, Capacity Intelligence System (§6A) |
+| `platform-adr.md` v1.7 | Authoritative architecture — all invariants, decision log, phase roadmap, Capacity Intelligence System (§6A, designed but not yet implemented) |
 | `rfc-001-continuous-commerce-loop.md` v3 | Phase 2 subscription billing design — `GrantReaderService` Q-009, capacity intelligence integration points |
-| `platform-story.md` v4 | Human-readable flow narrative — §11 wallet & capacity intelligence updated for ADR v1.6 |
+| `platform-story.md` v4 | Human-readable flow narrative — §11 wallet & capacity intelligence updated for ADR v1.7 |
 | `bug-006-load-testing-observability.md` | BUG-006 spec — architecture reference (all four tasks now complete) |
 | [Vendure: server-resource-requirements](https://docs.vendure.io/current/core/deployment/server-resource-requirements) | RAM/CPU constraints, k6/Artillery/jMeter recommendations |
 | [Vendure: horizontal-scaling](https://docs.vendure.io/current/core/deployment/horizontal-scaling) | `BullMQJobQueuePlugin`, `RedisCachePlugin`, shared cookie secret requirements |

@@ -4,6 +4,8 @@ import { TransactionalConnection } from '@vendure/core';
 import { BbbScheduledSession } from '../../bigbluebutton-plugin/entities/bbb-scheduled-session.entity';
 import { TenantProfile } from '../../tenant-plugin/entities/tenant-profile.entity';
 import { InstructorProfile } from '../../tenant-plugin/entities/instructor-profile.entity';
+import { MarketplaceAdService } from './marketplace-ad.service';
+import { BayesianRatingService } from './bayesian-rating.service';
 
 export interface MarketplaceSessionDocument {
   id: string;
@@ -46,6 +48,8 @@ export class MarketplaceIndexerService {
 
   constructor(
     private readonly connection: TransactionalConnection,
+    private readonly adService: MarketplaceAdService,
+    private readonly bayesianService: BayesianRatingService,
   ) {
     const node = process.env.ELASTICSEARCH_NODE || process.env.ELASTICSEARCH_URL || 'http://localhost:9200';
     const password = process.env.ELASTICSEARCH_PASSWORD;
@@ -133,6 +137,45 @@ export class MarketplaceIndexerService {
       .getRepository(TenantProfile)
       .findOne({ where: { channelId: session.channelId ?? undefined } });
 
+    // ─── Gap 3: Price from ProductVariant.price ─────────────────────────────
+    let priceInPaise = 0;
+    if (session.productVariantId) {
+      try {
+        const { ProductVariant } = require('@vendure/core');
+        const variant = await this.connection.rawConnection
+          .getRepository(ProductVariant)
+          .findOne({ where: { id: session.productVariantId as any } });
+        if (variant) {
+          priceInPaise = (variant as any).price ?? 0;
+        }
+      } catch (err: any) {
+        this.logger.warn(`Failed to fetch ProductVariant price for ${session.productVariantId}: ${err.message}`);
+      }
+    }
+
+    // ─── Gap 2: Bayesian rating from ReviewsPlugin aggregate ────────────────
+    let bayesianRating = 0;
+    if (session.productVariantId) {
+      try {
+        bayesianRating = await this.bayesianService.computeForVariant(session.productVariantId);
+      } catch (err: any) {
+        this.logger.warn(`Failed to compute Bayesian rating for variant ${session.productVariantId}: ${err.message}`);
+      }
+    }
+
+    // ─── Gap 1: Sponsored listing bid-boost from MarketplaceAdCampaign ──────
+    let isSponsored = false;
+    let sponsorBoost = 1.0;
+    try {
+      const campaign = await this.adService.findActiveCampaignForSession(String(session.id));
+      if (campaign) {
+        isSponsored = true;
+        sponsorBoost = campaign.boostWeight;
+      }
+    } catch (err: any) {
+      this.logger.warn(`Failed to check ad campaign for session ${session.id}: ${err.message}`);
+    }
+
     const doc: MarketplaceSessionDocument = {
       id: String(session.id),
       productVariantId: session.productVariantId,
@@ -141,14 +184,14 @@ export class MarketplaceIndexerService {
       title: session.title,
       startTime: session.startTime.toISOString(),
       endTime: session.endTime.toISOString(),
-      priceInPaise: 0, // populated from ProductVariant.price — see note below
+      priceInPaise,
       academyName: tenantProfile?.businessName ?? '',
-      academySlug: '', // TenantProfile has no slug field — add in Phase 3
+      academySlug: '',
       instructorName: session.trainer ? String(session.trainer.id) : null,
       subjectTags: [],
-      bayesianRating: 0, // populated from ReviewsPlugin aggregate — Phase 3
-      isSponsored: false, // populated from MarketplaceAdCampaign — Phase 3
-      sponsorBoost: 1.0, // default neutral boost
+      bayesianRating,
+      isSponsored,
+      sponsorBoost,
     };
 
     await this.client.index({
@@ -156,7 +199,7 @@ export class MarketplaceIndexerService {
       id: doc.id,
       document: doc,
     });
-    this.logger.log(`Indexed marketplace session: ${doc.id}`);
+    this.logger.log(`Indexed marketplace session: ${doc.id} (price=${priceInPaise}, rating=${bayesianRating}, sponsored=${isSponsored})`);
   }
 
   async deleteSession(id: string): Promise<void> {
@@ -192,9 +235,9 @@ export class MarketplaceIndexerService {
       slug: profile.slug,
       photoUrl: profile.photoAssetId ? String(profile.photoAssetId) : null,
       subjectTags: profile.expertiseAreas || [],
-      reviewRating: null, // populated from ReviewsPlugin aggregate — Phase 3
+      reviewRating: null,
       academyName: tenantProfile?.businessName ?? '',
-      academySlug: '', // TenantProfile has no slug field — add in Phase 3
+      academySlug: '',
     };
 
     await this.client.index({

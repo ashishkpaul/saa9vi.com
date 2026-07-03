@@ -2,24 +2,25 @@
 
 ## Saa9vi — Multi-Tenant Education Commerce Platform
 
-### Production Architecture · Version 1.6
+### Production Architecture · Version 1.7
 
 **Status:** Active
-**Date:** 2026-06
+**Date:** 2026-06-30
 **Authors:** Lead Architect, Platform Engineering
-**Supersedes:** ADR v1.5 (2026-06)
+**Supersedes:** ADR v1.6 (2026-06)
 
-> **What changed in v1.1:** Full audit against all three plugin codebases (`bigbluebutton-plugin`, `cms-plugin`, `tenant-plugin`). Status fields updated to match actual implementation. Four divergences from v1.0 documented. Three pending ADR items promoted to explicit open issues. No invariants changed.
+> **Changelog v1.1–v1.6 (condensed):**
 >
-> **What changed in v1.2:** Three code-verified corrections incorporated: (1) `convertTrialToEnrollment` → `BbbEnrollment` path added to AC-003; (2) EventBus published events corrected — `RoomActivatedEvent` is live, `TrialAttendanceRecordedEvent` is future-only; (3) cipher name corrected to AES-256-GCM. BUG-015 added for banner queue gap. Admin API isolation added as SEC-001 production deployment requirement.
+> | Version | Summary |
+> |---|---|
+> | v1.1 | Full audit vs. `bigbluebutton-plugin`, `cms-plugin`, `tenant-plugin`. Status fields matched to real implementation; 4 divergences (DIV-001–004) documented. |
+> | v1.2 | Code-verified corrections: `convertTrialToEnrollment` path added (AC-003); EventBus table corrected (`RoomActivatedEvent` live, `TrialAttendanceRecordedEvent` future); cipher corrected to AES-256-GCM. BUG-015 (banner queue gap) and SEC-001 (Admin API isolation) added. |
+> | v1.3 | Audit extended to `reviews` plugin (4th plugin). DIV-009/010, BUG-016 (`navSections.items` TS-2353), BUG-017 (reviews channel scoping) added. §5A Dashboard Extension Pattern and ADR-013 (Frontend Independence) added. DL-015/016 added. |
+> | v1.4 | Archetype B (Internal Staff Meeting) integrated as §8A. FEAT-001 (`BbbOrganizationMembership`) and FEAT-002 (Overhead Capacity Grant) tracked as Phase 1.5 blockers. BUG-018 added. DL-017/018 added. |
+> | v1.5 | Phase 3 Marketplace architecture locked: platform-level ES index, `orderSource` attribution, `MarketplaceIndexerPlugin`, `BayesianRatingService`; multivendor-plugin rejected (DL-019). Three-stream revenue model locked. FEAT-003/004 added. INV-009/010 added. DL-019–022 added. ADR-014 added. |
+> | v1.6 | Capacity Intelligence System *designed* (§6A, CI-001–006) — `CapacityIntelligenceService`, 48h PILOS-based load forecast, `poolCapacityDashboard`, `BbbCapacityAlertLog`, `capacity-alert` job. INV-012 (advisory-only) and DL-025 added. BUG-019/020 fixed. DL-026/027 added. |
 >
-> **What changed in v1.3:** Full audit extended to `reviews` plugin. Plugin inventory updated to four plugins. DIV-009 and DIV-010 added for reviews plugin findings. BUG-016 (TS-2353 — `items` in `navSections`) documented and fixed. BUG-017 (Reviews channel scoping deviation) added. Section 5A (Dashboard Extension Pattern) added as canonical reference. ADR-013 (Frontend Independence & API Evolution) added — defines the single-storefront / stable-API-surface architecture that allows backend plugin evolution without per-tenant frontend redeployments. DL-015 and DL-016 added to decision log.
->
-> **What changed in v1.4:** Archetype B (Internal Staff Meeting flow) assessed and integrated. Two missing features promoted from narrative to tracked gaps: FEAT-001 (`BbbOrganizationMembership` entity — prerequisite for auth waterfall short-circuit and moderator role routing) and FEAT-002 (Overhead Capacity Grant path — null-debit path for internal session consumption). Section 8A (Internal Operations Architecture) added. Phase 1.5 blockers updated to include FEAT-001 and FEAT-002. BUG-018 added (role-routing in `buildJoinUrl` has no trigger path without FEAT-001). Decision Log entries DL-017 and DL-018 added.
->
-> **What changed in v1.5:** Three strategic decisions formalised following full platform review. (1) Phase 3 Marketplace architecture specified: platform-level Elasticsearch index (spanning all channels), `orderSource` custom field on `Order` for commission attribution, `MarketplaceIndexerPlugin` as a cross-channel read projection, `BayesianRatingService` for ranking. Multivendor plugin explicitly rejected (DL-019). (2) Three-stream revenue model locked: Stream 1 = base subscription, Stream 2 = marketplace commission (5–15%, `orderSource = 'marketplace'` orders only), Stream 3 = marketplace advertising (sponsored listings + marketplace banners). (3) Phase 3 deliverables expanded with FEAT-003 (`MarketplaceAdCampaign` + `AdSpendLedger`) and FEAT-004 (Banner `scope` discriminator). New invariants INV-009 and INV-010 added. Decision Log entries DL-019 through DL-022 added. Section 14 Phase 3 and Phase 4 roadmaps expanded. ADR-014 (Revenue Model & Marketplace Architecture) added.
->
-> **What changed in v1.6:** Capacity Intelligence System formalised from peer assessment. (1) Section 6A (Capacity Intelligence Architecture) added — specifies `CapacityIntelligenceService`, 48-hour load forecasting using `BbbScheduledSession` data and PILOS virtual load formula, `CapacityRecommendation` engine, `poolCapacityDashboard` Admin API query. (2) `BbbServer.capacity` column specified (CI-001) — operator-configured hardware ceiling, separate from `maxLoad` admission threshold. (3) `BbbCapacityAlertLog` append-only entity specified (CI-004) — extends INV-002 principle to alerting domain. (4) `capacity-alert` BullMQ job specified (CI-005) — 15-minute cron. (5) `CapacityAlertEvent` added to EQ-002 event table. (6) INV-012 formalised: meetings are never blocked for capacity reasons — intelligence system is advisory only. (7) DL-025 added: proactive capacity intelligence over reactive throttling. (8) Architectural review corrections applied: BUG-019 (LoadSimulationPlugin DoS vector on Shop API) and BUG-020 (simulateBbbWebhook resolver missing) added to §12; Phase 1.5 room-access migration corrected to frozen interim state; PILOS parameters documented as hardcoded (not yet configurable); commission `orderSource` attribution corrected to enforce INV-008 (Vendure-side classification, not storefront); DL-026 added: SubscriptionEntitlement race condition accepted as business tolerance. (9) MarketplaceIndexerPlugin architecture corrected: event-driven via `ProductVariantEvent` (not raw Postgres polling); `Product.customFields.bbbSessionId` bridge specified; default channel isolation requirement documented as DL-027; Phase 3 data flow diagram updated.
+> **What changed in v1.7 (this revision):** Re-verified against all five plugin codebases as of 2026-06-30, cross-checked with `what-next.md`. (1) FEAT-001 and FEAT-002 confirmed **code-complete** in `bigbluebutton-plugin` (entity, service, resolvers, dashboard route, auth waterfall all present) — §8A and §14 updated from "⚠️ Required" to "✅ Done"; FEAT-002's database migration is the only remaining step. (2) Plugin inventory (§1) corrected to list all six plugins actually registered in `vendure-config.ts` — `LoadSimulationPlugin` and `MarketplaceIndexerPlugin` were missing from the table. (3) Instructor Elasticsearch indexing (§14 Phase 1.5) corrected to ✅ Done — `InstructorIndexerService` is implemented and wired, was marked pending. (4) `RedisCachePlugin` confirmed ✅ live in `vendure-config.ts`. (5) Capacity Intelligence System (§6A, §9 EQ-001, §12 CI-006) corrected from "✅ live" to "⚠️ Designed, not yet implemented" — grep against `bigbluebutton-plugin_complete_code.txt` returns zero matches for `CapacityIntelligenceService`, `BbbCapacityAlertLog`, or `poolCapacityDashboard`. This is the primary remaining Phase 1.5 build item (`what-next.md` Task 8). (6) Version changelog above condensed to a table; redundant repeated status prose consolidated throughout. (7) **Structural fix:** §6A (Capacity Intelligence) and §2B (Phase 3 Invariants) were physically located at the very end of the file, after ADR-014, despite the Table of Contents placing them after §6 and §2A respectively. Both sections are now physically relocated to match the TOC order. The stray top-level `## INV-012` and `## DL-025` headings that trailed after the old §6A location have been folded in as subsections of §6A rather than left as orphaned sections.
 
 ---
 
@@ -27,6 +28,8 @@
 
 1. [Platform Context](#1-platform-context)
 2. [Non-Negotiable Architectural Invariants](#2-non-negotiable-architectural-invariants)
+2A. [Code Audit Divergences](#2a-code-audit-divergences-v10--v12)
+2B. [Phase 3 Architectural Invariants](#2b-phase-3-architectural-invariants)
 3. [Plugin Architecture & Bounded Contexts](#3-plugin-architecture--bounded-contexts)
 4. [Data Layer Decisions](#4-data-layer-decisions)
 5. [Commerce & Access Control](#5-commerce--access-control)
@@ -77,6 +80,10 @@ Saa9vi is a **multi-tenant education commerce platform** targeting Indian coachi
 | `CmsPlugin` | Articles, pages, banners | Beta |
 | `TenantPlugin` | Tenant profiles, instructors, media | Beta |
 | `ReviewsPlugin` | Product reviews, moderation, fraud detection, reputation aggregation | Beta |
+| `LoadSimulationPlugin` | Causal drift / load-test observability (BUG-006) | Production-near — Admin API only, Shop API vector closed (BUG-019) |
+| `MarketplaceIndexerPlugin` | Phase 3 cross-channel Elasticsearch discovery layer | Scaffold — instructor index live, session index not yet wired (see §14 Phase 3 gaps) |
+
+*Corrected in v1.7 — all six were registered in `vendure-config.ts` but only four appeared in this table.*
 
 ---
 
@@ -159,6 +166,36 @@ The following divergences were found between ADR v1.0 and the plugin code, and c
 | DIV-010 | `ReviewsPlugin` entities | Not previously audited | `ProductReview`, `ReviewRequest`, `ReviewReport`, `ReviewReward`, `ReviewVote` do not implement `ChannelAware`. Channel isolation achieved via `ctx.channel.token` string comparison in service queries — no ORM-level enforcement | **Added** in v1.3 — BUG-017. Scheduled for remediation before multi-tenant production |
 
 ---
+
+## 2B. Phase 3 Architectural Invariants
+
+### INV-009: Marketplace Indices Are Read Projections. No Marketplace Write Bypasses Channel Context.
+
+The platform-level Elasticsearch indices (`saa9vi_marketplace_sessions`, `saa9vi_marketplace_instructors`) are derived read projections. Authoritative data always lives in channel-scoped PostgreSQL tables.
+
+```
+PostgreSQL (authoritative, channel-scoped)
+    ↓ ProductVariantEvent / InstructorProfileUpdatedEvent (Vendure EventBus)
+    ↓ MarketplaceIndexerPlugin reads Product.customFields.bbbSessionId → BbbScheduledSession
+Elasticsearch platform index (derived, cross-channel read only)
+    ↓
+MarketplaceSearchResolver (public, no channel context on reads)
+```
+
+No marketplace write operation may bypass channel context. `OrderLine` creation, entitlement creation, and billing writes always go through the channel-scoped Vendure Shop API.
+
+**Rejection criterion:** Any mutation that creates or modifies a channel-scoped entity without a `RequestContext.channelId` is rejected.
+
+### INV-010: Ad Spend Truth Is the AdSpendLedger. Campaign.spentInPaise Is a Denormalised Cache Only.
+
+`AdSpendLedger` rows are never updated, never deleted. `MarketplaceAdCampaign.spentInPaise` is a convenience cache maintained for fast budget-check queries. Discrepancies are resolved in favour of `SUM(AdSpendLedger.amountInPaise) WHERE campaignId = X`.
+
+This extends INV-002 (append-only billing truth) to the advertising domain.
+
+**Rejection criterion:** Any service method that calls `.update()` on an `AdSpendLedger` row is rejected.
+
+---
+
 
 ## 3. Plugin Architecture & Bounded Contexts
 
@@ -612,6 +649,266 @@ Both `BbbServer.encryptedApiSecret` and `BbbMeeting.encryptedAttendeePassword` /
 
 ---
 
+## 6A. Capacity Intelligence Architecture
+
+**Section-wide status (v1.7, code-verified): ⚠️ Designed, not implemented.** Nothing below exists in `bigbluebutton-plugin` as of this revision — `CapacityIntelligenceService`, `BbbCapacityAlertLog`, `BbbServer.capacity`, `poolCapacityDashboard`, and the `capacity-alert` job all return zero matches in the codebase. This section is the build spec; see `what-next.md` Task 8 for the implementation checklist.
+
+**Origin:** Peer assessment 2026-06. Formalised from the Capacity Intelligence System proposal following architectural review.
+
+**Background:** `BbbServer.currentLoad` and `BbbServer.maxLoad` (BB-003, DL-014) establish the server selection primitive. What was missing was a layer that aggregates that primitive into pool-level health, forecasts future load from scheduled session data, and informs operators before saturation — not after. This section specifies that layer.
+
+**Design principle (INV-012 revised, DL-025):** The system warns operators; it never blocks meetings. See INV-012 and DL-025 for rationale.
+
+---
+
+### CI-001: `BbbServer.capacity` — Operator-Configured Hardware Ceiling
+
+**New column on `BbbServer`:**
+
+```typescript
+/**
+ * Operator-configured maximum virtual load score for this server's hardware spec.
+ * Used by CapacityIntelligenceService for pool-level headroom calculations.
+ *
+ * Not used by BbbServerSelectionService — that service continues to use
+ * currentLoad < maxLoad for selection (DL-014 preserved).
+ *
+ * Default 200 ≈ a 4-core 8GB VM at moderate session density.
+ * A 8-core 16GB server would typically be configured with capacity: 500.
+ */
+@Column({ default: 200 })
+capacity: number;
+```
+
+`capacity` is deliberately separate from `maxLoad`. `maxLoad` is the admission threshold — servers at or above it are excluded from selection. `capacity` is the physical ceiling — the denominator for headroom percentage. An operator may set `maxLoad: 85` (stop accepting new meetings at 85% of capacity) and `capacity: 200` (where 85% = 170 virtual load units). These are independent tuning knobs.
+
+**Migration:** `ALTER TABLE bbb_server ADD COLUMN capacity INT NOT NULL DEFAULT 200`.
+
+---
+
+### CI-002: `CapacityIntelligenceService`
+
+**New service** that exposes three aggregations from data already in the system.
+
+#### Live Pool Health
+
+```typescript
+interface ServerPoolHealth {
+  servers: ServerHealth[];
+  totalServers: number;
+  activeServers: number;
+  totalVirtualLoad: number;     // sum of BbbServer.currentLoad across pool
+  totalCapacity: number;        // sum of BbbServer.capacity across pool
+  poolLoadPercent: number;      // totalVirtualLoad / totalCapacity × 100
+  activeAttendees: number;      // from BbbMeeting (Active state)
+  activeMeetings: number;
+  safeHeadroom: number;         // capacity remaining before 80% threshold
+}
+
+interface ServerHealth {
+  serverId: string;
+  serverName: string;
+  status: 'active' | 'disabled' | 'unreachable';
+  currentLoad: number;
+  loadPercent: number;          // currentLoad / capacity × 100
+  activeMeetings: number;
+  activeParticipants: number;
+  isOverloaded: boolean;        // loadPercent > 85
+}
+```
+
+No new polling. `currentLoad` is already maintained by `BbbReconciliationService.reconcileServerLoad()`.
+
+#### 48-Hour Load Forecast
+
+```typescript
+interface LoadForecastSlot {
+  windowStart: Date;
+  windowEnd: Date;              // 30-minute windows across next 48h
+  expectedSessions: number;
+  expectedAttendees: number;    // sum of BbbScheduledSession.maxAttendees
+  expectedVirtualLoad: number;  // PILOS formula: videos×3 + mics×2 + listeners×1
+  projectedLoadPercent: number; // vs current pool capacity
+  riskLevel: 'safe' | 'warning' | 'critical';
+}
+```
+
+**Data source:** `BbbScheduledSession.startsAt`, `endsAt`, `maxAttendees` — all present in Phase 1 entities.
+
+**Load estimation parameters (currently hardcoded defaults — planned for `BigBlueButtonPluginOptions`):**
+
+> **Note:** These parameters are not yet exposed in `vendure-config.ts`. They are hardcoded in `CapacityIntelligenceService`. Promoting them to `BigBlueButtonPlugin.init()` options is a tracked Phase 1.5 gap. They can be refined once `BbbUsageLedger.peakParticipantCount` history accumulates.
+
+| Parameter | Default | Rationale |
+|---|---|---|
+| `cameraRatio` | 0.40 | 40% of attendees typically enable camera |
+| `micRatio` | 0.70 | 70% of attendees typically unmute |
+| `videoWeight` | 3 | PILOS virtual load weight for video streams |
+| `micWeight` | 2 | PILOS virtual load weight for microphone streams |
+| `listenerWeight` | 1 | PILOS virtual load weight for listen-only |
+
+These ratios are **not yet configurable** — they are hardcoded defaults. The `BigBlueButtonPluginOptions` extension is a tracked gap (see BUG-019 remediation work, Phase 1.5).
+
+#### Capacity Recommendation
+
+```typescript
+interface CapacityRecommendation {
+  currentServers: number;
+  currentCapacity: number;
+  peakForecastLoad: number;
+  peakForecastAt: Date;
+  peakForecastPercent: number;
+  serversNeeded: number;        // 0 if within safe threshold
+  urgency: 'none' | 'plan' | 'soon' | 'immediate';
+  reasoning: string;            // plain English, shown in dashboard
+}
+```
+
+**Target utilisation:** Peak load should not exceed 70% of total capacity (30% headroom for session join spikes). `serversNeeded = Math.ceil((peakForecastLoad / 0.70 - currentCapacity) / standardServerCapacity)`.
+
+**Urgency thresholds:**
+
+| Projected peak % | Urgency |
+|---|---|
+| > 90% | `immediate` |
+| > 75% | `soon` |
+| > 60% | `plan` |
+| ≤ 60% | `none` |
+
+---
+
+### CI-003: Admin API Query
+
+```graphql
+type Query {
+  """
+  Returns live pool health, 48-hour load forecast, capacity recommendation,
+  and historical peak stats for the specified server pool.
+  Only accessible by SuperAdmin.
+  """
+  poolCapacityDashboard: PoolCapacityDashboard!
+    @Allow(Permission.SuperAdmin)
+}
+
+type PoolCapacityDashboard {
+  liveHealth: ServerPoolHealth!
+  forecast: [LoadForecastSlot!]!
+  recommendation: CapacityRecommendation!
+  historicalPeak: HistoricalPeakStats!
+}
+
+type HistoricalPeakStats {
+  last7DaysPeakAttendees: Int!
+  last7DaysPeakLoad: Float!
+  last7DaysPeakAt: DateTime!
+  avgDailyAttendeeMinutes: Float!
+}
+```
+
+`historicalPeak` is computed from `BbbUsageLedger` — no new tables.
+
+---
+
+### CI-004: `CapacityAlertLog` — Append-Only Alert Audit Trail
+
+**New entity** following INV-002 principle extended to the alerting domain.
+
+```typescript
+@Entity('bbb_capacity_alert_log')
+export class BbbCapacityAlertLog extends VendureEntity {
+  @Column() checkedAt: Date;
+  @Column() urgency: 'none' | 'plan' | 'soon' | 'immediate';
+  @Column() serversNeeded: number;
+  @Column() peakForecastPercent: number;
+  @Column({ nullable: true }) peakForecastAt: Date | null;
+  @Column({ nullable: true, type: 'text' }) reasoning: string | null;
+}
+```
+
+Rows are never updated. Never deleted. Operators can retrospectively audit when the system flagged a capacity risk and whether a server was added in time.
+
+---
+
+### CI-005: `capacity-alert` BullMQ Job
+
+**New scheduled job** — runs every 15 minutes.
+
+```
+Queue: bbb-capacity-alert (cron: every 15 minutes)
+  → CapacityIntelligenceService.buildDashboard()
+  → append BbbCapacityAlertLog row (always — provides continuous audit trail)
+  → if urgency = 'immediate': publish CapacityAlertEvent → email to platform admin
+  → if urgency = 'soon': publish CapacityAlertEvent (lower priority)
+```
+
+**`CapacityAlertEvent`** (new VendureEvent):
+
+```typescript
+export class CapacityAlertEvent extends VendureEvent {
+  constructor(
+    public readonly urgency: 'soon' | 'immediate',
+    public readonly message: string,
+    public readonly peakForecastAt: Date,
+    public readonly serversNeeded: number,
+  ) { super(); }
+}
+```
+
+Subscribers: `EmailPlugin` handler sends alert to platform admin email. Future: MSG91 SMS (`urgency = 'immediate'` only), WhatsApp Business.
+
+---
+
+### CI-006: ADR Updates Required
+
+**New entries in job queue table (§9 EQ-001):**
+
+```
+bbb-capacity-alert    ← ⚠️ designed, not implemented (CI-005, 15-minute cron)
+```
+
+**New entry in EventBus table (§9 EQ-002):**
+
+| Event | Publisher | Subscribers | Status |
+|---|---|---|---|
+| `CapacityAlertEvent` | `BbbCapacityAlertJob` | `EmailPlugin` | Phase 1.5 |
+
+**Production Readiness Checklist (§13) — new items:**
+
+- [ ] `BbbServer.capacity` column migrated and set per server spec
+- [ ] `bbb-capacity-alert` job registered in `onModuleInit`
+- [ ] `poolCapacityDashboard` query verified in dashboard
+- [ ] Load estimation ratios tuned from first 2 weeks of `BbbUsageLedger` data
+
+---
+
+### INV-012 (Capacity Intelligence Invariant): Capacity Intelligence Is Advisory. Meetings Are Never Blocked for Capacity Reasons.
+
+The `CapacityIntelligenceService` warns operators when forecast load approaches pool capacity. It does not block meeting provisioning.
+
+**Rationale:** A coaching institute's 6:00 PM class with 42 students enrolled cannot be cancelled at the last minute because the platform's infrastructure is under-provisioned. The failure mode of a blocked class (42 students lose a session, academy loses trust, refunds issued) is categorically worse than the failure mode of a degraded class (video choppy for some participants, recoverable with a server addition). The correct response to approaching capacity is operator notification and server addition — not meeting rejection.
+
+**Operational consequence:** The 15-minute alert job and the `poolCapacityDashboard` query provide the operator sufficient warning to add a server before saturation. `BbbServerSelectionService` continues to use `currentLoad < maxLoad` as the admission filter — this is the soft ceiling, not a block. Once all servers are above `maxLoad`, new provisioning jobs will queue and retry (up to `BBB_MAX_AUTO_RETRIES`), giving the operator a window to act.
+
+**Rejection criterion:** Any code path that throws an error or returns an access-denied response solely because pool capacity is high is rejected. Capacity is a signal for operators, not a gate for students.
+
+---
+
+### DL-025 (Decision Log detail): Proactive Capacity Intelligence Over Reactive Throttling
+
+**Decision:** The platform implements 48-hour load forecasting with operator notification rather than capacity-based meeting blocking.
+
+**Rationale:** The education context makes reactive throttling uniquely harmful. A live class has a scheduled time, enrolled students, and a trainer who has prepared. Blocking the class at provisioning time means real students lose real learning time with no recovery path in the moment. The infrastructure failure is the platform's responsibility, not the academy's problem to absorb.
+
+By contrast, a 15-minute alert cadence with a 48-hour forecast window gives the operator between 48 hours and 15 minutes of warning — enough to provision a new server before any student is affected. The operator takes the action; the student experience is uninterrupted.
+
+**Alternatives rejected:**
+
+- Hard ceiling blocking (rejected — see INV-012 rationale)
+- Per-meeting capacity checks at join time (rejected — too late; the meeting is already provisioned)
+- Reactive server auto-scaling (deferred to Phase 4 — requires cloud-native infrastructure; current BBB servers are self-hosted)
+
+---
+
 ## 7. CMS Architecture
 
 ### CMS-001: Slug Uniqueness Migration ✅ Fixed
@@ -765,11 +1062,11 @@ Staff member clicks "Join"
   → Usage written to BbbUsageLedger against overhead grant
 ```
 
-### OP-001: Auth Waterfall Short-Circuit — FEAT-001 Required ⚠️
+### OP-001: Auth Waterfall Short-Circuit — FEAT-001 ✅ Done
 
-**Current state:** The `joinRoom()` resolver runs entitlement checks against `BbbEntitlement` rows (`bbb_room`, `bbb_session` types). There is no organizational membership check as a prior gate. A staff member with no purchase record would be **denied** by the existing check, not granted access.
+**Current state (v1.7, code-verified):** `BbbOrganizationMembership` entity, migration `1782651476546-bbb-membership.ts`, `BbbMembershipService.findActiveMembership()`, admin CRUD resolvers, and the `MembershipsList.tsx` dashboard route are all implemented. `BbbShopResolver.joinRoom()` (and `BbbMeetingService.getJoinUrl()`) now runs the membership check as Gate 1 before falling through to entitlement — the design below is implemented as written. BUG-018 is resolved.
 
-**Required design:**
+**Design (implemented):**
 
 ```typescript
 // FEAT-001: New entity
@@ -816,13 +1113,11 @@ async joinRoom(ctx, { roomId }) {
 }
 ```
 
-**Blocking status:** FEAT-001 (`BbbOrganizationMembership`) is the single prerequisite for Archetype B. Without it, no part of the internal operations flow can be implemented.
+**Status:** FEAT-001 shipped — Archetype B's prerequisite is satisfied.
 
-### OP-002: Moderator Role Assignment — depends on FEAT-001 ⚠️
+### OP-002: Moderator Role Assignment — FEAT-001 ✅ Done
 
-**Current state:** `BbbApiService.buildJoinUrl()` correctly constructs HMAC-signed URLs and supports both attendee and moderator passwords (AES-256-GCM decrypted). The URL-building logic exists and is production-ready. What does **not** exist is the decision logic that routes a given user to the moderator password path.
-
-**Required:** The `provisionAndJoin()` call (above) passes `membership.role` to `buildJoinUrl()`. The mapping:
+**Current state (v1.7, code-verified):** `BbbApiService.buildJoinUrl()` constructs HMAC-signed URLs and supports both attendee and moderator passwords (AES-256-GCM decrypted). The routing logic that maps `membership.role` to the moderator/viewer password path is now wired into `provisionAndJoin()`. Mapping:
 
 ```typescript
 const bbbRole = membership.role === 'org_admin' || membership.role === 'moderator'
@@ -844,11 +1139,13 @@ This is a one-line addition once `BbbOrganizationMembership.role` exists. No cha
 
 `BbbRoomLockService` acquires a Redis distributed lock on `roomId` before provisioning. This applies equally to internal rooms. If two staff members click "Join" at the same millisecond, only one provisioning job fires. The second worker finds the room already in `Provisioning` state and waits. No changes needed.
 
-### OP-005: Overhead Consumption Ledger — FEAT-002 Required ⚠️
+### OP-005: Overhead Consumption Ledger — FEAT-002 ✅ Code Complete, Migration Pending
 
-**Current state:** `BbbUsageLedger` rows are written by `BbbWebhookProcessorService` after every `meeting-ended` webhook. The write path requires a `BbbCapacityGrant` to debit consumed minutes against. For commercial sessions, the grant is created by `BbbOrderFulfillmentListener`. For internal sessions there is **no grant** — the debit would fail or be skipped silently.
+**Current state (v1.7, code-verified):** `sourceType` (`'order' | 'subscription' | 'internal_overhead'`) and `isUnbounded` columns exist on `BbbCapacityGrant`. `BbbOrganizationService.create()` auto-provisions an `internal_overhead` grant per org. `BbbReconciliationService.consumeGrantHours()` branches on `sourceType === 'internal_overhead'` to skip exhaustion checks and capacity alerts, per Option A below. The design is implemented as written.
 
-**Required design:**
+**Remaining step:** the schema migration for the new columns has not been run (`npx vendure migrate create && npx vendure migrate up`) — see `what-next.md` Task 1.
+
+**Design (implemented, Option A):**
 
 ```typescript
 // FEAT-002: Add sourceType discriminator to BbbCapacityGrant
@@ -880,16 +1177,16 @@ if (grant.sourceType === 'internal_overhead') {
 | INV-004: Webhooks persist-first | ✅ Compliant | `meeting-ended` webhook path unchanged |
 | INV-008: Business logic in Vendure | ✅ Compliant | All branching logic in `BbbShopResolver`, not in Next.js |
 
-### OP-007: Phase 1.5 Implementation Order
+### OP-007: Phase 1.5 Implementation Order — ✅ All Steps Complete
 
-1. **FEAT-001:** Create `BbbOrganizationMembership` entity + migration + `BbbMembershipService` (`findActiveMembership`, `create`, `update`, `delete`)
-2. **FEAT-001:** Add admin mutations (`createOrgMembership`, `updateOrgMembership`, `removeOrgMembership`) and dashboard UI
-3. **FEAT-001:** Update `BbbShopResolver.joinRoom()` to check membership before entitlement
-4. **OP-002:** Wire `membership.role → bbbRole` in `provisionAndJoin()`
-5. **FEAT-002:** Add `sourceType` discriminator to `BbbCapacityGrant`; auto-provision `internal_overhead` grant on `BbbOrganization` create
-6. **FEAT-002:** Update `BbbReconciliationService.consumeGrant()` to handle `internal_overhead` path
+1. **FEAT-001:** ✅ `BbbOrganizationMembership` entity + migration + `BbbMembershipService` (`findActiveMembership`, `create`, `update`, `delete`)
+2. **FEAT-001:** ✅ Admin mutations (`createBbbOrgMembership`, `updateBbbOrgMembership`) and dashboard UI (`MembershipsList.tsx`)
+3. **FEAT-001:** ✅ `BbbShopResolver.joinRoom()` / `BbbMeetingService.getJoinUrl()` check membership before entitlement
+4. **OP-002:** ✅ `membership.role → bbbRole` wired in `provisionAndJoin()`
+5. **FEAT-002:** ✅ `sourceType` discriminator added to `BbbCapacityGrant`; `internal_overhead` grant auto-provisioned on `BbbOrganization` create
+6. **FEAT-002:** ✅ `BbbReconciliationService.consumeGrantHours()` handles the `internal_overhead` path
 
-Steps 1–4 are a single cohesive unit (FEAT-001). Steps 5–6 are independently shippable (FEAT-002) but should follow closely to avoid untracked internal consumption.
+**Only remaining action:** run the FEAT-002 schema migration (columns exist in the entity but the DB has not been migrated — `what-next.md` Task 1).
 
 ---
 
@@ -902,7 +1199,7 @@ Steps 1–4 are a single cohesive unit (FEAT-001). Steps 5–6 are independently
 bbb-meeting-provisioning     ← ✅ live
 bbb-webhook-processor        ← ✅ live (INV-004)
 bbb-reconciliation           ← ✅ live (scheduled task)
-bbb-capacity-alert           ← ✅ live (CI-005, 15-minute cron)
+bbb-capacity-alert           ← ⚠️ designed, not implemented (CI-005 — see §6A, what-next Task 8)
 banner-activator             ← ⚠️ pending (CMS-002)
 banner-deactivator           ← ⚠️ pending (CMS-002)
 billing-invoice-generator    ← Phase 2
@@ -919,7 +1216,7 @@ All jobs are registered in `onModuleInit` via `JobQueueService.createQueue`. Job
 | `GrantConsumedEvent` | `BbbReconciliationService` | Email plugin (capacity alerts) | ✅ Live |
 | `RoomActivatedEvent` | `BbbRoomService` | `BbbMetricsService` | ✅ Live |
 | `CapacityExhaustedEvent` | `BbbReconciliationService` | Email plugin | ✅ Live |
-| `CapacityAlertEvent` | `BbbCapacityAlertJob` | Email plugin (→ SMS Phase 3) | Phase 1.5 (CI-005) |
+| `CapacityAlertEvent` | `BbbCapacityAlertJob` | Email plugin (→ SMS Phase 3) | ⚠️ Designed, not implemented (CI-005) |
 | `TrialAttendanceRecordedEvent` | `BbbWebhookProcessor` | Analytics (Phase 3) | ⚠️ Future — no publisher yet |
 | `ArticleEvent` | `ArticleService` | Elasticsearch indexer (Phase 3) | ⚠️ Future |
 | `PageEvent` | `PageService` | Elasticsearch indexer (Phase 3) | ⚠️ Future |
@@ -1133,7 +1430,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 - [x] `BbbReconciliationService` scheduled task running ✅
 - [x] `STALE` meeting FSM state added ✅ BUG-012 fixed
 - [x] `CapacityExhaustedEvent` published on billing cap ✅ BUG-013 fixed
-- [ ] `currentLoad` scoring semantics documented ⚠️ BUG-014
+- [x] `currentLoad` scoring semantics documented ✅ BUG-014 fixed
 - [ ] Banner BullMQ queues registered (`banner-activator`, `banner-deactivator`) ⚠️ BUG-015
 - [ ] Health check endpoints responding
 - [ ] Custom domain → channel token Redis mapping
@@ -1175,10 +1472,11 @@ Note: `CapacityExhaustedEvent` (BUG-013 / BB-004) is now implemented and publish
 - `BbbEntitlement` entity + service exist and are live for `bbb_session` access checks ✅
 - `BbbMeetingService.joinRoom()` migrated to `BbbEntitlement` for room access ✅ `BbbEnrollment` rows retained as audit trail
 - `InstructorProfile` entity exists in `TenantPlugin` with public query `findPublicByChannel` / `findPublicBySlug` ✅
-- Elasticsearch indexing for instructors: ⚠️ pending — entity exists but no indexer job registered
+- Elasticsearch indexing for instructors: ✅ Done — `InstructorIndexerService` implemented and wired into `InstructorProfileService.create/update/delete` (was pending as of v1.6, corrected in v1.7)
 - Public instructor profile pages in Next.js: ⚠️ pending — storefront rendering not started
 - CMS pages served from Next.js with SEO metadata: ⚠️ pending — `CmsShopResolver` exists but Next.js page renderer not implemented
 - `BbbEntitlement` admin UI: ✅ Added — GraphQL queries/mutations (`bbbEntitlements`, `createBbbEntitlement`, `deleteBbbEntitlement`) and `/bbb/entitlements` dashboard route registered
+- **FEAT-001** (`BbbOrganizationMembership`) and **FEAT-002** (`internal_overhead` capacity grant): ✅ Both code-complete (see §8A OP-007). FEAT-002's schema migration is still outstanding.
 
 **Phase 1.5 room-access migration (Interim State):**
 
@@ -1189,10 +1487,11 @@ Note: `CapacityExhaustedEvent` (BUG-013 / BB-004) is now implemented and publish
 
 **Remaining blockers before Phase 1.5 completion:**
 
-1. Register Elasticsearch indexing job for `InstructorProfile`
+1. Run the FEAT-002 schema migration (`npx vendure migrate create && npx vendure migrate up`) — code is complete, DB is not
 2. Build Next.js storefront pages for public instructor profiles and CMS pages
-3. **FEAT-001:** Implement `BbbOrganizationMembership` entity + service + admin UI (prerequisite for Archetype B internal staff flow — see §8A)
-4. **FEAT-002:** Add `internal_overhead` capacity grant path to `BbbCapacityGrant` and `BbbReconciliationService` (prerequisite for internal session billing — see §8A OP-005)
+3. `myLearningDashboard` Shop API query (ADR-013 INV-006) — see `what-next.md` Task 6
+4. Capacity Intelligence System (§6A, CI-001–006) — entirely unimplemented; see `what-next.md` Task 8
+5. Rate limiting (SEC-004) and custom-domain → channel-token Redis mapping (SEC-006) — last Phase 1 blockers, see `what-next.md` Tasks 10–11
 
 ### Phase 2 — Subscription Billing
 
@@ -1268,35 +1567,6 @@ Deliverables:
 - Student Corner (CMS-native) — career options, placement partners, internship listings as `PageSection` types; no new plugin required; channel-scoped CMS pages per academy
 - Cross-academy placement network (requires deliberate break of channel isolation — ADR-level decision deferred)
 - 3CX telephony bridge for academy CRM (operator-facing Admin API integration, not student-facing)
-
----
-
-## 2B. Phase 3 Architectural Invariants
-
-### INV-009: Marketplace Indices Are Read Projections. No Marketplace Write Bypasses Channel Context.
-
-The platform-level Elasticsearch indices (`saa9vi_marketplace_sessions`, `saa9vi_marketplace_instructors`) are derived read projections. Authoritative data always lives in channel-scoped PostgreSQL tables.
-
-```
-PostgreSQL (authoritative, channel-scoped)
-    ↓ ProductVariantEvent / InstructorProfileUpdatedEvent (Vendure EventBus)
-    ↓ MarketplaceIndexerPlugin reads Product.customFields.bbbSessionId → BbbScheduledSession
-Elasticsearch platform index (derived, cross-channel read only)
-    ↓
-MarketplaceSearchResolver (public, no channel context on reads)
-```
-
-No marketplace write operation may bypass channel context. `OrderLine` creation, entitlement creation, and billing writes always go through the channel-scoped Vendure Shop API.
-
-**Rejection criterion:** Any mutation that creates or modifies a channel-scoped entity without a `RequestContext.channelId` is rejected.
-
-### INV-010: Ad Spend Truth Is the AdSpendLedger. Campaign.spentInPaise Is a Denormalised Cache Only.
-
-`AdSpendLedger` rows are never updated, never deleted. `MarketplaceAdCampaign.spentInPaise` is a convenience cache maintained for fast budget-check queries. Discrepancies are resolved in favour of `SUM(AdSpendLedger.amountInPaise) WHERE campaignId = X`.
-
-This extends INV-002 (append-only billing truth) to the advertising domain.
-
-**Rejection criterion:** Any service method that calls `.update()` on an `AdSpendLedger` row is rejected.
 
 ---
 
@@ -1641,262 +1911,3 @@ Saa9vi uses the **Shopify/Kajabi model** — each academy is a completely isolat
 ---
 
 *This ADR is the authoritative architecture reference for Saa9vi. All plugin development, schema migrations, and infrastructure changes must be evaluated against the invariants and decisions documented here. Conflicts between this document and code comments are resolved in favour of this document; the code should be updated.*
-
-
----
-
-## 6A. Capacity Intelligence Architecture
-
-**Origin:** Peer assessment 2026-06. Formalised from the Capacity Intelligence System proposal following architectural review.
-
-**Background:** `BbbServer.currentLoad` and `BbbServer.maxLoad` (BB-003, DL-014) establish the server selection primitive. What was missing was a layer that aggregates that primitive into pool-level health, forecasts future load from scheduled session data, and informs operators before saturation — not after. This section specifies that layer.
-
-**Design principle (INV-012 revised, DL-025):** The system warns operators; it never blocks meetings. See INV-012 and DL-025 for rationale.
-
----
-
-### CI-001: `BbbServer.capacity` — Operator-Configured Hardware Ceiling
-
-**New column on `BbbServer`:**
-
-```typescript
-/**
- * Operator-configured maximum virtual load score for this server's hardware spec.
- * Used by CapacityIntelligenceService for pool-level headroom calculations.
- *
- * Not used by BbbServerSelectionService — that service continues to use
- * currentLoad < maxLoad for selection (DL-014 preserved).
- *
- * Default 200 ≈ a 4-core 8GB VM at moderate session density.
- * A 8-core 16GB server would typically be configured with capacity: 500.
- */
-@Column({ default: 200 })
-capacity: number;
-```
-
-`capacity` is deliberately separate from `maxLoad`. `maxLoad` is the admission threshold — servers at or above it are excluded from selection. `capacity` is the physical ceiling — the denominator for headroom percentage. An operator may set `maxLoad: 85` (stop accepting new meetings at 85% of capacity) and `capacity: 200` (where 85% = 170 virtual load units). These are independent tuning knobs.
-
-**Migration:** `ALTER TABLE bbb_server ADD COLUMN capacity INT NOT NULL DEFAULT 200`.
-
----
-
-### CI-002: `CapacityIntelligenceService`
-
-**New service** that exposes three aggregations from data already in the system.
-
-#### Live Pool Health
-
-```typescript
-interface ServerPoolHealth {
-  servers: ServerHealth[];
-  totalServers: number;
-  activeServers: number;
-  totalVirtualLoad: number;     // sum of BbbServer.currentLoad across pool
-  totalCapacity: number;        // sum of BbbServer.capacity across pool
-  poolLoadPercent: number;      // totalVirtualLoad / totalCapacity × 100
-  activeAttendees: number;      // from BbbMeeting (Active state)
-  activeMeetings: number;
-  safeHeadroom: number;         // capacity remaining before 80% threshold
-}
-
-interface ServerHealth {
-  serverId: string;
-  serverName: string;
-  status: 'active' | 'disabled' | 'unreachable';
-  currentLoad: number;
-  loadPercent: number;          // currentLoad / capacity × 100
-  activeMeetings: number;
-  activeParticipants: number;
-  isOverloaded: boolean;        // loadPercent > 85
-}
-```
-
-No new polling. `currentLoad` is already maintained by `BbbReconciliationService.reconcileServerLoad()`.
-
-#### 48-Hour Load Forecast
-
-```typescript
-interface LoadForecastSlot {
-  windowStart: Date;
-  windowEnd: Date;              // 30-minute windows across next 48h
-  expectedSessions: number;
-  expectedAttendees: number;    // sum of BbbScheduledSession.maxAttendees
-  expectedVirtualLoad: number;  // PILOS formula: videos×3 + mics×2 + listeners×1
-  projectedLoadPercent: number; // vs current pool capacity
-  riskLevel: 'safe' | 'warning' | 'critical';
-}
-```
-
-**Data source:** `BbbScheduledSession.startsAt`, `endsAt`, `maxAttendees` — all present in Phase 1 entities.
-
-**Load estimation parameters (currently hardcoded defaults — planned for `BigBlueButtonPluginOptions`):**
-
-> **Note:** These parameters are not yet exposed in `vendure-config.ts`. They are hardcoded in `CapacityIntelligenceService`. Promoting them to `BigBlueButtonPlugin.init()` options is a tracked Phase 1.5 gap. They can be refined once `BbbUsageLedger.peakParticipantCount` history accumulates.
-
-| Parameter | Default | Rationale |
-|---|---|---|
-| `cameraRatio` | 0.40 | 40% of attendees typically enable camera |
-| `micRatio` | 0.70 | 70% of attendees typically unmute |
-| `videoWeight` | 3 | PILOS virtual load weight for video streams |
-| `micWeight` | 2 | PILOS virtual load weight for microphone streams |
-| `listenerWeight` | 1 | PILOS virtual load weight for listen-only |
-
-These ratios are **not yet configurable** — they are hardcoded defaults. The `BigBlueButtonPluginOptions` extension is a tracked gap (see BUG-019 remediation work, Phase 1.5).
-
-#### Capacity Recommendation
-
-```typescript
-interface CapacityRecommendation {
-  currentServers: number;
-  currentCapacity: number;
-  peakForecastLoad: number;
-  peakForecastAt: Date;
-  peakForecastPercent: number;
-  serversNeeded: number;        // 0 if within safe threshold
-  urgency: 'none' | 'plan' | 'soon' | 'immediate';
-  reasoning: string;            // plain English, shown in dashboard
-}
-```
-
-**Target utilisation:** Peak load should not exceed 70% of total capacity (30% headroom for session join spikes). `serversNeeded = Math.ceil((peakForecastLoad / 0.70 - currentCapacity) / standardServerCapacity)`.
-
-**Urgency thresholds:**
-
-| Projected peak % | Urgency |
-|---|---|
-| > 90% | `immediate` |
-| > 75% | `soon` |
-| > 60% | `plan` |
-| ≤ 60% | `none` |
-
----
-
-### CI-003: Admin API Query
-
-```graphql
-type Query {
-  """
-  Returns live pool health, 48-hour load forecast, capacity recommendation,
-  and historical peak stats for the specified server pool.
-  Only accessible by SuperAdmin.
-  """
-  poolCapacityDashboard: PoolCapacityDashboard!
-    @Allow(Permission.SuperAdmin)
-}
-
-type PoolCapacityDashboard {
-  liveHealth: ServerPoolHealth!
-  forecast: [LoadForecastSlot!]!
-  recommendation: CapacityRecommendation!
-  historicalPeak: HistoricalPeakStats!
-}
-
-type HistoricalPeakStats {
-  last7DaysPeakAttendees: Int!
-  last7DaysPeakLoad: Float!
-  last7DaysPeakAt: DateTime!
-  avgDailyAttendeeMinutes: Float!
-}
-```
-
-`historicalPeak` is computed from `BbbUsageLedger` — no new tables.
-
----
-
-### CI-004: `CapacityAlertLog` — Append-Only Alert Audit Trail
-
-**New entity** following INV-002 principle extended to the alerting domain.
-
-```typescript
-@Entity('bbb_capacity_alert_log')
-export class BbbCapacityAlertLog extends VendureEntity {
-  @Column() checkedAt: Date;
-  @Column() urgency: 'none' | 'plan' | 'soon' | 'immediate';
-  @Column() serversNeeded: number;
-  @Column() peakForecastPercent: number;
-  @Column({ nullable: true }) peakForecastAt: Date | null;
-  @Column({ nullable: true, type: 'text' }) reasoning: string | null;
-}
-```
-
-Rows are never updated. Never deleted. Operators can retrospectively audit when the system flagged a capacity risk and whether a server was added in time.
-
----
-
-### CI-005: `capacity-alert` BullMQ Job
-
-**New scheduled job** — runs every 15 minutes.
-
-```
-Queue: bbb-capacity-alert (cron: every 15 minutes)
-  → CapacityIntelligenceService.buildDashboard()
-  → append BbbCapacityAlertLog row (always — provides continuous audit trail)
-  → if urgency = 'immediate': publish CapacityAlertEvent → email to platform admin
-  → if urgency = 'soon': publish CapacityAlertEvent (lower priority)
-```
-
-**`CapacityAlertEvent`** (new VendureEvent):
-
-```typescript
-export class CapacityAlertEvent extends VendureEvent {
-  constructor(
-    public readonly urgency: 'soon' | 'immediate',
-    public readonly message: string,
-    public readonly peakForecastAt: Date,
-    public readonly serversNeeded: number,
-  ) { super(); }
-}
-```
-
-Subscribers: `EmailPlugin` handler sends alert to platform admin email. Future: MSG91 SMS (`urgency = 'immediate'` only), WhatsApp Business.
-
----
-
-### CI-006: ADR Updates Required
-
-**New entries in job queue table (§9 EQ-001):**
-
-```
-bbb-capacity-alert    ← ✅ live (CI-005, 15-minute cron)
-```
-
-**New entry in EventBus table (§9 EQ-002):**
-
-| Event | Publisher | Subscribers | Status |
-|---|---|---|---|
-| `CapacityAlertEvent` | `BbbCapacityAlertJob` | `EmailPlugin` | Phase 1.5 |
-
-**Production Readiness Checklist (§13) — new items:**
-
-- [ ] `BbbServer.capacity` column migrated and set per server spec
-- [ ] `bbb-capacity-alert` job registered in `onModuleInit`
-- [ ] `poolCapacityDashboard` query verified in dashboard
-- [ ] Load estimation ratios tuned from first 2 weeks of `BbbUsageLedger` data
-
----
-
-## INV-012: Capacity Intelligence Is Advisory. Meetings Are Never Blocked for Capacity Reasons.
-
-The `CapacityIntelligenceService` warns operators when forecast load approaches pool capacity. It does not block meeting provisioning.
-
-**Rationale:** A coaching institute's 6:00 PM class with 42 students enrolled cannot be cancelled at the last minute because the platform's infrastructure is under-provisioned. The failure mode of a blocked class (42 students lose a session, academy loses trust, refunds issued) is categorically worse than the failure mode of a degraded class (video choppy for some participants, recoverable with a server addition). The correct response to approaching capacity is operator notification and server addition — not meeting rejection.
-
-**Operational consequence:** The 15-minute alert job and the `poolCapacityDashboard` query provide the operator sufficient warning to add a server before saturation. `BbbServerSelectionService` continues to use `currentLoad < maxLoad` as the admission filter — this is the soft ceiling, not a block. Once all servers are above `maxLoad`, new provisioning jobs will queue and retry (up to `BBB_MAX_AUTO_RETRIES`), giving the operator a window to act.
-
-**Rejection criterion:** Any code path that throws an error or returns an access-denied response solely because pool capacity is high is rejected. Capacity is a signal for operators, not a gate for students.
-
----
-
-## DL-025: Proactive Capacity Intelligence Over Reactive Throttling
-
-**Decision:** The platform implements 48-hour load forecasting with operator notification rather than capacity-based meeting blocking.
-
-**Rationale:** The education context makes reactive throttling uniquely harmful. A live class has a scheduled time, enrolled students, and a trainer who has prepared. Blocking the class at provisioning time means real students lose real learning time with no recovery path in the moment. The infrastructure failure is the platform's responsibility, not the academy's problem to absorb.
-
-By contrast, a 15-minute alert cadence with a 48-hour forecast window gives the operator between 48 hours and 15 minutes of warning — enough to provision a new server before any student is affected. The operator takes the action; the student experience is uninterrupted.
-
-**Alternatives rejected:**
-
-- Hard ceiling blocking (rejected — see INV-012 rationale)
-- Per-meeting capacity checks at join time (rejected — too late; the meeting is already provisioned)
-- Reactive server auto-scaling (deferred to Phase 4 — requires cloud-native infrastructure; current BBB servers are self-hosted)
