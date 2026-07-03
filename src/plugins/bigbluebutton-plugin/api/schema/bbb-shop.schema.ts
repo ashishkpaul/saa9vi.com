@@ -118,7 +118,7 @@ export const shopApiExtensions = gql`
     Student learning dashboard — aggregates entitlements, sessions, and join URLs
     into a single domain API. No Bbb* types exposed (INV-006).
     """
-    myLearningDashboard: LearningDashboard! @Allow(Permission.Authenticated)
+    myLearningDashboard: LearningDashboard!
   }
 
   extend type Mutation {
