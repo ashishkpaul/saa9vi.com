@@ -331,28 +331,51 @@ Create a `load-testing/` directory at the project root:
 
 ---
 
-## Task 11 — Custom Domain → Channel Token Redis Mapping
+## Task 11 — Custom Domain → Channel Token Redis Mapping ✅ Done
 
-**Reference:** ADR v1.7 §13 Production Readiness Checklist (⚠️ Pending), SEC-006
-**Blocking:** Custom domain tenants — without this, `mehta.saa9vi.com` cannot resolve to the correct channel
+**Reference:** ADR v1.7 §13 Production Readiness Checklist, SEC-006
+**Priority:** Phase 1 final blocker — required for custom domain tenants
 
-### What to do
+**Status:** ✅ Implemented. Custom domain → channel token mapping is fully wired with Redis persistence, Express middleware, and automatic invalidation on domain changes.
 
-When `TenantProfile.customDomain` is set or updated, write a Redis key:
+### Implementation
 
-```typescript
-// key: `channel-token:${customDomain}`  value: channelToken
-await redis.set(`channel-token:${customDomain}`, channel.token);
+**Files created/modified:**
+
+| File | Purpose |
+|---|---|
+| `src/plugins/tenant-plugin/entities/tenant-profile.entity.ts` | Added `customDomain` column (nullable, unique) |
+| `src/plugins/tenant-plugin/services/domain-channel-resolver.service.ts` | **New** — Redis service managing `channel-token:{domain}` → channelToken mappings with 7-day TTL |
+| `src/plugins/tenant-plugin/config/domain-channel.middleware.ts` | **New** — Express middleware that resolves hostname via Redis and sets `X-Vendure-Token` header |
+| `src/plugins/tenant-plugin/services/tenant-profile.service.ts` | Wired `DomainChannelResolverService` into `create()` and `update()` to auto-sync domain changes |
+| `src/plugins/tenant-plugin/tenant-plugin.plugin.ts` | Registered `DomainChannelResolverService` in providers |
+| `src/vendure-config.ts` | Registered `domainChannelMiddleware` in `apiOptions.middleware` with `route: '*'` |
+| `src/migrations/1783228720863-tenant-profile-custom-domain.ts` | Migration adding `customDomain` column to `tenant_profile` table |
+
+### Architecture
+
+```
+TenantProfile.create/update()
+  → DomainChannelResolverService.setMapping(domain, token)
+    → Redis: SET channel-token:{domain} {token} EX 604800
+
+Incoming HTTP request
+  → domainChannelMiddleware
+    → Redis: GET channel-token:{hostname}
+    → Sets X-Vendure-Token header
+    → Vendure routes to correct channel
 ```
 
-In Next.js middleware, resolve hostname → channelToken:
+### Acceptance criteria
 
-```typescript
-const channelToken = await redis.get(`channel-token:${hostname}`);
-// Set as X-Vendure-Token header on all requests
-```
-
-Invalidate the Redis key when `TenantProfile.customDomain` changes.
+- ✅ Redis key format: `channel-token:{customDomain}` → channelToken
+- ✅ 7-day TTL on Redis keys (refreshed on each update)
+- ✅ Express middleware resolves hostname → channelToken non-blockingly (fails open if Redis unavailable)
+- ✅ Middleware sets `X-Vendure-Token` header for Vendure channel resolution
+- ✅ `TenantProfile.create()` auto-sets mapping when `customDomain` provided
+- ✅ `TenantProfile.update()` invalidates old mapping and sets new mapping when domain changes
+- ✅ Migration generated via Vendure CLI and run successfully
+- ✅ `npm run build` passes cleanly
 
 ---
 

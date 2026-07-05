@@ -12,6 +12,7 @@ const sharedTypeExtensions = gql`
         logoAsset: Asset
         timezone: String!
         contactEmail: String!
+        customDomain: String
         onboardingComplete: Boolean!
     }
 
@@ -93,6 +94,7 @@ export const adminApiExtensions = gql`
         logoAssetId: ID
         timezone: String
         contactEmail: String
+        customDomain: String
         onboardingComplete: Boolean
     }
 

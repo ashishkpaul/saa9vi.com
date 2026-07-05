@@ -17,6 +17,7 @@ import "dotenv/config";
 import path from "path";
 import { BullMQJobQueuePlugin } from "@vendure/job-queue-plugin/package/bullmq";
 import { BigBlueButtonPlugin } from "./plugins/bigbluebutton-plugin";
+import { domainChannelMiddleware } from "./plugins/tenant-plugin/config/domain-channel.middleware";
 import { CmsPlugin } from "./plugins/cms/cms.plugin";
 import { TenantPlugin } from "./plugins/tenant-plugin/tenant-plugin.plugin";
 import { ReviewsPlugin } from "./plugins/reviews/reviews-plugin";
@@ -32,6 +33,13 @@ export const config: VendureConfig = {
     adminApiPath: "admin-api",
     shopApiPath: "shop-api",
     trustProxy: IS_DEV ? false : 1,
+    middleware: [
+      {
+        // Resolve custom domain → channel token via Redis (SEC-006)
+        route: '*',
+        handler: domainChannelMiddleware,
+      },
+    ],
     // The following options are useful in development mode,
     // but are best turned off for production for security
     // reasons.

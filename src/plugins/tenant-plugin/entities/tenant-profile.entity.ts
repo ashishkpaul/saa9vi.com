@@ -30,6 +30,9 @@ export class TenantProfile extends VendureEntity implements ChannelAware {
   @Column()
   contactEmail: string;
 
+  @Column({ nullable: true, unique: true })
+  customDomain: string;
+
   @Column({ default: false })
   onboardingComplete: boolean;
 }
