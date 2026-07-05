@@ -65,4 +65,19 @@ export class BbbServer extends VendureEntity {
 
   @Column({ nullable: true })
   lastHealthCheckAt: Date;
+
+  /**
+   * Operator-configured maximum virtual load score for this server's hardware spec.
+   * Used by CapacityIntelligenceService for pool-level headroom calculations.
+   *
+   * Not used by BbbServerSelectionService — that service continues to use
+   * currentLoad < maxLoad for selection (DL-014 preserved).
+   *
+   * Default 200 ≈ a 4-core 8GB VM at moderate session density.
+   * A 8-core 16GB server would typically be configured with capacity: 500.
+   *
+   * See ADR v1.7 CI-001.
+   */
+  @Column({ default: 200 })
+  capacity: number;
 }

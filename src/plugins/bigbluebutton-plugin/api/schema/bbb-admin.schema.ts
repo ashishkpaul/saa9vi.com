@@ -11,6 +11,7 @@ export const adminApiExtensions = gql`
     healthy: Boolean!
     currentLoad: Int!
     maxLoad: Int!
+    capacity: Int!
     lastHealthCheckAt: DateTime
   }
 
@@ -235,6 +236,7 @@ export const adminApiExtensions = gql`
     bbbServers(options: BbbServerListOptions): BbbServerList!
     bbbServer(id: ID!): BbbServer
     bbbOrganizations(options: BbbOrganizationListOptions): BbbOrganizationList!
+    poolCapacityDashboard: PoolCapacityDashboard!
     bbbOrganization(id: ID!): BbbOrganization
     bbbMeetings(
       organizationId: ID
@@ -335,6 +337,7 @@ export const adminApiExtensions = gql`
     apiUrl: String!
     apiSecret: String!
     maxLoad: Int
+    capacity: Int
   }
 
   input UpdateBbbServerInput {
@@ -342,6 +345,7 @@ export const adminApiExtensions = gql`
     apiUrl: String
     apiSecret: String
     maxLoad: Int
+    capacity: Int
     enabled: Boolean
   }
 
@@ -482,6 +486,66 @@ export const adminApiExtensions = gql`
     source: String!
     validFrom: String
     validUntil: String
+  }
+
+  # ─── Capacity Intelligence Types (ADR v1.7 §6A) ──────────────────────────────
+
+  type PoolCapacityDashboard {
+    liveHealth: ServerPoolHealth!
+    forecast: [LoadForecastSlot!]!
+    recommendation: CapacityRecommendation!
+    historicalPeak: HistoricalPeakStats!
+  }
+
+  type ServerPoolHealth {
+    servers: [ServerHealth!]!
+    totalServers: Int!
+    activeServers: Int!
+    totalVirtualLoad: Float!
+    totalCapacity: Int!
+    poolLoadPercent: Float!
+    activeAttendees: Int!
+    activeMeetings: Int!
+    safeHeadroom: Float!
+  }
+
+  type ServerHealth {
+    serverId: ID!
+    serverName: String!
+    status: String!
+    currentLoad: Int!
+    loadPercent: Float!
+    activeMeetings: Int!
+    activeParticipants: Int!
+    isOverloaded: Boolean!
+  }
+
+  type LoadForecastSlot {
+    windowStart: DateTime!
+    windowEnd: DateTime!
+    expectedSessions: Int!
+    expectedAttendees: Int!
+    expectedVirtualLoad: Float!
+    projectedLoadPercent: Float!
+    riskLevel: String!
+  }
+
+  type CapacityRecommendation {
+    currentServers: Int!
+    currentCapacity: Int!
+    peakForecastLoad: Float!
+    peakForecastAt: DateTime!
+    peakForecastPercent: Float!
+    serversNeeded: Int!
+    urgency: String!
+    reasoning: String!
+  }
+
+  type HistoricalPeakStats {
+    last7DaysPeakAttendees: Int!
+    last7DaysPeakLoad: Float!
+    last7DaysPeakAt: DateTime!
+    avgDailyAttendeeMinutes: Float!
   }
 
   # ─── Organization Membership Inputs (FEAT-001) ──────────────────────────────

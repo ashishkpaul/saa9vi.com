@@ -28,6 +28,7 @@ import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbAdminPermission } from "../constants";
 import { TrialRegistrationService } from "../services/trial-registration.service";
 import { BbbMembershipService } from "../services/bbb-membership.service";
+import { CapacityIntelligenceService } from "../services/capacity-intelligence.service";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
 
 import { Customer, EntityNotFoundError } from "@vendure/core";
@@ -131,8 +132,17 @@ export class BbbAdminResolver {
     private readonly scheduledSessionService: BbbScheduledSessionService,
     private readonly trialRegistrationService: TrialRegistrationService,
     private readonly membershipService: BbbMembershipService,
+    private readonly capacityIntelligenceService: CapacityIntelligenceService,
     private readonly connection: TransactionalConnection,
   ) {}
+
+  // ─── Capacity Intelligence Dashboard (ADR v1.7 §6A CI-003) ────────────────
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  async poolCapacityDashboard(@Ctx() ctx: RequestContext) {
+    return this.capacityIntelligenceService.buildDashboard(ctx);
+  }
 
   // ─── Servers ────────────────────────────────────────────────────────────────
 

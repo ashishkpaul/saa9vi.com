@@ -74,3 +74,22 @@ export class CapacityExhaustedEvent extends VendureEvent {
     super();
   }
 }
+
+/**
+ * Published when CapacityIntelligenceService detects that projected load
+ * exceeds safe thresholds. Triggers operator notifications via subscriber plugins.
+ *
+ * Urgency levels:
+ * - 'soon': 75-90% projected utilization
+ * - 'immediate': > 90% projected utilization
+ *
+ * See ADR v1.7 §6A CI-005.
+ */
+export class CapacityAlertEvent extends VendureEvent {
+  constructor(
+    public readonly urgency: "soon" | "immediate",
+    public readonly message: string,
+    public readonly peakForecastAt: Date,
+    public readonly serversNeeded: number,
+  ) { super(); }
+}

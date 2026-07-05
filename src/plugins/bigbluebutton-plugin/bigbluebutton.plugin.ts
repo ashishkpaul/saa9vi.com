@@ -22,6 +22,7 @@ import { BbbInstructorAssignment } from "./entities/instructor-assignment.entity
 import { BbbWebhookEvent } from "./entities/bbb-webhook-event.entity";
 import { BbbEntitlement } from "./entities/bbb-entitlement.entity";
 import { BbbOrganizationMembership } from "./entities/bbb-organization-membership.entity";
+import { BbbCapacityAlertLog } from "./entities/bbb-capacity-alert-log.entity";
 import { EventLog } from "../../platform/tracing/entities/event-log.entity";
 
 import { BbbEncryptionService } from "./services/bbb-encryption.service";
@@ -42,6 +43,7 @@ import { BbbEntitlementService } from "./services/bbb-entitlement.service";
 import { BbbMembershipService } from "./services/bbb-membership.service";
 import { GrantReaderService } from "./services/grant-reader.service";
 import { LearningDashboardService } from "./services/learning-dashboard.service";
+import { CapacityIntelligenceService } from "./services/capacity-intelligence.service";
 import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.listener";
 
 import { PlatformTracingModule } from "../../platform/tracing/platform-tracing.module";
@@ -52,6 +54,7 @@ import { BbbAdminResolver } from "./api/bbb-admin.resolver";
 import { BbbShopResolver } from "./api/bbb-shop.resolver";
 import { BbbWebhookController } from "./workers/bbb-webhook.controller";
 import { bbbReconciliationTask } from "./jobs/bbb-reconciliation.task";
+import { bbbCapacityAlertTask } from "./jobs/bbb-capacity-alert.task";
 import {
   bbbFulfillmentHandler,
   bbbOrderProcess,
@@ -80,6 +83,7 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     BbbWebhookEvent,
     BbbEntitlement,
     BbbOrganizationMembership,
+    BbbCapacityAlertLog,
     EventLog,
   ],
 
@@ -109,6 +113,7 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     BbbMembershipService,
     GrantReaderService,
     LearningDashboardService,
+    CapacityIntelligenceService,
     BbbOrderFulfillmentListener,
   ],
 
@@ -136,6 +141,12 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
       config.schedulerOptions.tasks = [
         ...(config.schedulerOptions.tasks ?? []),
         bbbReconciliationTask,
+      ];
+    }
+    if (!existingIds.has(bbbCapacityAlertTask.id)) {
+      config.schedulerOptions.tasks = [
+        ...(config.schedulerOptions.tasks ?? []),
+        bbbCapacityAlertTask,
       ];
     }
     config.authOptions.customPermissions = [

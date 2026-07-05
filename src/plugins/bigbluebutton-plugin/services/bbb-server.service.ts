@@ -8,6 +8,7 @@ export interface CreateBbbServerInput {
   apiUrl: string;
   apiSecret: string;
   maxLoad?: number;
+  capacity?: number;
 }
 
 export interface UpdateBbbServerInput {
@@ -15,6 +16,7 @@ export interface UpdateBbbServerInput {
   apiUrl?: string;
   apiSecret?: string;
   maxLoad?: number;
+  capacity?: number;
   enabled?: boolean;
 }
 
@@ -88,6 +90,7 @@ export class BbbServerService {
       apiUrl: input.apiUrl.replace(/\/$/, ""),
       encryptedApiSecret: this.encryptionService.encrypt(input.apiSecret),
       maxLoad: input.maxLoad ?? 100,
+      capacity: input.capacity ?? 200,
     });
     return this.connection.getRepository(ctx, BbbServer).save(server);
   }
@@ -107,6 +110,7 @@ export class BbbServerService {
       );
     }
     if (input.maxLoad !== undefined) server.maxLoad = input.maxLoad;
+    if (input.capacity !== undefined) server.capacity = input.capacity;
     if (input.enabled !== undefined) server.enabled = input.enabled;
     return this.connection.getRepository(ctx, BbbServer).save(server);
   }
