@@ -234,126 +234,43 @@ Results are ranked by `function_score` combining `bayesianRating` (log1p) with a
 
 ---
 
-## Task 8 — ADR v1.7 §6A: Capacity Intelligence System
+## Task 8 — ADR v1.7 §6A: Capacity Intelligence System ✅ Done
 
 **Reference:** ADR v1.7 §6A, CI-001 through CI-006
 **Priority:** Phase 1.5 — required before load testing results are meaningful at scale
 
-### This is entirely new work. Nothing in the codebase implements it yet.
+**Status:** ✅ Implemented. All components are built, wired, migrated, and verified.
 
-#### Step 8a — `BbbServer.capacity` column (CI-001)
+### Files changed
 
-Add to `src/plugins/bigbluebutton-plugin/entities/bbb-server.entity.ts`:
+| File | Change |
+|---|---|
+| `src/plugins/bigbluebutton-plugin/entities/bbb-server.entity.ts` | `capacity` column with default 200 (CI-001) |
+| `src/plugins/bigbluebutton-plugin/entities/bbb-capacity-alert-log.entity.ts` | **New** — append-only alert audit trail (CI-004) |
+| `src/plugins/bigbluebutton-plugin/events/bbb-events.ts` | `CapacityAlertEvent` class (CI-005) |
+| `src/plugins/bigbluebutton-plugin/services/capacity-intelligence.service.ts` | **New** — live pool health, 48h PILOS forecast, capacity recommendation (CI-002) |
+| `src/plugins/bigbluebutton-plugin/jobs/bbb-capacity-alert.task.ts` | **New** — 15-minute cron job, appends log row, publishes event on `soon`/`immediate` (CI-005) |
+| `src/plugins/bigbluebutton-plugin/api/schema/bbb-admin.schema.ts` | `PoolCapacityDashboard` + nested types, `capacity` on server create/update inputs (CI-003) |
+| `src/plugins/bigbluebutton-plugin/api/bbb-admin.resolver.ts` | `poolCapacityDashboard` query resolver with `@Allow(BbbAdminPermission.Permission)` |
+| `src/plugins/bigbluebutton-plugin/services/bbb-server.service.ts` | `capacity` in create/update input interfaces and logic |
+| `src/plugins/bigbluebutton-plugin/bigbluebutton.plugin.ts` | Registered `BbbCapacityAlertLog` entity, `CapacityIntelligenceService` provider, `bbbCapacityAlertTask` scheduled task |
+| `src/migrations/1783223489524-bbb-capacity-intelligence.ts` | **New** — creates `bbb_capacity_alert_log` table + `bbb_server.capacity` column |
 
-```typescript
-/**
- * Operator-configured maximum virtual load score for this server's hardware spec.
- * Used by CapacityIntelligenceService for pool-level headroom calculations.
- * Separate from maxLoad (admission threshold). Default 200 ≈ 4-core/8GB VM.
- * See ADR v1.7 CI-001.
- */
-@Column({ default: 200 })
-capacity: number;
-```
+### Bugs fixed during implementation
 
-Generate migration: `ALTER TABLE bbb_server ADD COLUMN capacity INT NOT NULL DEFAULT 200`.
-
-Add `capacity` to the `BbbServer` GraphQL type in `bbb-admin.schema.ts`.
-
-#### Step 8b — `BbbCapacityAlertLog` entity (CI-004)
-
-Create `src/plugins/bigbluebutton-plugin/entities/bbb-capacity-alert-log.entity.ts`:
-
-```typescript
-@Entity('bbb_capacity_alert_log')
-export class BbbCapacityAlertLog extends VendureEntity {
-  @Column() checkedAt: Date;
-  @Column({ type: 'simple-enum', enum: ['none', 'plan', 'soon', 'immediate'] })
-  urgency: 'none' | 'plan' | 'soon' | 'immediate';
-  @Column({ type: 'int' }) serversNeeded: number;
-  @Column({ type: 'float' }) peakForecastPercent: number;
-  @Column({ nullable: true }) peakForecastAt: Date | null;
-  @Column({ nullable: true, type: 'text' }) reasoning: string | null;
-}
-```
-
-Rows are never updated (INV-002 extended to alerting domain per ADR §6A CI-004).
-
-#### Step 8c — `CapacityAlertEvent` (CI-005)
-
-Add to `src/plugins/bigbluebutton-plugin/events/bbb-events.ts`:
-
-```typescript
-export class CapacityAlertEvent extends VendureEvent {
-  constructor(
-    public readonly urgency: 'soon' | 'immediate',
-    public readonly message: string,
-    public readonly peakForecastAt: Date,
-    public readonly serversNeeded: number,
-  ) { super(); }
-}
-```
-
-#### Step 8d — `CapacityIntelligenceService` (CI-002)
-
-Create `src/plugins/bigbluebutton-plugin/services/capacity-intelligence.service.ts`.
-
-The service provides three aggregations:
-
-**Live pool health** — reads `BbbServer.currentLoad`, `BbbServer.capacity`, active `BbbMeeting` counts. No new polling needed.
-
-**48-hour load forecast** — reads `BbbScheduledSession.startsAt`, `endsAt`, `maxAttendees` across all orgs. Builds 30-minute windows. Uses PILOS formula:
-```
-virtualLoad = (maxAttendees × cameraRatio × videoWeight)
-            + (maxAttendees × micRatio × micWeight)
-            + (maxAttendees × (1 - micRatio) × listenerWeight)
-```
-Default parameters: `cameraRatio: 0.40`, `micRatio: 0.70`, `videoWeight: 3`, `micWeight: 2`, `listenerWeight: 1`.
-
-**Capacity recommendation** — target utilisation 70%:
-```typescript
-serversNeeded = Math.ceil((peakForecastLoad / 0.70 - totalCapacity) / standardServerCapacity);
-// urgency: >90% → immediate, >75% → soon, >60% → plan, ≤60% → none
-```
-
-#### Step 8e — `capacity-alert` BullMQ job (CI-005)
-
-Register a scheduled job (cron: every 15 minutes) in `src/plugins/bigbluebutton-plugin/jobs/`:
-
-```
-Queue: bbb-capacity-alert
-  → CapacityIntelligenceService.buildDashboard()
-  → append BbbCapacityAlertLog row (always)
-  → if urgency in ['soon', 'immediate']: publish CapacityAlertEvent
-```
-
-#### Step 8f — `poolCapacityDashboard` Admin API query (CI-003)
-
-Add to `bbb-admin.schema.ts`:
-
-```graphql
-type Query {
-  poolCapacityDashboard: PoolCapacityDashboard! @Allow(Permission.SuperAdmin)
-}
-```
-
-With full type definitions for `PoolCapacityDashboard`, `ServerPoolHealth`, `ServerHealth`, `LoadForecastSlot`, `CapacityRecommendation`, `HistoricalPeakStats` per ADR v1.7 §6A CI-003.
-
-`historicalPeak` is computed from `BbbUsageLedger` — no new tables.
-
-#### Step 8g — Update `EQ-001` job queue table and `EQ-002` event table
-
-Add `bbb-capacity-alert` to job queue naming comment in `bbb-reconciliation.task.ts` or a relevant `constants.ts`.
-Add `CapacityAlertEvent` to the event bus table in `bbb-events.ts`.
+1. **Invalid `@Allow` directive in SDL** — `poolCapacityDashboard` had `@Allow(SuperAdmin)` which is invalid GraphQL syntax (positional arguments not allowed). Removed entirely; the resolver already has the correct `@Allow(BbbAdminPermission.Permission)` TypeScript decorator.
+2. **Column name mismatch in forecast query** — `get48HourLoadForecast()` used `session.startsAt`/`session.endsAt` but `BbbScheduledSession` has `startTime`/`endTime` columns. Fixed both the QueryBuilder WHERE clause and the in-memory filter. `tsc` could not catch this since these are raw string fragments.
 
 ### Acceptance criteria
 
-- `BbbServer.capacity` column migrated and default set
-- `bbb-capacity-alert` job registered in `onModuleInit`
-- `BbbCapacityAlertLog` rows appended every 15 minutes (not updated)
-- `poolCapacityDashboard` query returns live health + 48h forecast + recommendation
-- `CapacityAlertEvent` published when urgency is `soon` or `immediate`
-- **INV-012 enforced:** No code path blocks meeting provisioning for capacity reasons — intelligence is advisory only
+- ✅ `BbbServer.capacity` column migrated and default set (200)
+- ✅ `bbb-capacity-alert` job registered in `configuration()` with dedup guard
+- ✅ `BbbCapacityAlertLog` rows appended every 15 minutes (never updated — INV-002 extended)
+- ✅ `poolCapacityDashboard` query returns live health + 48h forecast + recommendation
+- ✅ `CapacityAlertEvent` published when urgency is `soon` or `immediate`
+- ✅ **INV-012 enforced:** No code path blocks meeting provisioning for capacity reasons — intelligence is advisory only
+- ✅ Migration generated via Vendure CLI and run
+- ✅ `npm run build` passes cleanly
 
 ---
 
@@ -384,22 +301,33 @@ Create a `load-testing/` directory at the project root:
 
 ---
 
-## Task 10 — SEC-004: Rate Limiting on Public Mutations
+## Task 10 — SEC-004: Rate Limiting on Public Mutations ✅ Done
 
 **Reference:** ADR v1.7 §13 Production Readiness Checklist (⚠️ Pending)
 **Blocking:** First tenant onboarding — this is the last remaining Phase 1 blocker
 
-### What to do
+**Status:** ✅ Implemented. Rate limiting applied to three surfaces via `express-rate-limit` middleware, registered through the plugin's `configuration()` hook.
 
-Add rate limiting to three surfaces via a NestJS `ThrottlerModule` or a Caddy/reverse-proxy layer:
+### Implementation
 
-| Surface | Limit | Reason |
+**File:** `src/plugins/bigbluebutton-plugin/config/rate-limiter.middleware.ts` (new)
+
+| Surface | Limit | Mechanism |
 |---|---|---|
-| `POST /bbb/webhook` | 100 req/min per source IP | BBB server IPs should be allowlisted |
-| `registerForTrialSession` mutation | 10 req/min per customer | Abuse vector for free trial seats |
-| `joinMeeting` mutation | 10 req/min per customer | Prevents join-URL farming |
+| `POST /bbb/webhook` | 100 req/min per IP | `bbbWebhookRateLimiter` — IP-based, with allowlist via `BBB_WEBHOOK_ALLOWED_IPS` env var |
+| `registerForTrial` mutation | 10 req/min per customer | `shopApiRateLimiter` — inspects GraphQL body, keys by `activeUserId` or IP |
+| `bbbJoinMeeting` mutation | 10 req/min per customer | `shopApiRateLimiter` — same mechanism, separate counter |
 
-The simplest Vendure-native approach is `@nestjs/throttler` registered as a global guard. For `POST /bbb/webhook`, configure an IP allowlist for known BBB server IPs and apply a stricter rate on unknown IPs.
+**Architecture:** Both limiters are Express middleware registered via `config.apiOptions.middleware` in the plugin's `configuration()` function. The webhook limiter is a direct `rateLimit()` instance. The Shop API limiter inspects the GraphQL request body to identify the operation name and applies the appropriate per-mutation rate limit, passing all other operations through unmodified.
+
+**Configuration:** Set `BBB_WEBHOOK_ALLOWED_IPS` env var to a comma-separated list of known BBB server IPs to bypass the webhook rate limit.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `src/plugins/bigbluebutton-plugin/config/rate-limiter.middleware.ts` | **New** — `bbbWebhookRateLimiter` (100 req/min, IP allowlist) + `shopApiRateLimiter` (per-mutation, 10 req/min) |
+| `src/plugins/bigbluebutton-plugin/bigbluebutton.plugin.ts` | Registered both middleware handlers in `configuration()` via `config.apiOptions.middleware` |
 
 ---
 
