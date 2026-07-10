@@ -69,15 +69,17 @@ export class BannerService {
 
     /**
      * Used by the storefront (Shop API) to fetch what's currently live for a
-     * given placement in the active channel — active flag + date window +
-     * channel are all checked here so the storefront query stays a single
-     * dumb fetch with no client-side filtering logic to duplicate.
+     * given placement in the active channel.
+     *
+     * Uses the precomputed isCurrentlyActive flag (refreshed every minute by
+     * the banner-activator ScheduledTask) instead of runtime date-range
+     * comparisons — eliminates the need for date arithmetic on every
+     * storefront page load (BUG-015 / CMS-002).
      */
     async findActiveForPlacement(
         ctx: RequestContext,
         placement: BannerPlacement,
     ): Promise<Banner[]> {
-        const now = new Date();
         const banners = await this.connection
             .getRepository(ctx, Banner)
             .createQueryBuilder('banner')
@@ -86,9 +88,7 @@ export class BannerService {
             })
             .leftJoinAndSelect('banner.image', 'image')
             .where('banner.placement = :placement', { placement })
-            .andWhere('banner.isActive = true')
-            .andWhere('(banner.startsAt IS NULL OR banner.startsAt <= :now)', { now })
-            .andWhere('(banner.endsAt IS NULL OR banner.endsAt >= :now)', { now })
+            .andWhere('banner.isCurrentlyActive = true')
             .orderBy('banner.priority', 'ASC')
             .getMany();
 

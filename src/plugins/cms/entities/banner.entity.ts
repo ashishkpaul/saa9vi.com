@@ -38,6 +38,15 @@ export class Banner extends VendureEntity implements ChannelAware {
     @Column({ type: Date, nullable: true })
     endsAt: Date | null;
 
+    /**
+     * Precomputed flag refreshed every minute by the banner-activator
+     * ScheduledTask (BUG-015 / CMS-002). Replaces runtime date-range
+     * comparisons in findActiveForPlacement().
+     */
+    @Index()
+    @Column({ default: false })
+    isCurrentlyActive: boolean;
+
     /** Scalar channelId for efficient direct queries (see DA-001) */
     @Index()
     @Column({ nullable: true })

@@ -1,4 +1,5 @@
-import { PluginCommonModule, VendurePlugin } from '@vendure/core';
+import { PluginCommonModule, RuntimeVendureConfig, VendurePlugin } from '@vendure/core';
+import { bannerActivatorTask } from './jobs/banner-activator.task';
 import { articlePermission, bannerPermission, pagePermission } from './constants';
 import { Article } from './entities/article.entity';
 import { Banner } from './entities/banner.entity';
@@ -23,8 +24,15 @@ import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
         schema: shopApiExtensions,
         resolvers: [CmsShopResolver],
     },
-    configuration: config => {
+    configuration: (config: RuntimeVendureConfig) => {
         config.authOptions.customPermissions.push(articlePermission, bannerPermission, pagePermission);
+
+        // Register banner activator/deactivator scheduled task (BUG-015 / CMS-002)
+        config.schedulerOptions.tasks = [
+            ...(config.schedulerOptions.tasks ?? []),
+            bannerActivatorTask,
+        ];
+
         return config;
     },
     dashboard: './dashboard/index.tsx',
