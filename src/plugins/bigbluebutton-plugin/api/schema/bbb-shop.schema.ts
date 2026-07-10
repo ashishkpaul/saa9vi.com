@@ -105,6 +105,18 @@ export const shopApiExtensions = gql`
     courses: [LearningCourse!]!
   }
 
+  # ─── Account Deletion Result Types (INV-013) ──────────────────────────────
+
+  type LeaveAcademyResult {
+    success: Boolean!
+    message: String
+  }
+
+  type DeleteAccountResult {
+    success: Boolean!
+    message: String
+  }
+
   extend type Query {
     myBbbMeetings(skip: Int, take: Int): BbbMeetingPublicList!
     myBbbCapacityGrants: [BbbCapacityGrantPublic!]!
@@ -130,15 +142,16 @@ export const shopApiExtensions = gql`
     startScheduledSession(sessionId: ID!): BbbScheduledSessionPublic!
     registerForTrial(sessionId: ID!): BbbTrialRegistrationPublic!
     """
-    Leave a single academy/channel. Deactivates entitlements and
-    unlinks customer from channel. Use only for multi-tenant users who
-    want to leave one academy but keep others.
+    Leave the current academy/channel. Deactivates entitlements and
+    unlinks customer from channel. Uses the active channel from the
+    request context — no channelId argument needed.
     """
-    leaveAcademy(channelId: ID!): Boolean!
+    leaveAcademy: LeaveAcademyResult!
     """
     Permanently delete account from entire platform. Anonymizes all
-    personal data. Cannot be undone.
+    personal data. Requires current password for confirmation.
+    Cannot be undone.
     """
-    deleteMyAccount: Boolean!
+    deleteMyAccount(password: String!): DeleteAccountResult!
   }
 `;

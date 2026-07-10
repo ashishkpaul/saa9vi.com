@@ -3,8 +3,10 @@ import {
   Customer,
   CustomerService,
   ID,
+  Order,
   RequestContext,
   TransactionalConnection,
+  User,
   UserService,
 } from "@vendure/core";
 import { CustomerDeletionLog } from "./entities/customer-deletion-log.entity";
@@ -76,6 +78,7 @@ export class CustomerDeletionService {
   /**
    * Remove the customer from a single channel/academy.
    * The customer record is preserved — they may be active in other channels.
+   * channelId is resolved from ctx.channelId, never from client input.
    */
   async removeFromChannel(
     ctx: RequestContext,
@@ -128,6 +131,7 @@ export class CustomerDeletionService {
   /**
    * Permanently remove the customer from the entire platform.
    * Anonymizes all personal data. Preserves immutable ledger rows (INV-002, INV-010).
+   * Uses CustomerService.softDelete() to set deletedAt and fire CustomerEvent.
    */
   async fullDelete(ctx: RequestContext, customerId: ID): Promise<void> {
     const log = await this.createLog(customerId, null, "full_delete");
@@ -138,20 +142,33 @@ export class CustomerDeletionService {
         loggerCtx,
       );
 
-      // 1. Verify no pending orders
-      const { Order } = await import("@vendure/core");
+      // 1. Verify no pending orders — check states where checkout is still in
+      //    progress or fulfillment is outstanding. Delivered and Cancelled are
+      //    terminal resting states — orders in those states will simply sit in
+      //    history (anonymized) per INV-013.
+      const pendingOrderStates = [
+        "AddingItems",
+        "ArrangingPayment",
+        "ArrangingAdditionalPayment",
+        "Modifying",
+        "PaymentAuthorized",
+        "PaymentSettled",
+        "PartiallyShipped",
+        "Shipped",
+        "PartiallyDelivered",
+      ];
       const pendingOrders = await this.connection
         .getRepository(ctx, Order)
         .count({
           where: {
             customer: { id: customerId as string },
-            state: "AddingItems" as any,
+            state: pendingOrderStates as any,
           },
         });
 
       if (pendingOrders > 0) {
         throw new Error(
-          `Customer ${customerId} has ${pendingOrders} pending order(s). Complete or cancel before deleting.`,
+          `Customer ${customerId} has ${pendingOrders} active order(s). Complete or cancel before deleting.`,
         );
       }
 
@@ -161,10 +178,10 @@ export class CustomerDeletionService {
         await h.handler(ctx, customerId);
       }
 
-      // 3. Anonymize Customer record
+      // 3. Anonymize PII fields on Customer record
       const customer = await this.connection
         .getRepository(ctx, Customer)
-        .findOne({ where: { id: customerId as string } });
+        .findOne({ where: { id: customerId as string }, relations: ["user"] });
 
       if (customer) {
         const deletedEmail = `deleted-${customerId}@saa9vi.invalid`;
@@ -174,23 +191,23 @@ export class CustomerDeletionService {
         customer.phoneNumber = null as any;
         await this.connection.getRepository(ctx, Customer).save(customer);
 
-        // 4. Anonymize and delete User account
+        // 4. Anonymize User identifier
         if (customer.user) {
           const user = await this.connection
-            .getRepository(ctx, customer.user.constructor.name as any)
+            .getRepository(ctx, User)
             .findOne({ where: { id: customer.user.id as string } });
-
           if (user) {
-            (user as any).identifier = deletedEmail;
-            await this.connection
-              .getRepository(ctx, user.constructor.name as any)
-              .save(user);
-            await this.userService.softDelete(ctx, customer.user.id);
+            user.identifier = deletedEmail;
+            await this.connection.getRepository(ctx, User).save(user);
           }
         }
+
+        // 5. Soft-delete via Vendure core — sets deletedAt, cascades to User,
+        //    publishes CustomerEvent('deleted') for downstream subscribers
+        await this.customerService.softDelete(ctx, customerId);
       }
 
-      // 5. Mark log as completed
+      // 6. Mark log as completed
       await this.completeLog(log.id);
       Logger.log(
         `Flow B complete: customer ${customerId} fully deleted`,

@@ -6,6 +6,7 @@ import { Args, Mutation, Query, Resolver } from "@nestjs/graphql";
 import { In } from "typeorm";
 import {
   Allow,
+  AuthService,
   Ctx,
   ForbiddenError,
   Logger,
@@ -41,6 +42,7 @@ export class BbbShopResolver {
     private readonly trialRegistrationService: TrialRegistrationService,
     private readonly learningDashboardService: LearningDashboardService,
     private readonly customerDeletionService: CustomerDeletionService,
+    private readonly authService: AuthService,
   ) {}
 
   @Query()
@@ -533,7 +535,7 @@ export class BbbShopResolver {
 
   @Mutation()
   @Allow(Permission.Authenticated)
-  async leaveAcademy(@Ctx() ctx: RequestContext, @Args("channelId") channelId: string): Promise<boolean> {
+  async leaveAcademy(@Ctx() ctx: RequestContext): Promise<{ success: boolean; message: string | null }> {
     if (!ctx.activeUserId) throw new ForbiddenError();
 
     const customer = await this.connection
@@ -541,21 +543,39 @@ export class BbbShopResolver {
       .findOne({ where: { user: { id: ctx.activeUserId as string } } });
     if (!customer) throw new ForbiddenError();
 
+    // channelId is resolved from the request context, never from client input
+    const channelId = ctx.channelId as string;
     await this.customerDeletionService.removeFromChannel(ctx, customer.id, channelId);
-    return true;
+    return { success: true, message: null };
   }
 
   @Mutation()
   @Allow(Permission.Authenticated)
-  async deleteMyAccount(@Ctx() ctx: RequestContext): Promise<boolean> {
+  async deleteMyAccount(
+    @Ctx() ctx: RequestContext,
+    @Args("password") password: string,
+  ): Promise<{ success: boolean; message: string | null }> {
     if (!ctx.activeUserId) throw new ForbiddenError();
 
     const customer = await this.connection
       .getRepository(ctx, Customer)
-      .findOne({ where: { user: { id: ctx.activeUserId as string } } });
+      .findOne({
+        where: { user: { id: ctx.activeUserId as string } },
+        relations: ["user"],
+      });
     if (!customer) throw new ForbiddenError();
 
+    // Verify password before proceeding with irreversible deletion
+    const passwordValid = await this.authService.verifyUserPassword(
+      ctx,
+      ctx.activeUserId,
+      password,
+    );
+    if (passwordValid !== true) {
+      return { success: false, message: "Incorrect password. Account deletion requires password confirmation." };
+    }
+
     await this.customerDeletionService.fullDelete(ctx, customer.id);
-    return true;
+    return { success: true, message: null };
   }
 }
