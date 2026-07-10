@@ -5,7 +5,7 @@ import {
   VendurePlugin,
 } from "@vendure/core";
 
-import { CUSTOMER_SUSPENSION_PLUGIN_OPTIONS } from "./constants";
+import { CUSTOMER_SUSPENSION_PLUGIN_OPTIONS, CustomerSuspensionPermission } from "./constants";
 import { PluginInitOptions } from "./types";
 import { CustomerChannelStatus } from "./entities/customer-channel-status.entity";
 import { CustomerStatusChangeLog } from "./entities/customer-status-change-log.entity";
@@ -30,20 +30,11 @@ import { customerStatusOrderProcess } from "./config/customer-status-order-proce
   },
 
   configuration(config: RuntimeVendureConfig) {
-    // Register Customer custom field for platform-wide status
-    const existingCustomerFields = config.customFields?.Customer ?? [];
-    config.customFields = {
-      ...config.customFields,
-      Customer: [
-        ...existingCustomerFields,
-        {
-          name: "status",
-          type: "string" as const,
-          nullable: true,
-          readonly: true, // Set via Admin API only, not client-editable
-        },
-      ],
-    };
+    // Register custom permission for customer suspension operations
+    config.authOptions.customPermissions = [
+      ...(config.authOptions.customPermissions ?? []),
+      CustomerSuspensionPermission,
+    ];
 
     // Register order process to block checkouts for suspended customers
     config.orderOptions.process = [

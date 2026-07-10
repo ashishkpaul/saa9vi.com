@@ -307,7 +307,7 @@ export class CustomerSuspensionService {
       changedAt: new Date(),
     });
 
-    return this.connection.getRepository(CustomerStatusChangeLog).save(log);
+    return await this.connection.getRepository(ctx, CustomerStatusChangeLog).save(log);
   }
 
   // ─── Query Methods ──────────────────────────────────────────────────────────

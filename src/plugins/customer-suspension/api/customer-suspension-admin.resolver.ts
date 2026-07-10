@@ -9,10 +9,12 @@ import {
   Permission,
   RequestContext,
   Transaction,
+  IllegalOperationError,
 } from "@vendure/core";
 import { CustomerSuspensionService } from "../services/customer-suspension.service";
 import { CustomerChannelStatus } from "../entities/customer-channel-status.entity";
 import { CustomerStatusChangeLog } from "../entities/customer-status-change-log.entity";
+import { CustomerSuspensionPermission } from "../constants";
 
 @Resolver()
 export class CustomerSuspensionAdminResolver {
@@ -61,7 +63,7 @@ export class CustomerSuspensionAdminResolver {
   // ─── Channel-scoped Mutations ────────────────────────────────────────────────
 
   @Mutation()
-  @Allow(Permission.UpdateCustomer)
+  @Allow(CustomerSuspensionPermission.Permission)
   @Transaction()
   async suspendCustomerInChannel(
     @Ctx() ctx: RequestContext,
@@ -69,6 +71,16 @@ export class CustomerSuspensionAdminResolver {
     @Args("channelId") channelId: ID,
     @Args("reason", { nullable: true }) reason?: string,
   ): Promise<boolean> {
+    // Channel validation: if not SuperAdmin, channelId must match the admin's assigned channel
+    if (!ctx.userHasPermissions([Permission.SuperAdmin])) {
+      const adminChannelId = ctx.channelId as string;
+      if (adminChannelId !== String(channelId)) {
+        throw new IllegalOperationError(
+          "You can only suspend customers in your assigned channel",
+        );
+      }
+    }
+
     await this.suspensionService.suspendInChannel(
       ctx,
       customerId,
@@ -79,13 +91,23 @@ export class CustomerSuspensionAdminResolver {
   }
 
   @Mutation()
-  @Allow(Permission.UpdateCustomer)
+  @Allow(CustomerSuspensionPermission.Permission)
   @Transaction()
   async reinstateCustomerInChannel(
     @Ctx() ctx: RequestContext,
     @Args("customerId") customerId: ID,
     @Args("channelId") channelId: ID,
   ): Promise<boolean> {
+    // Channel validation: if not SuperAdmin, channelId must match the admin's assigned channel
+    if (!ctx.userHasPermissions([Permission.SuperAdmin])) {
+      const adminChannelId = ctx.channelId as string;
+      if (adminChannelId !== String(channelId)) {
+        throw new IllegalOperationError(
+          "You can only reinstate customers in your assigned channel",
+        );
+      }
+    }
+
     await this.suspensionService.reinstateInChannel(
       ctx,
       customerId,
@@ -95,12 +117,22 @@ export class CustomerSuspensionAdminResolver {
   }
 
   @Query()
-  @Allow(Permission.ReadCustomer)
+  @Allow(CustomerSuspensionPermission.Permission)
   async customerChannelStatus(
     @Ctx() ctx: RequestContext,
     @Args("customerId") customerId: ID,
     @Args("channelId") channelId: ID,
   ): Promise<CustomerChannelStatus | null> {
+    // Channel validation: if not SuperAdmin, channelId must match the admin's assigned channel
+    if (!ctx.userHasPermissions([Permission.SuperAdmin])) {
+      const adminChannelId = ctx.channelId as string;
+      if (adminChannelId !== String(channelId)) {
+        throw new IllegalOperationError(
+          "You can only view status for your assigned channel",
+        );
+      }
+    }
+
     return this.suspensionService.findChannelStatus(
       ctx,
       customerId,
@@ -108,8 +140,10 @@ export class CustomerSuspensionAdminResolver {
     );
   }
 
+  // customerChannelStatuses returns all channel status records for a customer.
+  // This is inherently cross-channel data, so restrict to SuperAdmin only.
   @Query()
-  @Allow(Permission.ReadCustomer)
+  @Allow(Permission.SuperAdmin)
   async customerChannelStatuses(
     @Ctx() ctx: RequestContext,
     @Args("customerId") customerId: ID,

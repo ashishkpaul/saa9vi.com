@@ -89,6 +89,10 @@ export const config: VendureConfig = {
       { name: 'bbbSessionId',        type: 'string' as const, nullable: true, public: false },
       { name: 'instructorProfileId', type: 'string' as const, nullable: true, public: false },
     ],
+    // Customer status field for platform-wide suspension (INV-014)
+    Customer: [
+      { name: 'status', type: 'string' as const, nullable: true, readonly: true },
+    ],
     Article: [],
     Banner: [],
     Page: [],
