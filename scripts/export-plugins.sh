@@ -180,3 +180,22 @@ else
 fi
 
 echo "All exports completed."
+
+
+# ---------------------------
+# Export customer-deletion folder specifically
+# ---------------------------
+echo "Exporting customer-deletion folder..."
+customer_deletion_output="$OUTPUT_BASE_DIR/customer-deletion_complete_code.txt"
+if [ -d "$PLATFORM_DIR/customer-deletion" ]; then
+    > "$customer_deletion_output"
+    find "$PLATFORM_DIR/customer-deletion" -type f -print0 | while IFS= read -r -d '' file; do
+        if ! is_excluded "$file"; then
+            echo "--- $file ---" >> "$customer_deletion_output"
+            cat "$file" >> "$customer_deletion_output"
+        fi
+    done
+    echo "  Done: $customer_deletion_output"
+else
+    echo "  Warning: $PLATFORM_DIR/customer-deletion not found, skipping."
+fi

@@ -129,5 +129,16 @@ export const shopApiExtensions = gql`
     """
     startScheduledSession(sessionId: ID!): BbbScheduledSessionPublic!
     registerForTrial(sessionId: ID!): BbbTrialRegistrationPublic!
+    """
+    Leave a single academy/channel. Deactivates entitlements and
+    unlinks customer from channel. Use only for multi-tenant users who
+    want to leave one academy but keep others.
+    """
+    leaveAcademy(channelId: ID!): Boolean!
+    """
+    Permanently delete account from entire platform. Anonymizes all
+    personal data. Cannot be undone.
+    """
+    deleteMyAccount: Boolean!
   }
 `;

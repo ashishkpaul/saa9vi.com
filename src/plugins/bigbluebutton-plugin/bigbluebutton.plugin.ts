@@ -1,11 +1,14 @@
 // src/plugins/bigbluebutton-plugin/bigbluebutton.plugin.ts
 
-import { OnApplicationBootstrap } from "@nestjs/common";
+import { Inject, OnApplicationBootstrap } from "@nestjs/common";
 import {
   PluginCommonModule,
   RuntimeVendureConfig,
   VendurePlugin,
 } from "@vendure/core";
+import { CustomerDeletionLog } from "../../platform/customer-deletion/entities/customer-deletion-log.entity";
+import { CustomerDeletionModule } from "../../platform/customer-deletion/customer-deletion.module";
+import { CustomerDeletionService } from "../../platform/customer-deletion/customer-deletion.service";
 
 import { BbbServer } from "./entities/bbb-server.entity";
 import { BbbOrganization } from "./entities/bbb-organization.entity";
@@ -40,6 +43,7 @@ import { BbbMetricsService } from "./services/bbb-metrics.service";
 import { TrialRegistrationService } from "./services/trial-registration.service";
 import { BbbWebhookProcessorService } from "./services/bbb-webhook-processor.service";
 import { BbbEntitlementService } from "./services/bbb-entitlement.service";
+import { BbbDeletionService } from "./services/bbb-deletion.service";
 import { BbbMembershipService } from "./services/bbb-membership.service";
 import { GrantReaderService } from "./services/grant-reader.service";
 import { LearningDashboardService } from "./services/learning-dashboard.service";
@@ -66,7 +70,7 @@ import { BigBlueButtonPluginOptions } from "./types";
 import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
 
 @VendurePlugin({
-  imports: [PluginCommonModule, PlatformTracingModule],
+  imports: [PluginCommonModule, PlatformTracingModule, CustomerDeletionModule],
 
   entities: [
     BbbServer,
@@ -85,6 +89,7 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     BbbEntitlement,
     BbbOrganizationMembership,
     BbbCapacityAlertLog,
+    CustomerDeletionLog,
     EventLog,
   ],
 
@@ -111,6 +116,7 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     TrialRegistrationService,
     BbbWebhookProcessorService,
     BbbEntitlementService,
+    BbbDeletionService,
     BbbMembershipService,
     GrantReaderService,
     LearningDashboardService,
@@ -196,6 +202,9 @@ export class BigBlueButtonPlugin implements OnApplicationBootstrap {
   constructor(
     private readonly meetingService: BbbMeetingService,
     private readonly webhookProcessor: BbbWebhookProcessorService,
+    private readonly bbbDeletionService: BbbDeletionService,
+    @Inject(CustomerDeletionService)
+    private readonly customerDeletionService: CustomerDeletionService,
   ) {}
 
   async onApplicationBootstrap() {
@@ -207,5 +216,17 @@ export class BigBlueButtonPlugin implements OnApplicationBootstrap {
     // Initialize job queues
     await this.meetingService.init();
     await this.webhookProcessor.init();
+
+    // Register customer deletion handlers
+    this.customerDeletionService.registerChannelScopedHandler(
+      'bbb-plugin',
+      (ctx, customerId, channelId) =>
+        this.bbbDeletionService.removeFromChannel(ctx, customerId, channelId),
+    );
+    this.customerDeletionService.registerFullDeleteHandler(
+      'bbb-plugin',
+      (ctx, customerId) =>
+        this.bbbDeletionService.fullDelete(ctx, customerId),
+    );
   }
 }

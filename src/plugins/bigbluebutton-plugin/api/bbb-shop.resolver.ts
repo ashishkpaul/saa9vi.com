@@ -20,6 +20,7 @@ import { BbbMemberService } from "../services/bbb-member.service";
 import { BbbScheduledSessionService } from "../services/bbb-scheduled-session.service";
 import { TrialRegistrationService } from "../services/trial-registration.service";
 import { LearningDashboardService } from "../services/learning-dashboard.service";
+import { CustomerDeletionService } from "../../../platform/customer-deletion/customer-deletion.service";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
@@ -39,6 +40,7 @@ export class BbbShopResolver {
     private readonly connection: TransactionalConnection,
     private readonly trialRegistrationService: TrialRegistrationService,
     private readonly learningDashboardService: LearningDashboardService,
+    private readonly customerDeletionService: CustomerDeletionService,
   ) {}
 
   @Query()
@@ -525,5 +527,35 @@ export class BbbShopResolver {
         : null,
       joinUrl,
     };
+  }
+
+  // ─── Account Deletion Mutations (INV-013) ───────────────────────────────
+
+  @Mutation()
+  @Allow(Permission.Authenticated)
+  async leaveAcademy(@Ctx() ctx: RequestContext, @Args("channelId") channelId: string): Promise<boolean> {
+    if (!ctx.activeUserId) throw new ForbiddenError();
+
+    const customer = await this.connection
+      .getRepository(ctx, Customer)
+      .findOne({ where: { user: { id: ctx.activeUserId as string } } });
+    if (!customer) throw new ForbiddenError();
+
+    await this.customerDeletionService.removeFromChannel(ctx, customer.id, channelId);
+    return true;
+  }
+
+  @Mutation()
+  @Allow(Permission.Authenticated)
+  async deleteMyAccount(@Ctx() ctx: RequestContext): Promise<boolean> {
+    if (!ctx.activeUserId) throw new ForbiddenError();
+
+    const customer = await this.connection
+      .getRepository(ctx, Customer)
+      .findOne({ where: { user: { id: ctx.activeUserId as string } } });
+    if (!customer) throw new ForbiddenError();
+
+    await this.customerDeletionService.fullDelete(ctx, customer.id);
+    return true;
   }
 }

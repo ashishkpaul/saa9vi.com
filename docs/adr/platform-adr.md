@@ -909,6 +909,24 @@ By contrast, a 15-minute alert cadence with a 48-hour forecast window gives the 
 
 ---
 
+### INV-013: Customer Deletions Are Always Anonymizations. No Cascade Deletes.
+
+Customer deletion (both `leaveAcademy` and `deleteMyAccount` flows) must **anonymize** all personal data rather than hard-deleting rows. Financial and audit data must retain immutable foreign key references.
+
+**Rules:**
+- `CustomerDeletionService` orchestrates cross-plugin deletion via registered handlers
+- Each plugin registers `removeFromChannel` and `fullDelete` handlers in `onApplicationBootstrap`
+- `CustomerDeletionLog` entity tracks every deletion with status and timestamps
+- `BbbUsageLedger`, `Order`, `ReviewReward` rows are **never deleted** — they carry financial/audit value
+- `BbbEntitlement`, `BbbEnrollment`, `ReviewRequest` are soft-deleted (deactivated) or hard-deleted if no PII
+- `InstructorProfile` is anonymized (fullName → "[deleted]", photo nullified, isActive = false) — slugs preserved for URL integrity
+- `ProductReview.authorName` is anonymized, review text retained for community value
+- All operations are idempotent and logged for audit
+
+**Rejection criterion:** Any schema change that adds `onDelete: CASCADE` from `Customer` or `User` to financial/audit tables is rejected.
+
+---
+
 ## 7. CMS Architecture
 
 ### CMS-001: Slug Uniqueness Migration ✅ Fixed

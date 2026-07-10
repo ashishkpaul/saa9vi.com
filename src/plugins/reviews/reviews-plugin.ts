@@ -1,4 +1,7 @@
+import { Inject, OnApplicationBootstrap } from '@nestjs/common';
 import { LanguageCode, PluginCommonModule, VendurePlugin } from "@vendure/core";
+import { CustomerDeletionModule } from '../../platform/customer-deletion/customer-deletion.module';
+import { CustomerDeletionService } from '../../platform/customer-deletion/customer-deletion.service';
 
 import { ProductReview } from "./entities/product-review.entity";
 import { ReviewRequest } from "./entities/review-request.entity";
@@ -29,6 +32,7 @@ import { ReviewTargetRegistry } from "./infrastructure/review-target.registry";
 import { ProductReviewTargetProvider } from "./providers/product-review-target.provider";
 import { ProductReviewAggregationStrategy } from "./strategies/product-aggregation.strategy";
 import { ProductReviewEligibilityStrategy } from "./strategies/product-eligibility.strategy";
+import { ReviewDeletionService } from "./services/review-deletion.service";
 import { REVIEW_ADMIN_PERMISSION } from "./constants";
 
 /**
@@ -46,7 +50,7 @@ import { REVIEW_ADMIN_PERMISSION } from "./constants";
  * 3. Access Admin UI at /admin under the "product-reviews" route
  */
 @VendurePlugin({
-  imports: [PluginCommonModule],
+  imports: [PluginCommonModule, CustomerDeletionModule],
   controllers: [ReviewUploadController],
   entities: [
     ProductReview,
@@ -75,6 +79,7 @@ import { REVIEW_ADMIN_PERMISSION } from "./constants";
     ProductReviewTargetProvider,
     ProductReviewAggregationStrategy,
     ProductReviewEligibilityStrategy,
+    ReviewDeletionService,
   ],
   adminApiExtensions: {
     schema: adminApiExtensions,
@@ -135,4 +140,23 @@ import { REVIEW_ADMIN_PERMISSION } from "./constants";
   },
   dashboard: './dashboard/index.tsx',
 })
-export class ReviewsPlugin {}
+export class ReviewsPlugin implements OnApplicationBootstrap {
+  constructor(
+    private readonly reviewDeletionService: ReviewDeletionService,
+    @Inject(CustomerDeletionService)
+    private readonly customerDeletionService: CustomerDeletionService,
+  ) {}
+
+  async onApplicationBootstrap() {
+    this.customerDeletionService.registerChannelScopedHandler(
+      'reviews-plugin',
+      (ctx, customerId, channelId) =>
+        this.reviewDeletionService.removeFromChannel(ctx, customerId, channelId),
+    );
+    this.customerDeletionService.registerFullDeleteHandler(
+      'reviews-plugin',
+      (ctx, customerId) =>
+        this.reviewDeletionService.fullDelete(ctx, customerId),
+    );
+  }
+}
