@@ -20,7 +20,7 @@
 > | v1.5 | Phase 3 Marketplace architecture locked: platform-level ES index, `orderSource` attribution, `MarketplaceIndexerPlugin`, `BayesianRatingService`; multivendor-plugin rejected (DL-019). Three-stream revenue model locked. FEAT-003/004 added. INV-009/010 added. DL-019–022 added. ADR-014 added. |
 > | v1.6 | Capacity Intelligence System *designed* (§6A, CI-001–006) — `CapacityIntelligenceService`, 48h PILOS-based load forecast, `poolCapacityDashboard`, `BbbCapacityAlertLog`, `capacity-alert` job. INV-012 (advisory-only) and DL-025 added. BUG-019/020 fixed. DL-026/027 added. |
 >
-> **What changed in v1.7 (this revision):** Re-verified against all five plugin codebases as of 2026-06-30, cross-checked with `what-next.md`. (1) FEAT-001 and FEAT-002 confirmed **code-complete** in `bigbluebutton-plugin` (entity, service, resolvers, dashboard route, auth waterfall all present) — §8A and §14 updated from "⚠️ Required" to "✅ Done"; FEAT-002's database migration is the only remaining step. (2) Plugin inventory (§1) corrected to list all six plugins actually registered in `vendure-config.ts` — `LoadSimulationPlugin` and `MarketplaceIndexerPlugin` were missing from the table. (3) Instructor Elasticsearch indexing (§14 Phase 1.5) corrected to ✅ Done — `InstructorIndexerService` is implemented and wired, was marked pending. (4) `RedisCachePlugin` confirmed ✅ live in `vendure-config.ts`. (5) Capacity Intelligence System (§6A, §9 EQ-001, §12 CI-006) corrected from "✅ live" to "⚠️ Designed, not yet implemented" — grep against `bigbluebutton-plugin_complete_code.txt` returns zero matches for `CapacityIntelligenceService`, `BbbCapacityAlertLog`, or `poolCapacityDashboard`. This is the primary remaining Phase 1.5 build item (`what-next.md` Task 8). (6) Version changelog above condensed to a table; redundant repeated status prose consolidated throughout. (7) **Structural fix:** §6A (Capacity Intelligence) and §2B (Phase 3 Invariants) were physically located at the very end of the file, after ADR-014, despite the Table of Contents placing them after §6 and §2A respectively. Both sections are now physically relocated to match the TOC order. The stray top-level `## INV-012` and `## DL-025` headings that trailed after the old §6A location have been folded in as subsections of §6A rather than left as orphaned sections.
+> **What changed in v1.8 (this revision):** (1) BUG-015 / CMS-002 **fixed** — `banner-activator` BullMQ scheduled task registered, `isCurrentlyActive` flag replaces runtime date-range comparisons, `BannerService.findActiveForPlacement()` now queries precomputed flag. (2) INV-013 (customer deletion) added — cross-plugin orchestration with `CustomerDeletionService`, three plugin handlers (BBB, Tenant, Reviews), `CustomerDeletionLog` entity, `leaveAcademy`/`deleteMyAccount` Shop API mutations with password confirmation. (3) Status fields updated throughout to match current implementation.
 
 ---
 
@@ -940,24 +940,24 @@ CREATE UNIQUE INDEX "IDX_page_channel_slug" ON "page" ("channelId", "slug");
 
 **Current status:** ✅ Code-verified. Both `ArticleService` and `PageService` use `ListQueryBuilder` + `findOneInChannel` which enforce channel scope. Migration `1782369776476-bugs` applied.
 
-### CMS-002: Banner Scheduling via BullMQ ⚠️ Pending
+### CMS-002: Banner Scheduling via BullMQ ✅ Fixed
 
-Replace runtime date filter with precomputed `isCurrentlyActive`:
+Replaced runtime date filter with precomputed `isCurrentlyActive`:
 
 ```typescript
-// Add to Banner entity
+// Added to Banner entity
 @Column({ default: false })
 isCurrentlyActive: boolean;
 
-// BullMQ scheduled jobs (run every minute)
+// BullMQ scheduled job (runs every minute)
 // banner-activator: WHERE isActive = true AND startsAt <= NOW() AND isCurrentlyActive = false → set true
-// banner-deactivator: WHERE isCurrentlyActive = true AND endsAt <= NOW() → set false
+//                   WHERE isCurrentlyActive = true AND (isActive = false OR endsAt < NOW()) → set false
 
 // Storefront query becomes:
 WHERE channelId = :channelId AND isCurrentlyActive = true
 ```
 
-**Current status:** ⚠️ Pending. `BannerService` currently filters by date at query time. `banner-activator` and `banner-deactivator` queues not yet registered.
+**Current status:** ✅ Fixed. `banner-activator` BullMQ scheduled task registered in `CmsPlugin.configuration()`. `BannerService.findActiveForPlacement()` now queries `isCurrentlyActive = true` instead of runtime date-range comparisons. The `isCurrentlyActive` column and index already existed in the database.
 
 ### CMS-003: Page Sections Type Index (Phase 2)
 
@@ -1218,8 +1218,7 @@ bbb-meeting-provisioning     ← ✅ live
 bbb-webhook-processor        ← ✅ live (INV-004)
 bbb-reconciliation           ← ✅ live (scheduled task)
 bbb-capacity-alert           ← ⚠️ designed, not implemented (CI-005 — see §6A, what-next Task 8)
-banner-activator             ← ⚠️ pending (CMS-002)
-banner-deactivator           ← ⚠️ pending (CMS-002)
+banner-activator             ← ✅ live — 1-minute cron, precomputes isCurrentlyActive (CMS-002)
 billing-invoice-generator    ← Phase 2
 usage-ledger-aggregator      ← Phase 2
 ```
@@ -1258,6 +1257,32 @@ Failed jobs are never auto-removed. Ops console or admin query surfaces them for
 
 ## 10. Security Architecture
 
+### SEC-005: Rate Limiting ✅ Fixed
+
+Rate limiting applied to three surfaces via `express-rate-limit` middleware:
+
+| Surface | Limit | Mechanism |
+|---|---|---|
+| `POST /bbb/webhook` | 100 req/min per IP | `bbbWebhookRateLimiter` — IP-based, with allowlist via `BBB_WEBHOOK_ALLOWED_IPS` env var |
+| `registerForTrial` mutation | 10 req/min per customer | `shopApiRateLimiter` — inspects GraphQL body, keys by `activeUserId` or IP |
+| `bbbJoinMeeting` mutation | 10 req/min per customer | `shopApiRateLimiter` — same mechanism, separate counter |
+
+**Current status:** ✅ Implemented. Both limiters are Express middleware registered via `config.apiOptions.middleware` in the BBB plugin's `configuration()` function.
+
+### SEC-006: Custom Domain TLS ✅ Fixed
+
+Channel token → custom domain mapping stored in Redis for sub-millisecond lookup:
+
+```
+academy.com (CNAME → saa9vi.com)
+  → DomainChannelMiddleware (Express, route: '*')
+    → Redis: GET channel-token:{hostname}
+    → Sets X-Vendure-Token header
+  → Vendure API → RequestContext.channelId = lookup(channel-token)
+```
+
+**Current status:** ✅ Implemented. `DomainChannelResolverService` manages Redis key `channel-token:{domain}` with 7-day TTL, synced automatically in `TenantProfileService.create()` and `update()`. Redis failure fails open (unauthenticated request, not crash).
+
 ### SEC-001: Admin API Network Isolation
 
 The Admin API (`/admin-api`) must not be exposed on a public-facing port or hostname in production. It should be bound to an internal interface or placed behind network-level access control. Caddy or the host firewall should block external access to the admin path. This is a deployment constraint, not enforced in plugin code.
@@ -1282,27 +1307,6 @@ Every external-facing resolver includes channel verification (code-verified):
 - `InstructorProfileService.findOne` — includes `channelId` filter ✅
 - `MediaResourceService.findOne` — includes `channelId` filter ✅
 
-### SEC-005: Rate Limiting ⚠️ Pending
-
-Before production, add rate limiting to:
-
-- `POST /bbb/webhook` — 100 req/min per source IP (BBB server IPs should be allowlisted)
-- `POST /shop-api` mutations: `registerForTrialSession`, `joinMeeting` — 10 req/min per customer
-- `POST /admin-api` — Vendure's built-in token auth is sufficient
-
-### SEC-006: Custom Domain TLS
-
-When `TenantProfile.customDomain` is populated, Caddy provisions TLS via Let's Encrypt:
-
-```
-academy.com (CNAME → saa9vi.com)
-  → Caddy reverse proxy
-    → X-Vendure-Token: {channel-token}  ← injected by Caddy based on hostname lookup
-  → Vendure API
-    → RequestContext.channelId = lookup(channel-token)
-```
-
-Channel token → custom domain mapping stored in Redis for sub-millisecond Caddy lookup. Updated whenever `TenantProfile.customDomain` changes.
 
 ---
 
@@ -1402,7 +1406,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 | BUG-012 | High | `constants.ts` | `STALE` meeting state absent from FSM | ✅ Fixed — `STALE` state added to `constants.ts`, transitions wired, reconciliation calls `markMeetingStale()` for missing BBB meetings |
 | BUG-013 | Medium | `BbbReconciliationService` | `CapacityExhaustedEvent` not published when `billingCapped = true` | ✅ Fixed — `CapacityExhaustedEvent` class added and published from billing ceiling path |
 | BUG-014 | Low | `BbbServerSelectionService` | `currentLoad` scoring semantics undocumented | ✅ Fixed — documented in `BbbServer` entity JSDoc and BB-003 section |
-| BUG-015 | Medium | `CmsPlugin` / `BannerService` | `banner-activator` and `banner-deactivator` BullMQ queues not registered; banners currently filtered at query-time instead of via precomputed `isCurrentlyActive` | ⚠️ Pending — see CMS-002 |
+| BUG-015 | Medium | `CmsPlugin` / `BannerService` | `banner-activator` and `banner-deactivator` BullMQ queues not registered; banners filtered at query-time instead of via precomputed `isCurrentlyActive` | ✅ Fixed — `banner-activator` scheduled task registered, `isCurrentlyActive` replaces date-range comparisons in `BannerService.findActiveForPlacement()` |
 | BUG-016 | High | `ReviewsPlugin` / `dashboard/index.tsx` | `navSections` entry uses `items: [...]` which does not exist on `DashboardNavSectionDefinition` — TS error 2353, Reviews menu invisible in admin dashboard | ✅ Fixed — remove `items` from `navSections`; add `navMenuItem` to `reviewList` route in `review-list.tsx` |
 | BUG-017 | Medium | `ReviewsPlugin` / all review entities | `ProductReview`, `ReviewRequest`, `ReviewReport`, `ReviewReward`, `ReviewVote` do not implement `ChannelAware` — channel isolation relies solely on explicit `ctx.channelId` WHERE clauses in services; ORM provides no guard against missed query paths | ⚠️ Pending — add `ChannelAware` + `@ManyToMany(() => Channel)` to `ProductReview` as minimum; backfill join table from existing `channelId` strings via migration |
 | BUG-018 | Medium | `BbbShopResolver.joinRoom()` / `BbbMeetingService.joinRoom()` | `buildJoinUrl()` moderator role-routing has no trigger path — no entity exists to distinguish staff members from students, so all users receive the attendee password regardless of their organizational role | ✅ Fixed — FEAT-001 `BbbOrganizationMembership` entity + `BbbMembershipService` created; Gate 1 short-circuit in `joinRoom()` checks active membership before entitlement check; role-based `provisionAndJoin()` routes org_admin/moderator → MODERATOR URL, staff → VIEWER URL |
@@ -1419,7 +1423,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 - [x] AES-256-GCM on BBB passwords ✅
 - [x] `encryptionKeyVersion` column on encrypted entities ✅
 - [ ] Admin API bound to internal interface only ⚠️ Deployment constraint (SEC-001)
-- [ ] Rate limiting on public mutations ⚠️ Pending
+- [x] Rate limiting on public mutations ✅ (SEC-005)
 - [x] Channel isolation verified on all public resolvers ✅
 - [ ] No secrets in source control
 
@@ -1449,9 +1453,9 @@ Caddy upstream health check polls `/health` every 10 seconds.
 - [x] `STALE` meeting FSM state added ✅ BUG-012 fixed
 - [x] `CapacityExhaustedEvent` published on billing cap ✅ BUG-013 fixed
 - [x] `currentLoad` scoring semantics documented ✅ BUG-014 fixed
-- [ ] Banner BullMQ queues registered (`banner-activator`, `banner-deactivator`) ⚠️ BUG-015
+- [x] Banner BullMQ queues registered (`banner-activator`) ✅ BUG-015
 - [ ] Health check endpoints responding
-- [ ] Custom domain → channel token Redis mapping
+- [x] Custom domain → channel token Redis mapping ✅ (SEC-006)
 
 ### Dashboard
 

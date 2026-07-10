@@ -23,6 +23,7 @@ import { TenantPlugin } from "./plugins/tenant-plugin/tenant-plugin.plugin";
 import { ReviewsPlugin } from "./plugins/reviews/reviews-plugin";
 import { LoadSimulationPlugin } from "./plugins/load-simulation-plugin/load-simulation.plugin";
 import { MarketplaceIndexerPlugin } from "./plugins/marketplace";
+import { CustomerSuspensionPlugin } from './plugins/customer-suspension/customer-suspension.plugin';
 
 const IS_DEV = process.env.APP_ENV === "dev";
 const serverPort = +process.env.PORT || 3000;
@@ -188,5 +189,6 @@ export const config: VendureConfig = {
     ReviewsPlugin,
     LoadSimulationPlugin,
     MarketplaceIndexerPlugin,
-  ],
+    CustomerSuspensionPlugin.init({}),
+],
 };
