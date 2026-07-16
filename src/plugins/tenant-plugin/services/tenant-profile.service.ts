@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { RequestContext, TransactionalConnection, ChannelService } from '@vendure/core';
+import { Channel, RequestContext, TransactionalConnection, ChannelService, RequestContextService } from '@vendure/core';
 import { TenantProfile } from '../entities/tenant-profile.entity';
 import { DomainChannelResolverService } from './domain-channel-resolver.service';
 
@@ -8,6 +8,7 @@ export class TenantProfileService {
   constructor(
     private readonly connection: TransactionalConnection,
     private readonly channelService: ChannelService,
+    private readonly requestContextService: RequestContextService,
     private readonly domainResolver: DomainChannelResolverService,
   ) {}
 
@@ -35,7 +36,24 @@ export class TenantProfileService {
       throw new Error(`TenantProfile already exists for channel ${channelId}`);
     }
     const profile = new TenantProfile({ ...input, channelId });
-    await this.channelService.assignToCurrentChannel(profile, ctx);
+    // Use assignToCurrentChannel with a context scoped to the target channel.
+    // assignToCurrentChannel reads ctx.channelId to determine which channel to
+    // assign to, so when the caller's ctx doesn't match the target channelId,
+    // we create a channel-scoped context. This fixes the "assignToCurrentChannel
+    // gotcha" documented in TenantRegistrationService.registerTenant().
+    //
+    // NOTE: RequestContextService.create()'s channelOrToken param accepts a
+    // Channel instance or a token string — NOT a raw channel ID. We resolve
+    // the Channel entity first so we can pass the instance.
+    const assignCtx = ctx.channelId !== channelId
+      ? await this.requestContextService.create({
+          apiType: 'admin',
+          channelOrToken: await this.connection.getRepository(ctx, Channel).findOneOrFail({
+            where: { id: channelId },
+          }),
+        })
+      : ctx;
+    await this.channelService.assignToCurrentChannel(profile, assignCtx);
     const saved = await this.connection.getRepository(ctx, TenantProfile).save(profile);
 
     // Sync custom domain to Redis if set

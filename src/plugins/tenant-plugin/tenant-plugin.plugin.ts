@@ -10,12 +10,14 @@ import {
 import { TenantProfile } from './entities/tenant-profile.entity';
 import { InstructorProfile } from './entities/instructor-profile.entity';
 import { MediaResource } from './entities/media-resource.entity';
+import { TenantRegistrationLog } from './entities/tenant-registration-log.entity';
 import { TenantProfileService } from './services/tenant-profile.service';
 import { InstructorProfileService } from './services/instructor-profile.service';
 import { MediaResourceService } from './services/media-resource.service';
 import { InstructorIndexerService } from './services/instructor-indexer.service';
 import { DomainChannelResolverService } from './services/domain-channel-resolver.service';
 import { TenantDeletionService } from './services/tenant-deletion.service';
+import { TenantRegistrationService } from './services/tenant-registration.service';
 import { TenantAdminResolver } from './api/tenant-admin.resolver';
 import { TenantShopResolver } from './api/tenant-shop.resolver';
 import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
@@ -23,7 +25,7 @@ import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
 @VendurePlugin({
   compatibility: '^3.0.0',
   imports: [PluginCommonModule, CustomerDeletionModule],
-  entities: [TenantProfile, InstructorProfile, MediaResource],
+  entities: [TenantProfile, InstructorProfile, MediaResource, TenantRegistrationLog],
   providers: [
     TenantProfileService,
     InstructorProfileService,
@@ -31,6 +33,7 @@ import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
     InstructorIndexerService,
     DomainChannelResolverService,
     TenantDeletionService,
+    TenantRegistrationService,
   ],
   adminApiExtensions: {
     schema: adminApiExtensions,

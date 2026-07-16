@@ -1,8 +1,12 @@
-import { Args, Query, Resolver } from '@nestjs/graphql';
-import { Allow, Ctx, Permission, RequestContext } from '@vendure/core';
+import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
+import { Allow, Ctx, Permission, RequestContext, Transaction } from '@vendure/core';
 import { TenantProfileService } from '../services/tenant-profile.service';
 import { InstructorProfileService } from '../services/instructor-profile.service';
 import { MediaResourceService } from '../services/media-resource.service';
+import {
+  RegisterTenantInput,
+  TenantRegistrationService,
+} from '../services/tenant-registration.service';
 
 @Resolver()
 export class TenantShopResolver {
@@ -10,6 +14,7 @@ export class TenantShopResolver {
     private readonly tenantProfileService: TenantProfileService,
     private readonly instructorProfileService: InstructorProfileService,
     private readonly mediaResourceService: MediaResourceService,
+    private readonly tenantRegistrationService: TenantRegistrationService,
   ) {}
 
   @Query()
@@ -37,5 +42,20 @@ export class TenantShopResolver {
       ownerType: args.ownerType,
       ownerId: args.ownerId,
     });
+  }
+
+  /**
+   * Self-serve tenant/seller registration.
+   *
+   * NOT SAFE FOR PRODUCTION UNTIL SEC-004 LANDS: this is a public mutation
+   * with no rate limiting, and each call provisions a Seller, Channel, Role
+   * and Administrator. See TenantRegistrationService for the full caveats
+   * (also: no email verification yet).
+   */
+  @Transaction()
+  @Mutation()
+  @Allow(Permission.Public)
+  registerNewTenant(@Ctx() ctx: RequestContext, @Args('input') input: RegisterTenantInput) {
+    return this.tenantRegistrationService.registerTenant(ctx, input);
   }
 }

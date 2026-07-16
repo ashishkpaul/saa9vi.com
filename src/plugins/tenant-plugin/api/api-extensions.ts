@@ -173,10 +173,30 @@ export const adminApiExtensions = gql`
 export const shopApiExtensions = gql`
     ${sharedTypeExtensions}
 
+    input RegisterTenantInput {
+        businessName: String!
+        firstName: String!
+        lastName: String!
+        emailAddress: String!
+        password: String!
+        contactEmail: String
+        timezone: String
+    }
+
+    type RegisterTenantResult {
+        channelId: ID!
+        channelToken: String!
+        administratorId: ID!
+    }
+
     extend type Query {
         instructorProfile(slug: String!): InstructorProfile
         instructorProfiles(options: InstructorProfileListOptions): InstructorProfileList!
         tenantProfile: TenantProfile
         mediaResources(ownerType: String!, ownerId: ID!): [MediaResource!]!
+    }
+
+    extend type Mutation {
+        registerNewTenant(input: RegisterTenantInput!): RegisterTenantResult!
     }
 `;
