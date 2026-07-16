@@ -8,6 +8,12 @@ export default defineConfig({
     build: {
         outDir: join(__dirname, 'dist/dashboard'),
     },
+    // ─── SERVER BLOCK ────────────────────────────────────────────────────
+    server: {
+        host: true, // Allows Nginx to reach the Vite server internally
+        allowedHosts: ['.meeting.lan', 'localhost'], // Permits incoming proxy traffic
+    },
+    // ─────────────────────────────────────────────────────────────────────
     plugins: [
         vendureDashboardPlugin({
             // The vendureDashboardPlugin will scan your configuration in order
@@ -21,7 +27,7 @@ export default defineConfig({
             // the Vite dev server can reach the Vendure backend.
             api: process.env.NODE_ENV === 'production'
                 ? { host: 'auto', port: 'auto' }
-                : { host: 'http://localhost', port: 3000 },
+                : { host: 'https://core.meeting.lan', port: 'auto' }, // <── Fixed: Added quotes around 'auto'
             // When you start the Vite server, your Admin API schema will
             // be introspected and the types will be generated in this location.
             // These types can be used in your dashboard extensions to provide

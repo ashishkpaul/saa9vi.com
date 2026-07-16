@@ -8,7 +8,8 @@ ES9_CONFIG_DIR="$SRC_DIR/es9-config"
 CONFIG_DIR="$SRC_DIR/config"
 PLATFORM_DIR="$SRC_DIR/platform"
 SCRIPTS_DIR="./scripts"
-OUTPUT_BASE_DIR="$HOME/Documents/vendure/plugins"
+# OUTPUT_BASE_DIR="$HOME/Documents/vendure/plugins"
+OUTPUT_BASE_DIR="/mnt/256G/projects/vendure/edu/saanvi.com"
 
 # Prompt user for .md file exclusion
 read -p "Exclude .md files? (y/n): " exclude_md_choice

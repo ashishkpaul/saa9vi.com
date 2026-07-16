@@ -29,11 +29,24 @@ const IS_DEV = process.env.APP_ENV === "dev";
 const serverPort = +process.env.PORT || 3000;
 
 export const config: VendureConfig = {
-  apiOptions: {
+apiOptions: {
     port: serverPort,
     adminApiPath: "admin-api",
     shopApiPath: "shop-api",
-    trustProxy: IS_DEV ? false : 1,
+    
+    // Trust proxy headers from Nginx (use true in dev, 1 proxy hop in production)
+    trustProxy: IS_DEV ? true : 1,
+
+    // Enable CORS to allow secure requests from your local domain infrastructure
+    cors: {
+      origin: [
+        "https://core.meeting.lan",
+        "https://storefront.meeting.lan",
+        "http://localhost:5173", // Direct access fallback for local Vite dev
+      ],
+      credentials: true,
+    },
+
     middleware: [
       {
         // Resolve custom domain → channel token via Redis (SEC-006)
@@ -41,9 +54,9 @@ export const config: VendureConfig = {
         handler: domainChannelMiddleware,
       },
     ],
+
     // The following options are useful in development mode,
-    // but are best turned off for production for security
-    // reasons.
+    // but are best turned off for production for security reasons.
     ...(IS_DEV
       ? {
           adminApiDebug: true,
