@@ -2,7 +2,7 @@
 
 ## Saa9vi — Multi-Tenant Education Commerce Platform
 
-### Production Architecture · Version 1.7
+### Production Architecture · Version 1.8
 
 **Status:** Active
 **Date:** 2026-06-30
@@ -20,7 +20,7 @@
 > | v1.5 | Phase 3 Marketplace architecture locked: platform-level ES index, `orderSource` attribution, `MarketplaceIndexerPlugin`, `BayesianRatingService`; multivendor-plugin rejected (DL-019). Three-stream revenue model locked. FEAT-003/004 added. INV-009/010 added. DL-019–022 added. ADR-014 added. |
 > | v1.6 | Capacity Intelligence System *designed* (§6A, CI-001–006) — `CapacityIntelligenceService`, 48h PILOS-based load forecast, `poolCapacityDashboard`, `BbbCapacityAlertLog`, `capacity-alert` job. INV-012 (advisory-only) and DL-025 added. BUG-019/020 fixed. DL-026/027 added. |
 >
-> **What changed in v1.8 (this revision):** (1) BUG-015 / CMS-002 **fixed** — `banner-activator` BullMQ scheduled task registered, `isCurrentlyActive` flag replaces runtime date-range comparisons, `BannerService.findActiveForPlacement()` now queries precomputed flag. (2) INV-013 (customer deletion) added — cross-plugin orchestration with `CustomerDeletionService`, three plugin handlers (BBB, Tenant, Reviews), `CustomerDeletionLog` entity, `leaveAcademy`/`deleteMyAccount` Shop API mutations with password confirmation. (3) Status fields updated throughout to match current implementation.
+> **What changed in v1.8 (this revision):** (1) BUG-015 / CMS-002 **fixed** — `banner-activator` BullMQ scheduled task registered, `isCurrentlyActive` flag replaces runtime date-range comparisons, `BannerService.findActiveForPlacement()` now queries precomputed flag. (2) INV-013 (customer deletion) added — cross-plugin orchestration with `CustomerDeletionService`, three plugin handlers (BBB, Tenant, Reviews), `CustomerDeletionLog` entity, `leaveAcademy`/`deleteMyAccount` Shop API mutations with password confirmation. (3) **Tenant Registration System** added — `TenantRegistrationLog` entity (append-only, INV-004 persist-first pattern), `TenantRegistrationService` (5-step orchestration: Seller → Channel → Role → Administrator → TenantProfile), `registerNewTenant` Shop API mutation (`Permission.Public`), `TENANT_ADMIN_ROLE_PERMISSIONS` constant. (4) BUG-021 **fixed** — `TenantProfileService.create()` `channelOrToken` bug resolved by resolving `Channel` entity before passing to `RequestContextService.create()`. (5) Status fields updated throughout to match current implementation.
 
 ---
 
@@ -1059,6 +1059,95 @@ See §5A for the canonical pattern. The applied fix:
 
 `MediaResourceService.findOne` includes `channelId` filter. Code-verified.
 
+### TP-006: Tenant Registration System ✅ Implemented
+
+The Tenant Registration System provides a self-service `registerNewTenant` Shop API mutation (`Permission.Public`) that provisions a complete tenant channel in a single synchronous transaction. It follows the INV-004 persist-first pattern: the registration request is logged as `PENDING` before any entity creation, and marked `COMPLETED` or `FAILED` on outcome.
+
+#### Registration Flow (5-Step Orchestration)
+
+```
+registerNewTenant(input: RegisterTenantInput)
+  → 1. Persist TenantRegistrationLog { status: PENDING }
+  → 2. Create Seller (Vendure core) — required for channel creation
+  → 3. Create Channel — reuses default channel's zones/currency
+       channelCode = slugify(shopName) + "_" + randomSuffix(4)
+       channelToken = "tok_" + randomToken(8)
+  → 4. Create channel-scoped Role with TENANT_ADMIN_ROLE_PERMISSIONS
+  → 5. Create Administrator (email + password) assigned to the new Role
+  → 6. Create TenantProfile — assigned to the new Channel via assignToCurrentChannel
+  → 7. Mark TenantRegistrationLog { status: COMPLETED }
+  → Return { success: true, channelToken, message }
+```
+
+**Error handling:** If any step fails, the log is marked `FAILED` with the error message. The mutation throws, and the caller receives the error. Partial entity creation (e.g., Channel created but Administrator creation failed) is handled by the `@Transaction()` decorator — the entire mutation rolls back on exception.
+
+#### `TenantRegistrationLog` Entity
+
+```typescript
+@Entity('tenant_registration_log')
+@Index(['channelId'])
+@Index(['status'])
+export class TenantRegistrationLog extends VendureEntity {
+  @Column() email: string;
+  @Column() shopName: string;
+  @Column({ nullable: true }) channelId: string | null;
+  @Column({ nullable: true }) channelToken: string | null;
+  @Column({ default: 'PENDING' })
+  status: 'PENDING' | 'COMPLETED' | 'FAILED';
+  @Column({ nullable: true, type: 'text' }) errorMessage: string | null;
+}
+```
+
+Rows are never updated after final status (COMPLETED/FAILED). The PENDING → COMPLETED/FAILED transition is the only mutation. This follows the INV-002 append-only principle extended to the registration domain.
+
+#### `TENANT_ADMIN_ROLE_PERMISSIONS`
+
+```typescript
+export const TENANT_ADMIN_ROLE_PERMISSIONS: PermissionDefinition[] = [
+  // Channel-scoped commerce permissions
+  Permission.Catalog, Permission.Asset, Permission.Collection,
+  Permission.Customer, Permission.CustomerGroup, Permission.Facet,
+  Permission.Order, Permission.PaymentMethod, Permission.Promotion,
+  Permission.ShippingMethod, Permission.Tag,
+  // Plugin CRUD permissions
+  Permission.CreateTenantProfile, Permission.ReadTenantProfile,
+  Permission.UpdateTenantProfile, Permission.DeleteTenantProfile,
+  Permission.CreateInstructorProfile, Permission.ReadInstructorProfile,
+  Permission.UpdateInstructorProfile, Permission.DeleteInstructorProfile,
+  Permission.CreateMediaResource, Permission.ReadMediaResource,
+  Permission.UpdateMediaResource, Permission.DeleteMediaResource,
+];
+```
+
+The role is created with `channelIds: [newChannel.id]` so the administrator's permissions are scoped to their own channel only — they cannot access other tenants' data.
+
+#### GraphQL Schema
+
+```graphql
+input RegisterTenantInput {
+  email: String!
+  password: String!
+  shopName: String!
+}
+
+type RegisterTenantResult {
+  success: Boolean!
+  channelToken: String
+  message: String
+}
+
+extend type Mutation {
+  registerNewTenant(input: RegisterTenantInput!): RegisterTenantResult!
+    @Allow(Permission.Public)
+}
+```
+
+#### Outstanding Items (Phase 1.5)
+
+- **SEC-004 (Rate limiting):** The mutation is `Permission.Public` with no rate limiting. A `shopApiRateLimiter` middleware (matching the pattern in SEC-005) should be added before production to prevent registration spam.
+- **Email verification:** The Administrator is created in a usable state immediately. Should mirror `registerCustomerAccount`/`verifyCustomerAccount` pattern before production to prevent disposable-account abuse.
+- **Shipping/payment methods and stock location:** New tenant Channels will need at least one ShippingMethod and StockLocation before they can sell. These are not auto-provisioned in the current flow.
+
 ---
 
 ## 8A. Internal Operations Architecture
@@ -1303,6 +1392,7 @@ Every external-facing resolver includes channel verification (code-verified):
 - `BbbAdminResolver.*` — requires `BbbAdminPermission` ✅
 - `TenantAdminResolver.*` — requires scoped permissions ✅
 - `TenantShopResolver.instructorProfiles` — public, filters by `channelId` from ctx ✅
+- `TenantShopResolver.registerNewTenant` — `Permission.Public`, creates new Channel (no channel context needed) ✅
 - `CmsShopResolver.articleBySlug` — filters by `channelId` and `isPublished` ✅
 - `InstructorProfileService.findOne` — includes `channelId` filter ✅
 - `MediaResourceService.findOne` — includes `channelId` filter ✅
@@ -1412,6 +1502,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 | BUG-018 | Medium | `BbbShopResolver.joinRoom()` / `BbbMeetingService.joinRoom()` | `buildJoinUrl()` moderator role-routing has no trigger path — no entity exists to distinguish staff members from students, so all users receive the attendee password regardless of their organizational role | ✅ Fixed — FEAT-001 `BbbOrganizationMembership` entity + `BbbMembershipService` created; Gate 1 short-circuit in `joinRoom()` checks active membership before entitlement check; role-based `provisionAndJoin()` routes org_admin/moderator → MODERATOR URL, staff → VIEWER URL |
 | BUG-019 | High | `LoadSimulationPlugin` / `load-simulation.plugin.ts` | `runLoadTest` is exposed on the public Shop API via `shopApiExtensions`, creating a DoS vector — any unauthenticated caller can trigger a sustained load test against the platform | ✅ Fixed — moved to `adminApiExtensions`, `@Allow(Permission.SuperAdmin)` applied to resolver |
 | BUG-020 | Medium | `CausalMapper` / `bbb-admin.schema.ts` | `SIMULATE_BBB_WEBHOOK_MUTATION` is referenced in `CausalMapper` but `simulateBbbWebhook` resolver does not exist in `BbbAdminResolver` — load tests silently fail on every `BbbWebhookEvent` lifecycle step | ✅ Fixed — `BbbWebhookEvent` step returns `isPending: true` in `CausalMapper`; skipped cleanly by `LoadOrchestrator` until resolver is implemented |
+| BUG-021 | High | `TenantProfileService.create()` | `channelOrToken` parameter passed as raw `Channel` entity object to `RequestContextService.create()` instead of `channel.token` string — causes `TypeError: channelOrToken.startsWith is not a function` on tenant profile creation | ✅ Fixed — resolved `Channel` entity to `channel.token` string before passing to `RequestContextService.create()` |
 
 ---
 
@@ -1456,6 +1547,28 @@ Caddy upstream health check polls `/health` every 10 seconds.
 - [x] Banner BullMQ queues registered (`banner-activator`) ✅ BUG-015
 - [ ] Health check endpoints responding
 - [x] Custom domain → channel token Redis mapping ✅ (SEC-006)
+
+### Tenant Registration System
+
+- [x] `TenantRegistrationLog` entity with append-only pattern ✅
+- [x] `TenantRegistrationService` 5-step orchestration (Seller → Channel → Role → Administrator → TenantProfile) ✅
+- [x] `registerNewTenant` Shop API mutation (`Permission.Public`) ✅
+- [x] `TENANT_ADMIN_ROLE_PERMISSIONS` constant with channel-scoped permissions ✅
+- [x] BUG-021 fixed — `channelOrToken` resolved to `channel.token` string ✅
+- [ ] Rate limiting on `registerNewTenant` mutation (SEC-004) ⚠️ Phase 1.5
+- [ ] Email verification flow for new tenant administrators ⚠️ Phase 1.5
+- [ ] Auto-provision ShippingMethod and StockLocation for new channels ⚠️ Phase 1.5
+
+### Customer Deletion System
+
+- [x] `CustomerDeletionService` with cross-plugin orchestration ✅
+- [x] BBB plugin handler (anonymize enrollments, entitlements; preserve ledger) ✅
+- [x] Tenant plugin handler (anonymize InstructorProfile, MediaResource) ✅
+- [x] Reviews plugin handler (anonymize ProductReview.authorName, deactivate ReviewRequest) ✅
+- [x] `CustomerDeletionLog` entity with status tracking ✅
+- [x] `leaveAcademy` Shop API mutation (password confirmation) ✅
+- [x] `deleteMyAccount` Shop API mutation (password confirmation) ✅
+- [ ] End-to-end deletion flow tested across all three plugins ⚠️ Pre-production
 
 ### Dashboard
 
@@ -1621,6 +1734,8 @@ Deliverables:
 | DL-025 | Proactive capacity intelligence over reactive throttling | The education context makes reactive throttling uniquely harmful — a live class with enrolled students cannot be cancelled at provisioning time. A 48-hour forecast with 15-minute alert cadence gives operators enough warning to add infrastructure before any student is affected. See INV-012 and §6A. | Hard capacity ceiling blocking meetings (rejected — INV-012); per-join capacity checks (too late — meeting already provisioned); cloud auto-scaling (deferred to Phase 4 — current BBB servers are self-hosted) |
 | DL-026 | `SubscriptionEntitlement` as pure computed state accepts a time-driven FSM race condition | Access is computed at runtime from `SubscriptionEnrollment.status`. The transition `IN_GRACE → SUSPENDED` is driven by an async BullMQ cron job — a student technically past grace expiry retains access until the job processes. In a live education billing context, granting a few extra minutes during a queue delay is an acceptable business tolerance and vastly preferable to the complexity of persisting and syncing a duplicate access state. | Persisting `SubscriptionEntitlement` explicitly (creates fragile sync between billing state and access state, introduces drift risk on job failure) |
 | DL-027 | Session products are assigned to the tenant channel only — never to the default channel | Vendure assigns new products to both the default channel and the current channel by default. Allowing session products on the default channel would create an accidental cross-tenant product listing visible to all storefronts. The marketplace ES index (`saa9vi_marketplace_sessions`) is the correct and only cross-tenant discovery surface. This must be enforced via a custom `ProductChannelMappingStrategy` or by explicitly removing default channel assignment in `BbbScheduledSessionService.create()`. | Allow default channel assignment (creates uncontrolled cross-tenant product leakage); per-tenant index only for discovery (acceptable for Phase 1.5; not scalable for Phase 3 marketplace) |
+| DL-028 | `TenantRegistrationLog` uses append-only pattern (INV-004) — PENDING → COMPLETED/FAILED transition only, rows never updated after final status | Registration is a critical platform operation. Append-only logging provides an immutable audit trail for every tenant creation attempt, enabling retrospective analysis of registration failures and abuse patterns. The pattern mirrors `BbbWebhookEvent` (DL-005) and `BbbUsageLedger` (DL-004). | Mutable `TenantRegistrationLog` (loses audit trail on failure); no log at all (no observability into registration failures) |
+| DL-029 | `TenantProfileService.create()` resolves `Channel` entity to `channel.token` string before passing to `RequestContextService.create()` | `RequestContextService.create()` expects a `channelToken: string` parameter. Passing a raw `Channel` entity object causes `TypeError: channelOrToken.startsWith is not a function` because the method calls `.startsWith()` on the first argument. The fix resolves the entity to its `.token` string property before the call. | Passing `Channel` entity directly (crashes with TypeError); refactoring `RequestContextService.create()` to accept both types (adds complexity to a Vendure core method) |
 
 ---
 

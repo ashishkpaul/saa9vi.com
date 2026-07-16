@@ -1,8 +1,8 @@
 # What Next — Saa9vi Platform: Cline Development Prompt
 
-**Generated:** 2026-06-30
-**Based on:** ADR v1.7, RFC-001 v3, platform-story v4, BUG-001 through BUG-006, all five plugin codebases, Vendure live docs (server-resource-requirements, horizontal-scaling)
-**Status of platform at time of writing:** Phase 1 commerce loop complete. Phase 1.5 mostly complete — FEAT-001 and FEAT-002 are code-complete (FEAT-002's DB migration is the only outstanding step). Phase 2 (subscriptions) unimplemented. BUG-006 load testing is fully wired. `RedisCachePlugin` and `BullMQJobQueuePlugin` both confirmed live. Tasks 1–5 and 12 from the previous what-next iteration are complete (Task 1's migration step aside). Tasks 6–11 and the Capacity Intelligence System (ADR v1.7 §6A, Task 8) are pending — Capacity Intelligence has zero code so far, despite being fully specified in the ADR.
+**Generated:** 2026-07-16
+**Based on:** ADR v1.8, RFC-001 v3, platform-story v4, all five plugin codebases, Vendure live docs (server-resource-requirements, horizontal-scaling)
+**Status of platform at time of writing:** Phase 1 commerce loop complete. Phase 1.5 substantially complete — FEAT-001, FEAT-002, Capacity Intelligence System, myLearningDashboard, GrantReaderService, rate limiting, custom domain Redis mapping, CorrelationInterceptor global scope, Tenant Registration System, and Customer Deletion System are all implemented. Phase 2 (subscriptions) unimplemented. The only remaining Phase 1.5 blockers are: (1) FEAT-002's DB migration step, (2) email verification for new tenant administrators, (3) rate limiting on `registerNewTenant`, (4) auto-provision ShippingMethod/StockLocation for new channels, and (5) end-to-end customer deletion testing across all three plugins.
 
 ---
 
@@ -47,7 +47,7 @@ The following tasks from the previous iteration have been verified complete in t
 | `vendure-config.ts` — `COOKIE_SECRET` from env | ✅ Done | `cookieOptions: { secret: process.env.COOKIE_SECRET }` verified. |
 | BUG-019 — `LoadSimulationPlugin` DoS vector on Shop API | ✅ Done | Moved to `adminApiExtensions`, `@Allow(Permission.SuperAdmin)` added to resolver. |
 | BUG-020 — `CausalMapper` fires non-existent `simulateBbbWebhook` | ✅ Done | `BbbWebhookEvent` step marked `isPending: true` — skipped cleanly until resolver implemented. |
-| FEAT-002 entity + service — `sourceType`/`isUnbounded` on `BbbCapacityGrant` | ✅ Done | Columns added to entity. `bbb-organization.service.ts` auto-provisions `internal_overhead` grant on org create. `bbb-reconciliation.service.ts` skips exhaustion/alerts for overhead grants. **Migration pending:** run `npx vendure migrate create` then `npx vendure migrate up`. |
+| FEAT-002 entity + service — `sourceType`/`isUnbounded` on `BbbCapacityGrant` | ✅ Done | Columns added to entity. `bbb-organization.service.ts` auto-provisions `internal_overhead` grant on org create. `bbb-reconciliation.service.ts` skips exhaustion/alerts for overhead grants. **Migration pending:** run `npx vendure migrate -g Feat002OverheadGrant` then `npx vendure migrate -r`. |
 | Task 4 — `RedisCachePlugin` in `vendure-config.ts` | ✅ Done | `RedisCachePlugin.init()` present in plugins array, reads from `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` env vars. |
 | Task 5 — `InstructorProfile` Elasticsearch indexer | ✅ Done | `InstructorIndexerService` wired. ES client fixed to use `ELASTICSEARCH_NODE` + `ELASTICSEARCH_PASSWORD`. |
 | Task 12 — CorrelationInterceptor global scope fix | ✅ Done | `PlatformTracingModule` created with `@Global()` + `APP_INTERCEPTOR`. `BigBlueButtonPlugin` imports the module; `APP_INTERCEPTOR` removed from plugin providers. All plugins now inherit correlation context. |
@@ -56,13 +56,13 @@ The following tasks from the previous iteration have been verified complete in t
 
 ## Task 1 — FEAT-002: Overhead Capacity Grant ✅ Code Complete — Migration Pending
 
-**Reference:** ADR v1.7 §8A OP-005. Code is done (see Completed table above); this task is only the remaining DB step.
+**Reference:** ADR v1.8 §8A OP-005. Code is done (see Completed table above); this task is only the remaining DB step.
 
 **Remaining step (do not skip — rule 7 in `.clinerules`):**
 
 ```bash
-npx vendure migrate create
-npx vendure migrate up
+npx vendure migrate -g Feat002OverheadGrant
+npx vendure migrate -r
 npm run build
 ```
 
@@ -104,7 +104,7 @@ Multi-instance Vendure deployment can now run without channel/session cache inco
 
 ## Task 5 — Phase 1.5: Elasticsearch Indexing for `InstructorProfile` ✅ Done
 
-**Reference:** ADR v1.7 §14 Phase 1.5. `InstructorIndexerService` manages the `instructor_profiles` index (`ensureIndexExists()`, `indexProfile()`, `deleteProfile()`, `fullReindex()`, via `@elastic/elasticsearch`), wired non-fatally into `InstructorProfileService.create/update/delete`. ES client reads `ELASTICSEARCH_NODE` + `ELASTICSEARCH_PASSWORD` from env.
+**Reference:** ADR v1.8 §14 Phase 1.5. `InstructorIndexerService` manages the `instructor_profiles` index (`ensureIndexExists()`, `indexProfile()`, `deleteProfile()`, `fullReindex()`, via `@elastic/elasticsearch`), wired non-fatally into `InstructorProfileService.create/update/delete`. ES client reads `ELASTICSEARCH_NODE` + `ELASTICSEARCH_PASSWORD` from env.
 
 ### Scope clarification — per-tenant vs marketplace discovery
 
@@ -132,7 +132,7 @@ Student searches "JEE maths coach Delhi" on marketplace.saa9vi.com
 
 ## Task 5b — Phase 3 Prerequisite: `MarketplaceIndexerPlugin` ✅ Done (Scaffold)
 
-**Reference:** ADR v1.7 §14 Phase 3, DL-020, INV-009
+**Reference:** ADR v1.8 §14 Phase 3, DL-020, INV-009
 **Priority:** Phase 3 — scaffold complete. Full Phase 3 features (sponsored listings, Bayesian rating, price from ProductVariant) are deferred; see gaps below.
 
 `MarketplaceIndexerPlugin` (`src/plugins/marketplace/`), registered in `vendure-config.ts`:
@@ -190,7 +190,7 @@ Results are ranked by `function_score` combining `bayesianRating` (log1p) with a
 
 ## Task 6 — Phase 1.5: `myLearningDashboard` Shop API Query ✅ Done
 
-**Reference:** ADR v1.7 ADR-013 Implementation Checklist item 1; INV-006
+**Reference:** ADR v1.8 ADR-013 Implementation Checklist item 1; INV-006
 
 **Status:** ✅ Implemented. `LearningDashboardService` aggregates `BbbEntitlement` rows for the current customer, fetches linked `BbbScheduledSession` data, resolves `instructorName` from `InstructorProfile`, checks `canJoin` via `BbbEntitlementService.hasAccess()` combined with session LIVE status, and generates `joinUrl` only when `canJoin = true`. The GraphQL types (`LearningDashboard`, `LearningCourse`, `SessionWindow`) have no `Bbb*` prefix — INV-006 enforced.
 
@@ -234,9 +234,9 @@ Results are ranked by `function_score` combining `bayesianRating` (log1p) with a
 
 ---
 
-## Task 8 — ADR v1.7 §6A: Capacity Intelligence System ✅ Done
+## Task 8 — ADR v1.8 §6A: Capacity Intelligence System ✅ Done
 
-**Reference:** ADR v1.7 §6A, CI-001 through CI-006
+**Reference:** ADR v1.8 §6A, CI-001 through CI-006
 **Priority:** Phase 1.5 — required before load testing results are meaningful at scale
 
 **Status:** ✅ Implemented. All components are built, wired, migrated, and verified.
@@ -276,7 +276,7 @@ Results are ranked by `function_score` combining `bayesianRating` (log1p) with a
 
 ## Task 9 — k6 Load Testing Integration
 
-**Reference:** ADR v1.7 §13 production readiness, Vendure docs recommendation
+**Reference:** ADR v1.8 §13 production readiness, Vendure docs recommendation
 **Note:** Vendure recommends k6, Artillery, or jMeter for traffic generation. `LoadSimulationPlugin` is the causal drift validator — use both together.
 
 ### What to do
@@ -303,7 +303,7 @@ Create a `load-testing/` directory at the project root:
 
 ## Task 10 — SEC-004: Rate Limiting on Public Mutations ✅ Done
 
-**Reference:** ADR v1.7 §13 Production Readiness Checklist (⚠️ Pending)
+**Reference:** ADR v1.8 §13 Production Readiness Checklist (⚠️ Pending)
 **Blocking:** First tenant onboarding — this is the last remaining Phase 1 blocker
 
 **Status:** ✅ Implemented. Rate limiting applied to three surfaces via `express-rate-limit` middleware, registered through the plugin's `configuration()` hook.
@@ -333,7 +333,7 @@ Create a `load-testing/` directory at the project root:
 
 ## Task 11 — Custom Domain → Channel Token Redis Mapping ✅ Done
 
-**Reference:** ADR v1.7 §13 Production Readiness Checklist, SEC-006
+**Reference:** ADR v1.8 §13 Production Readiness Checklist, SEC-006
 **Priority:** Phase 1 final blocker — required for custom domain tenants
 
 **Status:** ✅ Implemented. Custom domain → channel token mapping is fully wired with Redis persistence, Express middleware, and automatic invalidation on domain changes.
@@ -401,7 +401,7 @@ PHASE 1.5 BLOCKERS (unblocks full tenant experience)
 CORRECTNESS / RELIABILITY
   Task 7 — GrantReaderService scaffold                   [RFC-001 Q-009]
 
-CAPACITY INTELLIGENCE (new in ADR v1.7)
+CAPACITY INTELLIGENCE (new in ADR v1.8)
   Task 8 — Full Capacity Intelligence System             [ADR §6A CI-001 to CI-006]
   Task 9 — k6 load testing integration                   [Vendure docs compliance]
 ```
@@ -432,9 +432,9 @@ CAPACITY INTELLIGENCE (new in ADR v1.7)
 
 | File | Purpose |
 |---|---|
-| `platform-adr.md` v1.7 | Authoritative architecture — all invariants, decision log, phase roadmap, Capacity Intelligence System (§6A, designed but not yet implemented) |
+| `platform-adr.md` v1.8 | Authoritative architecture — all invariants, decision log, phase roadmap, Capacity Intelligence System (§6A), Tenant Registration System (§8 TP-006), Customer Deletion System (§8A), rate limiting (§13 SEC-004), custom domain Redis mapping (§13 SEC-006) |
 | `rfc-001-continuous-commerce-loop.md` v3 | Phase 2 subscription billing design — `GrantReaderService` Q-009, capacity intelligence integration points |
-| `platform-story.md` v4 | Human-readable flow narrative — §11 wallet & capacity intelligence updated for ADR v1.7 |
+| `platform-story.md` v4 | Human-readable flow narrative — §11 wallet & capacity intelligence updated for ADR v1.8 |
 | `bug-006-load-testing-observability.md` | BUG-006 spec — architecture reference (all four tasks now complete) |
 | [Vendure: server-resource-requirements](https://docs.vendure.io/current/core/deployment/server-resource-requirements) | RAM/CPU constraints, k6/Artillery/jMeter recommendations |
 | [Vendure: horizontal-scaling](https://docs.vendure.io/current/core/deployment/horizontal-scaling) | `BullMQJobQueuePlugin`, `RedisCachePlugin`, shared cookie secret requirements |
