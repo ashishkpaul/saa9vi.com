@@ -51,6 +51,16 @@ The following tasks from the previous iteration have been verified complete in t
 | Task 4 — `RedisCachePlugin` in `vendure-config.ts` | ✅ Done | `RedisCachePlugin.init()` present in plugins array, reads from `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` env vars. |
 | Task 5 — `InstructorProfile` Elasticsearch indexer | ✅ Done | `InstructorIndexerService` wired. ES client fixed to use `ELASTICSEARCH_NODE` + `ELASTICSEARCH_PASSWORD`. |
 | Task 12 — CorrelationInterceptor global scope fix | ✅ Done | `PlatformTracingModule` created with `@Global()` + `APP_INTERCEPTOR`. `BigBlueButtonPlugin` imports the module; `APP_INTERCEPTOR` removed from plugin providers. All plugins now inherit correlation context. |
+| Scheduled Sessions dashboard | ✅ Done | Added educational session management UI with organization-scoped listing, dedicated session detail query, cancellation workflow, and separation between Session domain and Meeting runtime infrastructure. |
+
+### Scheduled Sessions Follow-ups
+
+| Item | Status | Notes |
+|---|---|---|
+| Server-side pagination for BBB dashboard lists | ⚠️ Pending | Current SessionsList uses client-side pagination. Convert list APIs to Vendure ListQueryBuilder pattern. |
+| Trainer identity resolution | ⚠️ Pending | Replace trainerId display with InstructorProfile/customer name. |
+| Session creation workflow | ⚠️ Pending | Add guided creation flow with trainer assignment and product linkage. |
+| Session lifecycle actions | ⚠️ Pending | Start session, attendance, recording management. |
 
 ---
 
