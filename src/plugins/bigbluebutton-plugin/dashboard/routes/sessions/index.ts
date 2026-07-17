@@ -1,2 +1,2 @@
 export { SessionsList } from './SessionsList';
-export { SessionDetail } from './SessionDetail';
+export { sessionDetail } from './SessionDetail';
