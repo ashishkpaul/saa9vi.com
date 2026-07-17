@@ -2,12 +2,12 @@
 
 ## Saa9vi — Multi-Tenant Education Commerce Platform
 
-### Production Architecture · Version 1.8
+### Production Architecture · Version 1.9
 
 **Status:** Active
-**Date:** 2026-06-30
+**Date:** 2026-07-17
 **Authors:** Lead Architect, Platform Engineering
-**Supersedes:** ADR v1.6 (2026-06)
+**Supersedes:** ADR v1.8 (2026-06-30)
 
 > **Changelog v1.1–v1.6 (condensed):**
 >
@@ -19,8 +19,10 @@
 > | v1.4 | Archetype B (Internal Staff Meeting) integrated as §8A. FEAT-001 (`BbbOrganizationMembership`) and FEAT-002 (Overhead Capacity Grant) tracked as Phase 1.5 blockers. BUG-018 added. DL-017/018 added. |
 > | v1.5 | Phase 3 Marketplace architecture locked: platform-level ES index, `orderSource` attribution, `MarketplaceIndexerPlugin`, `BayesianRatingService`; multivendor-plugin rejected (DL-019). Three-stream revenue model locked. FEAT-003/004 added. INV-009/010 added. DL-019–022 added. ADR-014 added. |
 > | v1.6 | Capacity Intelligence System *designed* (§6A, CI-001–006) — `CapacityIntelligenceService`, 48h PILOS-based load forecast, `poolCapacityDashboard`, `BbbCapacityAlertLog`, `capacity-alert` job. INV-012 (advisory-only) and DL-025 added. BUG-019/020 fixed. DL-026/027 added. |
+> | v1.7 | Code audit pass: FEAT-001/FEAT-002 status corrected to code-complete; Capacity Intelligence corrected to "Designed, not implemented"; plugin inventory expanded to 6; instructor ES indexing status corrected; §6A/§2B moved to correct TOC positions. |
+> | v1.8 | BUG-015/CMS-002 fixed (banner-activator job). INV-013 (customer deletion) added. Tenant Registration System added. BUG-021 fixed. Status fields updated throughout. |
 >
-> **What changed in v1.8 (this revision):** (1) BUG-015 / CMS-002 **fixed** — `banner-activator` BullMQ scheduled task registered, `isCurrentlyActive` flag replaces runtime date-range comparisons, `BannerService.findActiveForPlacement()` now queries precomputed flag. (2) INV-013 (customer deletion) added — cross-plugin orchestration with `CustomerDeletionService`, three plugin handlers (BBB, Tenant, Reviews), `CustomerDeletionLog` entity, `leaveAcademy`/`deleteMyAccount` Shop API mutations with password confirmation. (3) **Tenant Registration System** added — `TenantRegistrationLog` entity (append-only, INV-004 persist-first pattern), `TenantRegistrationService` (5-step orchestration: Seller → Channel → Role → Administrator → TenantProfile), `registerNewTenant` Shop API mutation (`Permission.Public`), `TENANT_ADMIN_ROLE_PERMISSIONS` constant. (4) BUG-021 **fixed** — `TenantProfileService.create()` `channelOrToken` bug resolved by resolving `Channel` entity before passing to `RequestContextService.create()`. (5) Status fields updated throughout to match current implementation.
+> **What changed in v1.9 (this revision):** (1) **Capacity Intelligence System** status updated from "Designed" to "Implemented" — CI-001 through CI-006 all code-complete, migrated, and verified. (2) **MarketplaceIndexerPlugin** status updated — all Phase 3 gaps closed (sponsored listing bid-boost, Bayesian rating, price from ProductVariant, ProductVariantEvent subscription, BullMQ job queue, Product custom fields). (3) **PlatformDashboardPlugin** added — Saa9vi login branding layer with CSS override for Vendure core branding footer (ADR-016). (4) **Phase Roadmap** updated — Phase 1.5 blockers corrected to reflect current state (myLearningDashboard, GrantReaderService, rate limiting, custom domain Redis mapping all done). (5) **ADR-017 (Observability Architecture)** added — formalizes correlation tracing, event causality validation, and runtime invariant monitoring. (6) **Phase 1.6 (Live Classroom Experience)** added to roadmap — elevates Scheduled Sessions follow-ups to a dedicated phase before subscriptions.
 
 ---
 
@@ -1145,7 +1147,7 @@ extend type Mutation {
 
 #### Outstanding Items (Phase 1.5)
 
-- **SEC-004 (Rate limiting):** The mutation is `Permission.Public` with no rate limiting. A `shopApiRateLimiter` middleware (matching the pattern in SEC-005) should be added before production to prevent registration spam.
+- **SEC-004 (Rate limiting):** ✅ Done — `shopApiRateLimiter` extended to cover `registerNewTenant` mutation, matching the pattern in SEC-005.
 - **Email verification:** The Administrator is created in a usable state immediately. Should mirror `registerCustomerAccount`/`verifyCustomerAccount` pattern before production to prevent disposable-account abuse.
 - **Shipping/payment methods and stock location:** New tenant Channels will need at least one ShippingMethod and StockLocation before they can sell. These are not auto-provisioned in the current flow.
 
@@ -1626,13 +1628,14 @@ Note: `CapacityExhaustedEvent` (BUG-013 / BB-004) is now implemented and publish
 
 1. Run the FEAT-002 schema migration (`npx vendure migrate create && npx vendure migrate up`) — code is complete, DB is not
 2. Build Next.js storefront pages for public instructor profiles and CMS pages
-3. `myLearningDashboard` Shop API query (ADR-013 INV-006) — see `what-next.md` Task 6
-4. Rate limiting on `registerNewTenant` mutation (SEC-004) — see `what-next.md` Task 10
-5. Email verification flow for new tenant administrators — Phase 1.5
-6. Auto-provision ShippingMethod and StockLocation for new channels — Phase 1.5
-7. End-to-end customer deletion flow tested across all three plugins — Pre-production
-8. Load estimation ratios tuned from first 2 weeks of `BbbUsageLedger` data — Phase 1.5
-9. BUG-017 remediation — add `ChannelAware` to `ProductReview` — Phase 1.5
+3. `myLearningDashboard` Shop API query (ADR-013 INV-006) — ✅ Done — `GrantReaderService` implemented, `myLearningDashboard` query registered in BBB admin resolver, returns active grants with consumed/total minutes per organization
+4. Rate limiting on `registerNewTenant` mutation (SEC-004) — ✅ Done — `shopApiRateLimiter` extended to cover `registerNewTenant` mutation
+5. Custom domain → channel token Redis mapping — ✅ Done — `DomainChannelResolverService` manages `channel-token:{domain}` keys with 7-day TTL, synced on `TenantProfileService.create/update`
+6. Email verification flow for new tenant administrators — Phase 1.5
+7. Auto-provision ShippingMethod and StockLocation for new channels — Phase 1.5
+8. End-to-end customer deletion flow tested across all three plugins — Pre-production
+9. Load estimation ratios tuned from first 2 weeks of `BbbUsageLedger` data — Phase 1.5
+10. BUG-017 remediation — add `ChannelAware` to `ProductReview` — Phase 1.5
 
 ### Phase 2 — Subscription Billing
 
@@ -1925,7 +1928,7 @@ query CourseAccess($courseId: ID!) {
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    SAAAVI REVENUE STREAMS                        │
+│                    SAA9VI REVENUE STREAMS                        │
 ├──────────────────┬──────────────────┬───────────────────────────┤
 │  Stream 1        │  Stream 2        │  Stream 3                 │
 │  Subscription    │  Commission      │  Advertising              │
@@ -1946,7 +1949,7 @@ query CourseAccess($courseId: ID!) {
 ### Marketplace Data Architecture
 
 ```
-                    SAAAVI MARKETPLACE
+                    SAA9VI MARKETPLACE
 
 Per-tenant (existing)              Platform-level (Phase 3)
 ═════════════════════              ════════════════════════
