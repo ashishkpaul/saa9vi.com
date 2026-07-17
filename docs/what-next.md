@@ -1,8 +1,8 @@
 # What Next — Saa9vi Platform: Cline Development Prompt
 
-**Generated:** 2026-07-16
-**Based on:** ADR v1.8, RFC-001 v3, platform-story v4, all five plugin codebases, Vendure live docs (server-resource-requirements, horizontal-scaling)
-**Status of platform at time of writing:** Phase 1 commerce loop complete. Phase 1.5 substantially complete — FEAT-001, FEAT-002, Capacity Intelligence System, myLearningDashboard, GrantReaderService, rate limiting, custom domain Redis mapping, CorrelationInterceptor global scope, Tenant Registration System, and Customer Deletion System are all implemented. Phase 2 (subscriptions) unimplemented. The only remaining Phase 1.5 blockers are: (1) FEAT-002's DB migration step, (2) email verification for new tenant administrators, (3) rate limiting on `registerNewTenant`, (4) auto-provision ShippingMethod/StockLocation for new channels, and (5) end-to-end customer deletion testing across all three plugins.
+**Generated:** 2026-07-17
+**Based on:** ADR v1.9, RFC-001 v3, platform-story v4, all six plugin codebases, Vendure live docs (server-resource-requirements, horizontal-scaling)
+**Status of platform at time of writing:** Phase 1 commerce loop complete. Phase 1.5 substantially complete — FEAT-001, FEAT-002, Capacity Intelligence System, myLearningDashboard, GrantReaderService, rate limiting, custom domain Redis mapping, CorrelationInterceptor global scope, Tenant Registration System, Customer Deletion System, and Saa9vi login branding are all implemented. Phase 2 (subscriptions) unimplemented. The only remaining Phase 1.5 blockers are: (1) FEAT-002's DB migration step, (2) email verification for new tenant administrators, (3) rate limiting on `registerNewTenant`, (4) auto-provision ShippingMethod/StockLocation for new channels, and (5) end-to-end customer deletion testing across all three plugins.
 
 ---
 
@@ -392,6 +392,43 @@ Incoming HTTP request
 ## Task 12 — CorrelationInterceptor Global Scope Fix ✅ Done
 
 **Reference:** what-next Task 2 scope gap. The original problem — `APP_INTERCEPTOR` registered only inside `BigBlueButtonPlugin`, leaving `CmsPlugin`/`TenantPlugin`/`ReviewsPlugin` requests without a `correlationId` — is resolved. `PlatformTracingModule` is `@Global()` and registers `CorrelationInterceptor` as `APP_INTERCEPTOR` at the module level; `BigBlueButtonPlugin` now imports the module instead of registering the interceptor itself. All plugins inherit correlation context. Verified by confirming a `TenantPlugin` resolver call produces an `event_log` row with a `correlationId`.
+
+---
+
+## Task 13 — Platform Dashboard: CSS Override for Vendure Core Branding ✅ Done
+
+**Reference:** ADR-016 §Vendure Core Branding Override
+**Priority:** Phase 1 — login page branding completeness
+
+**Status:** ✅ Implemented. The Vendure dashboard shell renders a vendor branding footer (`"Vendure v3.x.x"`) outside the login extension slots. This element is not part of the `login.logo`, `login.beforeForm`, or `login.afterForm` slots — it is rendered by the core dashboard layout component.
+
+### Solution
+
+CSS override via `styles.css` imported in the dashboard extension entry point:
+
+```css
+/* Hide Vendure branding footer on login page */
+[data-vendure-branding] {
+    display: none !important;
+}
+```
+
+The `[data-vendure-branding]` attribute selector targets the core dashboard element without relying on fragile CSS class names that may change between Vendure versions. The Saa9vi-owned footer (`LoginFooter` component) remains visible below the login form.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `src/plugins/platform-dashboard/dashboard/styles.css` | **New** — CSS override for `[data-vendure-branding]` |
+| `src/plugins/platform-dashboard/dashboard/index.tsx` | Added `import './styles.css'` |
+| `docs/adr/platform-adr.md` | ADR-016 updated with Vendure Core Branding Override section |
+
+### Acceptance criteria
+
+- ✅ Vendure branding footer hidden on login page
+- ✅ Saa9vi-owned footer (`LoginFooter` component) remains visible
+- ✅ CSS uses `data-*` attribute selector (stable across Vendure versions) rather than fragile class names
+- ✅ `npm run build` passes cleanly
 
 ---
 

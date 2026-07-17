@@ -24,6 +24,7 @@ import { ReviewsPlugin } from "./plugins/reviews/reviews-plugin";
 import { LoadSimulationPlugin } from "./plugins/load-simulation-plugin/load-simulation.plugin";
 import { MarketplaceIndexerPlugin } from "./plugins/marketplace";
 import { CustomerSuspensionPlugin } from './plugins/customer-suspension/customer-suspension.plugin';
+import { PlatformDashboardPlugin } from './plugins/platform-dashboard/platform-dashboard.plugin';
 
 const IS_DEV = process.env.APP_ENV === "dev";
 const serverPort = +process.env.PORT || 3000;
@@ -33,7 +34,7 @@ apiOptions: {
     port: serverPort,
     adminApiPath: "admin-api",
     shopApiPath: "shop-api",
-    
+
     // Trust proxy headers from Nginx (use true in dev, 1 proxy hop in production)
     trustProxy: IS_DEV ? true : 1,
 
@@ -207,5 +208,6 @@ apiOptions: {
     LoadSimulationPlugin,
     MarketplaceIndexerPlugin,
     CustomerSuspensionPlugin.init({}),
+    PlatformDashboardPlugin.init({}),
 ],
 };

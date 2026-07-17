@@ -82,8 +82,9 @@ Saa9vi is a **multi-tenant education commerce platform** targeting Indian coachi
 | `ReviewsPlugin` | Product reviews, moderation, fraud detection, reputation aggregation | Beta |
 | `LoadSimulationPlugin` | Causal drift / load-test observability (BUG-006) | Production-near — Admin API only, Shop API vector closed (BUG-019) |
 | `MarketplaceIndexerPlugin` | Phase 3 cross-channel Elasticsearch discovery layer | Scaffold — instructor index live, session index not yet wired (see §14 Phase 3 gaps) |
+| `PlatformDashboardPlugin` | Saa9vi login branding — replaces Vendure logo, welcome message, and footer on the login page | Live — `login.logo`, `login.beforeForm`, `login.afterForm` customized via `defineDashboardExtension` |
 
-*Corrected in v1.7 — all six were registered in `vendure-config.ts` but only four appeared in this table.*
+*Corrected in v1.7 — all six were registered in `vendure-config.ts` but only four appeared in this table. PlatformDashboardPlugin added in v1.9.*
 
 ---
 
@@ -2049,6 +2050,108 @@ The Vendure example `multivendor-plugin` implements order splitting for a market
 Saa9vi uses the **Shopify/Kajabi model** — each academy is a completely isolated storefront. A student on `mehta.saa9vi.com` never sees products from `verma.saa9vi.com` in their cart. Cross-academy carts do not exist. The plugin's entire machinery (`OrderSellerStrategy`, `ShippingLineAssignmentStrategy`, aggregate order FSM, seller order splitting) solves a problem Saa9vi does not have.
 
 **Use the plugin as a reference for Vendure `Seller` API patterns. Do not install it.**
+
+---
+
+## ADR-016: Platform Dashboard Branding Layer
+
+**Status:** Active
+**Date:** 2026-07-17
+**Trigger:** Login page displayed generic "Vendure Admin" branding instead of Saa9vi identity. Multiple options existed for customization — modifying Vendure core, patching individual plugins, or creating a dedicated platform layer.
+
+---
+
+### Decision
+
+Saa9vi dashboard customization is implemented through `PlatformDashboardPlugin` — a dedicated plugin that owns all platform-level UI branding — rather than modifying Vendure core or individual domain plugins.
+
+---
+
+### Rationale
+
+1. **Preserves Vendure upgrade path.** Modifying Vendure core files (`node_modules/@vendure/dashboard`) would be overwritten on every `npm update`. The `defineDashboardExtension` API is the supported customization surface.
+
+2. **Keeps branding concerns separate.** Login page customization (`login.logo`, `login.beforeForm`, `login.afterForm`) is a platform identity concern, not a domain concern. Placing it in `BigBlueButtonPlugin` or `TenantPlugin` would couple branding to a specific domain plugin's lifecycle.
+
+3. **Supports future tenant-aware branding.** The `Channel = Tenant` invariant (INV-001) enables a future where the login page renders the tenant's own logo and academy name instead of the platform logo. `PlatformDashboardPlugin` is the natural home for this logic — it can inject a `TenantProfileService` dependency and resolve branding per channel without touching any domain plugin.
+
+4. **Avoids coupling BBB plugin with platform identity.** `BigBlueButtonPlugin` is a live-class infrastructure plugin. It should not know about Saa9vi's brand colors, logo SVG, or welcome copy. Cross-cutting platform identity concerns belong in a platform-level extension.
+
+---
+
+### Architecture
+
+```
+PlatformDashboardPlugin (platform-level, no domain dependencies)
+  └── dashboard/index.tsx
+        ├── import './styles.css'          // CSS override for Vendure core branding
+        └── defineDashboardExtension({
+              login: {
+                logo: Saa9viLogo,          // replaces Vendure logo
+                beforeForm: LoginWelcome,   // welcome message above form
+                afterForm: LoginFooter,     // footer below form
+              },
+            })
+```
+
+**Plugin registration** (in `vendure-config.ts`):
+
+```typescript
+PlatformDashboardPlugin.init({}),
+```
+
+**No `navSections` or `navMenuItem`** — this plugin customizes the login page only. Dashboard navigation is owned by domain plugins (BBB, CMS, Tenant, Reviews) per the DL-015 pattern.
+
+### Vendure Core Branding Override
+
+The Vendure dashboard shell renders a vendor branding footer (`"Vendure v3.x.x"`) outside the login extension slots. This element is not part of the `login.logo`, `login.beforeForm`, or `login.afterForm` slots — it is rendered by the core dashboard layout component.
+
+**Solution:** CSS override via `styles.css` imported in the dashboard extension entry point:
+
+```css
+/* Hide Vendure branding footer container */
+div[class*="gap-1.5"][class*="text-muted-foreground"] {
+    display: none !important;
+}
+```
+
+The selector targets the footer container by its Tailwind utility classes. In Vendure v3.6.x, the footer is rendered as:
+
+```html
+<div class="flex items-center justify-center gap-1.5 text-muted-foreground">
+    <svg .../>
+    <span>Vendure</span>
+    <span>v3.6.5</span>
+</div>
+```
+
+The `[class*="..."]` attribute selector approach avoids CSS escaping issues with the dot in `gap-1.5` while still being specific enough to not accidentally match other elements. The Saa9vi-owned footer (`LoginFooter` component) remains visible below the login form.
+
+**Note on `data-vendure-branding`:** The `[data-vendure-branding]` attribute does not exist in Vendure v3.6.x. The attribute-based selector was the original approach but was updated to use class-based matching after verification against the actual DOM.
+
+**Rationale:** The `defineDashboardExtension` API does not expose a slot for replacing the core dashboard footer. The CSS override is the minimal, maintainable approach. If a future Vendure version changes these class names, the fallback is acceptable (Vendure branding reappears) and can be addressed with an updated selector.
+
+---
+
+### Future Evolution
+
+| Phase | Capability | Mechanism |
+|---|---|---|
+| Current | Platform-level Saa9vi branding | Static components in `PlatformDashboardPlugin` |
+| Phase 1.5 | Environment-aware footer | `import.meta.env.MODE` — shows "Development Environment" in dev, "Education Commerce Operating System" in production |
+| Phase 2 | Tenant-aware login | `PlatformDashboardPlugin` injects `TenantProfileService`, resolves `channelId` from login URL hostname, renders tenant logo + academy name |
+| Phase 3 | Academy Console landing page | Post-login dashboard route (`/`) shows Saa9vi operating cockpit — live sessions, upcoming classes, student counts, BBB usage, recent orders |
+
+---
+
+### Alternatives Rejected
+
+| Alternative | Reason |
+|---|---|
+| Modify Vendure core `node_modules/@vendure/dashboard` | Overwritten on `npm update` — not maintainable |
+| Add login customization to `BigBlueButtonPlugin` | Couples platform identity to a domain plugin; violates separation of concerns |
+| Add login customization to `TenantPlugin` | Tenant plugin manages tenant data, not platform UI; wrong abstraction level |
+| Custom React app outside Vendure dashboard | Loses all Vendure admin functionality (orders, customers, products, etc.) — would require rebuilding the entire admin panel |
 
 ---
 

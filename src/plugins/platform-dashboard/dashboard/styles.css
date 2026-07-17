@@ -1,0 +1,21 @@
+/* Hide Vendure branding footer on login page
+ * The dashboard shell renders "Vendure v3.x.x" outside the login extension slots.
+ * In Vendure v3.6.x, the footer is rendered as:
+ *   <div class="flex items-center justify-center gap-1.5 text-muted-foreground">
+ *     <svg .../>
+ *     <span>Vendure</span>
+ *     <span>v3.6.5</span>
+ *   </div>
+ *
+ * This CSS hides the entire footer row by targeting the parent container
+ * that contains the "Vendure" text. The Saa9vi-owned footer (LoginFooter
+ * component) remains visible below the login form.
+ *
+ * Note: The [data-vendure-branding] attribute does not exist in Vendure v3.6.x.
+ * This selector uses the class pattern that the core dashboard renders.
+ */
+
+/* Hide the Vendure branding footer container */
+div[class*="gap-1.5"][class*="text-muted-foreground"] {
+    display: none !important;
+}
