@@ -1611,6 +1611,7 @@ Note: `CapacityExhaustedEvent` (BUG-013 / BB-004) is now implemented and publish
 - Public instructor profile pages in Next.js: ⚠️ pending — storefront rendering not started
 - CMS pages served from Next.js with SEO metadata: ⚠️ pending — `CmsShopResolver` exists but Next.js page renderer not implemented
 - `BbbEntitlement` admin UI: ✅ Added — GraphQL queries/mutations (`bbbEntitlements`, `createBbbEntitlement`, `deleteBbbEntitlement`) and `/bbb/entitlements` dashboard route registered
+- **Scheduled Sessions admin UI:** ✅ Added — Educational session management boundary introduced. Added dedicated `bbbScheduledSession(id)` query, `bbbScheduledSessions(organizationId)` list query, and `cancelBbbScheduledSession` mutation. Dashboard routes `/bbb/sessions` and `/bbb/sessions/$id` provide session lifecycle visibility through Session Information, Commercial Reference, and Live Runtime views while keeping Meeting infrastructure separate.
 - **FEAT-001** (`BbbOrganizationMembership`) and **FEAT-002** (`internal_overhead` capacity grant): ✅ Both code-complete (see §8A OP-007). FEAT-002's schema migration is still outstanding.
 
 **Phase 1.5 room-access migration (Interim State):**
