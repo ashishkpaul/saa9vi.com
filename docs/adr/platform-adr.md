@@ -651,7 +651,7 @@ Both `BbbServer.encryptedApiSecret` and `BbbMeeting.encryptedAttendeePassword` /
 
 ## 6A. Capacity Intelligence Architecture
 
-**Section-wide status (v1.7, code-verified): ⚠️ Designed, not implemented.** Nothing below exists in `bigbluebutton-plugin` as of this revision — `CapacityIntelligenceService`, `BbbCapacityAlertLog`, `BbbServer.capacity`, `poolCapacityDashboard`, and the `capacity-alert` job all return zero matches in the codebase. This section is the build spec; see `what-next.md` Task 8 for the implementation checklist.
+**Section-wide status (v1.8, code-verified): ✅ Fully implemented.** `CapacityIntelligenceService`, `BbbCapacityAlertLog`, `BbbServer.capacity`, `poolCapacityDashboard`, and the `capacity-alert` job are all live in `bigbluebutton-plugin`. See CI-001–CI-006 below for implementation details.
 
 **Origin:** Peer assessment 2026-06. Formalised from the Capacity Intelligence System proposal following architectural review.
 
@@ -863,20 +863,20 @@ Subscribers: `EmailPlugin` handler sends alert to platform admin email. Future: 
 **New entries in job queue table (§9 EQ-001):**
 
 ```
-bbb-capacity-alert    ← ⚠️ designed, not implemented (CI-005, 15-minute cron)
+bbb-capacity-alert    ← ✅ live — 15-minute cron, logs to BbbCapacityAlertLog, publishes CapacityAlertEvent (CI-005)
 ```
 
 **New entry in EventBus table (§9 EQ-002):**
 
 | Event | Publisher | Subscribers | Status |
 |---|---|---|---|
-| `CapacityAlertEvent` | `BbbCapacityAlertJob` | `EmailPlugin` | Phase 1.5 |
+| `CapacityAlertEvent` | `BbbCapacityAlertJob` | `EmailPlugin` | ✅ Live — published by 15-minute cron job |
 
 **Production Readiness Checklist (§13) — new items:**
 
-- [ ] `BbbServer.capacity` column migrated and set per server spec
-- [ ] `bbb-capacity-alert` job registered in `onModuleInit`
-- [ ] `poolCapacityDashboard` query verified in dashboard
+- [x] `BbbServer.capacity` column migrated and set per server spec ✅
+- [x] `bbb-capacity-alert` job registered in `onModuleInit` ✅
+- [x] `poolCapacityDashboard` query verified in dashboard ✅
 - [ ] Load estimation ratios tuned from first 2 weeks of `BbbUsageLedger` data
 
 ---
@@ -1306,7 +1306,7 @@ if (grant.sourceType === 'internal_overhead') {
 bbb-meeting-provisioning     ← ✅ live
 bbb-webhook-processor        ← ✅ live (INV-004)
 bbb-reconciliation           ← ✅ live (scheduled task)
-bbb-capacity-alert           ← ⚠️ designed, not implemented (CI-005 — see §6A, what-next Task 8)
+bbb-capacity-alert           ← ✅ live — 15-minute cron, logs to BbbCapacityAlertLog, publishes CapacityAlertEvent (CI-005)
 banner-activator             ← ✅ live — 1-minute cron, precomputes isCurrentlyActive (CMS-002)
 billing-invoice-generator    ← Phase 2
 usage-ledger-aggregator      ← Phase 2
@@ -1322,7 +1322,7 @@ All jobs are registered in `onModuleInit` via `JobQueueService.createQueue`. Job
 | `GrantConsumedEvent` | `BbbReconciliationService` | Email plugin (capacity alerts) | ✅ Live |
 | `RoomActivatedEvent` | `BbbRoomService` | `BbbMetricsService` | ✅ Live |
 | `CapacityExhaustedEvent` | `BbbReconciliationService` | Email plugin | ✅ Live |
-| `CapacityAlertEvent` | `BbbCapacityAlertJob` | Email plugin (→ SMS Phase 3) | ⚠️ Designed, not implemented (CI-005) |
+| `CapacityAlertEvent` | `BbbCapacityAlertJob` | Email plugin (→ SMS Phase 3) | ✅ Live — published by 15-minute cron job (CI-005) |
 | `TrialAttendanceRecordedEvent` | `BbbWebhookProcessor` | Analytics (Phase 3) | ⚠️ Future — no publisher yet |
 | `ArticleEvent` | `ArticleService` | Elasticsearch indexer (Phase 3) | ⚠️ Future |
 | `PageEvent` | `PageService` | Elasticsearch indexer (Phase 3) | ⚠️ Future |
@@ -1625,8 +1625,12 @@ Note: `CapacityExhaustedEvent` (BUG-013 / BB-004) is now implemented and publish
 1. Run the FEAT-002 schema migration (`npx vendure migrate create && npx vendure migrate up`) — code is complete, DB is not
 2. Build Next.js storefront pages for public instructor profiles and CMS pages
 3. `myLearningDashboard` Shop API query (ADR-013 INV-006) — see `what-next.md` Task 6
-4. Capacity Intelligence System (§6A, CI-001–006) — entirely unimplemented; see `what-next.md` Task 8
-5. Rate limiting (SEC-004) and custom-domain → channel-token Redis mapping (SEC-006) — last Phase 1 blockers, see `what-next.md` Tasks 10–11
+4. Rate limiting on `registerNewTenant` mutation (SEC-004) — see `what-next.md` Task 10
+5. Email verification flow for new tenant administrators — Phase 1.5
+6. Auto-provision ShippingMethod and StockLocation for new channels — Phase 1.5
+7. End-to-end customer deletion flow tested across all three plugins — Pre-production
+8. Load estimation ratios tuned from first 2 weeks of `BbbUsageLedger` data — Phase 1.5
+9. BUG-017 remediation — add `ChannelAware` to `ProductReview` — Phase 1.5
 
 ### Phase 2 — Subscription Billing
 
