@@ -83,7 +83,7 @@ Saa9vi is a **multi-tenant education commerce platform** targeting Indian coachi
 | `TenantPlugin` | Tenant profiles, instructors, media | Beta |
 | `ReviewsPlugin` | Product reviews, moderation, fraud detection, reputation aggregation | Beta |
 | `LoadSimulationPlugin` | Causal drift / load-test observability (BUG-006) | Production-near — Admin API only, Shop API vector closed (BUG-019) |
-| `MarketplaceIndexerPlugin` | Phase 3 cross-channel Elasticsearch discovery layer | Scaffold — instructor index live, session index not yet wired (see §14 Phase 3 gaps) |
+| `MarketplaceIndexerPlugin` | Phase 3 cross-channel Elasticsearch discovery layer | Production-ready projection layer — platform-level instructor/session discovery indexes, ranking, sponsored listing support |
 | `PlatformDashboardPlugin` | Saa9vi login branding — replaces Vendure logo, welcome message, and footer on the login page | Live — `login.logo`, `login.beforeForm`, `login.afterForm` customized via `defineDashboardExtension` |
 
 *Corrected in v1.7 — all six were registered in `vendure-config.ts` but only four appeared in this table. PlatformDashboardPlugin added in v1.9.*
@@ -654,7 +654,7 @@ Both `BbbServer.encryptedApiSecret` and `BbbMeeting.encryptedAttendeePassword` /
 
 ## 6A. Capacity Intelligence Architecture
 
-**Section-wide status (v1.8, code-verified): ✅ Fully implemented.** `CapacityIntelligenceService`, `BbbCapacityAlertLog`, `BbbServer.capacity`, `poolCapacityDashboard`, and the `capacity-alert` job are all live in `bigbluebutton-plugin`. See CI-001–CI-006 below for implementation details.
+**Section-wide status (v1.9, code-verified): ✅ Fully implemented.** `CapacityIntelligenceService`, `BbbCapacityAlertLog`, `BbbServer.capacity`, `poolCapacityDashboard`, and the `capacity-alert` job are all live in `bigbluebutton-plugin`. See CI-001–CI-006 below for implementation details.
 
 **Origin:** Peer assessment 2026-06. Formalised from the Capacity Intelligence System proposal following architectural review.
 
