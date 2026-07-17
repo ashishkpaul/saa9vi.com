@@ -208,6 +208,9 @@ export const adminApiExtensions = gql`
     trainerId: ID!
     activeMeetingId: ID
     productVariantId: ID
+    isTrial: Boolean!
+    visibility: String!
+    maxAttendees: Int
   }
 
   type BbbServerList {
@@ -259,6 +262,7 @@ export const adminApiExtensions = gql`
     ): BbbEnrollmentList!
     bbbProductVariantSearch(term: String!): [BbbProductVariantResult!]!
     bbbScheduledSessions(organizationId: ID!): [BbbScheduledSession!]!
+    bbbScheduledSession(id: ID!): BbbScheduledSession
     bbbTrialRegistrationsBySession(sessionId: ID!): [BbbTrialRegistration!]!
     bbbTrialRegistrationsByOrganization(organizationId: ID!): [BbbTrialRegistration!]!
     bbbEntitlements(options: BbbEntitlementListOptions): BbbEntitlementList!

@@ -911,6 +911,15 @@ export class BbbAdminResolver {
     return this.scheduledSessionService.findByOrganization(ctx, orgId);
   }
 
+  @Query()
+  @Allow(BbbAdminPermission.Permission)
+  bbbScheduledSession(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+  ) {
+    return this.scheduledSessionService.findById(ctx, id);
+  }
+
   @Mutation()
   @Allow(BbbAdminPermission.Permission)
   @Transaction()

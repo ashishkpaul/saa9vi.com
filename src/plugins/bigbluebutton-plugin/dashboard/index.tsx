@@ -1,4 +1,4 @@
-import { MonitorIcon, ServerIcon, BuildingIcon, DoorOpenIcon, VideoIcon, UsersIcon, ClipboardIcon, CreditCardIcon, ClipboardCheckIcon, KeyIcon } from 'lucide-react';
+import { MonitorIcon, ServerIcon, BuildingIcon, DoorOpenIcon, VideoIcon, UsersIcon, ClipboardIcon, CreditCardIcon, ClipboardCheckIcon, KeyIcon, CalendarIcon } from 'lucide-react';
 import { defineDashboardExtension } from '@vendure/dashboard';
 
 import { ServersList } from './routes/servers';
@@ -11,6 +11,8 @@ import { PlansList } from './routes/plans';
 import { TrialRegistrationsList } from './routes/trials/TrialRegistrationsList';
 import { EntitlementsList } from './routes/entitlements/EntitlementsList';
 import { MembershipsList } from './routes/memberships/MembershipsList';
+import { SessionsList } from './routes/sessions/SessionsList';
+import { sessionDetail } from './routes/sessions/SessionDetail';
 
 export default defineDashboardExtension({
     navSections: [
@@ -69,9 +71,10 @@ export default defineDashboardExtension({
             navMenuItem: { sectionId: 'bbb', title: 'Entitlements', icon: KeyIcon, id: 'bbb-entitlements', url: '/bbb/entitlements', requiresPermission: ['BBBAdmin'] },
         },
         {
-            path: '/bbb/memberships',
-            component: () => <MembershipsList />,
-            navMenuItem: { sectionId: 'bbb', title: 'Memberships', icon: UsersIcon, id: 'bbb-memberships', url: '/bbb/memberships', requiresPermission: ['BBBAdmin'] },
+            path: '/bbb/sessions',
+            component: () => <SessionsList />,
+            navMenuItem: { sectionId: 'bbb', title: 'Sessions', icon: CalendarIcon, id: 'bbb-sessions', url: '/bbb/sessions', requiresPermission: ['BBBAdmin'] },
         },
+        sessionDetail,
     ],
 });
