@@ -7,8 +7,10 @@ import {
   Parent,
 } from "@nestjs/graphql";
 import {
+  Allow,
   Ctx,
   Customer,
+  Permission,
   UserInputError,
   RequestContext,
   Transaction,
@@ -140,6 +142,7 @@ export class ProductReviewShopResolver {
     return this.reviewRequestService.validateToken(ctx, token);
   }
 
+  @Allow(Permission.Authenticated)
   @Transaction()
   @Mutation()
   async submitProductReview(
@@ -191,6 +194,7 @@ export class ProductReviewShopResolver {
     return result;
   }
 
+  @Allow(Permission.Authenticated)
   @Transaction()
   @Mutation()
   async voteOnReview(
@@ -267,6 +271,7 @@ export class ProductReviewShopResolver {
     return this.connection.getRepository(ctx, ProductReview).save(review);
   }
 
+  @Allow(Permission.Authenticated)
   @Transaction()
   @Mutation()
   async reportReview(

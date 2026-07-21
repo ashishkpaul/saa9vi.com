@@ -37,9 +37,9 @@ export class CustomerSuspensionAdminResolver {
 
   // ─── Platform-wide Mutations ─────────────────────────────────────────────────
 
-  @Mutation()
   @Allow(Permission.SuperAdmin)
   @Transaction()
+  @Mutation()
   async suspendCustomer(
     @Ctx() ctx: RequestContext,
     @Args("customerId") customerId: ID,
@@ -49,9 +49,9 @@ export class CustomerSuspensionAdminResolver {
     return true;
   }
 
-  @Mutation()
   @Allow(Permission.SuperAdmin)
   @Transaction()
+  @Mutation()
   async reinstateCustomer(
     @Ctx() ctx: RequestContext,
     @Args("customerId") customerId: ID,
@@ -62,9 +62,9 @@ export class CustomerSuspensionAdminResolver {
 
   // ─── Channel-scoped Mutations ────────────────────────────────────────────────
 
-  @Mutation()
   @Allow(CustomerSuspensionPermission.Permission)
   @Transaction()
+  @Mutation()
   async suspendCustomerInChannel(
     @Ctx() ctx: RequestContext,
     @Args("customerId") customerId: ID,
@@ -90,9 +90,9 @@ export class CustomerSuspensionAdminResolver {
     return true;
   }
 
-  @Mutation()
   @Allow(CustomerSuspensionPermission.Permission)
   @Transaction()
+  @Mutation()
   async reinstateCustomerInChannel(
     @Ctx() ctx: RequestContext,
     @Args("customerId") customerId: ID,

@@ -1,5 +1,5 @@
 import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
-import { Allow, Ctx, Permission, RequestContext, Transaction } from '@vendure/core';
+import { Allow, Ctx, Permission, RequestContext } from '@vendure/core';
 import { TenantProfileService } from '../services/tenant-profile.service';
 import { InstructorProfileService } from '../services/instructor-profile.service';
 import { MediaResourceService } from '../services/media-resource.service';
@@ -32,16 +32,17 @@ export class TenantShopResolver {
   @Query()
   @Allow(Permission.Public)
   tenantProfile(@Ctx() ctx: RequestContext) {
-    return this.tenantProfileService.findByChannelId(ctx, ctx.channelId as string);
+    return this.tenantProfileService.findByChannelId(ctx, ctx.channelId);
   }
 
   @Query()
   @Allow(Permission.Public)
-  mediaResources(@Ctx() ctx: RequestContext, @Args() args: { ownerType: string; ownerId: string }) {
-    return this.mediaResourceService.findAll(ctx, {
+  async mediaResources(@Ctx() ctx: RequestContext, @Args() args: { ownerType: string; ownerId: string }) {
+    const result = await this.mediaResourceService.findAll(ctx, {
       ownerType: args.ownerType,
       ownerId: args.ownerId,
     });
+    return result.items;
   }
 
   /**
@@ -52,10 +53,11 @@ export class TenantShopResolver {
    * and Administrator. See TenantRegistrationService for the full caveats
    * (also: no email verification yet).
    */
-  @Transaction()
   @Mutation()
   @Allow(Permission.Public)
   registerNewTenant(@Ctx() ctx: RequestContext, @Args('input') input: RegisterTenantInput) {
+    console.log('[TenantShopResolver] registerNewTenant resolver called, ctx.channelId:', ctx?.channelId);
+    console.log('[TenantShopResolver] registerNewTenant resolver input:', JSON.stringify(input));
     return this.tenantRegistrationService.registerTenant(ctx, input);
   }
 }

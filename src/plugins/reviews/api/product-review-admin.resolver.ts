@@ -83,9 +83,9 @@ export class ProductReviewAdminResolver {
     });
   }
 
+  @Allow(Permission.SuperAdmin, REVIEW_ADMIN_PERMISSION.Permission)
   @Transaction()
   @Mutation()
-  @Allow(Permission.SuperAdmin, REVIEW_ADMIN_PERMISSION.Permission)
   async updateProductReview(
     @Ctx() ctx: RequestContext,
     @Args() { input }: MutationUpdateProductReviewArgs,
@@ -105,9 +105,9 @@ export class ProductReviewAdminResolver {
       .save(updatedProductReview);
   }
 
+  @Allow(Permission.SuperAdmin, REVIEW_ADMIN_PERMISSION.Permission)
   @Transaction()
   @Mutation()
-  @Allow(Permission.SuperAdmin, REVIEW_ADMIN_PERMISSION.Permission)
   async approveProductReview(
     @Ctx() ctx: RequestContext,
     @Args() { id }: MutationApproveProductReviewArgs,
@@ -115,9 +115,9 @@ export class ProductReviewAdminResolver {
     return this.productReviewService.approveReview(ctx, id);
   }
 
+  @Allow(Permission.SuperAdmin, REVIEW_ADMIN_PERMISSION.Permission)
   @Transaction()
   @Mutation()
-  @Allow(Permission.SuperAdmin, REVIEW_ADMIN_PERMISSION.Permission)
   async rejectProductReview(
     @Ctx() ctx: RequestContext,
     @Args() { id }: MutationRejectProductReviewArgs,
@@ -125,9 +125,9 @@ export class ProductReviewAdminResolver {
     return this.productReviewService.rejectReview(ctx, id);
   }
 
+  @Allow(Permission.SuperAdmin, REVIEW_ADMIN_PERMISSION.Permission)
   @Transaction()
   @Mutation()
-  @Allow(Permission.SuperAdmin, REVIEW_ADMIN_PERMISSION.Permission)
   async hideProductReview(
     @Ctx() ctx: RequestContext,
     @Args() { id }: MutationHideProductReviewArgs,
@@ -135,9 +135,9 @@ export class ProductReviewAdminResolver {
     return this.productReviewService.hideReview(ctx, id);
   }
 
+  @Allow(Permission.SuperAdmin, REVIEW_ADMIN_PERMISSION.Permission)
   @Transaction()
   @Mutation()
-  @Allow(Permission.SuperAdmin, REVIEW_ADMIN_PERMISSION.Permission)
   async flagProductReview(
     @Ctx() ctx: RequestContext,
     @Args() { id, reason }: MutationFlagProductReviewArgs,
@@ -145,9 +145,9 @@ export class ProductReviewAdminResolver {
     return this.productReviewService.flagReview(ctx, id, reason ?? undefined);
   }
 
+  @Allow(Permission.SuperAdmin, REVIEW_ADMIN_PERMISSION.Permission)
   @Transaction()
   @Mutation()
-  @Allow(Permission.SuperAdmin, REVIEW_ADMIN_PERMISSION.Permission)
   async respondToReview(
     @Ctx() ctx: RequestContext,
     @Args() { id, response }: { id: string; response: string },

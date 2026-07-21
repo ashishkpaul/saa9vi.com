@@ -33,23 +33,23 @@ export class CmsAdminResolver {
         return this.articleService.findOne(ctx, args.id);
     }
 
+    @Allow(articlePermission.Create)
     @Transaction()
     @Mutation()
-    @Allow(articlePermission.Create)
     createArticle(@Ctx() ctx: RequestContext, @Args('input') input: CreateArticleInput) {
         return this.articleService.create(ctx, input);
     }
 
+    @Allow(articlePermission.Update)
     @Transaction()
     @Mutation()
-    @Allow(articlePermission.Update)
     updateArticle(@Ctx() ctx: RequestContext, @Args('input') input: UpdateArticleInput) {
         return this.articleService.update(ctx, input);
     }
 
+    @Allow(articlePermission.Delete)
     @Transaction()
     @Mutation()
-    @Allow(articlePermission.Delete)
     deleteArticle(@Ctx() ctx: RequestContext, @Args() args: { id: ID }) {
         return this.articleService.delete(ctx, args.id);
     }
@@ -68,23 +68,23 @@ export class CmsAdminResolver {
         return this.bannerService.findOne(ctx, args.id);
     }
 
+    @Allow(bannerPermission.Create)
     @Transaction()
     @Mutation()
-    @Allow(bannerPermission.Create)
     createBanner(@Ctx() ctx: RequestContext, @Args('input') input: CreateBannerInput) {
         return this.bannerService.create(ctx, input);
     }
 
+    @Allow(bannerPermission.Update)
     @Transaction()
     @Mutation()
-    @Allow(bannerPermission.Update)
     updateBanner(@Ctx() ctx: RequestContext, @Args('input') input: UpdateBannerInput) {
         return this.bannerService.update(ctx, input);
     }
 
+    @Allow(bannerPermission.Delete)
     @Transaction()
     @Mutation()
-    @Allow(bannerPermission.Delete)
     deleteBanner(@Ctx() ctx: RequestContext, @Args() args: { id: ID }) {
         return this.bannerService.delete(ctx, args.id);
     }
@@ -110,23 +110,23 @@ export class CmsAdminResolver {
         return this.pageService.findOne(ctx, args.id);
     }
 
+    @Allow(pagePermission.Create)
     @Transaction()
     @Mutation()
-    @Allow(pagePermission.Create)
     createPage(@Ctx() ctx: RequestContext, @Args('input') input: CreatePageInput) {
         return this.pageService.create(ctx, input);
     }
 
+    @Allow(pagePermission.Update)
     @Transaction()
     @Mutation()
-    @Allow(pagePermission.Update)
     updatePage(@Ctx() ctx: RequestContext, @Args('input') input: UpdatePageInput) {
         return this.pageService.update(ctx, input);
     }
 
+    @Allow(pagePermission.Delete)
     @Transaction()
     @Mutation()
-    @Allow(pagePermission.Delete)
     deletePage(@Ctx() ctx: RequestContext, @Args() args: { id: ID }) {
         return this.pageService.delete(ctx, args.id);
     }

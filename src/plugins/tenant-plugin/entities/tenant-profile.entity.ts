@@ -12,8 +12,8 @@ export class TenantProfile extends VendureEntity implements ChannelAware {
   channels: Channel[];
 
   @Index()
-  @Column()
-  channelId: string;
+  @Column('varchar', { length: 255 })
+  channelId: ID;
 
   @Column()
   businessName: string;

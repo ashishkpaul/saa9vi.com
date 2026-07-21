@@ -260,12 +260,27 @@ type Mutation {
 
   """Resets a Customer's password based on the provided token"""
   resetPassword(token: String!, password: String!): ResetPasswordResult!
+  registerNewTenant(input: RegisterTenantInput!): RegisterTenantResult!
   bbbJoinMeeting(meetingId: ID!, participantName: String!): String!
   bbbJoinRoom(roomId: ID!, participantName: String!): BbbJoinRoomResult!
 
   """Trainer starts a scheduled session - provisions a BBB meeting"""
   startScheduledSession(sessionId: ID!): BbbScheduledSessionPublic!
   registerForTrial(sessionId: ID!): BbbTrialRegistrationPublic!
+
+  """
+  Leave the current academy/channel. Deactivates entitlements and
+  unlinks customer from channel. Uses the active channel from the
+  request context — no channelId argument needed.
+  """
+  leaveAcademy: LeaveAcademyResult!
+
+  """
+  Permanently delete account from entire platform. Anonymizes all
+  personal data. Requires current password for confirmation.
+  Cannot be undone.
+  """
+  deleteMyAccount(password: String!): DeleteAccountResult!
   submitProductReview(input: SubmitProductReviewInput!): ProductReview!
   voteOnReview(id: ID!, vote: Boolean!): ProductReview!
   reportReview(input: ReportReviewInput!): Boolean!
@@ -849,6 +864,9 @@ enum Permission {
 
   """Allows access to review management features"""
   ReviewAdmin
+
+  """Allows suspending and reinstating customer accounts"""
+  ManageCustomerSuspension
 }
 
 enum SortOrder {
@@ -2107,7 +2125,7 @@ type Customer implements Node {
   addresses: [Address!]
   orders(options: OrderListOptions): OrderList!
   user: User
-  customFields: JSON
+  customFields: CustomerCustomFields
 }
 
 type CustomerList implements PaginatedList {
@@ -3874,6 +3892,22 @@ input MediaResourceListOptions {
   ownerId: String
 }
 
+input RegisterTenantInput {
+  businessName: String!
+  firstName: String!
+  lastName: String!
+  emailAddress: String!
+  password: String!
+  contactEmail: String
+  timezone: String
+}
+
+type RegisterTenantResult {
+  channelId: ID!
+  channelToken: String!
+  administratorId: ID!
+}
+
 type BbbMeetingPublic {
   id: ID!
   title: String!
@@ -3968,6 +4002,16 @@ type LearningCourse {
 
 type LearningDashboard {
   courses: [LearningCourse!]!
+}
+
+type LeaveAcademyResult {
+  success: Boolean!
+  message: String
+}
+
+type DeleteAccountResult {
+  success: Boolean!
+  message: String
 }
 
 type Article implements Node {
@@ -4266,6 +4310,7 @@ input CustomerFilterParameter {
   emailAddress: StringOperators
   _and: [CustomerFilterParameter!]
   _or: [CustomerFilterParameter!]
+  status: StringOperators
 }
 
 input CustomerSortParameter {
@@ -4277,6 +4322,7 @@ input CustomerSortParameter {
   lastName: SortOrder
   phoneNumber: SortOrder
   emailAddress: SortOrder
+  status: SortOrder
 }
 
 input OrderFilterParameter {
@@ -4516,6 +4562,10 @@ input ArticleSortParameter {
   excerpt: SortOrder
   body: SortOrder
   publishedAt: SortOrder
+}
+
+type CustomerCustomFields {
+  status: String
 }
 
 type ProductCustomFields {

@@ -22,16 +22,16 @@ export class TenantAdminResolver {
     return this.tenantProfileService.findByChannelId(ctx, channelId);
   }
 
+  @Allow(tenantProfilePermission.Update)
   @Transaction()
   @Mutation()
-  @Allow(tenantProfilePermission.Update)
   createTenantProfile(@Ctx() ctx: RequestContext, @Args('input') input: any) {
     return this.tenantProfileService.create(ctx, input);
   }
 
+  @Allow(tenantProfilePermission.Update)
   @Transaction()
   @Mutation()
-  @Allow(tenantProfilePermission.Update)
   updateTenantProfile(@Ctx() ctx: RequestContext, @Args('input') input: any) {
     return this.tenantProfileService.update(ctx, input.channelId, input);
   }
@@ -48,25 +48,26 @@ export class TenantAdminResolver {
     return this.instructorProfileService.findOne(ctx, args.id as string);
   }
 
+  @Allow(instructorProfilePermission.Create)
   @Transaction()
   @Mutation()
-  @Allow(instructorProfilePermission.Create)
   createInstructorProfile(@Ctx() ctx: RequestContext, @Args('input') input: any) {
     return this.instructorProfileService.create(ctx, input);
   }
 
+  @Allow(instructorProfilePermission.Update)
   @Transaction()
   @Mutation()
-  @Allow(instructorProfilePermission.Update)
   updateInstructorProfile(@Ctx() ctx: RequestContext, @Args('input') input: any) {
     return this.instructorProfileService.update(ctx, input.id, input);
   }
 
+  @Allow(instructorProfilePermission.Delete)
   @Transaction()
   @Mutation()
-  @Allow(instructorProfilePermission.Delete)
-  deleteInstructorProfile(@Ctx() ctx: RequestContext, @Args() args: { id: ID }) {
-    return this.instructorProfileService.delete(ctx, args.id as string);
+  async deleteInstructorProfile(@Ctx() ctx: RequestContext, @Args() args: { id: ID }) {
+    await this.instructorProfileService.delete(ctx, args.id as string);
+    return true;
   }
 
   @Query()
@@ -81,24 +82,25 @@ export class TenantAdminResolver {
     return this.mediaResourceService.findOne(ctx, args.id as string);
   }
 
+  @Allow(mediaResourcePermission.Create)
   @Transaction()
   @Mutation()
-  @Allow(mediaResourcePermission.Create)
   createMediaResource(@Ctx() ctx: RequestContext, @Args('input') input: any) {
     return this.mediaResourceService.create(ctx, input);
   }
 
+  @Allow(mediaResourcePermission.Update)
   @Transaction()
   @Mutation()
-  @Allow(mediaResourcePermission.Update)
   updateMediaResource(@Ctx() ctx: RequestContext, @Args('input') input: any) {
     return this.mediaResourceService.update(ctx, input.id, input);
   }
 
+  @Allow(mediaResourcePermission.Delete)
   @Transaction()
   @Mutation()
-  @Allow(mediaResourcePermission.Delete)
-  deleteMediaResource(@Ctx() ctx: RequestContext, @Args() args: { id: ID }) {
-    return this.mediaResourceService.delete(ctx, args.id as string);
+  async deleteMediaResource(@Ctx() ctx: RequestContext, @Args() args: { id: ID }) {
+    await this.mediaResourceService.delete(ctx, args.id as string);
+    return true;
   }
 }

@@ -10,11 +10,16 @@
     "build": "tsc",
     "build:dashboard": "vite build",
     "build:all": "npm run build && npm run build:dashboard",
+    "postinstall": "patch-package",
     "start:server": "node ./dist/index.js",
     "start:worker": "node ./dist/index-worker.js",
     "start": "concurrently npm:start:*",
     "deploy": "npm run build:all && npm run start",
-    "verify:invariants": "ts-node ./src/platform/invariants/cli.ts"
+    "verify:invariants": "ts-node ./src/platform/invariants/cli.ts",
+    "codegen": "graphql-codegen --config codegen.ts",
+    "test:e2e": "vitest run --config vitest.config.mts",
+    "test:e2e:watch": "vitest --config vitest.config.mts",
+    "test:e2e:tenant": "vitest run --config vitest.config.mts src/plugins/tenant-plugin/e2e/tenant-plugin.e2e-spec.ts"
   },
   "dependencies": {
     "@elastic/elasticsearch": "^9.4.2",
@@ -34,12 +39,21 @@
     "xml2js": "^0.6.2"
   },
   "devDependencies": {
+    "@graphql-codegen/cli": "7.2.0",
+    "@graphql-codegen/typescript": "6.1.0",
+    "@swc/core": "^1.15.43",
+    "@types/pg": "^8.20.0",
     "@types/xml2js": "^0.4.14",
     "@vendure/cli": "3.6.5",
+    "@vendure/testing": "3.6.5",
+    "@vitest/coverage-v8": "^4.1.10",
     "concurrently": "10.0.3",
+    "patch-package": "^8.0.1",
     "ts-node": "10.9.2",
     "typescript": "5.8.2",
-    "vite": "7.3.5"
+    "unplugin-swc": "^1.5.9",
+    "vite": "7.3.5",
+    "vitest": "^4.1.10"
   },
   "overrides": {
     "sharp": "0.33.5"

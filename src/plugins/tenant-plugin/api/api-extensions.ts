@@ -127,7 +127,7 @@ export const adminApiExtensions = gql`
 
     input CreateMediaResourceInput {
         ownerType: String!
-        ownerId: ID!
+        ownerId: String!
         type: String!
         url: String!
         title: String!
@@ -140,7 +140,7 @@ export const adminApiExtensions = gql`
     input UpdateMediaResourceInput {
         id: ID!
         ownerType: String
-        ownerId: ID
+        ownerId: String
         type: String
         url: String
         title: String
@@ -193,7 +193,7 @@ export const shopApiExtensions = gql`
         instructorProfile(slug: String!): InstructorProfile
         instructorProfiles(options: InstructorProfileListOptions): InstructorProfileList!
         tenantProfile: TenantProfile
-        mediaResources(ownerType: String!, ownerId: ID!): [MediaResource!]!
+        mediaResources(ownerType: String!, ownerId: String!): [MediaResource!]!
     }
 
     extend type Mutation {

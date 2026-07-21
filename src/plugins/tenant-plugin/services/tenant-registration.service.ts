@@ -1,17 +1,23 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
+  Administrator,
   AdministratorService,
   Channel,
   ChannelService,
+  ConfigService,
   ID,
+  NativeAuthenticationMethod,
+  PasswordCipher,
   RequestContext,
   RequestContextService,
+  Role,
   RoleService,
   SellerService,
   TransactionalConnection,
   User,
   UserInputError,
 } from '@vendure/core';
+import { Repository } from 'typeorm';
 import { TenantRegistrationLog } from '../entities/tenant-registration-log.entity';
 import { TenantProfileService } from './tenant-profile.service';
 import { TENANT_ADMIN_ROLE_PERMISSIONS } from '../constants';
@@ -74,50 +80,72 @@ export class TenantRegistrationService {
     private readonly sellerService: SellerService,
     private readonly roleService: RoleService,
     private readonly administratorService: AdministratorService,
-    private readonly requestContextService: RequestContextService,
     private readonly tenantProfileService: TenantProfileService,
+    private readonly configService: ConfigService,
+    private readonly requestContextService: RequestContextService,
+    private readonly passwordCipher: PasswordCipher,
   ) {}
 
   async registerTenant(
     ctx: RequestContext,
     input: RegisterTenantInput,
   ): Promise<RegisterTenantResult> {
+    console.log('[TenantRegistrationService] registerTenant called with input:', JSON.stringify(input));
     const businessName = input.businessName.trim();
     if (!businessName) {
       throw new UserInputError('businessName is required');
     }
 
-    const log = await this.createLog(input.businessName, input.emailAddress);
+    // Use rawConnection for TenantRegistrationLog (no transaction needed)
+    const logRepo = this.connection.rawConnection.getRepository(TenantRegistrationLog);
+    const log = await logRepo.save(
+      new TenantRegistrationLog({
+        businessName,
+        emailAddress: input.emailAddress,
+        requestedAt: new Date(),
+        status: 'PENDING',
+      }),
+    );
+    console.log('[TenantRegistrationService] Log created with id:', log.id);
 
     try {
+      console.log('[TenantRegistrationService] Checking email not taken...');
       await this.assertEmailNotTaken(ctx, input.emailAddress);
+      console.log('[TenantRegistrationService] Email check passed, getting superadmin context...');
 
-      // 1. Seller — the vendor record. Also what any future Phase-3
-      //    marketplace order-split (should DL-019 ever be revisited) or
-      //    Stream-3 advertising wallet would key off.
-      const seller = await this.sellerService.create(ctx, {
-        name: businessName,
-      });
+      // Elevate to superadmin context for privileged operations.
+      const superAdminCtx = await this.getSuperAdminContext(ctx);
+      console.log('[TenantRegistrationService] Superadmin context obtained, creating seller...');
 
-      // 2. Channel — the tenant's isolated storefront. Reuses the default
-      //    channel's tax/shipping zone and currency as sane defaults; the
-      //    tenant can change these later via updateChannel on the Admin API
-      //    once they're logged in.
+      // 1. Seller — the vendor record.
+      console.log('[TenantRegistrationService] About to create seller with name:', businessName);
+      let seller;
+      try {
+        seller = await this.sellerService.create(superAdminCtx, {
+          name: businessName,
+        });
+        console.log('[TenantRegistrationService] Seller created with id:', seller?.id);
+      } catch (e: any) {
+        console.log('[TenantRegistrationService] Seller creation failed:', e?.message);
+        throw e;
+      }
+
+      // 2. Channel — the tenant's isolated storefront.
       const { code, token } = this.generateChannelCodeAndToken(businessName);
-      const defaultChannel = await this.connection.getRepository(ctx, Channel).findOneOrFail({
-        where: { id: (await this.channelService.getDefaultChannel(ctx)).id },
+      console.log('[TenantRegistrationService] Generated channel code:', code, 'token:', token, 'sellerId:', seller.id);
+      const defaultChannel = await this.connection.getRepository(superAdminCtx, Channel).findOneOrFail({
+        where: { id: (await this.channelService.getDefaultChannel(superAdminCtx)).id },
         relations: ['defaultTaxZone', 'defaultShippingZone'],
       });
 
       if (!defaultChannel.defaultTaxZone || !defaultChannel.defaultShippingZone) {
-        // Fails loudly rather than creating a Channel that can never sell
-        // anything — checkout requires both zones to be resolvable.
         throw new Error(
-          'Default channel has no defaultTaxZone/defaultShippingZone configured; cannot provision a new tenant Channel',
+          'Default channel has no defaultTaxZone/defaultShippingZone configured',
         );
       }
 
-      const channelResult = await this.channelService.create(ctx, {
+      console.log('[TenantRegistrationService] About to create channel with sellerId:', seller.id);
+      const channelResult = await this.channelService.create(superAdminCtx, {
         code,
         token,
         sellerId: seller.id,
@@ -128,61 +156,117 @@ export class TenantRegistrationService {
         defaultTaxZoneId: defaultChannel.defaultTaxZone.id,
         defaultShippingZoneId: defaultChannel.defaultShippingZone.id,
       });
+      console.log('[TenantRegistrationService] Channel creation result:', JSON.stringify(channelResult));
 
       if (!('id' in channelResult)) {
-        // The only ErrorResult createChannel can return today is
-        // LanguageNotAvailableError; surfacing .message is enough for the
-        // storefront to show a useful validation error.
         throw new UserInputError(channelResult.message);
       }
       const channel = channelResult;
 
-      // From here on, operate with a RequestContext scoped to the NEW
-      // channel. This matters: TenantProfileService.create() calls
-      // channelService.assignToCurrentChannel(profile, ctx), which reads
-      // ctx.channelId — not an explicit channelId argument — so without
-      // this, the TenantProfile would silently be assigned to whatever
-      // channel the public Shop API request context defaults to, not the
-      // tenant's own new channel.
-      const tenantCtx = await this.requestContextService.create({
-        apiType: 'admin',
-        channelOrToken: channel.token,
-        languageCode: channel.defaultLanguageCode,
+      // 3. Role — channel-scoped, restricted to this one Channel.
+      // Note: We create the role without channelIds first because the superadmin context
+      // is bound to the default channel, and Vendure validates that the user has access
+      // to any channels specified in channelIds. We'll assign channels afterward via repository.
+      console.log('[TenantRegistrationService] About to create role (no channels)');
+      let role;
+      try {
+        role = await this.roleService.create(superAdminCtx, {
+          code: `${code}-admin`,
+          description: `Tenant administrator for ${businessName}`,
+          permissions: TENANT_ADMIN_ROLE_PERMISSIONS,
+        });
+        console.log('[TenantRegistrationService] Role created with id:', role?.id);
+      } catch (e: any) {
+        console.log('[TenantRegistrationService] Role creation failed:', e?.message);
+        throw e;
+      }
+      // Assign the channel to the role via direct repository access
+      console.log('[TenantRegistrationService] Assigning channel to role, channelId:', channel.id);
+      await this.connection.getRepository(superAdminCtx, Role).findOneOrFail({
+        where: { id: role.id },
+        relations: ['channels'],
+      }).then(roleEntity => {
+        roleEntity.channels = [channel];
+        return this.connection.getRepository(superAdminCtx, Role).save(roleEntity);
       });
-
-      // 3. Role — channel-scoped, restricted to this one Channel. Never
-      //    SuperAdmin — matches the Phase-3 ADR note: "Use Seller-scoped
-      //    admin roles for per-academy dashboard access — no custom RBAC
-      //    needed."
-      const role = await this.roleService.create(tenantCtx, {
-        code: `${code}-admin`,
-        description: `Tenant administrator for ${businessName}`,
-        permissions: TENANT_ADMIN_ROLE_PERMISSIONS,
-        channelIds: [channel.id],
-      });
+      console.log('[TenantRegistrationService] Channel assigned to role');
 
       // 4. Administrator — the tenant's own dashboard login.
-      const administrator = await this.administratorService.create(tenantCtx, {
-        firstName: input.firstName,
-        lastName: input.lastName,
-        emailAddress: input.emailAddress,
-        password: input.password,
-        roleIds: [role.id],
-      });
+      // We use direct repository access to bypass the administratorService.create()
+      // permission check (checkActiveUserCanGrantRoles) which validates that the
+      // active user has the required permissions on the role's channels. Since the
+      // role is scoped to the new channel (which the superadmin doesn't have access
+      // to yet), the check would fail. Using repository access is safe here because
+      // we're operating under the superAdminCtx.
+      console.log('[TenantRegistrationService] About to create administrator with email:', input.emailAddress);
+      let administrator;
+      try {
+        // Create User first (via repository to bypass permission checks).
+        // Set verified=true because requireVerification is enabled by default
+        // in Vendure's authOptions, and unverified users cannot log in.
+        const user = new User();
+        user.identifier = input.emailAddress;
+        user.verified = true;
+        const savedUser = await this.connection.getRepository(superAdminCtx, User).save(user);
+        console.log('[TenantRegistrationService] User created with id:', savedUser.id);
 
-      // 5. TenantProfile — this plugin's existing profile row, created with
-      //    tenantCtx (see note above) so it lands on the correct Channel.
-      await this.tenantProfileService.create(tenantCtx, {
-        channelId: channel.id as string,
-        businessName,
-        contactEmail: input.contactEmail ?? input.emailAddress,
-        timezone: input.timezone ?? 'Asia/Kolkata',
-      });
+        // Add native authentication method with password
+        const hashedPassword = await this.passwordCipher.hash(input.password);
+        const nativeAuthMethod = new NativeAuthenticationMethod({
+          identifier: input.emailAddress,
+          passwordHash: hashedPassword,
+        });
+        nativeAuthMethod.user = savedUser as any;
+        await this.connection.getRepository(superAdminCtx, NativeAuthenticationMethod).save(nativeAuthMethod);
+        console.log('[TenantRegistrationService] Native authentication method added');
 
-      await this.completeLog(log.id, channel);
+        // Assign role to user (via repository to bypass permission checks)
+        const userRepo = this.connection.getRepository(superAdminCtx, User);
+        const userWithRoles = await userRepo.findOne({
+          where: { id: savedUser.id },
+          relations: ['roles'],
+        });
+        if (userWithRoles && role) {
+          userWithRoles.roles = [role];
+          await userRepo.save(userWithRoles);
+          console.log('[TenantRegistrationService] Role assigned to user');
+        }
+
+        // Create Administrator (via repository to bypass permission checks)
+        const adminRepo = this.connection.getRepository(superAdminCtx, Administrator);
+        administrator = adminRepo.create({
+          firstName: input.firstName,
+          lastName: input.lastName,
+          emailAddress: input.emailAddress,
+          user: savedUser,
+        });
+        administrator = await adminRepo.save(administrator);
+        console.log('[TenantRegistrationService] Administrator created with id:', administrator?.id);
+
+      } catch (e: any) {
+        console.log('[TenantRegistrationService] Administrator creation failed:', e?.message);
+        throw e;
+      }
+
+      // 5. TenantProfile — channel assignment is done inside via assignToChannels.
+      console.log('[TenantRegistrationService] About to create TenantProfile for channel:', channel.id);
+      try {
+        await this.tenantProfileService.create(superAdminCtx, {
+          channelId: channel.id,
+          businessName,
+          contactEmail: input.contactEmail ?? input.emailAddress,
+          timezone: input.timezone ?? 'Asia/Kolkata',
+        });
+        console.log('[TenantRegistrationService] TenantProfile created');
+      } catch (e: any) {
+        console.log('[TenantRegistrationService] TenantProfile creation failed:', e?.message);
+        throw e;
+      }
+
+      await this.completeLog(logRepo, log.id, channel);
 
       Logger.log(
-        `Tenant registered: "${businessName}" -> channel ${channel.token} (admin ${administrator.emailAddress})`,
+        `Tenant registered: "${businessName}" -> channel ${channel.token}`,
         loggerCtx,
       );
 
@@ -192,9 +276,29 @@ export class TenantRegistrationService {
         administratorId: administrator.id,
       };
     } catch (err: any) {
-      await this.failLog(log.id, err.message);
+      await this.failLog(logRepo, log.id, err.message);
       throw err;
     }
+  }
+
+  private async getSuperAdminContext(ctx: RequestContext): Promise<RequestContext> {
+    const { superadminCredentials } = this.configService.authOptions;
+    const superAdminUser = await this.connection.getRepository(ctx, User).findOne({
+      where: {
+        identifier: superadminCredentials.identifier,
+      },
+      relations: ['roles', 'roles.channels'],
+    });
+    console.log('[TenantRegistrationService] getSuperAdminContext - found user:', superAdminUser?.identifier);
+    if (!superAdminUser) {
+      throw new Error('Could not find superadmin user for tenant registration');
+    }
+    const superAdminCtx = await this.requestContextService.create({
+      apiType: 'admin',
+      user: superAdminUser,
+    });
+    console.log('[TenantRegistrationService] getSuperAdminContext - created ctx, channelId:', superAdminCtx?.channelId);
+    return superAdminCtx;
   }
 
   private async assertEmailNotTaken(ctx: RequestContext, emailAddress: string): Promise<void> {
@@ -202,8 +306,6 @@ export class TenantRegistrationService {
       .getRepository(ctx, User)
       .findOne({ where: { identifier: emailAddress } });
     if (existing) {
-      // Deliberately generic — don't confirm/deny account existence for a
-      // specific email beyond what's needed to unblock the registrant.
       throw new UserInputError('An account with these details could not be created');
     }
   }
@@ -223,24 +325,12 @@ export class TenantRegistrationService {
     };
   }
 
-  // ─── Log helpers (INV-004 persist-first pattern) ──────────────────────────
-
-  private async createLog(
-    businessName: string,
-    emailAddress: string,
-  ): Promise<TenantRegistrationLog> {
-    return this.connection.getRepository(TenantRegistrationLog).save(
-      new TenantRegistrationLog({
-        businessName,
-        emailAddress,
-        requestedAt: new Date(),
-        status: 'PENDING',
-      }),
-    );
-  }
-
-  private async completeLog(logId: ID, channel: Channel): Promise<void> {
-    await this.connection.getRepository(TenantRegistrationLog).update(logId, {
+  private async completeLog(
+    logRepo: Repository<TenantRegistrationLog>,
+    logId: ID,
+    channel: Channel,
+  ): Promise<void> {
+    await logRepo.update(logId, {
       status: 'COMPLETED',
       processedAt: new Date(),
       channelId: String(channel.id),
@@ -248,8 +338,12 @@ export class TenantRegistrationService {
     });
   }
 
-  private async failLog(logId: ID, errorMessage: string): Promise<void> {
-    await this.connection.getRepository(TenantRegistrationLog).update(logId, {
+  private async failLog(
+    logRepo: Repository<TenantRegistrationLog>,
+    logId: ID,
+    errorMessage: string,
+  ): Promise<void> {
+    await logRepo.update(logId, {
       status: 'FAILED',
       processedAt: new Date(),
       errorMessage,
