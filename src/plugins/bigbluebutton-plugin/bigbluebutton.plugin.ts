@@ -165,7 +165,7 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
         handler: bbbWebhookRateLimiter,
       },
       {
-        // Rate limit Shop API mutations — registerForTrial (10/min), bbbJoinMeeting (10/min)
+        // Rate limit Shop API mutations — registerForTrial (10/min), bbbJoinMeeting (10/min), registerNewTenant (5/hour)
         route: "shop-api",
         handler: shopApiRateLimiter,
       },

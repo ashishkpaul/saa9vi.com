@@ -22,6 +22,8 @@
 > | v1.7 | Code audit pass: FEAT-001/FEAT-002 status corrected to code-complete; Capacity Intelligence corrected to "Designed, not implemented"; plugin inventory expanded to 6; instructor ES indexing status corrected; §6A/§2B moved to correct TOC positions. |
 > | v1.8 | BUG-015/CMS-002 fixed (banner-activator job). INV-013 (customer deletion) added. Tenant Registration System added. BUG-021 fixed. Status fields updated throughout. |
 >
+> **What changed in v1.10 (this revision):** (1) **Tenant Registration System** code quality pass — all `console.log` calls replaced with `Logger.debug(loggerCtx)` in `TenantRegistrationService` and `TenantShopResolver`. Full-input JSON dump (which logged plaintext email addresses) removed. (2) **Manual Administrator path documented** — added NOTE comment explaining why the repository-level Administrator creation path is kept (`checkActiveUserCanGrantRoles` limitation with new channels), with a flag that it'll need updating on Vendure upgrades. (3) **TS error fixed** — `channelResult.code` access moved after `'id' in channelResult` type guard so TypeScript correctly narrows the union type to `Channel`.
+>
 > **What changed in v1.9 (this revision):** (1) **Capacity Intelligence System** status updated from "Designed" to "Implemented" — CI-001 through CI-006 all code-complete, migrated, and verified. (2) **MarketplaceIndexerPlugin** status updated — all Phase 3 gaps closed (sponsored listing bid-boost, Bayesian rating, price from ProductVariant, ProductVariantEvent subscription, BullMQ job queue, Product custom fields). (3) **PlatformDashboardPlugin** added — Saa9vi login branding layer with CSS override for Vendure core branding footer (ADR-016). (4) **Phase Roadmap** updated — Phase 1.5 blockers corrected to reflect current state (myLearningDashboard, GrantReaderService, rate limiting, custom domain Redis mapping all done). (5) **ADR-017 (Observability Architecture)** added — formalizes correlation tracing, event causality validation, and runtime invariant monitoring. (6) **Phase 1.6 (Live Classroom Experience)** added to roadmap — elevates Scheduled Sessions follow-ups to a dedicated phase before subscriptions.
 
 ---
@@ -1351,15 +1353,16 @@ Failed jobs are never auto-removed. Ops console or admin query surfaces them for
 
 ### SEC-005: Rate Limiting ✅ Fixed
 
-Rate limiting applied to three surfaces via `express-rate-limit` middleware:
+Rate limiting applied to four surfaces via `express-rate-limit` middleware:
 
 | Surface | Limit | Mechanism |
 |---|---|---|
 | `POST /bbb/webhook` | 100 req/min per IP | `bbbWebhookRateLimiter` — IP-based, with allowlist via `BBB_WEBHOOK_ALLOWED_IPS` env var |
 | `registerForTrial` mutation | 10 req/min per customer | `shopApiRateLimiter` — inspects GraphQL body, keys by `activeUserId` or IP |
 | `bbbJoinMeeting` mutation | 10 req/min per customer | `shopApiRateLimiter` — same mechanism, separate counter |
+| `registerNewTenant` mutation | 5 req/hour per IP | `shopApiRateLimiter` — IP-keyed (no authenticated customer at registration time), 60-minute window |
 
-**Current status:** ✅ Implemented. Both limiters are Express middleware registered via `config.apiOptions.middleware` in the BBB plugin's `configuration()` function.
+**Current status:** ✅ Implemented. All limiters are Express middleware registered via `config.apiOptions.middleware` in the BBB plugin's `configuration()` function.
 
 ### SEC-006: Custom Domain TLS ✅ Fixed
 
@@ -1558,7 +1561,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 - [x] `registerNewTenant` Shop API mutation (`Permission.Public`) ✅
 - [x] `TENANT_ADMIN_ROLE_PERMISSIONS` constant with channel-scoped permissions ✅
 - [x] BUG-021 fixed — `channelOrToken` resolved to `channel.token` string ✅
-- [ ] Rate limiting on `registerNewTenant` mutation (SEC-004) ⚠️ Phase 1.5
+- [x] Rate limiting on `registerNewTenant` mutation (SEC-004) ✅ Done
 - [ ] Email verification flow for new tenant administrators ⚠️ Phase 1.5
 - [ ] Auto-provision ShippingMethod and StockLocation for new channels ⚠️ Phase 1.5
 

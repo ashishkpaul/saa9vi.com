@@ -1,8 +1,8 @@
 # What Next — Saa9vi Platform: Cline Development Prompt
 
-**Generated:** 2026-07-17
+**Generated:** 2026-07-23
 **Based on:** ADR v1.9, RFC-001 v3, platform-story v4, all six plugin codebases, Vendure live docs (server-resource-requirements, horizontal-scaling)
-**Status of platform at time of writing:** Phase 1 commerce loop complete. Phase 1.5 substantially complete — FEAT-001, FEAT-002, Capacity Intelligence System, myLearningDashboard, GrantReaderService, rate limiting, custom domain Redis mapping, CorrelationInterceptor global scope, Tenant Registration System, Customer Deletion System, and Saa9vi login branding are all implemented. Phase 2 (subscriptions) unimplemented. The only remaining Phase 1.5 blockers are: (1) FEAT-002's DB migration step, (2) email verification for new tenant administrators, (3) rate limiting on `registerNewTenant`, (4) auto-provision ShippingMethod/StockLocation for new channels, and (5) end-to-end customer deletion testing across all three plugins.
+**Status of platform at time of writing:** Phase 1 commerce loop complete. Phase 1.5 substantially complete — FEAT-001, FEAT-002, Capacity Intelligence System, myLearningDashboard, GrantReaderService, rate limiting, custom domain Redis mapping, CorrelationInterceptor global scope, Tenant Registration System, Customer Deletion System, and Saa9vi login branding are all implemented. Phase 2 (subscriptions) unimplemented. The only remaining Phase 1.5 blockers are: (1) FEAT-002's DB migration step, (2) email verification for new tenant administrators, (3) auto-provision ShippingMethod/StockLocation for new channels, and (4) end-to-end customer deletion testing across all three plugins.
 
 ---
 
@@ -52,6 +52,7 @@ The following tasks from the previous iteration have been verified complete in t
 | Task 5 — `InstructorProfile` Elasticsearch indexer | ✅ Done | `InstructorIndexerService` wired. ES client fixed to use `ELASTICSEARCH_NODE` + `ELASTICSEARCH_PASSWORD`. |
 | Task 12 — CorrelationInterceptor global scope fix | ✅ Done | `PlatformTracingModule` created with `@Global()` + `APP_INTERCEPTOR`. `BigBlueButtonPlugin` imports the module; `APP_INTERCEPTOR` removed from plugin providers. All plugins now inherit correlation context. |
 | Scheduled Sessions dashboard | ✅ Done | Added educational session management UI with organization-scoped listing, dedicated session detail query, cancellation workflow, and separation between Session domain and Meeting runtime infrastructure. |
+| **Tenant Registration System code quality pass** | ✅ Done | `console.log` → `Logger.debug(loggerCtx)` in `TenantRegistrationService` and `TenantShopResolver`. Full-input JSON dump (which logged plaintext email addresses) removed. Manual Administrator path documented with NOTE comment. TS error fixed — `channelResult.code` access moved after type guard. |
 
 ### Scheduled Sessions Follow-ups
 

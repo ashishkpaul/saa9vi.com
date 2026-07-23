@@ -77,6 +77,7 @@ function createMutationRateLimiter(
  * applies the appropriate rate limiter:
  *   - registerForTrial: 10 req/min per customer
  *   - bbbJoinMeeting: 10 req/min per customer
+ *   - registerNewTenant: 5 req/hour per IP (no authenticated customer at registration time)
  *
  * All other operations pass through unmodified.
  */
@@ -106,6 +107,15 @@ export const shopApiRateLimiter = (
   // bbbJoinMeeting: 10 req/min per customer
   if (query.includes("bbbJoinMeeting") || operationName === "bbbJoinMeeting") {
     const limiter = createMutationRateLimiter("bbbJoinMeeting", 10, 1);
+    limiter(req, res, next);
+    return;
+  }
+
+  // registerNewTenant: 5 req/hour per IP
+  // IP-keyed because no authenticated customer exists at registration time.
+  // Uses a 60-minute window to prevent rapid-fire tenant creation from a single IP.
+  if (query.includes("registerNewTenant") || operationName === "registerNewTenant") {
+    const limiter = createMutationRateLimiter("registerNewTenant", 5, 60);
     limiter(req, res, next);
     return;
   }
