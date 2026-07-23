@@ -90,7 +90,7 @@ export class TenantRegistrationService {
     ctx: RequestContext,
     input: RegisterTenantInput,
   ): Promise<RegisterTenantResult> {
-    console.log('[TenantRegistrationService] registerTenant called with input:', JSON.stringify(input));
+    Logger.debug(`registerTenant called for businessName="${input.businessName}" email="${input.emailAddress}"`, loggerCtx);
     const businessName = input.businessName.trim();
     if (!businessName) {
       throw new UserInputError('businessName is required');
@@ -106,33 +106,33 @@ export class TenantRegistrationService {
         status: 'PENDING',
       }),
     );
-    console.log('[TenantRegistrationService] Log created with id:', log.id);
+    Logger.debug(`Log created with id: ${log.id}`, loggerCtx);
 
     try {
-      console.log('[TenantRegistrationService] Checking email not taken...');
+      Logger.debug('Checking email not taken...', loggerCtx);
       await this.assertEmailNotTaken(ctx, input.emailAddress);
-      console.log('[TenantRegistrationService] Email check passed, getting superadmin context...');
+      Logger.debug('Email check passed, getting superadmin context...', loggerCtx);
 
       // Elevate to superadmin context for privileged operations.
       const superAdminCtx = await this.getSuperAdminContext(ctx);
-      console.log('[TenantRegistrationService] Superadmin context obtained, creating seller...');
+      Logger.debug('Superadmin context obtained, creating seller...', loggerCtx);
 
       // 1. Seller — the vendor record.
-      console.log('[TenantRegistrationService] About to create seller with name:', businessName);
+      Logger.debug(`About to create seller with name: ${businessName}`, loggerCtx);
       let seller;
       try {
         seller = await this.sellerService.create(superAdminCtx, {
           name: businessName,
         });
-        console.log('[TenantRegistrationService] Seller created with id:', seller?.id);
+        Logger.debug(`Seller created with id: ${seller?.id}`, loggerCtx);
       } catch (e: any) {
-        console.log('[TenantRegistrationService] Seller creation failed:', e?.message);
+        Logger.debug(`Seller creation failed: ${e?.message}`, loggerCtx);
         throw e;
       }
 
       // 2. Channel — the tenant's isolated storefront.
       const { code, token } = this.generateChannelCodeAndToken(businessName);
-      console.log('[TenantRegistrationService] Generated channel code:', code, 'token:', token, 'sellerId:', seller.id);
+      Logger.debug(`Generated channel code: ${code} token: ${token} sellerId: ${seller.id}`, loggerCtx);
       const defaultChannel = await this.connection.getRepository(superAdminCtx, Channel).findOneOrFail({
         where: { id: (await this.channelService.getDefaultChannel(superAdminCtx)).id },
         relations: ['defaultTaxZone', 'defaultShippingZone'],
@@ -144,7 +144,7 @@ export class TenantRegistrationService {
         );
       }
 
-      console.log('[TenantRegistrationService] About to create channel with sellerId:', seller.id);
+      Logger.debug(`About to create channel with sellerId: ${seller.id}`, loggerCtx);
       const channelResult = await this.channelService.create(superAdminCtx, {
         code,
         token,
@@ -156,18 +156,19 @@ export class TenantRegistrationService {
         defaultTaxZoneId: defaultChannel.defaultTaxZone.id,
         defaultShippingZoneId: defaultChannel.defaultShippingZone.id,
       });
-      console.log('[TenantRegistrationService] Channel creation result:', JSON.stringify(channelResult));
 
       if (!('id' in channelResult)) {
+        Logger.debug(`Channel creation failed: ${channelResult.message}`, loggerCtx);
         throw new UserInputError(channelResult.message);
       }
       const channel = channelResult;
+      Logger.debug(`Channel created: code=${channel.code} id=${channel.id}`, loggerCtx);
 
       // 3. Role — channel-scoped, restricted to this one Channel.
       // Note: We create the role without channelIds first because the superadmin context
       // is bound to the default channel, and Vendure validates that the user has access
       // to any channels specified in channelIds. We'll assign channels afterward via repository.
-      console.log('[TenantRegistrationService] About to create role (no channels)');
+      Logger.debug('About to create role (no channels)', loggerCtx);
       let role;
       try {
         role = await this.roleService.create(superAdminCtx, {
@@ -175,13 +176,13 @@ export class TenantRegistrationService {
           description: `Tenant administrator for ${businessName}`,
           permissions: TENANT_ADMIN_ROLE_PERMISSIONS,
         });
-        console.log('[TenantRegistrationService] Role created with id:', role?.id);
+        Logger.debug(`Role created with id: ${role?.id}`, loggerCtx);
       } catch (e: any) {
-        console.log('[TenantRegistrationService] Role creation failed:', e?.message);
+        Logger.debug(`Role creation failed: ${e?.message}`, loggerCtx);
         throw e;
       }
       // Assign the channel to the role via direct repository access
-      console.log('[TenantRegistrationService] Assigning channel to role, channelId:', channel.id);
+      Logger.debug(`Assigning channel to role, channelId: ${channel.id}`, loggerCtx);
       await this.connection.getRepository(superAdminCtx, Role).findOneOrFail({
         where: { id: role.id },
         relations: ['channels'],
@@ -189,7 +190,7 @@ export class TenantRegistrationService {
         roleEntity.channels = [channel];
         return this.connection.getRepository(superAdminCtx, Role).save(roleEntity);
       });
-      console.log('[TenantRegistrationService] Channel assigned to role');
+      Logger.debug('Channel assigned to role', loggerCtx);
 
       // 4. Administrator — the tenant's own dashboard login.
       // We use direct repository access to bypass the administratorService.create()
@@ -198,7 +199,16 @@ export class TenantRegistrationService {
       // role is scoped to the new channel (which the superadmin doesn't have access
       // to yet), the check would fail. Using repository access is safe here because
       // we're operating under the superAdminCtx.
-      console.log('[TenantRegistrationService] About to create administrator with email:', input.emailAddress);
+      //
+      // NOTE: This manual path duplicates framework internals (password hashing,
+      // user.verified, event publishing, etc.). It was kept because the original
+      // swap to administratorService.create()/roleService.create() with channelIds
+      // failed due to Vendure's checkActiveUserCanGrantRoles validation — the
+      // superadmin doesn't have access to the newly-created channel yet. If a
+      // future Vendure upgrade changes what Administrator creation requires,
+      // this code will need updating. The e2e test suite (27 tests) serves as
+      // the safety net for any such refactor.
+      Logger.debug(`About to create administrator with email: ${input.emailAddress}`, loggerCtx);
       let administrator;
       try {
         // Create User first (via repository to bypass permission checks).
@@ -208,7 +218,7 @@ export class TenantRegistrationService {
         user.identifier = input.emailAddress;
         user.verified = true;
         const savedUser = await this.connection.getRepository(superAdminCtx, User).save(user);
-        console.log('[TenantRegistrationService] User created with id:', savedUser.id);
+        Logger.debug(`User created with id: ${savedUser.id}`, loggerCtx);
 
         // Add native authentication method with password
         const hashedPassword = await this.passwordCipher.hash(input.password);
@@ -218,7 +228,7 @@ export class TenantRegistrationService {
         });
         nativeAuthMethod.user = savedUser as any;
         await this.connection.getRepository(superAdminCtx, NativeAuthenticationMethod).save(nativeAuthMethod);
-        console.log('[TenantRegistrationService] Native authentication method added');
+        Logger.debug('Native authentication method added', loggerCtx);
 
         // Assign role to user (via repository to bypass permission checks)
         const userRepo = this.connection.getRepository(superAdminCtx, User);
@@ -229,7 +239,7 @@ export class TenantRegistrationService {
         if (userWithRoles && role) {
           userWithRoles.roles = [role];
           await userRepo.save(userWithRoles);
-          console.log('[TenantRegistrationService] Role assigned to user');
+          Logger.debug('Role assigned to user', loggerCtx);
         }
 
         // Create Administrator (via repository to bypass permission checks)
@@ -241,15 +251,15 @@ export class TenantRegistrationService {
           user: savedUser,
         });
         administrator = await adminRepo.save(administrator);
-        console.log('[TenantRegistrationService] Administrator created with id:', administrator?.id);
+        Logger.debug(`Administrator created with id: ${administrator?.id}`, loggerCtx);
 
       } catch (e: any) {
-        console.log('[TenantRegistrationService] Administrator creation failed:', e?.message);
+        Logger.debug(`Administrator creation failed: ${e?.message}`, loggerCtx);
         throw e;
       }
 
       // 5. TenantProfile — channel assignment is done inside via assignToChannels.
-      console.log('[TenantRegistrationService] About to create TenantProfile for channel:', channel.id);
+      Logger.debug(`About to create TenantProfile for channel: ${channel.id}`, loggerCtx);
       try {
         await this.tenantProfileService.create(superAdminCtx, {
           channelId: channel.id,
@@ -257,9 +267,9 @@ export class TenantRegistrationService {
           contactEmail: input.contactEmail ?? input.emailAddress,
           timezone: input.timezone ?? 'Asia/Kolkata',
         });
-        console.log('[TenantRegistrationService] TenantProfile created');
+        Logger.debug('TenantProfile created', loggerCtx);
       } catch (e: any) {
-        console.log('[TenantRegistrationService] TenantProfile creation failed:', e?.message);
+        Logger.debug(`TenantProfile creation failed: ${e?.message}`, loggerCtx);
         throw e;
       }
 
@@ -289,7 +299,7 @@ export class TenantRegistrationService {
       },
       relations: ['roles', 'roles.channels'],
     });
-    console.log('[TenantRegistrationService] getSuperAdminContext - found user:', superAdminUser?.identifier);
+    Logger.debug(`getSuperAdminContext - found user: ${superAdminUser?.identifier}`, loggerCtx);
     if (!superAdminUser) {
       throw new Error('Could not find superadmin user for tenant registration');
     }
@@ -297,7 +307,7 @@ export class TenantRegistrationService {
       apiType: 'admin',
       user: superAdminUser,
     });
-    console.log('[TenantRegistrationService] getSuperAdminContext - created ctx, channelId:', superAdminCtx?.channelId);
+    Logger.debug(`getSuperAdminContext - created ctx, channelId: ${superAdminCtx?.channelId}`, loggerCtx);
     return superAdminCtx;
   }
 
