@@ -499,6 +499,62 @@ For a marketplace search result, the redirect URL should be built in this priori
 
 ---
 
+## Task 16 — CommissionLedger $0-Row Pattern (Phase 3 Prerequisite)
+
+**Reference:** ADR v1.10 §ADR-014 (Three-Stream Revenue Model), DL-030
+**Priority:** Phase 3 prerequisite — implement before marketplace goes live
+
+**Status:** ⚠️ Not yet implemented — design documented in ADR, code not started.
+
+### Problem
+
+`CommissionLedger` (Stream 2 — marketplace commission) must write a row for every `orderSource = 'marketplace'` order regardless of the current commission rate. When `MARKETPLACE_COMMISSION_PERCENT` is 0%, rows are written with `amountInPaise: 0` to preserve complete GMV history for future rate changes.
+
+This pattern applies **only** to Stream 2. Stream 1 (`BbbUsageLedger`) and Stream 3 (`AdSpendLedger`) are usage/opt-in driven — absence of rows in those streams correctly means no usage or no ad spend.
+
+### Design
+
+```typescript
+// CommissionLedger entity (append-only, INV-002 extended)
+@Entity('commission_ledger')
+export class CommissionLedger extends VendureEntity {
+  @Column() orderId: string;           // FK → Order.id
+  @Column() channelId: string;         // tenant channel
+  @Column() orderAmountInPaise: number; // total order value for GMV tracking
+  @Column() commissionPercent: number;  // rate applied (0 when env var is 0)
+  @Column() amountInPaise: number;      // computed: orderAmount × commissionPercent / 100
+  @Column() orderSource: string;        // 'marketplace' (always — only marketplace orders qualify)
+  @Column() occurredAt: Date;
+}
+```
+
+### Env var
+
+```bash
+# .env — controls Stream 2 only. Default 0. Does NOT affect Stream 1 or Stream 3.
+MARKETPLACE_COMMISSION_PERCENT=0
+```
+
+### Files to create/modify
+
+| File | Change |
+|---|---|
+| `src/plugins/marketplace/entities/commission-ledger.entity.ts` | **New** — `CommissionLedger` entity with append-only pattern |
+| `src/plugins/marketplace/services/commission-ledger.service.ts` | **New** — service with `recordCommission(order)` method |
+| `src/plugins/marketplace/listeners/commission-ledger.listener.ts` | **New** — subscribes to `OrderStateTransitionEvent` when `orderSource = 'marketplace'` and `toState = 'PaymentSettled'` |
+| `src/plugins/marketplace/marketplace-indexer.plugin.ts` | Register new entity, service, and listener |
+
+### Acceptance criteria
+
+- [ ] `CommissionLedger` row written for every `orderSource = 'marketplace'` order reaching `PaymentSettled`
+- [ ] Row written with `amountInPaise: 0` when `MARKETPLACE_COMMISSION_PERCENT` is 0% (or unset)
+- [ ] Row written with computed amount when `MARKETPLACE_COMMISSION_PERCENT` > 0
+- [ ] No rows written for `orderSource = 'direct'` or `orderSource = 'referral'` orders
+- [ ] `CommissionLedger` rows are never updated, never deleted (INV-002 extended)
+- [ ] `npm run build` passes cleanly
+
+---
+
 ## Priority Order Summary
 
 Execute in this order. Each task unlocks the next.

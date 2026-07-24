@@ -1759,6 +1759,7 @@ Deliverables:
 | DL-027 | Session products are assigned to the tenant channel only — never to the default channel | Vendure assigns new products to both the default channel and the current channel by default. Allowing session products on the default channel would create an accidental cross-tenant product listing visible to all storefronts. The marketplace ES index (`saa9vi_marketplace_sessions`) is the correct and only cross-tenant discovery surface. This must be enforced via a custom `ProductChannelMappingStrategy` or by explicitly removing default channel assignment in `BbbScheduledSessionService.create()`. | Allow default channel assignment (creates uncontrolled cross-tenant product leakage); per-tenant index only for discovery (acceptable for Phase 1.5; not scalable for Phase 3 marketplace) |
 | DL-028 | `TenantRegistrationLog` uses append-only pattern (INV-004) — PENDING → COMPLETED/FAILED transition only, rows never updated after final status | Registration is a critical platform operation. Append-only logging provides an immutable audit trail for every tenant creation attempt, enabling retrospective analysis of registration failures and abuse patterns. The pattern mirrors `BbbWebhookEvent` (DL-005) and `BbbUsageLedger` (DL-004). | Mutable `TenantRegistrationLog` (loses audit trail on failure); no log at all (no observability into registration failures) |
 | DL-029 | `TenantProfileService.create()` resolves `Channel` entity to `channel.token` string before passing to `RequestContextService.create()` | `RequestContextService.create()` expects a `channelToken: string` parameter. Passing a raw `Channel` entity object causes `TypeError: channelOrToken.startsWith is not a function` because the method calls `.startsWith()` on the first argument. The fix resolves the entity to its `.token` string property before the call. | Passing `Channel` entity directly (crashes with TypeError); refactoring `RequestContextService.create()` to accept both types (adds complexity to a Vendure core method) |
+| DL-030 | `CommissionLedger` always writes a row per marketplace order, even at 0% rate ($0 rows). Env var is `MARKETPLACE_COMMISSION_PERCENT` (not `PLATFORM_FEE_PERCENT`). | Three-stream revenue model has three separate control mechanisms. Stream 2 (marketplace commission) is the only one where "the event happened but the rate is zero" is a recurring state worth recording. Writing $0 rows preserves complete `orderSource = 'marketplace'` GMV history so future rate changes have full historical data. The env var name must be unambiguous about which stream it controls — `PLATFORM_FEE_PERCENT` would incorrectly imply it also controls Stream 1 (tenant billing) or Stream 3 (advertising). | `PLATFORM_FEE_PERCENT` (ambiguous — reads like it controls all three streams); not writing $0 rows (loses GMV history when rate is turned up later); applying $0-row pattern to Stream 1 or 3 (incorrect — absence of rows in those streams correctly means no usage/no ad spend) |
 
 ---
 
@@ -1945,18 +1946,37 @@ query CourseAccess($courseId: ID!) {
 │                    SAA9VI REVENUE STREAMS                        │
 ├──────────────────┬──────────────────┬───────────────────────────┤
 │  Stream 1        │  Stream 2        │  Stream 3                 │
-│  Subscription    │  Commission      │  Advertising              │
+│  Tenant Billing  │  Marketplace     │  Advertising              │
+│  (BBB usage +    │  Commission      │                           │
+│   portal/hosting)│                  │                           │
 │                  │                  │                           │
-│  ₹999–₹4999/mo  │  5–15% of        │  A: Sponsored listings    │
-│  per academy     │  marketplace     │     (CPC/CPM/flat bid)    │
-│  (Phase 2)       │  orders only     │  B: Marketplace banners   │
-│                  │  (Phase 3)       │     (prepaid wallet)      │
-│  Predictable     │  Growth-aligned  │  Self-serve, scalable     │
-│  recurring base  │  platform moat   │  (Phase 3)                │
+│  Usage-driven    │  % of order,     │  Opt-in, tenant-initiated │
+│  from day one    │  only when       │  via AdWallet top-up      │
+│  via             │  orderSource =   │  (Juspay)                 │
+│  BbbCapacityGrant│  'marketplace'   │                           │
+│  /BbbUsageLedger │                  │                           │
+│                  │                  │                           │
+│  Control: none   │  Control:        │  Control: none (tenant    │
+│  (always on)     │  MARKETPLACE_    │  decides whether to       │
+│                  │  COMMISSION_     │  advertise)               │
+│                  │  PERCENT env var │                           │
+│                  │  (default 0%)    │                           │
+│                  │                  │                           │
+│  Ledger: rows    │  Ledger: ALWAYS  │  Ledger: rows only on     │
+│  only on actual  │  write a row per │  actual impression/click/ │
+│  usage (no usage │  marketplace     │  conversion for tenants   │
+│  = no rows,      │  order, even at  │  who opted in (no rows =  │
+│  which is        │  0% — $0 rows    │  no ad spend, correct)    │
+│  correct)        │  preserve GMV    │                           │
+│                  │  history for     │                           │
+│                  │  future rate     │                           │
+│                  │  changes         │                           │
 └──────────────────┴──────────────────┴───────────────────────────┘
 ```
 
 **Key property:** Zero commission on direct traffic. A student who goes directly to `mehta.saa9vi.com` never generates a platform commission. Only `orderSource = 'marketplace'` orders are subject to Stream 2. This is the merchant-friendly design that prevents churn.
+
+**CommissionLedger $0-row pattern (Stream 2 only):** `CommissionLedger` rows are written for every marketplace order regardless of the current `MARKETPLACE_COMMISSION_PERCENT` rate. When the rate is 0%, rows are written with `amountInPaise: 0`. This preserves complete `orderSource = 'marketplace'` GMV history so that when the rate is turned up in the future, every qualifying order is already recorded. This pattern does **not** apply to Stream 1 (`BbbUsageLedger` — usage-driven, absence of rows correctly means no usage) or Stream 3 (`AdSpendLedger` — opt-in only, absence of rows correctly means no ad spend). See DL-030.
 
 ---
 

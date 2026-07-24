@@ -526,8 +526,8 @@ The thing to notice across all of this: the storefront makes zero decisions. It 
 ### Student purchases the full course — commission attributed
 
 * **Actor:** Student
-* **Description:** After the trial, the student buys the React Masterclass. At checkout, the storefront passes `utm_source=marketplace` as a raw parameter to the order mutation; Vendure-side `OrderProcess` logic stamps `Order.customFields.orderSource = 'marketplace'` (INV-008 — storefront never makes this business decision). `BbbOrderFulfillmentListener` creates the `BbbEntitlement` as normal. Separately, `CommissionLedger` records a platform fee (e.g., 10% of ₹499 = ₹49.90) against this order.
-* **System/Code Detail:** Storefront passes `referrerCode` or `utm_source` → Vendure `OrderProcess` classifies and stamps `orderSource`. `CommissionLedger` (append-only, Phase 3). Zero changes to Phase 1 fulfillment path.
+* **Description:** After the trial, the student buys the React Masterclass. At checkout, the storefront passes `utm_source=marketplace` as a raw parameter to the order mutation; Vendure-side `OrderProcess` logic stamps `Order.customFields.orderSource = 'marketplace'` (INV-008 — storefront never makes this business decision). `BbbOrderFulfillmentListener` creates the `BbbEntitlement` as normal. Separately, `CommissionLedger` records a commission row against this order — **always**, even if the current `MARKETPLACE_COMMISSION_PERCENT` env var is 0%. When the rate is 0%, the row is written with `amountInPaise: 0` to preserve complete GMV history for when the rate is turned up later.
+* **System/Code Detail:** Storefront passes `referrerCode` or `utm_source` → Vendure `OrderProcess` classifies and stamps `orderSource`. `CommissionLedger` (append-only, Phase 3) — $0-row pattern per DL-030. Zero changes to Phase 1 fulfillment path.
 
 ---
 
