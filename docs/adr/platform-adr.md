@@ -25,6 +25,8 @@
 > **What changed in v1.10 (this revision):** (1) **Tenant Registration System** code quality pass — all `console.log` calls replaced with `Logger.debug(loggerCtx)` in `TenantRegistrationService` and `TenantShopResolver`. Full-input JSON dump (which logged plaintext email addresses) removed. (2) **Manual Administrator path documented** — added NOTE comment explaining why the repository-level Administrator creation path is kept (`checkActiveUserCanGrantRoles` limitation with new channels), with a flag that it'll need updating on Vendure upgrades. (3) **TS error fixed** — `channelResult.code` access moved after `'id' in channelResult` type guard so TypeScript correctly narrows the union type to `Channel`.
 >
 > **What changed in v1.9 (this revision):** (1) **Capacity Intelligence System** status updated from "Designed" to "Implemented" — CI-001 through CI-006 all code-complete, migrated, and verified. (2) **MarketplaceIndexerPlugin** status updated — all Phase 3 gaps closed (sponsored listing bid-boost, Bayesian rating, price from ProductVariant, ProductVariantEvent subscription, BullMQ job queue, Product custom fields). (3) **PlatformDashboardPlugin** added — Saa9vi login branding layer with CSS override for Vendure core branding footer (ADR-016). (4) **Phase Roadmap** updated — Phase 1.5 blockers corrected to reflect current state (myLearningDashboard, GrantReaderService, rate limiting, custom domain Redis mapping all done). (5) **ADR-017 (Observability Architecture)** added — formalizes correlation tracing, event causality validation, and runtime invariant monitoring. (6) **Phase 1.6 (Live Classroom Experience)** added to roadmap — elevates Scheduled Sessions follow-ups to a dedicated phase before subscriptions.
+>
+> **What changed in v1.10 (this revision):** (1) **BUG-022 (Entitlement/Enrollment read mismatch)** — code-audit discovered that `bbbRoomStatus`, `myBbbRooms`, and `myBbbEnrollments` read from `BbbEnrollment` only, while `BbbOrderFulfillmentListener` writes `BbbEntitlement` for room purchases. A paying customer's room never appears in their dashboard and `bbbRoomStatus` throws `ForbiddenError`, even though `bbbJoinRoom` would work. Documented as P0. (2) **BUG-023 (Marketplace indexer broken redirect fields)** — `academySlug` hardcoded to `''`, `channelToken` set to raw `channelId` instead of `Channel.token`, `customDomain` not indexed. Marketplace search results have no usable redirect URL. (3) **BUG-024 (Auto-provisioning gap expanded)** — `ShippingMethod`/`StockLocation` gap confirmed still open; `PaymentMethod` added to the same list since a freshly registered tenant has zero working payment methods. (4) **AC-002 corrected** — `BbbOrderFulfillmentListener` room product path now writes `BbbEntitlement { type: bbb_room }`, not `BbbEnrollment`. The legacy `bbbFulfillmentHandler` still writes `BbbEnrollment` + `BbbCapacityGrant` as a parallel path. (5) **Phase Roadmap** updated — BUG-022 and BUG-023 added as Phase 1.5 blockers.
 
 ---
 
@@ -369,7 +371,7 @@ export class BbbEntitlement extends VendureEntity {
 1. `BbbOrderFulfillmentListener` creates Entitlement for session purchases ✅
 2. `TrialRegistrationService.register()` creates Entitlement for trial registrations ✅
 3. `BbbMeetingService.getJoinUrl()` checks Entitlement for session-based attendees (membership fallback) ✅
-4. `BbbMeetingService.joinRoom()` still uses legacy `BbbEnrollment` for room access ✅ (interim)
+4. `BbbMeetingService.joinRoom()` Gate 3 checks `BbbEntitlement { type: 'bbb_room' }` for room access ✅ (legacy `BbbEnrollment` read paths in `bbbRoomStatus`, `myBbbRooms`, `myBbbEnrollments` not yet migrated — see BUG-022)
 
 ### AC-002: Commerce Loop (Checkout → Access) ✅ Fixed
 
@@ -382,13 +384,14 @@ Student adds BbbScheduledSession to cart
       → findBbbScheduledSessionByProductVariantId(productVariantId) — FIRST
       → create Entitlement { type: 'bbb_session', resourceId: session.id, customerId, source: 'purchase' }
       → continue to next line (skip room path)
-  → fallback for room products: productVariantId → BbbProductAccess → BbbRoom → BbbEnrollment (legacy)
+  → fallback for room products: productVariantId → BbbProductAccess → BbbRoom
+      → create Entitlement { type: 'bbb_room', resourceId: room.id, customerId, source: 'purchase' }
   → Student joins: BbbMeetingService.getJoinUrl()
       → entitlementService.hasAccess(ctx, customerId, 'bbb_session', sessionId)
       → if granted: attendee join URL
 ```
 
-**Current status:** ✅ Dual-path fulfillment code-verified. `BbbOrderFulfillmentListener` uses `TransactionalConnection` to look up `BbbScheduledSession` by `productVariantId` first; room products fall through to legacy path.
+**Current status:** ✅ Dual-path fulfillment code-verified. `BbbOrderFulfillmentListener` uses `TransactionalConnection` to look up `BbbScheduledSession` by `productVariantId` first; room products create `BbbEntitlement { type: 'bbb_room' }`. A legacy parallel path (`bbbFulfillmentHandler`) also writes `BbbEnrollment` + `BbbCapacityGrant` via the classic Vendure FulfillmentHandler — this is redundant and creates a read/write mismatch (see BUG-022) since `bbbRoomStatus`, `myBbbRooms`, and `myBbbEnrollments` still read from `BbbEnrollment` only.
 
 ### AC-003: Trial Session Funnel (Zero-Price Entitlement) ✅ Fixed
 
@@ -1509,6 +1512,9 @@ Caddy upstream health check polls `/health` every 10 seconds.
 | BUG-019 | High | `LoadSimulationPlugin` / `load-simulation.plugin.ts` | `runLoadTest` is exposed on the public Shop API via `shopApiExtensions`, creating a DoS vector — any unauthenticated caller can trigger a sustained load test against the platform | ✅ Fixed — moved to `adminApiExtensions`, `@Allow(Permission.SuperAdmin)` applied to resolver |
 | BUG-020 | Medium | `CausalMapper` / `bbb-admin.schema.ts` | `SIMULATE_BBB_WEBHOOK_MUTATION` is referenced in `CausalMapper` but `simulateBbbWebhook` resolver does not exist in `BbbAdminResolver` — load tests silently fail on every `BbbWebhookEvent` lifecycle step | ✅ Fixed — `BbbWebhookEvent` step returns `isPending: true` in `CausalMapper`; skipped cleanly by `LoadOrchestrator` until resolver is implemented |
 | BUG-021 | High | `TenantProfileService.create()` | `channelOrToken` parameter passed as raw `Channel` entity object to `RequestContextService.create()` instead of `channel.token` string — causes `TypeError: channelOrToken.startsWith is not a function` on tenant profile creation | ✅ Fixed — resolved `Channel` entity to `channel.token` string before passing to `RequestContextService.create()` |
+| BUG-022 | P0 | `bbb-shop.resolver.ts` | `bbbRoomStatus`, `myBbbRooms`, and `myBbbEnrollments` read from `BbbEnrollment` only, while `BbbOrderFulfillmentListener` writes `BbbEntitlement` for room purchases. A paying customer's room never appears in their dashboard and `bbbRoomStatus` throws `ForbiddenError`, even though `bbbJoinRoom` would work. | ⚠️ Pending — add `entitlementService.hasAccess(ctx, customerId, "bbb_room", id)` checks to `bbbRoomStatus` and `myBbbRooms`; deprecate `myBbbEnrollments` in favor of `myLearningDashboard` |
+| BUG-023 | P1 | `marketplace-indexer.service.ts` | `academySlug` hardcoded to `''`, `channelToken` set to raw `channelId` instead of `Channel.token`, `customDomain` not indexed. Marketplace search results have no usable redirect URL. | ⚠️ Pending — fetch `BbbOrganization.slug` from session.organization relation, query `Channel.token` by channelId, index `TenantProfile.customDomain` |
+| BUG-024 | P2 | `TenantRegistrationService` | `ShippingMethod`/`StockLocation`/`PaymentMethod` not auto-provisioned for new channels. A freshly registered tenant has zero working payment methods and shipping configurations. | ⚠️ Pending — extend `TenantRegistrationService` to auto-provision default `ShippingMethod`, `StockLocation`, and `PaymentMethod` for new channels |
 
 ---
 
@@ -1639,6 +1645,9 @@ Note: `CapacityExhaustedEvent` (BUG-013 / BB-004) is now implemented and publish
 8. End-to-end customer deletion flow tested across all three plugins — Pre-production
 9. Load estimation ratios tuned from first 2 weeks of `BbbUsageLedger` data — Phase 1.5
 10. BUG-017 remediation — add `ChannelAware` to `ProductReview` — Phase 1.5
+11. **BUG-022 (P0)** — Fix `bbbRoomStatus`, `myBbbRooms`, `myBbbEnrollments` to read from `BbbEntitlement` in addition to `BbbEnrollment` — Phase 1.5
+12. **BUG-023 (P1)** — Fix `MarketplaceIndexerService` to populate `academySlug` from `BbbOrganization.slug`, `channelToken` from `Channel.token`, and index `TenantProfile.customDomain` — Phase 1.5
+13. **BUG-024 (P2)** — Auto-provision `PaymentMethod` in addition to `ShippingMethod`/`StockLocation` for new channels — Phase 1.5
 
 ### Phase 2 — Subscription Billing
 

@@ -433,11 +433,81 @@ The `[data-vendure-branding]` attribute selector targets the core dashboard elem
 
 ---
 
+## Task 14 — BUG-022: Fix Entitlement/Enrollment Read Mismatch (P0)
+
+**Reference:** ADR v1.10 §12 BUG-022
+**Priority:** P0 — blocks room-purchase customers from seeing their rooms in the dashboard
+
+**Status:** ⚠️ Pending — code-audit confirmed, not yet fixed.
+
+### Problem
+
+`bbbRoomStatus`, `myBbbRooms`, and `myBbbEnrollments` read from `BbbEnrollment` only, while `BbbOrderFulfillmentListener` writes `BbbEntitlement` for room purchases. A paying customer's room never appears in their dashboard and `bbbRoomStatus` throws `ForbiddenError`, even though `bbbJoinRoom` would work.
+
+### Files to fix
+
+| File | Lines | Change |
+|---|---|---|
+| `src/plugins/bigbluebutton-plugin/api/bbb-shop.resolver.ts` | 161-175 (`bbbRoomStatus`) | Add `entitlementService.hasAccess(ctx, customerId, "bbb_room", id)` as a second gate alongside the `BbbEnrollment` check |
+| `src/plugins/bigbluebutton-plugin/api/bbb-shop.resolver.ts` | 88-146 (`myBbbRooms`) | Add a second query for rooms the customer has `BbbEntitlement { type: bbb_room }` for, merge with enrollment-based rooms |
+| `src/plugins/bigbluebutton-plugin/api/bbb-shop.resolver.ts` | 214-258 (`myBbbEnrollments`) | Either add entitlement-based rooms or deprecate this query in favor of `myLearningDashboard` |
+
+### Acceptance criteria
+
+- [ ] `bbbRoomStatus` returns the room for customers with a valid `BbbEntitlement { type: bbb_room }` even when no `BbbEnrollment` exists
+- [ ] `myBbbRooms` includes rooms the customer has entitlement-based access to
+- [ ] `myBbbEnrollments` either includes entitlement-based rooms or is deprecated with a migration path
+- [ ] `npm run build` passes cleanly
+
+---
+
+## Task 15 — BUG-023: Fix Marketplace Indexer Redirect Fields (P1)
+
+**Reference:** ADR v1.10 §12 BUG-023
+**Priority:** P1 — marketplace search results have no usable redirect URL
+
+**Status:** ⚠️ Pending — code-audit confirmed, not yet fixed.
+
+### Problem
+
+`academySlug` is hardcoded to `''`, `channelToken` is set to raw `channelId` instead of `Channel.token`, and `customDomain` is not indexed. Marketplace search results have no usable redirect URL.
+
+### Files to fix
+
+| File | Lines | Change |
+|---|---|---|
+| `src/plugins/marketplace/services/marketplace-indexer.service.ts` | 179-195 (`indexSession`) | Fetch `BbbOrganization.slug` from `session.organization` relation (already loaded), query `Channel.token` by `channelId`, index `TenantProfile.customDomain` |
+| `src/plugins/marketplace/services/marketplace-indexer.service.ts` | 229-241 (`indexInstructor`) | Same three fixes — fetch `BbbOrganization.slug` via `channelId`, query `Channel.token`, index `customDomain` |
+| `src/plugins/marketplace/services/marketplace-indexer.service.ts` | 10-40 (document interfaces) | Add `customDomain` field to `MarketplaceSessionDocument` and `MarketplaceInstructorDocument` |
+| `src/plugins/marketplace/services/marketplace-indexer.service.ts` | 67-119 (ES mappings) | Add `customDomain` to both index mappings |
+
+### Redirect URL priority
+
+For a marketplace search result, the redirect URL should be built in this priority:
+
+1. `customDomain` — if set, use `https://{customDomain}/...` (best UX, tenant's own domain)
+2. `channelToken` — use `https://{channelToken}.saa9vi.com/...` (subdomain routing)
+3. `academySlug` — use `https://marketplace.saa9vi.com/academy/{slug}` (fallback, stays on marketplace)
+
+### Acceptance criteria
+
+- [ ] `academySlug` populated from `BbbOrganization.slug` in both `indexSession()` and `indexInstructor()`
+- [ ] `channelToken` populated from `Channel.token` (not raw `channelId`) in both indexers
+- [ ] `customDomain` indexed from `TenantProfile.customDomain` in both indexers
+- [ ] ES mappings updated for `customDomain` field
+- [ ] `npm run build` passes cleanly
+
+---
+
 ## Priority Order Summary
 
 Execute in this order. Each task unlocks the next.
 
 ```
+P0 — CRITICAL BUGS (block tenant onboarding)
+  Task 14 — BUG-022: Fix bbbRoomStatus/myBbbRooms/myBbbEnrollments to read BbbEntitlement
+  Task 15 — BUG-023: Fix MarketplaceIndexerService academySlug/channelToken/customDomain
+
 PHASE 1 FINAL BLOCKERS (last items before first tenant onboarding)
   Task 10 — SEC-004 Rate limiting                        [ADR §13 last Phase 1 blocker]
   Task 11 — Custom domain Redis mapping                  [SEC-006, multi-tenant routing]

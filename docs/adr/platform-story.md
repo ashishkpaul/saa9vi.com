@@ -1,6 +1,185 @@
 # System Architecture & User Flows: Saa9vi Academy Platform
 
-> **v4 — Updated:** Section 11 (Wallet & Capacity Intelligence) updated to reflect ADR v1.6 Capacity Intelligence System (§6A). CTA logic note in Section 3 corrected to reflect current code reality vs. ADR target. References updated to ADR v1.6 / RFC-001 v3.
+> **v5 — Updated:** Added mermaid workflow diagrams and domain model diagram reflecting the current codebase. BUG-022 (Entitlement/Enrollment read mismatch) and BUG-023 (Marketplace indexer broken redirect fields) documented. AC-002 corrected — room product path writes `BbbEntitlement`, not `BbbEnrollment`.
+
+---
+
+## Domain Model
+
+The current implementation revolves around **`BbbOrganization`**, not courses. The core domain is:
+
+```text
+Tenant (Channel)
+        │
+        ▼
+BbbOrganization
+        │
+ ┌──────┼─────────────┐
+ │      │             │
+ ▼      ▼             ▼
+Rooms  Memberships  Scheduled Sessions
+                         │
+              ┌──────────┴──────────┐
+              ▼                     ▼
+        Trial Registration      Product/Order
+              │                     │
+              └──────► Entitlement ◄┘
+                         │
+                         ▼
+                    BBB Meeting
+                         │
+                         ▼
+                 Webhooks → Ledger
+```
+
+This domain model aligns with the current codebase. There is no LMS-style "Course → Module → Lesson" workflow — the platform is organized around scheduled live sessions, not curriculum hierarchies.
+
+---
+
+## Workflow Diagram
+
+```mermaid
+flowchart TD
+
+    %% =========================
+    %% Platform Provisioning
+    %% =========================
+
+    A[Platform Admin] --> B[Create Tenant]
+    B --> C[Vendure Channel]
+    C --> D[TenantProfile]
+    D --> E[BbbOrganization]
+
+    E --> F[Capacity Grants]
+    E --> G[Organization Memberships]
+    E --> H[Rooms]
+    E --> I[Scheduled Sessions]
+
+    %% =========================
+    %% Internal Staff Flow
+    %% =========================
+
+    G --> J[Moderator / Staff]
+    J --> K{Organization Membership Valid?}
+
+    K -->|Yes| L[Join Internal Room]
+    K -->|No| X[Access Denied]
+
+    %% =========================
+    %% Public Session Flow
+    %% =========================
+
+    I --> M[Publish Session]
+    M --> N[Marketplace Index]
+
+    N --> O[Participant discovers session]
+
+    O --> P{Session Type}
+
+    %% Trial
+    P -->|Trial| Q[Register Trial]
+    Q --> R[BbbTrialRegistration]
+    R --> S[BbbEntitlement]
+
+    %% Paid
+    P -->|Paid| T[Checkout]
+    T --> U[Order Fulfillment]
+    U --> S
+
+    %% Internal
+    P -->|Internal| K
+
+    %% =========================
+    %% Join Flow
+    %% =========================
+
+    S --> V{Has Valid Entitlement?}
+
+    V -->|Yes| W[Generate Join URL]
+    W --> Y[BBB Meeting]
+
+    V -->|No| X
+
+    %% =========================
+    %% Runtime
+    %% =========================
+
+    Y --> Z[Meeting Running]
+
+    Z --> AA[Webhook Events]
+    AA --> AB[Persist Webhook]
+    AB --> AC[BullMQ Processing]
+
+    AC --> AD[Usage Ledger]
+    AC --> AE[Meeting Status]
+    AC --> AF[Reconciliation]
+
+    %% =========================
+    %% Discovery
+    %% =========================
+
+    I -.updates.-> N
+```
+
+---
+
+## Actor-Centric Sequence Diagram
+
+```mermaid
+sequenceDiagram
+
+    participant PA as Platform Admin
+    participant TA as Tenant Admin
+    participant M as Moderator
+    participant P as Participant
+    participant V as Vendure
+    participant BBB as BigBlueButton
+
+    PA->>V: Create Tenant
+    V->>V: Create Channel
+    V->>V: Create TenantProfile
+    V->>V: Create BbbOrganization
+
+    TA->>V: Create Room
+    TA->>V: Create Scheduled Session
+
+    alt Trial Session
+        P->>V: Register Trial
+        V->>V: Create Trial Registration
+        V->>V: Create Entitlement
+    else Paid Session
+        P->>V: Purchase Session
+        V->>V: Order Fulfillment
+        V->>V: Create Entitlement
+    else Internal Meeting
+        M->>V: Join using Organization Membership
+    end
+
+    M->>V: Request Join URL
+    P->>V: Request Join URL
+
+    V->>V: Validate Entitlement / Membership
+    V->>BBB: Create / Join Meeting
+    BBB-->>M: Join URL
+    BBB-->>P: Join URL
+
+    BBB->>V: Webhook Events
+    V->>V: Persist Event
+    V->>V: Queue Processing
+    V->>V: Usage Ledger
+```
+
+---
+
+## Known Gaps
+
+### BUG-022: Entitlement/Enrollment Read Mismatch (P0)
+
+`bbbRoomStatus`, `myBbbRooms`, and `myBbbEnrollments` read from `BbbEnrollment` only, while `BbbOrderFulfillmentListener` writes `BbbEntitlement` for room purchases. A paying customer's room never appears in their dashboard and `bbbRoomStatus` throws `ForbiddenError`, even though `bbbJoinRoom` would work.
+
+### BUG-023: Marketplace Indexer Broken Redirect Fields (P1)
+
+`academySlug` is hardcoded to `''`, `channelToken` is set to raw `channelId` instead of `Channel.token`, and `customDomain` is not indexed. Marketplace search results have no usable redirect URL.
 
 ---
 
@@ -96,8 +275,8 @@
 ### BbbOrderFulfillmentListener creates an entitlement
 
 * **Actor:** System
-* **Description:** The listener catches `PaymentSettled`. It looks up whether the purchased `ProductVariant` maps to a `BbbScheduledSession`. It does — so it calls `entitlementService.create({ type: "bbb_session", resourceId: session.id, customerId, source: "purchase", validUntil: session.endTime })`.
-* **System/Code Detail:** > `BbbEntitlement { type: bbb_session, source: purchase }` — idempotent `create()`
+* **Description:** The listener catches `PaymentSettled`. It first checks if the purchased `ProductVariant` maps to a `BbbScheduledSession`. If so, it calls `entitlementService.create({ type: "bbb_session", resourceId: session.id, customerId, source: "purchase", validUntil: session.endTime })`. If not, it falls through to check `BbbProductAccess` for room products and creates `BbbEntitlement { type: "bbb_room" }` instead. A legacy parallel path (`bbbFulfillmentHandler`) also writes `BbbEnrollment` + `BbbCapacityGrant` via the classic Vendure FulfillmentHandler, but this is redundant.
+* **System/Code Detail:** > `BbbEntitlement { type: bbb_session, source: purchase }` — idempotent `create()`. Room products: `BbbEntitlement { type: bbb_room, source: purchase }`.
 
 ### ReviewRequestService schedules a review prompt
 
