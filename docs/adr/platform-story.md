@@ -1,6 +1,8 @@
 # System Architecture & User Flows: Saa9vi Academy Platform
 
 > **v5 — Updated:** Added mermaid workflow diagrams and domain model diagram reflecting the current codebase. BUG-022 (Entitlement/Enrollment read mismatch) and BUG-023 (Marketplace indexer broken redirect fields) documented. AC-002 corrected — room product path writes `BbbEntitlement`, not `BbbEnrollment`.
+>
+> **v5.1 — Updated:** Workflow and sequence diagrams corrected to show self-service `registerNewTenant` as the primary tenant creation path (not platform admin). Section 1 (Academy Setup) updated to reflect self-registration flow.
 
 ---
 
@@ -42,10 +44,12 @@ This domain model aligns with the current codebase. There is no LMS-style "Cours
 flowchart TD
 
     %% =========================
-    %% Platform Provisioning
+    %% Tenant Registration
     %% =========================
 
-    A[Platform Admin] --> B[Create Tenant]
+    S[Academy Owner / Seller] -->|registerNewTenant| B[Create Tenant]
+    PA[Platform Admin] -.->|Manual override| B
+
     B --> C[Vendure Channel]
     C --> D[TenantProfile]
     D --> E[BbbOrganization]
@@ -128,6 +132,7 @@ flowchart TD
 ```mermaid
 sequenceDiagram
 
+    participant S as Seller / Academy Owner
     participant PA as Platform Admin
     participant TA as Tenant Admin
     participant M as Moderator
@@ -135,7 +140,10 @@ sequenceDiagram
     participant V as Vendure
     participant BBB as BigBlueButton
 
-    PA->>V: Create Tenant
+    S->>V: registerNewTenant (self-service)
+    alt Manual override
+        PA->>V: Create Tenant (admin)
+    end
     V->>V: Create Channel
     V->>V: Create TenantProfile
     V->>V: Create BbbOrganization
@@ -185,28 +193,28 @@ sequenceDiagram
 
 ## 1. Academy Setup
 
-### A new Vendure Channel is created
+### Academy owner self-registers via the marketplace
 
-* **Actor:** Platform admin
-* **Description:** Platform admin creates a channel for "Mehta Coaching" on the Saa9vi backend. This Channel is the tenant — every entity the academy owns will be scoped to this channel ID from this moment forward.
-* **System/Code Detail:** `TenantProfileService.create() → channelService.assignToCurrentChannel()`
+* **Actor:** Academy Owner / Seller
+* **Description:** A coaching institute founder visits `marketplace.saa9vi.com` and clicks "Register your academy". They fill in their email, password, and academy name. The `registerNewTenant` mutation (public, no authentication required) provisions everything in one synchronous transaction: Seller → Channel → Role → Administrator → TenantProfile. The founder receives a `channelToken` they can use to access their new admin dashboard.
+* **System/Code Detail:** `TenantRegistrationService.registerTenant()` — 5-step orchestration: create Seller, create Channel with unique `channelCode`/`channelToken`, create channel-scoped Role with `TENANT_ADMIN_ROLE_PERMISSIONS`, create Administrator, create TenantProfile via `assignToCurrentChannel`. All wrapped in `@Transaction()` — rolls back on any failure.
 
 ### TenantProfile is initialised
 
-* **Actor:** Platform admin
-* **Description:** Name, logo, custom domain (`mehta.saa9vi.com`), and branding are saved. The `TenantProfile` carries a 1:1 FK to the channel ID — there is no separate tenant table.
-* **System/Code Detail:** > `TenantProfile { channelId, name, logo, customDomain }`
+* **Actor:** System (automatic)
+* **Description:** Name, logo placeholder, and branding defaults are saved. The `TenantProfile` carries a 1:1 FK to the channel ID — there is no separate tenant table. The academy owner can later customise these in the admin dashboard.
+* **System/Code Detail:** > `TenantProfile { channelId, businessName, contactEmail, onboardingComplete: false }`
 
 ### BbbOrganization is provisioned
 
-* **Actor:** Platform admin
-* **Description:** The BBB organization record is created and linked to the channel. It holds the `concurrentMeetingLimit` and `maxParticipantsPerMeeting` caps that govern every live class.
-* **System/Code Detail:** `BbbOrganization` implements `ChannelAware` — channelId unique index enforces 1 org per channel.
+* **Actor:** System (automatic)
+* **Description:** The BBB organization record is created and linked to the channel. It holds the `concurrentMeetingLimit` and `maxParticipantsPerMeeting` caps that govern every live class. An `internal_overhead` capacity grant is auto-provisioned for staff meeting consumption.
+* **System/Code Detail:** `BbbOrganization` implements `ChannelAware` — channelId unique index enforces 1 org per channel. `BbbOrganizationService.create()` also auto-creates `BbbCapacityGrant { sourceType: 'internal_overhead', isUnbounded: true }`.
 
 ### A capacity grant is issued
 
-* **Actor:** Platform admin
-* **Description:** Admin creates a `BbbCapacityGrant` of e.g., 3,000 minutes (50 hours). This is the billing unit — a prepaid block. The grant carries `validFrom` and `validUntil`. When provisioning starts, the earliest-expiring non-exhausted grant is consumed first.
+* **Actor:** System (automatic) or Platform admin
+* **Description:** A `BbbCapacityGrant` of e.g., 3,000 minutes (50 hours) is issued. This is the billing unit — a prepaid block. The grant carries `validFrom` and `validUntil`. When provisioning starts, the earliest-expiring non-exhausted grant is consumed first. For self-registered academies, a welcome credit grant may be auto-issued via the wallet system.
 * **System/Code Detail:** > `BbbCapacityGrant { grantedMinutes: 3000, consumedMinutes: 0, exhausted: false }`
 
 ---
@@ -435,7 +443,7 @@ Here is what the full story covers, from the code up:
 
 The story has six chapters, each showing what fires in the background when a person takes an action.
 
-**Chapter 1 — Academy setup.** Everything starts with a Vendure `Channel`. That channel IS the tenant. `TenantProfileService.create()` stamps the branding, `BbbOrganization` is created with the channel's `channelId` as a unique index, and a `BbbCapacityGrant` is issued with a fixed minute budget. From this moment, every query in the system automatically filters by `ctx.channelId` — no explicit tenant-ID logic anywhere.
+**Chapter 1 — Academy setup.** An academy owner visits `marketplace.saa9vi.com` and calls `registerNewTenant` (a public mutation). Vendure provisions a Seller, Channel, Role, Administrator, and TenantProfile in a single transaction. The `BbbOrganization` is created with the channel's `channelId` as a unique index, and a `BbbCapacityGrant` is issued with a fixed minute budget. From this moment, every query in the system automatically filters by `ctx.channelId` — no explicit tenant-ID logic anywhere. (Platform admin can also create tenants manually as an override path.)
 
 **Chapter 2 — Content.** The trainer authors CMS pages, banners, and instructor profiles through the Admin UI. `assignToCurrentChannel()` is called on every creation. Slugs are unique per channel, not globally — two academies can both have a `/about` page. The BBB room and scheduled session are also created here. The session's `productVariantId` field is the commercial bridge — it's how checkout eventually connects to live class access.
 

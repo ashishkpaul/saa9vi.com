@@ -1069,7 +1069,9 @@ See §5A for the canonical pattern. The applied fix:
 
 ### TP-006: Tenant Registration System ✅ Implemented
 
-The Tenant Registration System provides a self-service `registerNewTenant` Shop API mutation (`Permission.Public`) that provisions a complete tenant channel in a single synchronous transaction. It follows the INV-004 persist-first pattern: the registration request is logged as `PENDING` before any entity creation, and marked `COMPLETED` or `FAILED` on outcome.
+The Tenant Registration System provides a self-service `registerNewTenant` Shop API mutation (`Permission.Public`) that provisions a complete tenant channel in a single synchronous transaction. This is the **primary tenant creation path** — any unauthenticated visitor (academy owner / seller) can register. A platform admin can also create tenants manually via the Admin API as an override path.
+
+It follows the INV-004 persist-first pattern: the registration request is logged as `PENDING` before any entity creation, and marked `COMPLETED` or `FAILED` on outcome.
 
 #### Registration Flow (5-Step Orchestration)
 

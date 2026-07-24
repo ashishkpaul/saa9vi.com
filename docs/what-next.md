@@ -2,7 +2,7 @@
 
 **Generated:** 2026-07-23
 **Based on:** ADR v1.9, RFC-001 v3, platform-story v4, all six plugin codebases, Vendure live docs (server-resource-requirements, horizontal-scaling)
-**Status of platform at time of writing:** Phase 1 commerce loop complete. Phase 1.5 substantially complete — FEAT-001, FEAT-002, Capacity Intelligence System, myLearningDashboard, GrantReaderService, rate limiting, custom domain Redis mapping, CorrelationInterceptor global scope, Tenant Registration System, Customer Deletion System, and Saa9vi login branding are all implemented. Phase 2 (subscriptions) unimplemented. The only remaining Phase 1.5 blockers are: (1) FEAT-002's DB migration step, (2) email verification for new tenant administrators, (3) auto-provision ShippingMethod/StockLocation for new channels, and (4) end-to-end customer deletion testing across all three plugins.
+**Status of platform at time of writing:** Phase 1 commerce loop complete. Phase 1.5 substantially complete — FEAT-001, FEAT-002, Capacity Intelligence System, myLearningDashboard, GrantReaderService, rate limiting, custom domain Redis mapping, CorrelationInterceptor global scope, Tenant Registration System (self-service `registerNewTenant` is the primary tenant creation path), Customer Deletion System, and Saa9vi login branding are all implemented. Phase 2 (subscriptions) unimplemented. The remaining Phase 1.5 blockers are: (1) FEAT-002's DB migration step, (2) email verification for new tenant administrators, (3) auto-provision ShippingMethod/StockLocation/PaymentMethod for new channels, (4) end-to-end customer deletion testing across all three plugins, (5) BUG-022 (P0 — Entitlement/Enrollment read mismatch), and (6) BUG-023 (P1 — Marketplace indexer broken redirect fields).
 
 ---
 
