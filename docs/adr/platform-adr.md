@@ -1,13 +1,26 @@
-# Architecture Decision Record
+# Architecture Decision Record (Legacy)
 
-## Saa9vi — Multi-Tenant Education Commerce Platform
+> **This document has been refactored.** The enduring architectural decisions have been moved to `docs/architecture/platform-adr.md`. Implementation status, bugs, and roadmap have been moved to `docs/implementation/`.
 
-### Production Architecture · Version 1.9
+## What moved where
 
-**Status:** Active
-**Date:** 2026-07-17
-**Authors:** Lead Architect, Platform Engineering
-**Supersedes:** ADR v1.8 (2026-06-30)
+| Content | New Location |
+|---|---|
+| Architectural decisions (ADR-001 through ADR-030) | `docs/architecture/platform-adr.md` |
+| Invariants (INV-001 through INV-013) | `docs/architecture/invariants.md` |
+| Domain model (entities, relationships, lifecycles) | `docs/architecture/domain-model.md` |
+| Plugin map (ownership, events, API surfaces) | `docs/architecture/plugin-map.md` |
+| Runtime flows (event-driven service interactions) | `docs/architecture/runtime-flow.md` |
+| Platform story (capability-based actor lifecycles) | `docs/product/platform-story.md` |
+| Glossary (domain term definitions) | `docs/product/glossary.md` |
+| Roadmap (future work by phase) | `docs/implementation/roadmap.md` |
+| Known bugs (active and fixed) | `docs/implementation/known-bugs.md` |
+| Release notes (completed work, chronologically) | `docs/implementation/release-notes.md` |
+| Development prompt (priority order) | `docs/what-next.md` |
+
+## Why
+
+The original `platform-adr.md` had grown to mix architecture, changelog, bugs, roadmap, and implementation status in a single file. This made it hard to maintain and caused drift between sections. The new structure separates concerns so each document has a single, clear purpose.
 
 > **Changelog v1.1–v1.6 (condensed):**
 >

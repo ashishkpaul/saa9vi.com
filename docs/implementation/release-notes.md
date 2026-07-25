@@ -1,0 +1,155 @@
+# Release Notes
+
+> **Purpose:** Track completed work only. Organized chronologically. When new work is completed, add it here and remove from roadmap.md.
+
+---
+
+## v1.10 — 2026-07-24
+
+### New
+
+- **BUG-022 documented**: Entitlement/Enrollment read mismatch in `bbbRoomStatus`, `myBbbRooms`, `myBbbEnrollments`
+- **BUG-023 documented**: Marketplace indexer broken redirect fields (`academySlug`, `channelToken`, `customDomain`)
+- **BUG-024 documented**: Auto-provisioning gap expanded to include `PaymentMethod`
+- **AC-002 corrected**: Room product path now writes `BbbEntitlement { type: bbb_room }`, not `BbbEnrollment`
+- **Three-stream revenue model refined**: Detailed control mechanisms per stream, `CommissionLedger` $0-row pattern (DL-030), `MARKETPLACE_COMMISSION_PERCENT` env var naming
+- **Documentation architecture refactored**: New `docs/architecture/`, `docs/product/`, `docs/implementation/` directories with focused documents
+
+### Fixed
+
+- `TenantRegistrationService` — all `console.log` calls replaced with `Logger.debug(loggerCtx)`
+- `TenantShopResolver` — full-input JSON dump (which logged plaintext email addresses) removed
+- `channelResult.code` — access moved after `'id' in channelResult` type guard
+
+---
+
+## v1.9 — 2026-07-17
+
+### New
+
+- **Capacity Intelligence System** — `CapacityIntelligenceService`, `BbbCapacityAlertLog`, `BbbServer.capacity`, `poolCapacityDashboard`, `capacity-alert` job (CI-001 through CI-006)
+- **MarketplaceIndexerPlugin** — all Phase 3 gaps closed (sponsored listing bid-boost, Bayesian rating, price from ProductVariant, ProductVariantEvent subscription, BullMQ job queue, Product custom fields)
+- **PlatformDashboardPlugin** — Saa9vi login branding layer with CSS override for Vendure core branding footer (ADR-016)
+- **ADR-017 (Observability Architecture)** — correlation tracing, event causality validation, runtime invariant monitoring
+- **Phase 1.6 (Live Classroom Experience)** — Scheduled Sessions follow-ups as a dedicated phase
+
+### Fixed
+
+- `bbb-capacity-alert` job registered and verified
+- `poolCapacityDashboard` query verified in dashboard
+
+---
+
+## v1.8 — 2026-06-30
+
+### New
+
+- **BUG-015/CMS-002 fixed** — `banner-activator` job registered
+- **INV-013 (Customer Deletion)** — `CustomerDeletionService` with cross-plugin orchestration
+- **Tenant Registration System** — `registerNewTenant` mutation with 5-step orchestration
+- **BUG-021 fixed** — `channelOrToken` resolved to `channel.token` string
+
+---
+
+## v1.7 — 2026-06-15
+
+### Fixed
+
+- FEAT-001/FEAT-002 status corrected to code-complete
+- Capacity Intelligence corrected from "Live" to "Designed, not implemented"
+- Plugin inventory expanded from 4 to 6
+- Instructor ES indexing status corrected
+- §6A and §2B moved to correct TOC positions
+
+---
+
+## v1.6 — 2026-06-01
+
+### New
+
+- Capacity Intelligence System *designed* (§6A)
+- INV-012 (advisory-only capacity intelligence)
+- DL-025 (proactive capacity intelligence over reactive throttling)
+- DL-026/027
+
+### Fixed
+
+- BUG-019 — `LoadSimulationPlugin` DoS vector closed
+- BUG-020 — `CausalMapper` non-existent resolver reference fixed
+
+---
+
+## v1.5 — 2026-05-15
+
+### New
+
+- Phase 3 Marketplace architecture locked
+- Platform-level ES index, `orderSource` attribution
+- `MarketplaceIndexerPlugin`, `BayesianRatingService`
+- Three-stream revenue model locked
+- FEAT-003/004, INV-009/010
+- DL-019–022, ADR-014
+- Multivendor-plugin rejected (DL-019)
+
+---
+
+## v1.4 — 2026-05-01
+
+### New
+
+- Archetype B (Internal Staff Meeting) integrated as §8A
+- FEAT-001 (`BbbOrganizationMembership`)
+- FEAT-002 (Overhead Capacity Grant)
+- DL-017/018
+
+---
+
+## v1.3 — 2026-04-15
+
+### New
+
+- Reviews plugin audit (4th plugin)
+- §5A Dashboard Extension Pattern
+- ADR-013 (Frontend Independence)
+- DL-015/016
+
+### Fixed
+
+- BUG-016 — Reviews dashboard nav fix
+- BUG-017 — Reviews channel isolation documented
+
+---
+
+## v1.2 — 2026-04-01
+
+### New
+
+- `convertTrialToEnrollment` path added (AC-003)
+- EventBus table corrected
+- Cipher corrected to AES-256-GCM
+- BUG-015 (banner queue gap) and SEC-001 (Admin API isolation)
+
+---
+
+## v1.1 — 2026-03-15
+
+### New
+
+- Full audit vs. `bigbluebutton-plugin`, `cms-plugin`, `tenant-plugin`
+- 4 divergences (DIV-001–004) documented
+
+---
+
+## v1.0 — 2026-03-01
+
+### New
+
+- Initial ADR
+- Platform context and technology foundation
+- Core architectural invariants (INV-001 through INV-004)
+- Plugin architecture and bounded contexts
+- Data layer decisions
+- Commerce and access control model
+- BBB integration architecture
+- CMS architecture
+- Tenant and academy layer
