@@ -400,3 +400,71 @@
 - `PLATFORM_FEE_PERCENT` (ambiguous — reads like it controls all three streams)
 - Not writing $0 rows (loses GMV history when rate is turned up later)
 - Applying $0-row pattern to Stream 1 or 3 (incorrect — absence of rows in those streams correctly means no usage/no ad spend)
+
+---
+
+## ADR-031: Platform-Owned BBB Capacity Policy
+
+**Status:** Proposed
+
+**Decision:** BBB infrastructure capacity limits are controlled by Portal Admin through a platform-level `BbbPlatformCapacityPolicy`. Tenant administrators can manage courses and commercial enrollment but cannot increase BBB resource limits beyond what the policy allows.
+
+**Rationale:** BBB servers are Saa9vi-owned infrastructure. Allowing tenant-controlled capacity creates unpredictable resource consumption that impacts other tenants and infrastructure costs. Three distinct capacity layers must be separated:
+
+1. **Platform infrastructure capacity** — controlled by Portal Admin via `BbbPlatformCapacityPolicy`
+2. **Academy commercial capacity** — tenant controls `ProductVariant.stockLevel` (how many can buy)
+3. **Individual class/room capacity** — governed by platform policy, tenant can set within limits
+
+**Capacity Model:**
+
+```
+ProductVariant.stockLevel
+  → "How many customers can buy?" (tenant-controlled)
+
+BbbScheduledSession.maxAttendees
+  → "How many students can attend this session?" (tenant-controlled, capped by policy)
+
+BbbRoom.maxParticipants
+  → "What is the BBB infrastructure limit?" (governed by platform policy)
+
+BbbPlatformCapacityPolicy
+  → "What is the platform-wide default and maximum?" (Portal Admin controlled)
+```
+
+**Plan-Based Capacity (Recommended):** Capacity limits are tied to subscription plans:
+
+| Plan | Default Room Capacity | Max Room Capacity | Max Concurrent Participants |
+|---|---|---|---|
+| Starter | 50 | 100 | 500 |
+| Growth | 200 | 500 | 2000 |
+| Enterprise | 500 | 1000 | 5000 |
+
+**Entity Design:**
+
+```typescript
+@Entity('bbb_platform_capacity_policy')
+export class BbbPlatformCapacityPolicy extends VendureEntity {
+  @Column({ default: 100 })
+  defaultRoomCapacity: number;       // applied when tenant creates a room
+
+  @Column({ default: 500 })
+  maxRoomCapacity: number;           // tenant cannot exceed this
+
+  @Column({ default: 1000 })
+  maxConcurrentParticipants: number; // across all rooms for this tenant
+
+  @Column({ nullable: true })
+  subscriptionPlanId: string | null; // FK to SubscriptionPlan (Phase 2)
+}
+```
+
+**Consequences:**
+- `BbbOrganization.maxParticipantsPerMeeting` becomes a denormalized cache of the policy limit
+- `BbbRoom.maxParticipants` is set from policy default on room creation, tenant can increase up to `maxRoomCapacity`
+- `BbbScheduledSession.maxAttendees` is a separate commercial field — tenant controls it for selling, but actual BBB room capacity is the runtime ceiling
+- Portal Admin dashboard needs a capacity policy management UI
+
+**Alternatives Rejected:**
+- Tenant-controlled BBB capacity (resource abuse risk, unpredictable infrastructure costs)
+- Fixed hardcoded capacity in code (not adaptable to different plan tiers)
+- BBB server as only capacity authority (too late — impacts user experience at join time)

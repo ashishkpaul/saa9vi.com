@@ -38,3 +38,8 @@
 | **INV-009** | Marketplace indices are read projections. |
 | **INV-012** | Capacity intelligence is advisory. Meetings are never blocked for capacity reasons. |
 | **DL-030** | CommissionLedger $0-row pattern — always write a row per marketplace order, even at 0%. |
+| **BbbPlatformCapacityPolicy** | Platform-level BBB capacity limits controlled by Portal Admin. Governs `BbbRoom.maxParticipants` and `BbbOrganization.maxParticipantsPerMeeting`. |
+| **Platform infrastructure capacity** | BBB server load and concurrent participant limits. Controlled by Portal Admin via `BbbPlatformCapacityPolicy`. |
+| **Academy commercial capacity** | How many customers can buy a product. Controlled by Tenant Admin via `ProductVariant.stockLevel`. |
+| **Session enrollment capacity** | How many students can attend a scheduled session. Controlled by Tenant Admin via `BbbScheduledSession.maxAttendees`, capped by platform policy. |
+| **INV-014** | BBB infrastructure capacity is platform-controlled. Tenant controls commercial capacity only. |

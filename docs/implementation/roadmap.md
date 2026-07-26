@@ -51,9 +51,14 @@
 
 ---
 
-## Phase 2 — Subscription Billing
+## Phase 2 — Subscription Billing & Capacity Policy
 
 - [ ] `SubscriptionPlan` and `OrganizationSubscription` entities
+- [ ] `BbbPlatformCapacityPolicy` entity — platform-level BBB capacity limits controlled by Portal Admin
+- [ ] Plan-based capacity tiers (Starter: 50, Growth: 200, Enterprise: 500 default room capacity)
+- [ ] `BbbRoom.maxParticipants` set from policy default on creation, tenant can increase up to `maxRoomCapacity`
+- [ ] `BbbOrganization.maxParticipantsPerMeeting` becomes denormalized cache of policy limit
+- [ ] Portal Admin dashboard for capacity policy management
 - [ ] `BbbCapacityGrant.sourceType` discriminator
 - [ ] Monthly invoice generation job
 - [ ] Juspay recurring billing integration

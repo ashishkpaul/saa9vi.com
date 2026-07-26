@@ -101,6 +101,11 @@
 - State machine: `Idle` → `Provisioning` → `Active` → `Idle` (on meeting end)
 - `productVariantId = null` means internal/staff room (commerce bypass)
 
+**Capacity:**
+- `maxParticipants` is set from `BbbPlatformCapacityPolicy.defaultRoomCapacity` on creation
+- Tenant can increase up to `BbbPlatformCapacityPolicy.maxRoomCapacity`
+- This is the BBB infrastructure limit — distinct from commercial stock
+
 ---
 
 ## BbbScheduledSession
@@ -126,6 +131,30 @@
 **Invariants:**
 - `(organizationId, slug)` composite unique index
 - `channelId` denormalized for tenant isolation
+- `maxAttendees` is a commercial field (how many can buy), distinct from `BbbRoom.maxParticipants` (infrastructure limit)
+
+---
+
+## BbbPlatformCapacityPolicy
+
+| Property | Value |
+|---|---|
+| **Plugin** | BigBlueButtonPlugin (Phase 2) |
+| **Table** | `bbb_platform_capacity_policy` |
+| **Purpose** | Platform-level BBB capacity limits controlled by Portal Admin. |
+
+**Fields:** `defaultRoomCapacity`, `maxRoomCapacity`, `maxConcurrentParticipants`, `subscriptionPlanId`
+
+**Lifecycle:**
+- Created by Portal Admin
+- Applied to rooms on creation (sets `BbbRoom.maxParticipants`)
+- Tenant can increase room capacity up to `maxRoomCapacity`
+- Tied to subscription plan in Phase 2
+
+**Invariants:**
+- `defaultRoomCapacity <= maxRoomCapacity`
+- `BbbOrganization.maxParticipantsPerMeeting` is a denormalized cache of the policy limit
+- `BbbRoom.maxParticipants` is the BBB infrastructure limit — distinct from `ProductVariant.stockLevel` (commercial) and `BbbScheduledSession.maxAttendees` (session enrollment)
 
 ---
 

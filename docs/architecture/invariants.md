@@ -146,3 +146,19 @@ BullMQ processor
 **Rule:** `CommissionLedger` rows are written for every marketplace order regardless of the current `MARKETPLACE_COMMISSION_PERCENT` rate. When the rate is 0%, rows are written with `amountInPaise: 0`. This preserves complete `orderSource = 'marketplace'` GMV history.
 
 This pattern does **not** apply to Stream 1 (`BbbUsageLedger`) or Stream 3 (`AdSpendLedger`).
+
+---
+
+## INV-014: BBB Infrastructure Capacity Is Platform-Controlled. Tenant Controls Commercial Capacity.
+
+**Rule:** BBB infrastructure capacity limits (`BbbRoom.maxParticipants`, `BbbOrganization.maxParticipantsPerMeeting`) are governed by `BbbPlatformCapacityPolicy` controlled by Portal Admin. Tenant administrators control commercial capacity (`ProductVariant.stockLevel`, `BbbScheduledSession.maxAttendees`) but cannot increase BBB resource limits beyond what the platform policy allows.
+
+**Three distinct capacity layers:**
+
+| Layer | What it controls | Who controls | Entity |
+|---|---|---|---|
+| Platform infrastructure | BBB server load, concurrent participants | Portal Admin | `BbbPlatformCapacityPolicy` |
+| Academy commercial | How many customers can buy | Tenant Admin | `ProductVariant.stockLevel` |
+| Session enrollment | How many students can attend a session | Tenant Admin (capped by policy) | `BbbScheduledSession.maxAttendees` |
+
+**Rejection criterion:** Any code path that allows a tenant administrator to set `BbbRoom.maxParticipants` or `BbbOrganization.maxParticipantsPerMeeting` above the `BbbPlatformCapacityPolicy.maxRoomCapacity` limit is rejected.
