@@ -38,8 +38,9 @@
 | **INV-009** | Marketplace indices are read projections. |
 | **INV-012** | Capacity intelligence is advisory. Meetings are never blocked for capacity reasons. |
 | **DL-030** | CommissionLedger $0-row pattern — always write a row per marketplace order, even at 0%. |
-| **BbbPlatformCapacityPolicy** | Platform-level BBB capacity limits controlled by Portal Admin. Governs `BbbRoom.maxParticipants` and `BbbOrganization.maxParticipantsPerMeeting`. |
-| **Platform infrastructure capacity** | BBB server load and concurrent participant limits. Controlled by Portal Admin via `BbbPlatformCapacityPolicy`. |
+| **BbbPlatformCapacityPolicy** | ⚠️ Proposed — see ADR-031. Not yet implemented. Platform-level BBB capacity limits controlled by Portal Admin. Current mechanism: `BbbOrganization.maxParticipantsPerMeeting` (single mutable integer). |
+| **Platform infrastructure capacity** | ⚠️ Proposed — see ADR-031. BBB server load and concurrent participant limits. Currently a single mutable integer per organization. |
 | **Academy commercial capacity** | How many customers can buy a product. Controlled by Tenant Admin via `ProductVariant.stockLevel`. |
-| **Session enrollment capacity** | How many students can attend a scheduled session. Controlled by Tenant Admin via `BbbScheduledSession.maxAttendees`, capped by platform policy. |
-| **INV-014** | BBB infrastructure capacity is platform-controlled. Tenant controls commercial capacity only. |
+| **Session enrollment capacity** | How many students can attend a scheduled session. Controlled by Tenant Admin via `BbbScheduledSession.maxAttendees`. |
+| **INV-014** | BBB infrastructure capacity is a single mutable integer per organization (current). |
+| **INV-015** | ⚠️ Proposed — see ADR-031. BBB infrastructure capacity is platform-controlled via `BbbPlatformCapacityPolicy`. |

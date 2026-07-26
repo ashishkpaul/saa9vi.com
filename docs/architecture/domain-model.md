@@ -101,9 +101,10 @@
 - State machine: `Idle` → `Provisioning` → `Active` → `Idle` (on meeting end)
 - `productVariantId = null` means internal/staff room (commerce bypass)
 
-**Capacity:**
-- `maxParticipants` is set from `BbbPlatformCapacityPolicy.defaultRoomCapacity` on creation
-- Tenant can increase up to `BbbPlatformCapacityPolicy.maxRoomCapacity`
+**Capacity (current):**
+- `maxParticipants` defaults from `BbbOrganization.maxParticipantsPerMeeting` on creation (`input.maxParticipants ?? org.maxParticipantsPerMeeting`)
+- Currently a single mutable integer — no tiered policy layer exists yet
+- **Proposed:** `BbbPlatformCapacityPolicy` will govern this in Phase 2 (see ADR-031)
 - This is the BBB infrastructure limit — distinct from commercial stock
 
 ---
@@ -135,25 +136,27 @@
 
 ---
 
-## BbbPlatformCapacityPolicy
+## BbbPlatformCapacityPolicy ⚠️ Proposed — Not Yet Implemented
+
+> **Status:** Proposed. See ADR-031. This entity does not exist in the codebase yet. The current mechanism is `BbbOrganization.maxParticipantsPerMeeting` — a single mutable integer set via admin dashboard form, with `BbbRoom.maxParticipants` defaulting from it on creation.
 
 | Property | Value |
 |---|---|
-| **Plugin** | BigBlueButtonPlugin (Phase 2) |
-| **Table** | `bbb_platform_capacity_policy` |
+| **Plugin** | BigBlueButtonPlugin (Phase 2 — proposed) |
+| **Table** | `bbb_platform_capacity_policy` (not yet created) |
 | **Purpose** | Platform-level BBB capacity limits controlled by Portal Admin. |
 
 **Fields:** `defaultRoomCapacity`, `maxRoomCapacity`, `maxConcurrentParticipants`, `subscriptionPlanId`
 
-**Lifecycle:**
+**Lifecycle (proposed):**
 - Created by Portal Admin
 - Applied to rooms on creation (sets `BbbRoom.maxParticipants`)
 - Tenant can increase room capacity up to `maxRoomCapacity`
 - Tied to subscription plan in Phase 2
 
-**Invariants:**
+**Invariants (proposed):**
 - `defaultRoomCapacity <= maxRoomCapacity`
-- `BbbOrganization.maxParticipantsPerMeeting` is a denormalized cache of the policy limit
+- `BbbOrganization.maxParticipantsPerMeeting` becomes a denormalized cache of the policy limit
 - `BbbRoom.maxParticipants` is the BBB infrastructure limit — distinct from `ProductVariant.stockLevel` (commercial) and `BbbScheduledSession.maxAttendees` (session enrollment)
 
 ---

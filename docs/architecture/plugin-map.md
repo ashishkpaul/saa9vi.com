@@ -110,6 +110,7 @@ None (injects TenantPlugin services for org verification).
 | `BbbMembershipService` | Organization membership CRUD and lookup |
 | `BbbReconciliationService` | Active meeting reconciliation, grant consumption |
 | `BbbServerSelectionService` | BBB server selection by load |
+| `BbbMetricsService` | Metrics recording for provisioning, completion, webhooks |
 | `CapacityIntelligenceService` | Pool health, 48h forecast, capacity recommendations |
 | `LearningDashboardService` | Domain API for student dashboard |
 | `TrialRegistrationService` | Trial registration and conversion |

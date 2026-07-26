@@ -149,11 +149,21 @@ This pattern does **not** apply to Stream 1 (`BbbUsageLedger`) or Stream 3 (`AdS
 
 ---
 
-## INV-014: BBB Infrastructure Capacity Is Platform-Controlled. Tenant Controls Commercial Capacity.
+## INV-014: BBB Infrastructure Capacity Is a Single Mutable Integer Per Organization (Current)
 
-**Rule:** BBB infrastructure capacity limits (`BbbRoom.maxParticipants`, `BbbOrganization.maxParticipantsPerMeeting`) are governed by `BbbPlatformCapacityPolicy` controlled by Portal Admin. Tenant administrators control commercial capacity (`ProductVariant.stockLevel`, `BbbScheduledSession.maxAttendees`) but cannot increase BBB resource limits beyond what the platform policy allows.
+**Rule (current):** `BbbOrganization.maxParticipantsPerMeeting` is a single mutable integer set via admin dashboard form. `BbbRoom.maxParticipants` defaults from this value on room creation (`input.maxParticipants ?? org.maxParticipantsPerMeeting`). Any user with access to the org edit form can set this value directly.
 
-**Three distinct capacity layers:**
+**Rejection criterion:** `BbbRoom.maxParticipants` must never exceed `BbbOrganization.maxParticipantsPerMeeting` at provisioning time.
+
+---
+
+## INV-015 (Proposed): BBB Infrastructure Capacity Is Platform-Controlled (Future — See ADR-031)
+
+**Status:** Proposed — not yet implemented. See ADR-031.
+
+**Rule (future):** BBB infrastructure capacity limits (`BbbRoom.maxParticipants`, `BbbOrganization.maxParticipantsPerMeeting`) will be governed by `BbbPlatformCapacityPolicy` controlled by Portal Admin. Tenant administrators will control commercial capacity (`ProductVariant.stockLevel`, `BbbScheduledSession.maxAttendees`) but will not be able to increase BBB resource limits beyond what the platform policy allows.
+
+**Three distinct capacity layers (proposed):**
 
 | Layer | What it controls | Who controls | Entity |
 |---|---|---|---|
@@ -161,4 +171,4 @@ This pattern does **not** apply to Stream 1 (`BbbUsageLedger`) or Stream 3 (`AdS
 | Academy commercial | How many customers can buy | Tenant Admin | `ProductVariant.stockLevel` |
 | Session enrollment | How many students can attend a session | Tenant Admin (capped by policy) | `BbbScheduledSession.maxAttendees` |
 
-**Rejection criterion:** Any code path that allows a tenant administrator to set `BbbRoom.maxParticipants` or `BbbOrganization.maxParticipantsPerMeeting` above the `BbbPlatformCapacityPolicy.maxRoomCapacity` limit is rejected.
+**Rejection criterion (future):** Any code path that allows a tenant administrator to set `BbbRoom.maxParticipants` or `BbbOrganization.maxParticipantsPerMeeting` above the `BbbPlatformCapacityPolicy.maxRoomCapacity` limit is rejected.
