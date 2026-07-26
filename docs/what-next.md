@@ -15,7 +15,7 @@ The documentation has been refactored into focused documents:
 | `docs/architecture/` | `domain-model.md` | Every aggregate, its purpose, lifecycle, relationships |
 | `docs/architecture/` | `plugin-map.md` | Plugin ownership, entities, events, API surfaces |
 | `docs/architecture/` | `runtime-flow.md` | Event-driven flows, service interactions, queues |
-| `docs/architecture/` | `invariants.md` | Non-negotiable rules (INV-001 through INV-013) |
+| `docs/architecture/` | `invariants.md` | Non-negotiable rules (INV-001 through INV-015) |
 | `docs/product/` | `platform-story.md` | Capability-based actor lifecycles |
 | `docs/product/` | `glossary.md` | Domain term definitions |
 | `docs/implementation/` | `roadmap.md` | Future work only, by phase |

@@ -6,8 +6,8 @@
 
 | Content | New Location |
 |---|---|
-| Architectural decisions (ADR-001 through ADR-030) | `docs/architecture/platform-adr.md` |
-| Invariants (INV-001 through INV-013) | `docs/architecture/invariants.md` |
+| Architectural decisions (ADR-001 through ADR-031) | `docs/architecture/platform-adr.md` |
+| Invariants (INV-001 through INV-015) | `docs/architecture/invariants.md` |
 | Domain model (entities, relationships, lifecycles) | `docs/architecture/domain-model.md` |
 | Plugin map (ownership, events, API surfaces) | `docs/architecture/plugin-map.md` |
 | Runtime flows (event-driven service interactions) | `docs/architecture/runtime-flow.md` |
