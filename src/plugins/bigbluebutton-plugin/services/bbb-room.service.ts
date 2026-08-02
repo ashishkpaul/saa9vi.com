@@ -1,5 +1,4 @@
-import { Inject, Injectable, OnModuleInit } from "@nestjs/common";
-import { ModuleRef } from "@nestjs/core";
+import { Inject, Injectable, forwardRef } from "@nestjs/common";
 import {
   ID,
   Logger,
@@ -15,6 +14,8 @@ import { BbbRoomLockService } from "./bbb-room-lock.service";
 import { BbbServerService } from "./bbb-server.service";
 import { BbbApiService } from "./bbb-api.service";
 import { BbbMetricsService } from "./bbb-metrics.service";
+import { BbbChannelAccessService } from "./bbb-channel-access.service";
+import { BbbMeetingService } from "./bbb-meeting.service";
 import { RoomActivatedEvent } from "../events/bbb-events";
 import { EventBus } from "@vendure/core";
 import type { BigBlueButtonPluginOptions } from "../types";
@@ -40,9 +41,7 @@ export interface RequestProvisioningResult {
 }
 
 @Injectable()
-export class BbbRoomService implements OnModuleInit {
-  private meetingService: any;
-
+export class BbbRoomService {
   constructor(
     private readonly connection: TransactionalConnection,
     private readonly lockService: BbbRoomLockService,
@@ -50,17 +49,12 @@ export class BbbRoomService implements OnModuleInit {
     private readonly bbbApiService: BbbApiService,
     private readonly metrics: BbbMetricsService,
     private readonly eventBus: EventBus,
-    private readonly moduleRef: ModuleRef,
+    private readonly channelAccess: BbbChannelAccessService,
+    @Inject(forwardRef(() => BbbMeetingService))
+    private readonly meetingService: BbbMeetingService,
     @Inject(BBB_PLUGIN_OPTIONS)
     private readonly options: BigBlueButtonPluginOptions,
   ) {}
-
-  async onModuleInit() {
-    this.meetingService = this.moduleRef.get(
-      require("./bbb-meeting.service").BbbMeetingService,
-      { strict: false },
-    );
-  }
 
   /** Debounce window: ignore re-provision requests within this many ms */
   private get provisionDebounceMs(): number {
@@ -87,6 +81,7 @@ export class BbbRoomService implements OnModuleInit {
     orgId: ID,
     options?: { skip?: number; take?: number },
   ): Promise<{ items: BbbRoom[]; totalItems: number }> {
+    await this.channelAccess.assertOrganizationAccess(ctx, orgId);
     const take = Math.min(Math.max(options?.take ?? 25, 1), 100);
     const skip = Math.max(options?.skip ?? 0, 0);
     const [items, totalItems] = await this.connection
@@ -101,6 +96,7 @@ export class BbbRoomService implements OnModuleInit {
   }
 
   async create(ctx: RequestContext, input: CreateRoomInput): Promise<BbbRoom> {
+    await this.channelAccess.assertOrganizationAccess(ctx, input.organizationId);
     const org = await this.connection.getEntityOrThrow(
       ctx,
       BbbOrganization,
@@ -121,10 +117,13 @@ export class BbbRoomService implements OnModuleInit {
   }
 
   async findById(ctx: RequestContext, id: ID): Promise<BbbRoom | null> {
-    return this.connection.getRepository(ctx, BbbRoom).findOne({
+    const room = await this.connection.getRepository(ctx, BbbRoom).findOne({
       where: { id: id as string },
       relations: ["organization"],
     });
+    if (!room) return null;
+    await this.channelAccess.assertRoomAccess(ctx, id);
+    return room;
   }
 
   async findByOrganization(ctx: RequestContext, orgId: ID): Promise<BbbRoom[]> {
@@ -486,7 +485,12 @@ export class BbbRoomService implements OnModuleInit {
     roomId: ID,
     meetingId: ID,
   ): Promise<void> {
-    const room = await this.findById(ctx, roomId);
+    // Internal worker callback — NOT a tenant-admin path. Query the room
+    // directly (bypassing the channel guard) so provisioning is not blocked.
+    const room = await this.connection.getRepository(ctx, BbbRoom).findOne({
+      where: { id: roomId as string },
+      relations: ["organization"],
+    });
     await this.connection.getRepository(ctx, BbbRoom).update(
       { id: roomId as string },
       {
@@ -551,6 +555,7 @@ export class BbbRoomService implements OnModuleInit {
 
   /** Manual reset by admin/trainer — clears Failed state */
   async resetFailedRoom(ctx: RequestContext, roomId: ID): Promise<BbbRoom> {
+    await this.channelAccess.assertRoomAccess(ctx, roomId);
     await this.connection.getRepository(ctx, BbbRoom).update(
       { id: roomId as string },
       {

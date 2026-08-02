@@ -11,6 +11,7 @@ import { BbbOrganizationMember } from "../entities/bbb-organization-member.entit
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { MEETING_STATE } from "../constants";
+import { BbbChannelAccessService } from "./bbb-channel-access.service";
 
 export interface CreateBbbOrganizationInput {
   channelId: string;
@@ -35,6 +36,7 @@ export class BbbOrganizationService {
   constructor(
     private readonly connection: TransactionalConnection,
     private readonly channelService: ChannelService,
+    private readonly channelAccess: BbbChannelAccessService,
   ) {}
 
   async findAll(
@@ -43,9 +45,11 @@ export class BbbOrganizationService {
   ): Promise<{ items: BbbOrganization[]; totalItems: number }> {
     const take = Math.min(Math.max(options?.take ?? 25, 1), 100);
     const skip = Math.max(options?.skip ?? 0, 0);
+    const channelId = ctx.channelId as string;
     const [items, totalItems] = await this.connection
       .getRepository(ctx, BbbOrganization)
       .findAndCount({
+        where: { channelId },
         order: { createdAt: "ASC" },
         skip,
         take,
@@ -54,9 +58,12 @@ export class BbbOrganizationService {
   }
 
   async findById(ctx: RequestContext, id: ID): Promise<BbbOrganization | null> {
-    return this.connection
+    const org = await this.connection
       .getRepository(ctx, BbbOrganization)
       .findOne({ where: { id: id as string } });
+    if (!org) return null;
+    await this.channelAccess.assertOrganizationAccess(ctx, id);
+    return org;
   }
 
   /**
@@ -193,6 +200,7 @@ export class BbbOrganizationService {
     id: ID,
     input: UpdateBbbOrganizationInput,
   ): Promise<BbbOrganization> {
+    await this.channelAccess.assertOrganizationAccess(ctx, id);
     const org = await this.connection.getEntityOrThrow(
       ctx,
       BbbOrganization,
@@ -203,6 +211,7 @@ export class BbbOrganizationService {
   }
 
   async delete(ctx: RequestContext, id: ID): Promise<void> {
+    await this.channelAccess.assertOrganizationAccess(ctx, id);
     await this.connection.getRepository(ctx, BbbOrganization).delete(id);
   }
 }

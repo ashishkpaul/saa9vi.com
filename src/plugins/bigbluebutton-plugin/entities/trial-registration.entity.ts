@@ -23,7 +23,7 @@ export class BbbTrialRegistration extends VendureEntity {
   @Column()
   customerId: string;
 
-  @Column({ default: "REGISTERED" })
+  @Column({ type: "varchar", default: "REGISTERED" })
   status: TrialRegistrationStatus;
 
   @Column()

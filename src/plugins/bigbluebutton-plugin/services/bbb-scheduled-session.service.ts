@@ -13,6 +13,7 @@ import { BbbMemberService } from "./bbb-member.service";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbOrganizationMember } from "../entities/bbb-organization-member.entity";
 import { Customer, Product, ProductVariant } from "@vendure/core";
+import { BbbChannelAccessService } from "./bbb-channel-access.service";
 
 const loggerCtx = "BbbScheduledSessionService";
 
@@ -23,6 +24,7 @@ export class BbbScheduledSessionService {
     private readonly orgService: BbbOrganizationService,
     private readonly meetingService: BbbMeetingService,
     private readonly memberService: BbbMemberService,
+    private readonly channelAccess: BbbChannelAccessService,
   ) {}
 
   // ─── Queries ──────────────────────────────────────────────────────────────
@@ -31,6 +33,7 @@ export class BbbScheduledSessionService {
     ctx: RequestContext,
     orgId: ID,
   ): Promise<BbbScheduledSession[]> {
+    await this.channelAccess.assertOrganizationAccess(ctx, orgId);
     return this.connection.getRepository(ctx, BbbScheduledSession).find({
       where: { organization: { id: orgId as string } },
       relations: ["trainer", "activeMeeting"],
@@ -73,10 +76,13 @@ export class BbbScheduledSessionService {
     ctx: RequestContext,
     id: ID,
   ): Promise<BbbScheduledSession | null> {
-    return this.connection.getRepository(ctx, BbbScheduledSession).findOne({
+    const session = await this.connection.getRepository(ctx, BbbScheduledSession).findOne({
       where: { id: id as string },
       relations: ["trainer", "activeMeeting", "organization"],
     });
+    if (!session) return null;
+    await this.channelAccess.assertSessionAccess(ctx, id);
+    return session;
   }
 
   // ─── Admin Mutations ──────────────────────────────────────────────────────
@@ -92,6 +98,7 @@ export class BbbScheduledSessionService {
       productVariantId?: string;
     },
   ): Promise<BbbScheduledSession> {
+    await this.channelAccess.assertOrganizationAccess(ctx, input.organizationId);
     const org = await this.connection.getEntityOrThrow(
       ctx,
       BbbOrganization,
@@ -170,6 +177,7 @@ export class BbbScheduledSessionService {
   }
 
   async cancel(ctx: RequestContext, id: ID): Promise<BbbScheduledSession> {
+    await this.channelAccess.assertSessionAccess(ctx, id);
     const session = await this.findById(ctx, id);
     if (!session) throw new EntityNotFoundError("BbbScheduledSession", id);
 

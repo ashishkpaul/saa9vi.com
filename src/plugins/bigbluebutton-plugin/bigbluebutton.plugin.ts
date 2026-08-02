@@ -28,6 +28,7 @@ import { BbbOrganizationMembership } from "./entities/bbb-organization-membershi
 import { BbbCapacityAlertLog } from "./entities/bbb-capacity-alert-log.entity";
 import { EventLog } from "../../platform/tracing/entities/event-log.entity";
 
+import { BbbChannelAccessService } from "./services/bbb-channel-access.service";
 import { BbbEncryptionService } from "./services/bbb-encryption.service";
 import { BbbApiService } from "./services/bbb-api.service";
 import { BbbServerService } from "./services/bbb-server.service";
@@ -99,6 +100,7 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
       useFactory: () => BigBlueButtonPlugin.options,
     },
     CorrelationInterceptor,
+    BbbChannelAccessService,
     BbbEncryptionService,
     BullMQTracer,
     WebhookRecorder,

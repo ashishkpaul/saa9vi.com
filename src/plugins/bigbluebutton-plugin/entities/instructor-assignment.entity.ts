@@ -24,7 +24,7 @@ export class BbbInstructorAssignment extends VendureEntity {
   @Column()
   instructorProfileId: string;
 
-  @Column({ default: "primary" })
+  @Column({ type: "varchar", default: "primary" })
   role: InstructorRole;
 
   @Column({ default: 0 })

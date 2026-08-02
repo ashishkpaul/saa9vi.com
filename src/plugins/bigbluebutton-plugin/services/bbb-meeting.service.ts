@@ -36,6 +36,7 @@ import { BbbRoomService } from "./bbb-room.service";
 import { BbbMetricsService } from "./bbb-metrics.service";
 import { BbbReconciliationService } from "./bbb-reconciliation.service";
 import { BbbEntitlementService } from "./bbb-entitlement.service";
+import { BbbChannelAccessService } from "./bbb-channel-access.service";
 import {
   MeetingProvisionedEvent,
   MeetingCompletedEvent,
@@ -95,6 +96,7 @@ export class BbbMeetingService implements OnModuleInit {
     private readonly orgService: BbbOrganizationService,
     private readonly encryptionService: BbbEncryptionService,
     private readonly memberService: BbbMemberService,
+    @Inject(forwardRef(() => BbbRoomService))
     private readonly roomService: BbbRoomService,
     private readonly metrics: BbbMetricsService,
     @Inject(forwardRef(() => BbbReconciliationService))
@@ -102,6 +104,7 @@ export class BbbMeetingService implements OnModuleInit {
     private readonly eventBus: EventBus,
     private readonly entitlementService: BbbEntitlementService,
     private readonly membershipService: BbbMembershipService,
+    private readonly channelAccess: BbbChannelAccessService,
   ) {}
 
   async onModuleInit() {
@@ -150,6 +153,9 @@ export class BbbMeetingService implements OnModuleInit {
     orgId?: ID,
     options?: { skip?: number; take?: number },
   ): Promise<{ items: BbbMeeting[]; totalItems: number }> {
+    if (orgId) {
+      await this.channelAccess.assertOrganizationAccess(ctx, orgId);
+    }
     const qb = this.connection
       .getRepository(ctx, BbbMeeting)
       .createQueryBuilder("meeting")
@@ -168,10 +174,13 @@ export class BbbMeetingService implements OnModuleInit {
   }
 
   async findById(ctx: RequestContext, id: ID): Promise<BbbMeeting | null> {
-    return this.connection.getRepository(ctx, BbbMeeting).findOne({
+    const meeting = await this.connection.getRepository(ctx, BbbMeeting).findOne({
       where: { id: id as string },
       relations: ["organization"],
     });
+    if (!meeting) return null;
+    await this.channelAccess.assertMeetingAccess(ctx, id);
+    return meeting;
   }
 
   /**
@@ -824,6 +833,7 @@ export class BbbMeetingService implements OnModuleInit {
   }
 
   async endMeeting(ctx: RequestContext, meetingId: ID): Promise<BbbMeeting> {
+    await this.channelAccess.assertMeetingAccess(ctx, meetingId);
     const meeting = await this.findByIdWithSecrets(ctx, meetingId);
     if (!meeting) throw new Error("Meeting not found");
     if (meeting.state !== MEETING_STATE.ACTIVE) {

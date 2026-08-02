@@ -1,10 +1,17 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { ID, RequestContext, TransactionalConnection } from "@vendure/core";
+import {
+  ForbiddenError,
+  ID,
+  Permission,
+  RequestContext,
+  TransactionalConnection,
+} from "@vendure/core";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
 import type {
   EntitlementType,
   EntitlementSource,
 } from "../entities/bbb-entitlement.entity";
+import { BbbChannelAccessService } from "./bbb-channel-access.service";
 
 const loggerCtx = "BbbEntitlementService";
 
@@ -32,7 +39,10 @@ export interface CreateEntitlementInput {
  */
 @Injectable()
 export class BbbEntitlementService {
-  constructor(private readonly connection: TransactionalConnection) {}
+  constructor(
+    private readonly connection: TransactionalConnection,
+    private readonly channelAccess: BbbChannelAccessService,
+  ) {}
 
   /**
    * Creates an entitlement idempotently — if one already exists for the
@@ -42,6 +52,15 @@ export class BbbEntitlementService {
     ctx: RequestContext,
     input: CreateEntitlementInput,
   ): Promise<BbbEntitlement> {
+    // Enforce channel isolation: a non-SuperAdmin may only create an
+    // entitlement for the channel they are operating under.
+    if (!ctx.userHasPermissions([Permission.SuperAdmin])) {
+      const channelId = ctx.channelId as string;
+      if (input.channelId && input.channelId !== channelId) {
+        throw new ForbiddenError();
+      }
+    }
+
     const existing = await this.connection
       .getRepository(ctx, BbbEntitlement)
       .findOne({
@@ -91,6 +110,7 @@ export class BbbEntitlementService {
     type: EntitlementType,
     resourceId: string,
   ): Promise<boolean> {
+    const channelId = ctx.channelId as string;
     const entitlement = await this.connection
       .getRepository(ctx, BbbEntitlement)
       .findOne({
@@ -98,6 +118,7 @@ export class BbbEntitlementService {
           customerId: String(customerId),
           type,
           resourceId,
+          channelId,
         },
       });
 
@@ -127,10 +148,12 @@ export class BbbEntitlementService {
     type: EntitlementType,
     resourceId: string,
   ): Promise<void> {
+    const channelId = ctx.channelId as string;
     await this.connection.getRepository(ctx, BbbEntitlement).delete({
       customerId: String(customerId),
       type,
       resourceId,
+      channelId,
     });
   }
 }
