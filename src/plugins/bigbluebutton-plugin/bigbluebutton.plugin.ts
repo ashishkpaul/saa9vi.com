@@ -68,7 +68,11 @@ import {
 import { adminApiExtensions } from "./api/schema/bbb-admin.schema";
 import { shopApiExtensions } from "./api/schema/bbb-shop.schema";
 import { BigBlueButtonPluginOptions } from "./types";
-import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
+import {
+  BBB_GRANULAR_PERMISSIONS,
+  BBB_PLUGIN_OPTIONS,
+  BbbAdminPermission,
+} from "./constants";
 
 @VendurePlugin({
   imports: [PluginCommonModule, PlatformTracingModule, CustomerDeletionModule],
@@ -176,6 +180,7 @@ import { BBB_PLUGIN_OPTIONS, BbbAdminPermission } from "./constants";
     config.authOptions.customPermissions = [
       ...(config.authOptions.customPermissions ?? []),
       BbbAdminPermission,
+      ...BBB_GRANULAR_PERMISSIONS,
     ];
     config.orderOptions.process = [
       ...(config.orderOptions.process ?? []),

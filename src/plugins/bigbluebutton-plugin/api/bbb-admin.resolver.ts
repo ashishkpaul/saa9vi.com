@@ -1,5 +1,8 @@
 // src/plugins/bigbluebutton-plugin/api/bbb-admin.resolver.ts
 // CHANGE: Added member queries and mutations (M4). All existing code preserved.
+// CHANGE (Phase B): Granular permissions. Each method is decorated with
+// @Allow(BbbAdminPermission.Permission, <granular>.Permission) so BBBAdmin
+// remains backward compatible while allowing finer-grained roles.
 
 import { Args, Mutation, Query, Resolver } from "@nestjs/graphql";
 import {
@@ -25,7 +28,16 @@ import { BbbProductAccess } from "../entities/bbb-product-access.entity";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
-import { BbbAdminPermission } from "../constants";
+import {
+  BbbAdminPermission,
+  BbbManageEntitlementsPermission,
+  BbbManageMeetingsPermission,
+  BbbManageMembersPermission,
+  BbbManageOrganizationsPermission,
+  BbbManageRoomsPermission,
+  BbbManageSessionsPermission,
+  BbbPlatformInfrastructurePermission,
+} from "../constants";
 import { TrialRegistrationService } from "../services/trial-registration.service";
 import { BbbMembershipService } from "../services/bbb-membership.service";
 import { CapacityIntelligenceService } from "../services/capacity-intelligence.service";
@@ -139,7 +151,7 @@ export class BbbAdminResolver {
   // ─── Capacity Intelligence Dashboard (ADR v1.7 §6A CI-003) ────────────────
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
   async poolCapacityDashboard(@Ctx() ctx: RequestContext) {
     return this.capacityIntelligenceService.buildDashboard(ctx);
   }
@@ -147,7 +159,7 @@ export class BbbAdminResolver {
   // ─── Servers ────────────────────────────────────────────────────────────────
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
   bbbServers(
     @Ctx() ctx: RequestContext,
     @Args("options") options?: { skip?: number; take?: number },
@@ -156,19 +168,19 @@ export class BbbAdminResolver {
   }
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
   bbbServer(@Ctx() ctx: RequestContext, @Args("id") id: string) {
     return this.serverService.findById(ctx, id);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
   @Transaction()
   @Mutation()
   createBbbServer(@Ctx() ctx: RequestContext, @Args("input") input: CreateBbbServerInput) {
     return this.serverService.create(ctx, input);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
   @Transaction()
   @Mutation()
   updateBbbServer(
@@ -182,7 +194,7 @@ export class BbbAdminResolver {
   // ─── Organizations ──────────────────────────────────────────────────────────
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageOrganizationsPermission.Permission)
   bbbOrganizations(
     @Ctx() ctx: RequestContext,
     @Args("options") options?: { skip?: number; take?: number },
@@ -191,19 +203,19 @@ export class BbbAdminResolver {
   }
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageOrganizationsPermission.Permission)
   bbbOrganization(@Ctx() ctx: RequestContext, @Args("id") id: string) {
     return this.orgService.findById(ctx, id);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageOrganizationsPermission.Permission)
   @Transaction()
   @Mutation()
   createBbbOrganization(@Ctx() ctx: RequestContext, @Args("input") input: AdminCreateBbbOrganizationInput) {
     return this.orgService.create(ctx, input);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageOrganizationsPermission.Permission)
   @Transaction()
   @Mutation()
   updateBbbOrganization(
@@ -217,7 +229,7 @@ export class BbbAdminResolver {
   // ─── Members (NEW — M4) ──────────────────────────────────────────────────────
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMembersPermission.Permission)
   async bbbOrganizationMembers(
     @Ctx() ctx: RequestContext,
     @Args("organizationId") organizationId: string,
@@ -259,7 +271,7 @@ export class BbbAdminResolver {
   }
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMembersPermission.Permission)
   async bbbOrganizationMember(
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
@@ -285,14 +297,14 @@ export class BbbAdminResolver {
     };
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMembersPermission.Permission)
   @Transaction()
   @Mutation()
   addBbbMember(@Ctx() ctx: RequestContext, @Args("input") input: AddBbbMemberInput) {
     return this.memberService.addMember(ctx, input);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMembersPermission.Permission)
   @Transaction()
   @Mutation()
   updateBbbMember(
@@ -303,7 +315,7 @@ export class BbbAdminResolver {
     return this.memberService.updateMember(ctx, id, input);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMembersPermission.Permission)
   @Transaction()
   @Mutation()
   removeBbbMember(@Ctx() ctx: RequestContext, @Args("id") id: string) {
@@ -313,7 +325,7 @@ export class BbbAdminResolver {
   // ─── Organization Membership CRUD (FEAT-001 / BUG-018) ──────────────────────
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMembersPermission.Permission)
   async bbbOrgMemberships(
     @Ctx() ctx: RequestContext,
     @Args("organizationId") organizationId: string,
@@ -321,7 +333,7 @@ export class BbbAdminResolver {
     return this.membershipService.listByOrganization(ctx, organizationId);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMembersPermission.Permission)
   @Transaction()
   @Mutation()
   async createBbbOrgMembership(
@@ -342,7 +354,7 @@ export class BbbAdminResolver {
     });
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMembersPermission.Permission)
   @Transaction()
   @Mutation()
   async updateBbbOrgMembership(
@@ -360,7 +372,7 @@ export class BbbAdminResolver {
     });
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMembersPermission.Permission)
   @Transaction()
   @Mutation()
   async removeBbbOrgMembership(
@@ -373,7 +385,7 @@ export class BbbAdminResolver {
 
   // ─── Retry Meeting (resets room + creates new meeting) ─────────────────────
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMeetingsPermission.Permission)
   @Transaction()
   @Mutation()
   async retryBbbMeeting(
@@ -404,7 +416,7 @@ export class BbbAdminResolver {
   // ─── Meetings ───────────────────────────────────────────────────────────────
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMeetingsPermission.Permission)
   bbbMeetings(
     @Ctx() ctx: RequestContext,
     @Args("organizationId") orgId?: string,
@@ -414,19 +426,19 @@ export class BbbAdminResolver {
   }
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMeetingsPermission.Permission)
   bbbMeeting(@Ctx() ctx: RequestContext, @Args("id") id: string) {
     return this.meetingService.findById(ctx, id);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMeetingsPermission.Permission)
   @Transaction()
   @Mutation()
   createBbbMeeting(@Ctx() ctx: RequestContext, @Args("input") input: CreateBbbMeetingInput) {
     return this.meetingService.createAndEnqueue(ctx, input);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMeetingsPermission.Permission)
   @Transaction()
   @Mutation()
   updateBbbMeeting(
@@ -437,7 +449,7 @@ export class BbbAdminResolver {
     return this.meetingService.update(ctx, id, input);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMeetingsPermission.Permission)
   @Transaction()
   @Mutation()
   async deleteBbbMeeting(
@@ -448,14 +460,14 @@ export class BbbAdminResolver {
     return true;
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMeetingsPermission.Permission)
   @Transaction()
   @Mutation()
   endBbbMeeting(@Ctx() ctx: RequestContext, @Args("id") id: string) {
     return this.meetingService.endMeeting(ctx, id);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
   @Transaction()
   @Mutation()
   async deleteBbbServer(
@@ -466,7 +478,7 @@ export class BbbAdminResolver {
     return true;
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageOrganizationsPermission.Permission)
   @Transaction()
   @Mutation()
   async deleteBbbOrganization(
@@ -478,7 +490,7 @@ export class BbbAdminResolver {
   }
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageMeetingsPermission.Permission)
   async bbbModeratorJoinUrl(
     @Ctx() ctx: RequestContext,
     @Args("meetingId") meetingId: string,
@@ -494,7 +506,7 @@ export class BbbAdminResolver {
   // ─── Capacity Grants ────────────────────────────────────────────────────────
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageOrganizationsPermission.Permission)
   async bbbCapacityGrants(
     @Ctx() ctx: RequestContext,
     @Args("organizationId") orgId: string,
@@ -513,7 +525,7 @@ export class BbbAdminResolver {
     return { items, totalItems };
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageOrganizationsPermission.Permission)
   @Transaction()
   @Mutation()
   async createBbbCapacityGrant(
@@ -547,7 +559,7 @@ export class BbbAdminResolver {
   // ─── Rooms ──────────────────────────────────────────────────────────────────
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   bbbRooms(
     @Ctx() ctx: RequestContext,
     @Args("organizationId") orgId: string,
@@ -557,12 +569,12 @@ export class BbbAdminResolver {
   }
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   bbbRoom(@Ctx() ctx: RequestContext, @Args("id") id: string) {
     return this.roomService.findById(ctx, id);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   @Transaction()
   @Mutation()
   createBbbRoom(@Ctx() ctx: RequestContext, @Args("input") input: CreateBbbRoomInput) {
@@ -572,7 +584,7 @@ export class BbbAdminResolver {
     });
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   @Transaction()
   @Mutation()
   async updateBbbRoom(
@@ -584,7 +596,7 @@ export class BbbAdminResolver {
     return this.roomService.findById(ctx, id);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   @Transaction()
   @Mutation()
   async deleteBbbRoom(
@@ -595,7 +607,7 @@ export class BbbAdminResolver {
     return true;
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   @Transaction()
   @Mutation()
   resetBbbRoom(@Ctx() ctx: RequestContext, @Args("id") id: string) {
@@ -605,7 +617,7 @@ export class BbbAdminResolver {
   // ─── Product Access ─────────────────────────────────────────────────────────
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   bbbProductAccessByRoom(
     @Ctx() ctx: RequestContext,
     @Args("roomId") roomId: string,
@@ -615,7 +627,7 @@ export class BbbAdminResolver {
       .find({ where: { room: { id: roomId } }, relations: ["room"] });
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   @Transaction()
   @Mutation()
   async createBbbProductAccess(
@@ -636,7 +648,7 @@ export class BbbAdminResolver {
     return this.connection.getRepository(ctx, BbbProductAccess).save(access);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   @Transaction()
   @Mutation()
   async deleteBbbProductAccess(
@@ -648,7 +660,7 @@ export class BbbAdminResolver {
   }
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   async bbbEnrollmentsByRoom(
     @Ctx() ctx: RequestContext,
     @Args("roomId") roomId: string,
@@ -686,7 +698,7 @@ export class BbbAdminResolver {
     return { items, totalItems };
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   @Transaction()
   @Mutation()
   async deactivateBbbEnrollment(
@@ -702,7 +714,7 @@ export class BbbAdminResolver {
     return this.connection.getRepository(ctx, BbbEnrollment).save(enrollment);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   @Transaction()
   @Mutation()
   async createBbbEnrollment(
@@ -753,7 +765,7 @@ export class BbbAdminResolver {
   }
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   async bbbProductVariantSearch(
     @Ctx() ctx: RequestContext,
     @Args("term") term: string,
@@ -788,7 +800,7 @@ export class BbbAdminResolver {
   // ─── Trial Registrations (Admin) ───────────────────────────────────────────
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
   async bbbTrialRegistrationsBySession(
     @Ctx() ctx: RequestContext,
     @Args("sessionId") sessionId: string,
@@ -798,7 +810,7 @@ export class BbbAdminResolver {
   }
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
   async bbbTrialRegistrationsByOrganization(
     @Ctx() ctx: RequestContext,
     @Args("organizationId") orgId: string,
@@ -815,7 +827,7 @@ export class BbbAdminResolver {
     return allRegistrations;
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
   @Transaction()
   @Mutation()
   async updateBbbTrialRegistrationStatus(
@@ -826,7 +838,7 @@ export class BbbAdminResolver {
     return this.trialRegistrationService.updateStatus(ctx, String(id), status);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
   @Transaction()
   @Mutation()
   async convertTrialToEnrollment(
@@ -846,7 +858,7 @@ export class BbbAdminResolver {
   // ─── Entitlements ─────────────────────────────────────────────────────────
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageEntitlementsPermission.Permission)
   async bbbEntitlements(
     @Ctx() ctx: RequestContext,
     @Args("options") options?: { skip?: number; take?: number },
@@ -863,7 +875,7 @@ export class BbbAdminResolver {
     return { items, totalItems };
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageEntitlementsPermission.Permission)
   @Transaction()
   @Mutation()
   async createBbbEntitlement(
@@ -889,7 +901,7 @@ export class BbbAdminResolver {
     return this.connection.getRepository(ctx, BbbEntitlement).save(entitlement);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageEntitlementsPermission.Permission)
   @Transaction()
   @Mutation()
   async deleteBbbEntitlement(
@@ -903,7 +915,7 @@ export class BbbAdminResolver {
   // ─── Scheduled Sessions ────────────────────────────────────────────────────
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
   bbbScheduledSessions(
     @Ctx() ctx: RequestContext,
     @Args("organizationId") orgId: string,
@@ -912,7 +924,7 @@ export class BbbAdminResolver {
   }
 
   @Query()
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
   bbbScheduledSession(
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
@@ -920,7 +932,7 @@ export class BbbAdminResolver {
     return this.scheduledSessionService.findById(ctx, id);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
   @Transaction()
   @Mutation()
   createBbbScheduledSession(
@@ -930,7 +942,7 @@ export class BbbAdminResolver {
     return this.scheduledSessionService.create(ctx, input);
   }
 
-  @Allow(BbbAdminPermission.Permission)
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
   @Transaction()
   @Mutation()
   cancelBbbScheduledSession(

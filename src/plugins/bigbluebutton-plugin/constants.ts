@@ -54,8 +54,73 @@ export const MODERATOR_ROLES: OrgRole[] = [
 
 export const BBB_PERMISSION_NAME = "BBBAdmin";
 
+/**
+ * Legacy coarse-grained permission. Kept for backward compatibility — any
+ * user holding BBBAdmin retains access to all BBB admin operations even
+ * without the granular permissions below.
+ */
 export const BbbAdminPermission = new PermissionDefinition({
   name: BBB_PERMISSION_NAME,
   description:
     "Permission to manage BigBlueButton servers, organizations, and meetings",
 });
+
+// ─── Granular BBB Permissions (Phase B) ─────────────────────────────────────
+// These replace the single BBBAdmin permission with scoped access. Each
+// resolver method is decorated with @Allow(BbbAdminPermission.Permission,
+// <granular>.Permission) so BBBAdmin remains backward compatible while
+// allowing finer-grained roles.
+
+export const BBB_PLATFORM_INFRASTRUCTURE = "BBBPlatformInfrastructure";
+export const BBB_MANAGE_ORGANIZATIONS = "BBBManageOrganizations";
+export const BBB_MANAGE_ROOMS = "BBBManageRooms";
+export const BBB_MANAGE_SESSIONS = "BBBManageSessions";
+export const BBB_MANAGE_MEETINGS = "BBBManageMeetings";
+export const BBB_MANAGE_ENTITLEMENTS = "BBBManageEntitlements";
+export const BBB_MANAGE_MEMBERS = "BBBManageMembers";
+
+export const BbbPlatformInfrastructurePermission = new PermissionDefinition({
+  name: BBB_PLATFORM_INFRASTRUCTURE,
+  description: "Manage BBB servers and platform capacity infrastructure",
+});
+
+export const BbbManageOrganizationsPermission = new PermissionDefinition({
+  name: BBB_MANAGE_ORGANIZATIONS,
+  description: "Create, read, update and delete BBB organizations",
+});
+
+export const BbbManageRoomsPermission = new PermissionDefinition({
+  name: BBB_MANAGE_ROOMS,
+  description: "Manage BBB rooms, product access and enrollments",
+});
+
+export const BbbManageSessionsPermission = new PermissionDefinition({
+  name: BBB_MANAGE_SESSIONS,
+  description: "Manage BBB scheduled sessions and trial registrations",
+});
+
+export const BbbManageMeetingsPermission = new PermissionDefinition({
+  name: BBB_MANAGE_MEETINGS,
+  description: "Manage BBB meetings, retry, end and moderator join",
+});
+
+export const BbbManageEntitlementsPermission = new PermissionDefinition({
+  name: BBB_MANAGE_ENTITLEMENTS,
+  description: "Manage BBB access entitlements",
+});
+
+export const BbbManageMembersPermission = new PermissionDefinition({
+  name: BBB_MANAGE_MEMBERS,
+  description: "Manage BBB organization members and memberships",
+});
+
+/** All granular BBB permission definitions for registration in the plugin. */
+export const BBB_GRANULAR_PERMISSIONS = [
+  BbbPlatformInfrastructurePermission,
+  BbbManageOrganizationsPermission,
+  BbbManageRoomsPermission,
+  BbbManageSessionsPermission,
+  BbbManageMeetingsPermission,
+  BbbManageEntitlementsPermission,
+  BbbManageMembersPermission,
+];
