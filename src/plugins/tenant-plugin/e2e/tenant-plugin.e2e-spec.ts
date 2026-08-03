@@ -876,8 +876,10 @@ describe('TenantPlugin', () => {
     });
 
     it('SuperAdmin sees all administrators', async () => {
-      adminClient.asSuperAdmin();
-      adminClient.setChannelToken('');
+      // Set the default channel token BEFORE logging in as SuperAdmin —
+      // asSuperAdmin() performs a login that needs a valid channel token.
+      adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
+      await adminClient.asSuperAdmin();
 
       const { administrators } = await adminClient.query(ADMINISTRATORS);
 

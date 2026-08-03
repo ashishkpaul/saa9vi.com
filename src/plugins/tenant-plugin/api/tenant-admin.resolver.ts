@@ -42,7 +42,7 @@ export class TenantAdminResolver {
       const [items, totalItems] = await this.connection
         .getRepository(ctx, Administrator)
         .findAndCount({
-          relations: ['user', 'roles'],
+          relations: ['user', 'user.roles'],
           order: { createdAt: 'ASC' },
           skip,
           take,
@@ -56,7 +56,7 @@ export class TenantAdminResolver {
       .getRepository(ctx, Administrator)
       .createQueryBuilder('administrator')
       .leftJoinAndSelect('administrator.user', 'user')
-      .leftJoinAndSelect('administrator.roles', 'role')
+      .leftJoinAndSelect('user.roles', 'role')
       .leftJoin('role.channels', 'channel')
       .where('channel.id = :channelId', { channelId })
       .orderBy('administrator.createdAt', 'ASC');
