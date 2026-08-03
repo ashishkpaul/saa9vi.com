@@ -76,6 +76,7 @@ None.
 | BbbTrialRegistration | `trial_registration` | No |
 | BbbCapacityAlertLog | `bbb_capacity_alert_log` | No |
 | BbbProductAccess | `bbb_product_access` | No |
+| BbbInstructorAssignment | `bbb_instructor_assignment` | No (scoped via organization) |
 | BbbServer | `bbb_server` | No |
 
 ### Publishes

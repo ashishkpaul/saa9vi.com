@@ -592,7 +592,20 @@ export class BbbAdminResolver {
     @Args("id") id: string,
     @Args("input") input: UpdateBbbRoomInput,
   ) {
-    await this.connection.getRepository(ctx, BbbRoom).update(id, input);
+    // INV-014: clamp maxParticipants to the owning org's ceiling.
+    const room = await this.connection.getRepository(ctx, BbbRoom).findOne({
+      where: { id },
+      relations: ["organization"],
+    });
+    if (!room) throw new EntityNotFoundError("BbbRoom", id);
+    const updateInput: UpdateBbbRoomInput = { ...input };
+    if (updateInput.maxParticipants != null) {
+      updateInput.maxParticipants = Math.min(
+        updateInput.maxParticipants,
+        room.organization.maxParticipantsPerMeeting,
+      );
+    }
+    await this.connection.getRepository(ctx, BbbRoom).update(id, updateInput);
     return this.roomService.findById(ctx, id);
   }
 

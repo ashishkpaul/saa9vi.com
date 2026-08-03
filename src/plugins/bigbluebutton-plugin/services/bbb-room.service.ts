@@ -102,13 +102,21 @@ export class BbbRoomService {
       BbbOrganization,
       input.organizationId,
     );
+    // INV-014: BbbRoom.maxParticipants must never exceed
+    // BbbOrganization.maxParticipantsPerMeeting. The org value is the
+    // default when no explicit value is given, and an explicitly-provided
+    // value is clamped to the org ceiling.
+    const maxParticipants = Math.min(
+      input.maxParticipants ?? org.maxParticipantsPerMeeting,
+      org.maxParticipantsPerMeeting,
+    );
     const room = new BbbRoom({
       organization: org,
       name: input.name,
       description: input.description ?? null,
       slug: input.slug ?? null,
       recordingEnabled: input.recordingEnabled ?? org.recordingEnabled,
-      maxParticipants: input.maxParticipants ?? org.maxParticipantsPerMeeting,
+      maxParticipants,
       createdByCustomerId: input.createdByCustomerId ?? null,
       state: "Idle",
       retryCount: 0,

@@ -14,7 +14,7 @@
 - [x] Trial registration creates `Entitlement` automatically
 - [x] `BbbMeetingService.getJoinUrl` checks Entitlement for session access
 - [x] `BbbScheduledSession` `(organizationId, slug)` composite index
-- [x] Rate limiting on public mutations (SEC-004)
+- [x] Rate limiting on public mutations (SEC-005)
 - [x] Custom domain → channel token Redis mapping (SEC-006)
 
 ---

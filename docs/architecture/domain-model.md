@@ -109,6 +109,29 @@
 
 ---
 
+## BbbInstructorAssignment
+
+| Property | Value |
+|---|---|
+| **Plugin** | BigBlueButtonPlugin |
+| **Table** | `bbb_instructor_assignment` |
+| **Purpose** | Maps an InstructorProfile to a BbbScheduledSession with a role and display order. |
+
+**Relationships:**
+- Belongs to BbbScheduledSession
+- References InstructorProfile (TenantPlugin) via `instructorProfileId`
+
+**Lifecycle:**
+- Created when an instructor is assigned to a scheduled session
+- Role: `primary` | `assistant`
+- `displayOrder` controls instructor ordering within a session
+
+**Invariants:**
+- `(instructorProfileId, scheduledSessionId)` composite unique index
+- `role` is a string-literal union (`primary` | `assistant`)
+
+---
+
 ## BbbScheduledSession
 
 | Property | Value |
