@@ -1,4 +1,19 @@
 import { CrudPermissionDefinition, Permission } from '@vendure/core';
+import {
+  BbbManageEntitlementsPermission,
+  BbbManageMeetingsPermission,
+  BbbManageMembersPermission,
+  BbbManageOrganizationsPermission,
+  BbbManageRoomsPermission,
+  BbbManageSessionsPermission,
+  BbbPlatformInfrastructurePermission,
+} from '../bigbluebutton-plugin/constants';
+import {
+  articlePermission,
+  bannerPermission,
+  pagePermission,
+} from '../cms/constants';
+import { REVIEW_ADMIN_PERMISSION } from '../reviews/constants';
 
 export const TENANT_PLUGIN_OPTIONS = 'TENANT_PLUGIN_OPTIONS';
 
@@ -76,4 +91,27 @@ export const TENANT_ADMIN_ROLE_PERMISSIONS: Permission[] = [
   mediaResourcePermission.Read,
   mediaResourcePermission.Update,
   mediaResourcePermission.Delete,
+  // BigBlueButton granular permissions (Phase B) — scoped access, not BBBAdmin
+  BbbPlatformInfrastructurePermission.Permission,
+  BbbManageOrganizationsPermission.Permission,
+  BbbManageRoomsPermission.Permission,
+  BbbManageSessionsPermission.Permission,
+  BbbManageMeetingsPermission.Permission,
+  BbbManageEntitlementsPermission.Permission,
+  BbbManageMembersPermission.Permission,
+  // CMS CRUD permissions
+  articlePermission.Create,
+  articlePermission.Read,
+  articlePermission.Update,
+  articlePermission.Delete,
+  bannerPermission.Create,
+  bannerPermission.Read,
+  bannerPermission.Update,
+  bannerPermission.Delete,
+  pagePermission.Create,
+  pagePermission.Read,
+  pagePermission.Update,
+  pagePermission.Delete,
+  // Reviews
+  REVIEW_ADMIN_PERMISSION.Permission,
 ];

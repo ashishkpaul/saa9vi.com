@@ -37,6 +37,7 @@ export const articleList: DashboardRouteDefinition = {
         id: 'articles',
         url: '/articles',
         title: 'Articles',
+        requiresPermission: ['ReadCmsArticle'],
     },
     path: '/articles',
     loader: () => ({ breadcrumb: 'Articles' }),

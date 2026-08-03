@@ -39,6 +39,7 @@ export const bannerList: DashboardRouteDefinition = {
         id: 'banners',
         url: '/banners',
         title: 'Banners',
+        requiresPermission: ['ReadCmsBanner'],
     },
     path: '/banners',
     loader: () => ({ breadcrumb: 'Banners' }),
