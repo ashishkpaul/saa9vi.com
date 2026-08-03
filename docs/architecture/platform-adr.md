@@ -468,3 +468,64 @@ export class BbbPlatformCapacityPolicy extends VendureEntity {
 - Tenant-controlled BBB capacity (resource abuse risk, unpredictable infrastructure costs)
 - Fixed hardcoded capacity in code (not adaptable to different plan tiers)
 - BBB server as only capacity authority (too late — impacts user experience at join time)
+
+---
+
+## ADR-032: Channel-Ownership Guard for BBB Resources
+
+**Status:** Active
+
+**Decision:** All BBB service-layer reads and mutations that resolve a tenant-scoped resource (organization, room, meeting, scheduled session, entitlement, member, membership, capacity grant, enrollment, product access, trial registration) must pass through `BbbChannelAccessService` before returning or mutating. The guard asserts the resource's owning organization belongs to the active `ctx.channelId`. SuperAdmin bypasses all checks.
+
+**Rationale:** The BBB services previously resolved resources by ID without verifying channel ownership, so a tenant admin could read or mutate another tenant's BBB resources if they knew the ID. Centralizing the check in a single injectable service (rather than scattering `if (org.channelId !== ctx.channelId)` across every method) keeps the invariant enforceable and testable.
+
+**Consequences:**
+- `BbbChannelAccessService` is registered in the BBB plugin providers and injected into `BbbOrganizationService`, `BbbRoomService`, `BbbMeetingService`, `BbbScheduledSessionService`, and `BbbEntitlementService`
+- `findAll` methods filter by `ctx.channelId`; `findById`/`update`/`delete`/`create` assert ownership
+- Worker/webhook callbacks (e.g. `onMeetingActive`) bypass the guard — they run under internal context, not tenant-admin context
+- See INV-001 and the Phase A isolation e2e suite
+
+**Alternatives Rejected:**
+- Relying on Vendure's `ListQueryBuilder` channel filtering alone (does not cover scalar-`channelId` entities like `BbbEntitlement`, and does not guard by-ID mutations)
+- Scattering inline channel checks per method (duplication, drift risk)
+
+---
+
+## ADR-033: Granular BBB Permissions
+
+**Status:** Active
+
+**Decision:** The single coarse-grained `BBBAdmin` permission is supplemented by seven granular permissions: `BBBPlatformInfrastructure`, `BBBManageOrganizations`, `BBBManageRooms`, `BBBManageSessions`, `BBBManageMeetings`, `BBBManageEntitlements`, `BBBManageMembers`. Every BBB admin resolver method and dashboard route is decorated with both `BBBAdmin` and the matching granular permission, so `BBBAdmin` remains fully backward compatible while finer-grained roles are possible.
+
+**Rationale:** A single `BBBAdmin` permission forces every tenant admin to have full BBB access or none. Granular permissions let the platform grant scoped access (e.g. a tenant admin who manages rooms but not platform servers) and align with the Phase C expansion of `TENANT_ADMIN_ROLE_PERMISSIONS`.
+
+**Consequences:**
+- `BBB_GRANULAR_PERMISSIONS` registered in `config.authOptions.customPermissions`
+- Resolver `@Allow` decorators include both `BbbAdminPermission.Permission` and the granular permission
+- Dashboard `requiresPermission` arrays include both `BBBAdmin` and the granular permission
+- `TENANT_ADMIN_ROLE_PERMISSIONS` grants the granular permissions (not `BBBAdmin`) to new tenant admins
+- See INV-001 and Phase B
+
+**Alternatives Rejected:**
+- Replacing `BBBAdmin` entirely (breaks existing roles that hold `BBBAdmin`)
+- Keeping only `BBBAdmin` (no scoped access possible)
+
+---
+
+## ADR-034: Channel-Scoped Administrator Visibility
+
+**Status:** Active
+
+**Decision:** The TenantPlugin overrides the built-in `administrators` Admin API query so that a tenant administrator only sees administrators whose `Role.channels[]` includes the active channel. SuperAdmin bypasses the filter and sees all administrators.
+
+**Rationale:** Vendure's built-in `administrators` query is not channel-aware — it returns all administrators regardless of the active channel. If a tenant role is ever granted `ReadAdministrator`, the built-in query would expose global/SuperAdmin accounts to tenant admins. Overriding the query closes this latent leak.
+
+**Consequences:**
+- `TenantAdminResolver.administrators` filters by `role.channels` join on `ctx.channelId`
+- SuperAdmin path returns all administrators
+- Enforced by INV-016 and the `administratorVisibility` invariant checker
+- Regression tests cover tenant A, tenant B, and SuperAdmin visibility
+
+**Alternatives Rejected:**
+- Relying on the built-in query (leaks global admins if `ReadAdministrator` is granted)
+- Removing `ReadAdministrator` from tenant roles entirely (over-restrictive; the override is the correct fix)

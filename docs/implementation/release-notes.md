@@ -4,6 +4,23 @@
 
 ---
 
+## v1.11 — 2026-08-03
+
+### New
+
+- **Phase A — Cross-tenant channel isolation**: `BbbChannelAccessService` enforces INV-001 at the service layer for organizations, rooms, meetings, scheduled sessions, and entitlements. `findAll` filters by `ctx.channelId`; `findById`/`update`/`delete`/`create` assert ownership. Cross-tenant isolation e2e suite added (`npm run test:e2e:bbb-isolation`).
+- **Phase B — Granular BBB permissions**: Seven scoped permissions (`BBBPlatformInfrastructure`, `BBBManageOrganizations`, `BBBManageRooms`, `BBBManageSessions`, `BBBManageMeetings`, `BBBManageEntitlements`, `BBBManageMembers`) added alongside the backward-compatible `BBBAdmin`. Resolver decorators and dashboard routes updated.
+- **Phase C — Tenant experience**: `TENANT_ADMIN_ROLE_PERMISSIONS` expanded with the granular BBB permissions, CMS CRUD permissions, and `ReviewAdmin`. CMS dashboard routes gated behind `ReadCmsArticle`/`ReadCmsBanner`/`ReadCmsPage`.
+- **Phase D — Hardening**: INV-016 (Administrator Visibility Is Channel-Scoped) added. The `administrators` query is overridden in the TenantPlugin so tenant admins only see administrators in their own channel; SuperAdmin sees all. Regression tests added.
+- **ADR-032/033/034**: Channel-ownership guard, granular BBB permissions, and channel-scoped administrator visibility documented.
+
+### Fixed
+
+- `BbbTrialRegistration.status` and `BbbInstructorAssignment.role` columns given explicit `varchar` type (TypeORM `Object` type error under `synchronize: true`).
+- `BbbRoomService`/`BbbMeetingService` circular DI refactored to `forwardRef` (removes `require()` ESM incompatibility).
+
+---
+
 ## v1.10 — 2026-07-24
 
 ### New
