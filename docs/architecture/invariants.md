@@ -157,6 +157,16 @@ This pattern does **not** apply to Stream 1 (`BbbUsageLedger`) or Stream 3 (`AdS
 
 ---
 
+## INV-016: Administrator Visibility Is Channel-Scoped
+
+**Rule:** The `administrators` Admin API query must never leak administrators from other channels (including SuperAdmin/global administrators) to a tenant administrator. A tenant admin operating under channel X may only see administrators whose `Role.channels[]` includes channel X.
+
+**Rationale:** Vendure's built-in `administrators` query is not channel-aware — it returns all administrators regardless of the active channel. If a tenant role is ever granted `ReadAdministrator`, the built-in query would expose global/SuperAdmin accounts to tenant admins. The TenantPlugin must override the `administrators` query to filter by the active channel's role membership.
+
+**Rejection criterion:** Any PR that grants `ReadAdministrator` to a tenant role without also overriding the `administrators` query to be channel-scoped is rejected.
+
+---
+
 ## INV-015 (Proposed): BBB Infrastructure Capacity Is Platform-Controlled (Future — See ADR-031)
 
 **Status:** Proposed — not yet implemented. See ADR-031.

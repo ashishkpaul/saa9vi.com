@@ -1,9 +1,18 @@
 import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
-import { Allow, Ctx, ID, RequestContext, Transaction } from '@vendure/core';
+import {
+  Allow,
+  Ctx,
+  ID,
+  Permission,
+  RequestContext,
+  Transaction,
+  TransactionalConnection,
+} from '@vendure/core';
 import { TenantProfileService } from '../services/tenant-profile.service';
 import { InstructorProfileService } from '../services/instructor-profile.service';
 import { MediaResourceService } from '../services/media-resource.service';
 import { tenantProfilePermission, instructorProfilePermission, mediaResourcePermission } from '../constants';
+import { Administrator } from '@vendure/core';
 
 @Resolver()
 export class TenantAdminResolver {
@@ -11,7 +20,54 @@ export class TenantAdminResolver {
     private readonly tenantProfileService: TenantProfileService,
     private readonly instructorProfileService: InstructorProfileService,
     private readonly mediaResourceService: MediaResourceService,
+    private readonly connection: TransactionalConnection,
   ) {}
+
+  /**
+   * INV-016: Override the built-in `administrators` query so a tenant admin
+   * only sees administrators whose Role.channels[] includes the active
+   * channel. SuperAdmin bypasses the filter and sees all administrators.
+   */
+  @Query()
+  @Allow(Permission.ReadAdministrator)
+  async administrators(
+    @Ctx() ctx: RequestContext,
+    @Args() args: { options?: any },
+  ): Promise<{ items: Administrator[]; totalItems: number }> {
+    const take = Math.min(Math.max(args.options?.take ?? 25, 1), 100);
+    const skip = Math.max(args.options?.skip ?? 0, 0);
+
+    // SuperAdmin sees all administrators (platform-level view).
+    if (ctx.userHasPermissions([Permission.SuperAdmin])) {
+      const [items, totalItems] = await this.connection
+        .getRepository(ctx, Administrator)
+        .findAndCount({
+          relations: ['user', 'roles'],
+          order: { createdAt: 'ASC' },
+          skip,
+          take,
+        });
+      return { items, totalItems };
+    }
+
+    // Tenant admin: only administrators whose roles include the active channel.
+    const channelId = ctx.channelId as string;
+    const qb = this.connection
+      .getRepository(ctx, Administrator)
+      .createQueryBuilder('administrator')
+      .leftJoinAndSelect('administrator.user', 'user')
+      .leftJoinAndSelect('administrator.roles', 'role')
+      .leftJoin('role.channels', 'channel')
+      .where('channel.id = :channelId', { channelId })
+      .orderBy('administrator.createdAt', 'ASC');
+
+    const [items, totalItems] = await qb
+      .skip(skip)
+      .take(take)
+      .getManyAndCount();
+
+    return { items, totalItems };
+  }
 
   @Query()
   @Allow(tenantProfilePermission.Read)

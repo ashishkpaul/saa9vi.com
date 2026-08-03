@@ -11,6 +11,7 @@ export class AdrChecker implements Checker {
       this.ledgerImmutability(),
       this.meetingFsmRules(),
       this.noAdHocAccessChecks(),
+      this.administratorVisibility(),
     ];
 
     const results = await Promise.all(checks);
@@ -176,6 +177,37 @@ export class AdrChecker implements Checker {
         ? 'All required meeting states present'
         : `Missing states: ${missing.join(', ')}`,
       details: 'INV-004: Meetings must follow FSM: Pending → Provisioning → Active → Completed → Archived/Failed/Stale',
+    };
+  }
+
+  private async administratorVisibility(): Promise<CheckResult> {
+    const srcDir = path.join(__dirname, '../../..');
+    const files = findFiles(
+      ['src/plugins/tenant-plugin/**/*.ts'],
+      srcDir
+    );
+
+    // INV-016: The TenantPlugin must override the `administrators` query so
+    // that a tenant admin only sees administrators whose Role.channels[]
+    // includes the active channel. If ReadAdministrator is ever granted to a
+    // tenant role without this override, the built-in query would leak
+    // global/SuperAdmin accounts.
+    const hasAdministratorsOverride = files.some((file) => {
+      const content = readFileContent(file);
+      return /administrators/.test(content) && /channelId/.test(content);
+    });
+
+    const message = hasAdministratorsOverride
+      ? 'TenantPlugin overrides administrators query with channel scoping'
+      : 'TenantPlugin does NOT override the administrators query — INV-016 violated';
+
+    return {
+      checker: this.name,
+      name: 'administrator-visibility',
+      passed: hasAdministratorsOverride,
+      severity: hasAdministratorsOverride ? 'info' : 'error',
+      message,
+      details: 'INV-016: administrators query must be channel-scoped to prevent leaking global/SuperAdmin accounts to tenant admins',
     };
   }
 

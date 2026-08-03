@@ -270,6 +270,20 @@ const ADMIN_MEDIA_RESOURCES = gql`
   }
 `;
 
+const ADMINISTRATORS = gql`
+  query Administrators {
+    administrators {
+      items {
+        id
+        emailAddress
+        firstName
+        lastName
+      }
+      totalItems
+    }
+  }
+`;
+
 // ─── Test suite ───────────────────────────────────────────────────────────
 
 describe('TenantPlugin', () => {
@@ -831,6 +845,44 @@ describe('TenantPlugin', () => {
 
       // Service layer throws EntityNotFoundError (resource not in tenant B's channel)
       await expect(promise).rejects.toThrow();
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 6. Administrator visibility (INV-016)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('Administrator visibility (INV-016)', () => {
+    it('tenant A admin only sees administrators in their own channel', async () => {
+      adminClient.setChannelToken(tenantAChannelToken);
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+
+      const { administrators } = await adminClient.query(ADMINISTRATORS);
+
+      // The tenant admin must NOT see the global SuperAdmin account.
+      // The only administrator visible is the tenant A admin themselves.
+      expect(administrators.totalItems).toBe(1);
+      expect(administrators.items[0].emailAddress).toBe(tenantAEmail);
+    });
+
+    it('tenant B admin only sees administrators in their own channel', async () => {
+      adminClient.setChannelToken(tenantBChannelToken);
+      await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
+
+      const { administrators } = await adminClient.query(ADMINISTRATORS);
+
+      expect(administrators.totalItems).toBe(1);
+      expect(administrators.items[0].emailAddress).toBe(tenantBEmail);
+    });
+
+    it('SuperAdmin sees all administrators', async () => {
+      adminClient.asSuperAdmin();
+      adminClient.setChannelToken('');
+
+      const { administrators } = await adminClient.query(ADMINISTRATORS);
+
+      // SuperAdmin sees at least the global admin plus the two tenant admins
+      expect(administrators.totalItems).toBeGreaterThanOrEqual(3);
     });
   });
 });
