@@ -27,6 +27,7 @@ import { BbbTrialRegistration } from "../entities/trial-registration.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
+import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
 import { BbbRoom } from "../entities/bbb-room.entity";
 import { Customer } from "@vendure/core";
 
@@ -94,7 +95,7 @@ export class BbbShopResolver {
 
     const now = new Date();
 
-    // Enrollment-based rooms (storefront purchase path)
+    // Enrollment-based rooms (legacy storefront purchase path)
     const enrollments = await this.connection
       .getRepository(ctx, BbbEnrollment)
       .find({
@@ -110,6 +111,27 @@ export class BbbShopResolver {
         })
         .map((e) => e.roomId),
     );
+
+    // Entitlement-based rooms (current storefront purchase path — BUG-022)
+    // BbbOrderFulfillmentListener writes BbbEntitlement { type: bbb_room }
+    // for room purchases, so a paying customer's room must appear here.
+    const entitlements = await this.connection
+      .getRepository(ctx, BbbEntitlement)
+      .find({
+        where: {
+          customerId: customer.id as string,
+          type: "bbb_room",
+        },
+      });
+    const entitlementRoomIds = new Set(
+      entitlements
+        .filter((e) => {
+          if (e.validUntil && e.validUntil < now) return false;
+          return true;
+        })
+        .map((e) => e.resourceId),
+    );
+    for (const id of entitlementRoomIds) enrolledRoomIds.add(id);
 
     // Membership-based rooms: staff only (TRAINER, ORG_ADMIN).
     // STUDENT membership is excluded — students access rooms via enrollment.
@@ -156,11 +178,19 @@ export class BbbShopResolver {
     const room = await this.roomService.findById(ctx, id);
     if (!room) throw new ForbiddenError();
 
-    // Allow access if customer has either a valid enrollment or an org membership
+    // Allow access if customer has a valid enrollment, a valid entitlement,
+    // or an org membership (BUG-022: also check BbbEntitlement).
     const now = new Date();
-    let [enrollment, member] = await Promise.all([
+    let [enrollment, entitlement, member] = await Promise.all([
       this.connection.getRepository(ctx, BbbEnrollment).findOne({
         where: { roomId: id, customerId: customer.id as string, active: true },
+      }),
+      this.connection.getRepository(ctx, BbbEntitlement).findOne({
+        where: {
+          resourceId: id,
+          customerId: customer.id as string,
+          type: "bbb_room",
+        },
       }),
       this.memberService.findActiveMembership(
         ctx,
@@ -173,7 +203,8 @@ export class BbbShopResolver {
       (enrollment?.validUntil && enrollment.validUntil < now) ||
       (!enrollment?.validUntil && enrollment?.expiresAt && enrollment.expiresAt < now);
     if (isExpired) enrollment = null;
-    if (!enrollment && !member) throw new ForbiddenError();
+    if (entitlement?.validUntil && entitlement.validUntil < now) entitlement = null;
+    if (!enrollment && !entitlement && !member) throw new ForbiddenError();
 
     return room;
   }
@@ -238,8 +269,20 @@ export class BbbShopResolver {
         relations: ["room"],
       });
 
+    // BUG-022: also surface rooms purchased via BbbEntitlement (the current
+    // storefront purchase path). Merge entitlement-based rooms into the list.
+    const entitlements = await this.connection
+      .getRepository(ctx, BbbEntitlement)
+      .find({
+        where: {
+          customerId: customer.id as string,
+          type: "bbb_room",
+        },
+        relations: ["room"],
+      });
+
     const now = new Date();
-    return enrollments
+    const enrollmentItems = enrollments
       .filter((e) => {
         if (e.validUntil && e.validUntil < now) return false;
         if (!e.validUntil && e.expiresAt && e.expiresAt < now) return false;
@@ -255,6 +298,30 @@ export class BbbShopResolver {
         validFrom: e.validFrom ? e.validFrom.toISOString() : null,
         validUntil: e.validUntil ? e.validUntil.toISOString() : null,
       }));
+
+    const entitlementItems = entitlements
+      .filter((e) => {
+        if (e.validUntil && e.validUntil < now) return false;
+        return true;
+      })
+      .map((e) => ({
+        id: e.id as string,
+        roomId: e.resourceId,
+        roomName: (e as any).room?.name ?? e.resourceId,
+        roomState: (e as any).room?.state ?? "Idle",
+        active: true,
+        expiresAt: e.validUntil ? e.validUntil.toISOString() : null,
+        validFrom: e.validFrom ? e.validFrom.toISOString() : null,
+        validUntil: e.validUntil ? e.validUntil.toISOString() : null,
+      }));
+
+    // Deduplicate by roomId, preferring the enrollment entry.
+    const seen = new Set<string>();
+    return [...enrollmentItems, ...entitlementItems].filter((item) => {
+      if (seen.has(item.roomId)) return false;
+      seen.add(item.roomId);
+      return true;
+    });
   }
 
   // ─── Scheduled Sessions ──────────────────────────────────────────────────

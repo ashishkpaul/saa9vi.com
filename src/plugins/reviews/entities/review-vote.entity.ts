@@ -1,5 +1,5 @@
-import { Entity, ManyToOne, Column, Unique } from "typeorm";
-import { VendureEntity, Customer } from "@vendure/core";
+import { Entity, ManyToOne, Column, Unique, JoinTable, ManyToMany, Index } from "typeorm";
+import { VendureEntity, Customer, Channel, ChannelAware } from "@vendure/core";
 import { ProductReview } from "./product-review.entity";
 
 /**
@@ -7,10 +7,18 @@ import { ProductReview } from "./product-review.entity";
  */
 @Entity()
 @Unique(["review", "customer"])
-export class ReviewVote extends VendureEntity {
+@Index("IDX_review_vote_channel", ["channelId"])
+export class ReviewVote extends VendureEntity implements ChannelAware {
   constructor(input?: Partial<ReviewVote>) {
     super(input);
   }
+
+  @ManyToMany(() => Channel)
+  @JoinTable()
+  channels: Channel[];
+
+  @Column()
+  channelId: string;
 
   @ManyToOne("ProductReview", "votes")
   review: ProductReview;

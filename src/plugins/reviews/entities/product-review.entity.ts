@@ -1,6 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import {
   Asset,
+  Channel,
+  ChannelAware,
   Customer,
   Order,
   OrderLine,
@@ -26,10 +28,18 @@ import { ReviewVote } from "./review-vote.entity";
 @Index("IDX_review_product_state", ["product", "state"])
 @Index("IDX_review_state", ["state"])
 @Index("IDX_review_product_customer", ["product", "author"], { unique: true })
-export class ProductReview extends VendureEntity {
+@Index("IDX_review_channel", ["channelId"])
+export class ProductReview extends VendureEntity implements ChannelAware {
   constructor(input?: DeepPartial<ProductReview>) {
     super(input);
   }
+
+  @ManyToMany(() => Channel)
+  @JoinTable()
+  channels: Channel[];
+
+  @Column()
+  channelId: string;
 
   @ManyToOne(() => Product, { onDelete: "CASCADE" })
   product: Product;

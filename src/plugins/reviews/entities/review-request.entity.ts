@@ -1,4 +1,6 @@
 import {
+  Channel,
+  ChannelAware,
   Customer,
   Order,
   OrderLine,
@@ -6,7 +8,7 @@ import {
   VendureEntity,
 } from "@vendure/core";
 import type { DeepPartial } from "@vendure/core";
-import { Column, Entity, Index, ManyToOne, Unique } from "typeorm";
+import { Column, Entity, Index, JoinTable, ManyToMany, ManyToOne, Unique } from "typeorm";
 
 export type ReviewRequestStatus = "scheduled" | "sent" | "reviewed" | "expired";
 
@@ -16,10 +18,15 @@ export type ReviewRequestStatus = "scheduled" | "sent" | "reviewed" | "expired";
 @Index("IDX_review_request_status", ["status"])
 @Index("IDX_review_request_scheduled_at", ["scheduledAt"])
 @Index("IDX_review_request_token", ["reviewToken"], { unique: true })
-export class ReviewRequest extends VendureEntity {
+@Index("IDX_review_request_channel", ["channelId"])
+export class ReviewRequest extends VendureEntity implements ChannelAware {
   constructor(input?: DeepPartial<ReviewRequest>) {
     super(input);
   }
+
+  @ManyToMany(() => Channel)
+  @JoinTable()
+  channels: Channel[];
 
   @ManyToOne(() => Customer, { onDelete: "CASCADE" })
   customer: Customer;

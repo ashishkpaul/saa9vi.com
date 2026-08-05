@@ -1,9 +1,11 @@
-import { Customer, VendureEntity } from "@vendure/core";
+import { Channel, ChannelAware, Customer, VendureEntity } from "@vendure/core";
 import type { DeepPartial } from "@vendure/core";
 import {
   Column,
   Entity,
   Index,
+  JoinTable,
+  ManyToMany,
   ManyToOne,
   CreateDateColumn,
   UpdateDateColumn,
@@ -20,10 +22,18 @@ import { ProductReview } from "./product-review.entity";
 @Index("idx_review_report_reporter", ["reporter"])
 @Index("idx_review_report_status", ["status"])
 @Index("idx_review_report_reason", ["reason"])
-export class ReviewReport extends VendureEntity {
+@Index("idx_review_report_channel", ["channelId"])
+export class ReviewReport extends VendureEntity implements ChannelAware {
   constructor(input?: DeepPartial<ReviewReport>) {
     super(input);
   }
+
+  @ManyToMany(() => Channel)
+  @JoinTable()
+  channels: Channel[];
+
+  @Column()
+  channelId: string;
 
   @CreateDateColumn()
   createdAt: Date;

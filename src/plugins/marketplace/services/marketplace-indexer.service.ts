@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Client } from '@elastic/elasticsearch';
-import { TransactionalConnection } from '@vendure/core';
+import { Channel, TransactionalConnection } from '@vendure/core';
 import { BbbScheduledSession } from '../../bigbluebutton-plugin/entities/bbb-scheduled-session.entity';
+import { BbbOrganization } from '../../bigbluebutton-plugin/entities/bbb-organization.entity';
 import { TenantProfile } from '../../tenant-plugin/entities/tenant-profile.entity';
 import { InstructorProfile } from '../../tenant-plugin/entities/instructor-profile.entity';
 import { MarketplaceAdService } from './marketplace-ad.service';
@@ -137,6 +138,22 @@ export class MarketplaceIndexerService {
       .getRepository(TenantProfile)
       .findOne({ where: { channelId: session.channelId ?? undefined } });
 
+    // ─── BUG-023: Resolve Channel.token and BbbOrganization.slug ────────────
+    // channelToken must be the Channel.token (used in the vendure-token header),
+    // not the raw channelId. academySlug comes from BbbOrganization.slug.
+    let channelToken = session.channelId ?? '';
+    let academySlug = '';
+    if (session.channelId) {
+      const channel = await this.connection.rawConnection
+        .getRepository(Channel)
+        .findOne({ where: { id: session.channelId as any } });
+      if (channel) channelToken = channel.token;
+      const org = await this.connection.rawConnection
+        .getRepository(BbbOrganization)
+        .findOne({ where: { channelId: session.channelId } });
+      if (org) academySlug = org.slug;
+    }
+
     // ─── Gap 3: Price from ProductVariant.price ─────────────────────────────
     let priceInPaise = 0;
     if (session.productVariantId) {
@@ -179,14 +196,14 @@ export class MarketplaceIndexerService {
     const doc: MarketplaceSessionDocument = {
       id: String(session.id),
       productVariantId: session.productVariantId,
-      channelToken: session.channelId ?? '',
+      channelToken,
       channelId: session.channelId ?? '',
       title: session.title,
       startTime: session.startTime.toISOString(),
       endTime: session.endTime.toISOString(),
       priceInPaise,
       academyName: tenantProfile?.businessName ?? '',
-      academySlug: '',
+      academySlug,
       instructorName: session.trainer ? String(session.trainer.id) : null,
       subjectTags: [],
       bayesianRating,
@@ -226,10 +243,22 @@ export class MarketplaceIndexerService {
       .getRepository(TenantProfile)
       .findOne({ where: { channelId: profile.channelId } });
 
+    // ─── BUG-023: Resolve Channel.token and BbbOrganization.slug ────────────
+    let channelToken = profile.channelId;
+    let academySlug = '';
+    const channel = await this.connection.rawConnection
+      .getRepository(Channel)
+      .findOne({ where: { id: profile.channelId as any } });
+    if (channel) channelToken = channel.token;
+    const org = await this.connection.rawConnection
+      .getRepository(BbbOrganization)
+      .findOne({ where: { channelId: profile.channelId } });
+    if (org) academySlug = org.slug;
+
     const doc: MarketplaceInstructorDocument = {
       id: String(profile.id),
       channelId: profile.channelId,
-      channelToken: profile.channelId,
+      channelToken,
       name: profile.fullName,
       bio: profile.bio || '',
       slug: profile.slug,
@@ -237,7 +266,7 @@ export class MarketplaceIndexerService {
       subjectTags: profile.expertiseAreas || [],
       reviewRating: null,
       academyName: tenantProfile?.businessName ?? '',
-      academySlug: '',
+      academySlug,
     };
 
     await this.client.index({

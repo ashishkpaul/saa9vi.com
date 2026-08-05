@@ -1,8 +1,10 @@
-import { Customer, Order, Product, VendureEntity } from "@vendure/core";
+import { Channel, ChannelAware, Customer, Order, Product, VendureEntity } from "@vendure/core";
 import {
   Column,
   Entity,
   Index,
+  JoinTable,
+  ManyToMany,
   ManyToOne,
   CreateDateColumn,
   UpdateDateColumn,
@@ -17,10 +19,18 @@ import { ProductReview } from "./product-review.entity";
 @Index("idx_review_reward_customer", ["customer"])
 @Index("idx_review_reward_review", ["review"])
 @Index("idx_review_reward_status", ["status"])
-export class ReviewReward extends VendureEntity {
+@Index("idx_review_reward_channel", ["channelId"])
+export class ReviewReward extends VendureEntity implements ChannelAware {
   constructor(input?: Partial<ReviewReward>) {
     super(input);
   }
+
+  @ManyToMany(() => Channel)
+  @JoinTable()
+  channels: Channel[];
+
+  @Column()
+  channelId: string;
 
   @CreateDateColumn()
   createdAt: Date;

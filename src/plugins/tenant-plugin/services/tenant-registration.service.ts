@@ -8,11 +8,14 @@ import {
   ID,
   NativeAuthenticationMethod,
   PasswordCipher,
+  PaymentMethodService,
   RequestContext,
   RequestContextService,
   Role,
   RoleService,
   SellerService,
+  ShippingMethodService,
+  StockLocationService,
   TransactionalConnection,
   User,
   UserInputError,
@@ -84,6 +87,9 @@ export class TenantRegistrationService {
     private readonly configService: ConfigService,
     private readonly requestContextService: RequestContextService,
     private readonly passwordCipher: PasswordCipher,
+    private readonly shippingMethodService: ShippingMethodService,
+    private readonly paymentMethodService: PaymentMethodService,
+    private readonly stockLocationService: StockLocationService,
   ) {}
 
   async registerTenant(
@@ -273,6 +279,13 @@ export class TenantRegistrationService {
         throw e;
       }
 
+      // 6. Auto-provision ShippingMethods, PaymentMethods, and StockLocations
+      // from the default channel to the new tenant channel (BUG-024).
+      // Without this, a freshly registered tenant has zero working payment
+      // methods, shipping configurations, and stock locations — checkout
+      // cannot complete.
+      await this.autoProvisionChannelResources(superAdminCtx, channel, defaultChannel);
+
       await this.completeLog(logRepo, log.id, channel);
 
       Logger.log(
@@ -358,5 +371,63 @@ export class TenantRegistrationService {
       processedAt: new Date(),
       errorMessage,
     });
+  }
+
+  /**
+   * BUG-024: Auto-provision ShippingMethods, PaymentMethods, and StockLocations
+   * from the default channel to the newly created tenant channel.
+   *
+   * Without this, a freshly registered tenant has zero working payment methods,
+   * shipping configurations, and stock locations — checkout cannot complete.
+   * We assign the default channel's existing methods/locations to the new
+   * channel rather than creating new ones, so the platform admin controls the
+   * configuration centrally and all tenants inherit it.
+   */
+  private async autoProvisionChannelResources(
+    ctx: RequestContext,
+    newChannel: Channel,
+    defaultChannel: Channel,
+  ): Promise<void> {
+    // ShippingMethods
+    try {
+      const { items: shippingMethods } = await this.shippingMethodService.findAll(ctx);
+      if (shippingMethods.length > 0) {
+        await this.shippingMethodService.assignShippingMethodsToChannel(ctx, {
+          channelId: newChannel.id,
+          shippingMethodIds: shippingMethods.map((m) => m.id),
+        });
+        Logger.log(`Assigned ${shippingMethods.length} shipping methods to channel ${newChannel.code}`, loggerCtx);
+      }
+    } catch (e: any) {
+      Logger.warn(`Failed to assign shipping methods to channel ${newChannel.code}: ${e.message}`, loggerCtx);
+    }
+
+    // PaymentMethods
+    try {
+      const { items: paymentMethods } = await this.paymentMethodService.findAll(ctx);
+      if (paymentMethods.length > 0) {
+        await this.paymentMethodService.assignPaymentMethodsToChannel(ctx, {
+          channelId: newChannel.id,
+          paymentMethodIds: paymentMethods.map((m) => m.id),
+        });
+        Logger.log(`Assigned ${paymentMethods.length} payment methods to channel ${newChannel.code}`, loggerCtx);
+      }
+    } catch (e: any) {
+      Logger.warn(`Failed to assign payment methods to channel ${newChannel.code}: ${e.message}`, loggerCtx);
+    }
+
+    // StockLocations
+    try {
+      const { items: stockLocations } = await this.stockLocationService.findAll(ctx);
+      if (stockLocations.length > 0) {
+        await this.stockLocationService.assignStockLocationsToChannel(ctx, {
+          channelId: newChannel.id,
+          stockLocationIds: stockLocations.map((l) => l.id),
+        });
+        Logger.log(`Assigned ${stockLocations.length} stock locations to channel ${newChannel.code}`, loggerCtx);
+      }
+    } catch (e: any) {
+      Logger.warn(`Failed to assign stock locations to channel ${newChannel.code}: ${e.message}`, loggerCtx);
+    }
   }
 }
