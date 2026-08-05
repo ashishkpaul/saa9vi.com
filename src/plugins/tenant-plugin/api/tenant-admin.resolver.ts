@@ -12,7 +12,7 @@ import { TenantProfileService } from '../services/tenant-profile.service';
 import { InstructorProfileService } from '../services/instructor-profile.service';
 import { MediaResourceService } from '../services/media-resource.service';
 import { tenantProfilePermission, instructorProfilePermission, mediaResourcePermission } from '../constants';
-import { Administrator } from '@vendure/core';
+import { Administrator, Role } from '@vendure/core';
 
 @Resolver()
 export class TenantAdminResolver {
@@ -60,6 +60,54 @@ export class TenantAdminResolver {
       .leftJoin('role.channels', 'channel')
       .where('channel.id = :channelId', { channelId })
       .orderBy('administrator.createdAt', 'ASC');
+
+    const [items, totalItems] = await qb
+      .skip(skip)
+      .take(take)
+      .getManyAndCount();
+
+    return { items, totalItems };
+  }
+
+  /**
+   * BUG-025: Override the built-in `roles` query so a SuperAdmin sees all
+   * roles regardless of the active channel. Vendure's built-in `roles` query
+   * is implicitly channel-scoped — it only returns roles whose channels[]
+   * includes the active channel. This causes tenant-created roles (scoped to
+   * only their tenant channel) to be invisible to a SuperAdmin operating on
+   * the Default channel, which breaks role-name resolution in the dashboard
+   * (a role shows as a bare numeric id). Tenant admins remain channel-scoped.
+   */
+  @Query()
+  @Allow(Permission.ReadAdministrator)
+  async roles(
+    @Ctx() ctx: RequestContext,
+    @Args() args: { options?: any },
+  ): Promise<{ items: Role[]; totalItems: number }> {
+    const take = Math.min(Math.max(args.options?.take ?? 25, 1), 100);
+    const skip = Math.max(args.options?.skip ?? 0, 0);
+
+    // SuperAdmin sees all roles (platform-level view).
+    if (ctx.userHasPermissions([Permission.SuperAdmin])) {
+      const [items, totalItems] = await this.connection
+        .getRepository(ctx, Role)
+        .findAndCount({
+          relations: ['channels'],
+          order: { createdAt: 'ASC' },
+          skip,
+          take,
+        });
+      return { items, totalItems };
+    }
+
+    // Tenant admin: only roles whose channels[] includes the active channel.
+    const channelId = ctx.channelId as string;
+    const qb = this.connection
+      .getRepository(ctx, Role)
+      .createQueryBuilder('role')
+      .leftJoinAndSelect('role.channels', 'channel')
+      .where('channel.id = :channelId', { channelId })
+      .orderBy('role.createdAt', 'ASC');
 
     const [items, totalItems] = await qb
       .skip(skip)

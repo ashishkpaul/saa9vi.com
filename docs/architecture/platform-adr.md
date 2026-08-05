@@ -529,3 +529,22 @@ export class BbbPlatformCapacityPolicy extends VendureEntity {
 **Alternatives Rejected:**
 - Relying on the built-in query (leaks global admins if `ReadAdministrator` is granted)
 - Removing `ReadAdministrator` from tenant roles entirely (over-restrictive; the override is the correct fix)
+
+---
+
+## ADR-035: Channel-Scoped Role Visibility
+
+**Status:** Active
+
+**Decision:** The TenantPlugin overrides the built-in `roles` Admin API query so that a SuperAdmin sees all roles regardless of the active channel, while a tenant administrator only sees roles whose `channels[]` includes the active channel.
+
+**Rationale:** Vendure's built-in `roles` query is implicitly channel-scoped — it only returns roles whose `channels[]` includes the active channel. Tenant-created roles are deliberately scoped to only their tenant channel (see `TenantRegistrationService.registerTenant()`), so they are invisible to a SuperAdmin operating on the Default channel. This breaks role-name resolution in the dashboard (a role shows as a bare numeric id). Overriding the query closes this gap.
+
+**Consequences:**
+- `TenantAdminResolver.roles` returns all roles for SuperAdmin, channel-scoped for tenant admins
+- Mirrors the `administrators` override (ADR-034 / INV-016)
+- Filed as BUG-025 with e2e coverage
+
+**Alternatives Rejected:**
+- Relying on the built-in query (tenant roles invisible to SuperAdmin on Default channel)
+- Assigning tenant roles to the Default channel (violates channel isolation)

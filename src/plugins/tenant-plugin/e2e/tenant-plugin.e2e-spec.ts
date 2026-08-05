@@ -284,6 +284,19 @@ const ADMINISTRATORS = gql`
   }
 `;
 
+const ROLES = gql`
+  query Roles {
+    roles {
+      items {
+        id
+        code
+        description
+      }
+      totalItems
+    }
+  }
+`;
+
 // ─── Test suite ───────────────────────────────────────────────────────────
 
 describe('TenantPlugin', () => {
@@ -885,6 +898,43 @@ describe('TenantPlugin', () => {
 
       // SuperAdmin sees at least the global admin plus the two tenant admins
       expect(administrators.totalItems).toBeGreaterThanOrEqual(3);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 7. Role visibility (BUG-025)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('Role visibility (BUG-025)', () => {
+    it('SuperAdmin sees all roles regardless of active channel', async () => {
+      // Set the default channel token BEFORE logging in as SuperAdmin.
+      adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
+      await adminClient.asSuperAdmin();
+
+      const { roles } = await adminClient.query(ROLES);
+
+      // SuperAdmin sees the seeded defaults (super_admin, customer) plus the
+      // tenant-created roles (one per registered tenant).
+      expect(roles.totalItems).toBeGreaterThanOrEqual(4);
+      // The tenant-created role must be present and resolvable by name.
+      const tenantRole = roles.items.find((r: any) =>
+        r.description?.includes('Tenant administrator'),
+      );
+      expect(tenantRole).toBeTruthy();
+    });
+
+    it('tenant A admin only sees roles in their own channel', async () => {
+      adminClient.setChannelToken(tenantAChannelToken);
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+
+      const { roles } = await adminClient.query(ROLES);
+
+      // Tenant A sees its own tenant-admin role (and any default roles
+      // assigned to its channel), but NOT tenant B's role.
+      const tenantBRole = roles.items.find((r: any) =>
+        r.description?.includes('Sharma Academy'),
+      );
+      expect(tenantBRole).toBeUndefined();
     });
   });
 });

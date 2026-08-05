@@ -12,6 +12,7 @@
 | BUG-022 | P0 | `bbb-shop.resolver.ts` | `bbbRoomStatus`, `myBbbRooms`, and `myBbbEnrollments` read from `BbbEnrollment` only, while `BbbOrderFulfillmentListener` writes `BbbEntitlement` for room purchases. A paying customer's room never appears in their dashboard and `bbbRoomStatus` throws `ForbiddenError`, even though `bbbJoinRoom` would work. | ⚠️ Pending |
 | BUG-023 | P1 | `marketplace-indexer.service.ts` | `academySlug` hardcoded to `''`, `channelToken` set to raw `channelId` instead of `Channel.token`, `customDomain` not indexed. Marketplace search results have no usable redirect URL. | ⚠️ Pending |
 | BUG-024 | P2 | `TenantRegistrationService` | `ShippingMethod`/`StockLocation`/`PaymentMethod` not auto-provisioned for new channels. A freshly registered tenant has zero working payment methods and shipping configurations. | ⚠️ Pending |
+| BUG-025 | Medium | `tenant-admin.resolver.ts` | Vendure's built-in `roles` query is implicitly channel-scoped — it only returns roles whose `channels[]` includes the active channel. Tenant-created roles (scoped to only their tenant channel) are invisible to a SuperAdmin operating on the Default channel, breaking role-name resolution in the dashboard (a role shows as a bare numeric id). Fixed by overriding `roles` in `TenantAdminResolver` (SuperAdmin sees all, tenant admin channel-scoped). | ✅ Fixed |
 
 ---
 
