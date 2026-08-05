@@ -547,6 +547,8 @@ export class BbbPlatformCapacityPolicy extends VendureEntity {
 - Mirrors the `administrators` override (ADR-034 / INV-016)
 - Filed as BUG-025 and BUG-026 with e2e coverage
 
+**Standing Checklist:** When overriding a built-in list query for cross-channel SuperAdmin visibility, check for and override the singular `id`-based counterpart in the same change. Vendure ships both a list and a by-id query for most Admin API entities, and both are independently channel-scoped. Missing the singular sibling was the root cause of BUG-026 (the `role(id)` gap left after BUG-025's `roles` fix) and would have been the root cause of a similar `administrator(id)` gap if INV-016 hadn't been caught here too.
+
 **Alternatives Rejected:**
 - Relying on the built-in query (tenant roles invisible to SuperAdmin on Default channel)
 - Assigning tenant roles to the Default channel (violates channel isolation)
