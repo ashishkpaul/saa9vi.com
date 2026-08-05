@@ -542,8 +542,10 @@ export class BbbPlatformCapacityPolicy extends VendureEntity {
 
 **Consequences:**
 - `TenantAdminResolver.roles` returns all roles for SuperAdmin, channel-scoped for tenant admins
+- `TenantAdminResolver.role(id)` singular query also overridden (BUG-026) — same channel-scoping gap existed on the singular endpoint, causing "not found" on the role detail page
+- `TenantAdminResolver.administrator(id)` singular query also overridden (BUG-026) — same gap on the administrator detail page
 - Mirrors the `administrators` override (ADR-034 / INV-016)
-- Filed as BUG-025 with e2e coverage
+- Filed as BUG-025 and BUG-026 with e2e coverage
 
 **Alternatives Rejected:**
 - Relying on the built-in query (tenant roles invisible to SuperAdmin on Default channel)

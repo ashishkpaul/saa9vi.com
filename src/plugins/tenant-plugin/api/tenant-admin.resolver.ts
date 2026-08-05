@@ -70,6 +70,44 @@ export class TenantAdminResolver {
   }
 
   /**
+   * BUG-026: Override the built-in singular `administrator(id)` query.
+   * Same channel-scoping gap as the plural `administrators` override (INV-016):
+   * Vendure's built-in `administrator` query is implicitly channel-scoped, so
+   * a SuperAdmin on the Default channel gets "not found" for a tenant admin
+   * even though `administrators` (list) correctly returns it.
+   */
+  @Query()
+  @Allow(Permission.ReadAdministrator)
+  async administrator(
+    @Ctx() ctx: RequestContext,
+    @Args() args: { id: string },
+  ): Promise<Administrator | undefined> {
+    // SuperAdmin sees any administrator regardless of channel.
+    if (ctx.userHasPermissions([Permission.SuperAdmin])) {
+      return this.connection
+        .getRepository(ctx, Administrator)
+        .findOne({
+          where: { id: args.id as any },
+          relations: ['user', 'user.roles'],
+        })
+        .then((a) => a ?? undefined);
+    }
+
+    // Tenant admin: only if the administrator's roles include the active channel.
+    const channelId = ctx.channelId as string;
+    return this.connection
+      .getRepository(ctx, Administrator)
+      .createQueryBuilder('administrator')
+      .leftJoinAndSelect('administrator.user', 'user')
+      .leftJoinAndSelect('user.roles', 'role')
+      .leftJoin('role.channels', 'channel')
+      .where('administrator.id = :id', { id: args.id })
+      .andWhere('channel.id = :channelId', { channelId })
+      .getOne()
+      .then((a) => a ?? undefined);
+  }
+
+  /**
    * BUG-025: Override the built-in `roles` query so a SuperAdmin sees all
    * roles regardless of the active channel. Vendure's built-in `roles` query
    * is implicitly channel-scoped — it only returns roles whose channels[]
@@ -115,6 +153,42 @@ export class TenantAdminResolver {
       .getManyAndCount();
 
     return { items, totalItems };
+  }
+
+  /**
+   * BUG-026: Override the built-in singular `role(id)` query.
+   * Same channel-scoping gap as the plural `roles` override (BUG-025):
+   * Vendure's built-in `role` query is implicitly channel-scoped, so
+   * a SuperAdmin on the Default channel gets "not found" for a tenant-scoped
+   * role even though `roles` (list) now correctly returns it.
+   */
+  @Query()
+  @Allow(Permission.ReadAdministrator)
+  async role(
+    @Ctx() ctx: RequestContext,
+    @Args() args: { id: string },
+  ): Promise<Role | undefined> {
+    // SuperAdmin sees any role regardless of channel.
+    if (ctx.userHasPermissions([Permission.SuperAdmin])) {
+      return this.connection
+        .getRepository(ctx, Role)
+        .findOne({
+          where: { id: args.id as any },
+          relations: ['channels'],
+        })
+        .then((r) => r ?? undefined);
+    }
+
+    // Tenant admin: only if the role's channels[] includes the active channel.
+    const channelId = ctx.channelId as string;
+    return this.connection
+      .getRepository(ctx, Role)
+      .createQueryBuilder('role')
+      .leftJoinAndSelect('role.channels', 'channel')
+      .where('role.id = :id', { id: args.id })
+      .andWhere('channel.id = :channelId', { channelId })
+      .getOne()
+      .then((r) => r ?? undefined);
   }
 
   @Query()

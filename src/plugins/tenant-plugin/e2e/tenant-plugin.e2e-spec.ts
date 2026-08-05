@@ -297,6 +297,27 @@ const ROLES = gql`
   }
 `;
 
+const ROLE = gql`
+  query Role($id: ID!) {
+    role(id: $id) {
+      id
+      code
+      description
+    }
+  }
+`;
+
+const ADMINISTRATOR = gql`
+  query Administrator($id: ID!) {
+    administrator(id: $id) {
+      id
+      emailAddress
+      firstName
+      lastName
+    }
+  }
+`;
+
 // ─── Test suite ───────────────────────────────────────────────────────────
 
 describe('TenantPlugin', () => {
@@ -935,6 +956,89 @@ describe('TenantPlugin', () => {
         r.description?.includes('Sharma Academy'),
       );
       expect(tenantBRole).toBeUndefined();
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 8. Singular role & administrator visibility (BUG-026)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('Singular role & administrator visibility (BUG-026)', () => {
+    it('SuperAdmin can fetch a tenant role by id directly', async () => {
+      // First get the list to find a tenant role id.
+      adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
+      await adminClient.asSuperAdmin();
+
+      const { roles } = await adminClient.query(ROLES);
+      const tenantRole = roles.items.find(
+        (r: any) => r.description?.includes('Tenant administrator'),
+      );
+      expect(tenantRole).toBeTruthy();
+
+      // Now fetch it via the singular role(id) query.
+      const { role } = await adminClient.query(ROLE, { id: tenantRole.id });
+      expect(role).toBeTruthy();
+      expect(role.id).toBe(tenantRole.id);
+      expect(role.description).toContain('Tenant administrator');
+    });
+
+    it('tenant A admin gets null for tenant B role by id', async () => {
+      // Get tenant B role id as SuperAdmin.
+      adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
+      await adminClient.asSuperAdmin();
+
+      const { roles } = await adminClient.query(ROLES);
+      const tenantBRole = roles.items.find(
+        (r: any) => r.description?.includes('Sharma Academy'),
+      );
+      expect(tenantBRole).toBeTruthy();
+
+      // Switch to tenant A and try to fetch tenant B's role by id.
+      adminClient.setChannelToken(tenantAChannelToken);
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+
+      const { role } = await adminClient.query(ROLE, { id: tenantBRole.id });
+      expect(role).toBeNull();
+    });
+
+    it('SuperAdmin can fetch a tenant administrator by id directly', async () => {
+      // Get the list to find a tenant admin id.
+      adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
+      await adminClient.asSuperAdmin();
+
+      const { administrators } = await adminClient.query(ADMINISTRATORS);
+      const tenantAdmin = administrators.items.find(
+        (a: any) => a.emailAddress === tenantAEmail,
+      );
+      expect(tenantAdmin).toBeTruthy();
+
+      // Now fetch it via the singular administrator(id) query.
+      const { administrator } = await adminClient.query(ADMINISTRATOR, {
+        id: tenantAdmin.id,
+      });
+      expect(administrator).toBeTruthy();
+      expect(administrator.emailAddress).toBe(tenantAEmail);
+    });
+
+    it('tenant A admin gets null for tenant B administrator by id', async () => {
+      // Get tenant B admin id as SuperAdmin.
+      adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
+      await adminClient.asSuperAdmin();
+
+      const { administrators } = await adminClient.query(ADMINISTRATORS);
+      const tenantBAdmin = administrators.items.find(
+        (a: any) => a.emailAddress === tenantBEmail,
+      );
+      expect(tenantBAdmin).toBeTruthy();
+
+      // Switch to tenant A and try to fetch tenant B's admin by id.
+      adminClient.setChannelToken(tenantAChannelToken);
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+
+      const { administrator } = await adminClient.query(ADMINISTRATOR, {
+        id: tenantBAdmin.id,
+      });
+      expect(administrator).toBeNull();
     });
   });
 });
