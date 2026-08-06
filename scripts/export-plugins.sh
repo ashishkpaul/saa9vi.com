@@ -46,6 +46,9 @@ is_excluded() {
     # Exclude generated TypeScript files in any plugin root
     [[ "$file" == ./src/plugins/*/generated-*-types.ts ]] && return 0
 
+    # Exclude e2e test directory under tenant-plugin
+    [[ "$file" == ./src/plugins/tenant-plugin/e2e/* ]] && return 0
+
     return 1
 }
 
@@ -181,7 +184,6 @@ else
 fi
 
 echo "All exports completed."
-
 
 # ---------------------------
 # Export customer-deletion folder specifically

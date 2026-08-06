@@ -16,6 +16,7 @@ export interface LearningCourse {
   joinUrl: string | null;
   nextSession: { startsAt: string; endsAt: string } | null;
   instructorName: string | null;
+  isTrial: boolean;
   entitlementType: string;
   entitlementSource: string;
 }
@@ -152,6 +153,7 @@ export class LearningDashboardService {
           endsAt: session.endTime.toISOString(),
         },
         instructorName,
+        isTrial: session.isTrial,
         entitlementType: entitlement.type,
         entitlementSource: entitlement.source,
       });

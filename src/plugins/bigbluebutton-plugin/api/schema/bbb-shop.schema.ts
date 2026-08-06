@@ -97,6 +97,7 @@ export const shopApiExtensions = gql`
     joinUrl: String
     nextSession: SessionWindow
     instructorName: String
+    isTrial: Boolean!
     entitlementType: String!
     entitlementSource: String!
   }
