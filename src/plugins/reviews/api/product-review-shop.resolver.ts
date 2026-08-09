@@ -128,8 +128,10 @@ export class ProductReviewShopResolver {
       ctx,
       customer.id as string,
       {
-        take: options.take,
-        skip: options.skip,
+        // `options` is optional per schema (`pendingReviewRequests(options: ProductReviewListOptions)`).
+        // The service defaults take/skip when undefined — the resolver must not assume the client sent it.
+        take: options?.take,
+        skip: options?.skip,
       },
     );
   }
