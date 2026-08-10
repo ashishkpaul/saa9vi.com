@@ -21,20 +21,13 @@
 
 ## Phase 1.5 — Trust Engine & Discovery
 
-### P0 — Critical Bugs (block tenant onboarding)
-
-- [ ] **BUG-022**: Fix `bbbRoomStatus`, `myBbbRooms`, `myBbbEnrollments` to read from `BbbEntitlement` in addition to `BbbEnrollment`
-- [ ] **BUG-023**: Fix `MarketplaceIndexerService` to populate `academySlug` from `BbbOrganization.slug`, `channelToken` from `Channel.token`, and index `TenantProfile.customDomain`
-
 ### Remaining Blockers
 
 - [ ] Run FEAT-002 schema migration (`npx vendure migrate create && npx vendure migrate up`)
 - [ ] Build Next.js storefront pages for public instructor profiles and CMS pages
 - [ ] Email verification flow for new tenant administrators
-- [ ] Auto-provision `ShippingMethod`, `StockLocation`, and `PaymentMethod` for new channels (BUG-024)
 - [ ] End-to-end customer deletion flow tested across all three plugins
 - [ ] Load estimation ratios tuned from first 2 weeks of `BbbUsageLedger` data
-- [ ] BUG-017 remediation — add `ChannelAware` to `ProductReview`
 
 ### Completed
 

@@ -37,8 +37,10 @@ export interface ReconciliationReport {
 }
 
 /**
- * Reconciles existing tenant admin roles (code pattern `*-admin`) against the
- * current `TENANT_ADMIN_ROLE_PERMISSIONS` definition.
+ * Reconciles existing tenant admin roles identified by the channel-backed
+ * tenant-admin role invariant: exactly one channel and code === `{channel.code}-admin`.
+ * See TenantRegistrationService.registerTenant() for how roles are provisioned.
+ * Reconciles them against the current `TENANT_ADMIN_ROLE_PERMISSIONS` definition.
  *
  * Background (BUG-028/BUG-029): `TENANT_ADMIN_ROLE_PERMISSIONS` was expanded in
  * Phase C (v1.11) to include BBB granular, CMS CRUD, and ReviewAdmin
@@ -75,8 +77,8 @@ export class TenantRoleReconciliationService {
   ) {}
 
   /**
-   * Reconcile all tenant admin roles (code pattern `*-admin`) against the
-   * current `TENANT_ADMIN_ROLE_PERMISSIONS`.
+   * Reconcile all tenant admin roles identified by the channel-backed
+   * tenant-admin role invariant against the current `TENANT_ADMIN_ROLE_PERMISSIONS`.
    *
    * @param dryRun - if true, only report; do not persist any changes.
    * @param removeUnexpected - if true, also remove permissions present in the

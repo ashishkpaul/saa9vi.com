@@ -1,7 +1,7 @@
 # What Next — Saa9vi Platform: Cline Development Prompt
 
-**Generated:** 2026-07-25
-**Based on:** All plugin codebases, Vendure live docs
+**Generated:** 2026-08-10
+**Based on:** All plugin codebases, Vendure live docs, current release state (v1.12)
 
 ---
 
@@ -24,30 +24,49 @@ The documentation has been refactored into focused documents:
 
 ---
 
-## Priority Order
+## Current State (v1.12 — 2026-08-10)
+
+Recent completions (see `release-notes.md`):
+
+- BUG-022 (entitlement/enrollment read mismatch) — fixed
+- BUG-023 (marketplace indexer redirect fields) — fixed
+- BUG-024 (auto-provision shipping/payment/stock) — fixed
+- BUG-025 / BUG-026 (role & administrator visibility) — fixed
+- BUG-027 (pendingReviewRequests `undefined` options) — fixed
+- BUG-028 (Academy Console permission names) — fixed
+- BUG-029 (BBB platform infrastructure boundary) — fixed
+- `myLearningDashboard` Shop API query — complete
+- `GrantReaderService` — implemented
+- Capacity Intelligence System (CI-001 to CI-006) — implemented
+- Tenant role reconciliation tooling (`tenant:roles:check` / `tenant:roles:repair`) — added
+- E2E suite: 39 tests passing
+
+---
+
+## Priority Order (current roadmap)
 
 ```
-P0 — CRITICAL BUGS (block tenant onboarding)
-  BUG-022: Fix bbbRoomStatus/myBbbRooms/myBbbEnrollments to read BbbEntitlement
-  BUG-023: Fix MarketplaceIndexerService academySlug/channelToken/customDomain
+PHASE 1.5 REMAINING BLOCKERS
+  FEAT-002 schema migration                  [ADR §8A OP-005]
+  Next.js public instructor/CMS pages        [Phase 1.5]
+  Email verification for tenant admins       [Phase 1.5]
+  End-to-end customer deletion test          [INV-013]
+  Load estimation ratios tuning              [CI-001]
 
-PHASE 1 FINAL BLOCKERS
-  SEC-004 Rate limiting                        [ADR §13]
-  Custom domain Redis mapping                  [SEC-006]
+PHASE 2 — SUBSCRIPTION BILLING & CAPACITY POLICY
+  SubscriptionPlan / OrganizationSubscription entities
+  BbbPlatformCapacityPolicy entity + Portal Admin dashboard
+  Plan-based capacity tiers
+  Juspay recurring billing integration
 
-PHASE 1.5 BLOCKERS
-  FEAT-002 Overhead Capacity Grant (migration)  [ADR §8A OP-005]
-  myLearningDashboard domain API                [ADR-013 INV-006]
+PHASE 3 — MARKETPLACE & RETENTION
+  CommissionLedger $0-row pattern            [DL-030]
+  MarketplaceSearchResolver (Shop API)
+  Order.customFields.orderSource attribution
+  Advertising stream (AdWallet, AdSpendLedger)
 
-CORRECTNESS / RELIABILITY
-  GrantReaderService scaffold                   [RFC-001 Q-009]
-
-CAPACITY INTELLIGENCE
-  Full Capacity Intelligence System             [ADR §6A CI-001 to CI-006]
-  k6 load testing integration                   [Vendure docs compliance]
-
-PHASE 3 PREREQUISITE
-  CommissionLedger $0-row pattern               [DL-030]
+PHASE 4 — SCALE & PREMIUM
+  White-label theming, TimescaleDB, AI features
 ```
 
-See `docs/implementation/roadmap.md` for full details.
+See `docs/implementation/roadmap.md` for full details and per-phase task lists.

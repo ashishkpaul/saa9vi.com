@@ -248,10 +248,4 @@ sequenceDiagram
 
 ## Known Gaps
 
-### BUG-022: Entitlement/Enrollment Read Mismatch (P0)
-
-`bbbRoomStatus`, `myBbbRooms`, and `myBbbEnrollments` read from `BbbEnrollment` only, while `BbbOrderFulfillmentListener` writes `BbbEntitlement` for room purchases. A paying customer's room never appears in their dashboard and `bbbRoomStatus` throws `ForbiddenError`, even though `bbbJoinRoom` would work.
-
-### BUG-023: Marketplace Indexer Broken Redirect Fields (P1)
-
-`academySlug` is hardcoded to `''`, `channelToken` is set to raw `channelId` instead of `Channel.token`, and `customDomain` is not indexed. Marketplace search results have no usable redirect URL.
+No current known gaps. (Historical BUG-022/023 were fixed in v1.10–v1.11; see `docs/implementation/release-notes.md`.)
