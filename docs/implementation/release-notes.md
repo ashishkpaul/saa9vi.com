@@ -4,6 +4,24 @@
 
 ---
 
+## v1.12 — 2026-08-10
+
+### New
+
+- **Tenant role reconciliation tooling** — `TenantRoleReconciliationService` + `scripts/tenant-role-reconcile.ts` with `npm run tenant:roles:check` (dry-run) and `npm run tenant:roles:repair` (apply). Reconciles existing tenant admin roles against the current `TENANT_ADMIN_ROLE_PERMISSIONS`. Add-only by default; `--remove-unexpected` removes permissions not in the template (always preserves `Authenticated`). Role selection is channel-backed (exactly one channel + `code === {channel.code}-admin`), not just `*-admin` pattern.
+
+### Fixed
+
+- **BUG-028** — Academy Console nav items used incorrect permission identifiers (`TenantProfileRead`, `InstructorProfileRead`, `MediaResourceRead`) instead of the Vendure `CrudPermissionDefinition` generated names (`ReadTenantProfile`, `ReadInstructorProfile`, `ReadMediaResource`). Tenant admins could not see the Academy Console.
+- **BUG-029** — `TENANT_ADMIN_ROLE_PERMISSIONS` included `BbbPlatformInfrastructurePermission`, granting tenant admins permission to manage BBB servers/platform capacity infrastructure (Portal/SuperAdmin-only per ADR-033). Removed from the tenant role template.
+- **Stale tenant roles reconciled** — Existing tenant admin roles (e.g. `test-academy-f9hmus-admin`) that were created before the Phase C (v1.11) permission expansion now have the BBB granular, CMS CRUD, and ReviewAdmin permissions added via the reconciliation tool.
+
+### Tests
+
+- E2E suite expanded to 39 tests. New tests verify: newly provisioned tenant admin role has BBB/CMS/Reviews permissions; does NOT include `BBBPlatformInfrastructure`; is scoped to exactly one tenant channel. Channel-scoping of the `administrators`/`roles`/`role`/`administrator` resolvers (INV-016, BUG-025, BUG-026) is now tested with a dedicated test-only `ReadAdministrator` role, keeping the production tenant-admin permission boundary intact.
+
+---
+
 ## v1.11 — 2026-08-03
 
 ### New

@@ -6,7 +6,6 @@ import {
   BbbManageOrganizationsPermission,
   BbbManageRoomsPermission,
   BbbManageSessionsPermission,
-  BbbPlatformInfrastructurePermission,
 } from '../bigbluebutton-plugin/constants';
 import {
   articlePermission,
@@ -91,8 +90,9 @@ export const TENANT_ADMIN_ROLE_PERMISSIONS: Permission[] = [
   mediaResourcePermission.Read,
   mediaResourcePermission.Update,
   mediaResourcePermission.Delete,
-  // BigBlueButton granular permissions (Phase B) — scoped access, not BBBAdmin
-  BbbPlatformInfrastructurePermission.Permission,
+  // BigBlueButton granular permissions (Phase B) — scoped access, not BBBAdmin.
+  // NOTE: BBBPlatformInfrastructure is intentionally NOT granted to tenant
+  // admins — it is Portal/SuperAdmin-only (ADR-033). See BUG-029.
   BbbManageOrganizationsPermission.Permission,
   BbbManageRoomsPermission.Permission,
   BbbManageSessionsPermission.Permission,

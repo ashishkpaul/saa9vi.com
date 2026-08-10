@@ -48,7 +48,16 @@ import {
   testConfig,
 } from '@vendure/testing';
 import { SchemaPostgresInitializer } from './schema-postgres-initializer';
-import { mergeConfig } from '@vendure/core';
+import {
+  Administrator,
+  mergeConfig,
+  NativeAuthenticationMethod,
+  PasswordCipher,
+  Permission,
+  Role,
+  TransactionalConnection,
+  User,
+} from '@vendure/core';
 import {
   afterAll,
   beforeAll,
@@ -58,6 +67,9 @@ import {
 } from 'vitest';
 
 import { TenantPlugin } from '../tenant-plugin.plugin';
+import { BigBlueButtonPlugin } from '../../bigbluebutton-plugin';
+import { CmsPlugin } from '../../cms/cms.plugin';
+import { ReviewsPlugin } from '../../reviews/reviews-plugin';
 import { E2E_INITIAL_DATA } from './fixtures/e2e-initial-data';
 
 // ─── Postgres initializer — uses the same DB as dev but an isolated schema ──
@@ -307,6 +319,21 @@ const ROLE = gql`
   }
 `;
 
+const ROLE_WITH_PERMISSIONS = gql`
+  query RoleWithPermissions($id: ID!) {
+    role(id: $id) {
+      id
+      code
+      description
+      permissions
+      channels {
+        id
+        code
+      }
+    }
+  }
+`;
+
 const ADMINISTRATOR = gql`
   query Administrator($id: ID!) {
     administrator(id: $id) {
@@ -336,7 +363,7 @@ describe('TenantPlugin', () => {
         schema: 'e2e_tenant_plugin',
         synchronize: true,
       },
-      plugins: [TenantPlugin],
+      plugins: [TenantPlugin, BigBlueButtonPlugin, CmsPlugin, ReviewsPlugin],
     }),
   );
 
@@ -349,6 +376,14 @@ describe('TenantPlugin', () => {
   let tenantBChannelId: string;
   let tenantBChannelToken: string;
   let tenantBEmail: string;
+
+  // Test-only admins with ReadAdministrator on their tenant channel, used to
+  // exercise the channel-scoped administrator/role resolvers (INV-016,
+  // BUG-025, BUG-026) WITHOUT broadening the production tenant-admin template.
+  let readAdminEmail: string;
+  let readAdminPassword: string;
+  let readAdminBEmail: string;
+  let readAdminBPassword: string;
 
   let instructorProfileId: string;
   let mediaResourceId: string;
@@ -366,6 +401,73 @@ describe('TenantPlugin', () => {
   afterAll(async () => {
     await server.destroy();
   });
+
+  // ── Helper: create a test-only admin with ReadAdministrator ─────────────
+  // The production tenant-admin template deliberately does NOT include
+  // ReadAdministrator (tenant admins should not manage administrators/roles).
+  // To test the channel-scoping of the custom resolvers (INV-016, BUG-025,
+  // BUG-026), we create a dedicated test-only role + admin scoped to the
+  // tenant A channel that DOES have ReadAdministrator. This keeps the
+  // production permission boundary intact while still exercising the resolver
+  // channel filtering.
+  async function createReadAdministratorTestAdmin(
+    channelId: string,
+    channelCode: string,
+  ): Promise<{ email: string; password: string }> {
+    const connection = server.app.get(TransactionalConnection);
+    const passwordCipher = server.app.get(PasswordCipher);
+    const email = `read-admin-${channelCode}-${Date.now()}@example.com`;
+    const password = 'ReadAdminP@ss1';
+
+    // 1. Create a channel-scoped role with ReadAdministrator.
+    const role = new Role({
+      code: `${channelCode}-read-admin`,
+      description: `Test-only ReadAdministrator for ${channelCode}`,
+      permissions: [Permission.Authenticated, Permission.ReadAdministrator],
+    });
+    const channel = await connection
+      .getRepository(undefined, 'Channel')
+      .findOneOrFail({ where: { id: channelId } });
+    role.channels = [channel as any];
+    const savedRole = await connection.getRepository(undefined, Role).save(role);
+
+    // 2. Create a User + native auth method.
+    const user = new User();
+    user.identifier = email;
+    user.verified = true;
+    const savedUser = await connection.getRepository(undefined, User).save(user);
+
+    const hashedPassword = await passwordCipher.hash(password);
+    const nativeAuthMethod = new NativeAuthenticationMethod({
+      identifier: email,
+      passwordHash: hashedPassword,
+    });
+    nativeAuthMethod.user = savedUser as any;
+    await connection
+      .getRepository(undefined, NativeAuthenticationMethod)
+      .save(nativeAuthMethod);
+
+    // 3. Assign the role to the user.
+    const userWithRoles = await connection.getRepository(undefined, User).findOne({
+      where: { id: savedUser.id },
+      relations: ['roles'],
+    });
+    if (userWithRoles) {
+      userWithRoles.roles = [savedRole];
+      await connection.getRepository(undefined, User).save(userWithRoles);
+    }
+
+    // 4. Create the Administrator.
+    const admin = connection.getRepository(undefined, Administrator).create({
+      firstName: 'Read',
+      lastName: 'Admin',
+      emailAddress: email,
+      user: savedUser,
+    });
+    await connection.getRepository(undefined, Administrator).save(admin);
+
+    return { email, password };
+  }
 
   // ═══════════════════════════════════════════════════════════════════════
   // 1. registerNewTenant — Shop API public mutation
@@ -887,26 +989,58 @@ describe('TenantPlugin', () => {
   // ═══════════════════════════════════════════════════════════════════════
 
   describe('Administrator visibility (INV-016)', () => {
-    it('tenant A admin only sees administrators in their own channel', async () => {
-      adminClient.setChannelToken(tenantAChannelToken);
-      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+    // The production tenant-admin template does NOT include ReadAdministrator,
+    // so the channel-scoping of the custom `administrators` resolver is tested
+    // with a dedicated test-only admin that has ReadAdministrator on tenant A's
+    // channel. This keeps the production permission boundary intact.
+    beforeAll(async () => {
+      const channelCodeA = tenantAChannelToken.replace(/^tok_/, '');
+      const credsA = await createReadAdministratorTestAdmin(
+        tenantAChannelId,
+        channelCodeA,
+      );
+      readAdminEmail = credsA.email;
+      readAdminPassword = credsA.password;
 
-      const { administrators } = await adminClient.query(ADMINISTRATORS);
-
-      // The tenant admin must NOT see the global SuperAdmin account.
-      // The only administrator visible is the tenant A admin themselves.
-      expect(administrators.totalItems).toBe(1);
-      expect(administrators.items[0].emailAddress).toBe(tenantAEmail);
+      const channelCodeB = tenantBChannelToken.replace(/^tok_/, '');
+      const credsB = await createReadAdministratorTestAdmin(
+        tenantBChannelId,
+        channelCodeB,
+      );
+      readAdminBEmail = credsB.email;
+      readAdminBPassword = credsB.password;
     });
 
-    it('tenant B admin only sees administrators in their own channel', async () => {
-      adminClient.setChannelToken(tenantBChannelToken);
-      await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
+    it('tenant A read-admin only sees administrators in their own channel', async () => {
+      adminClient.setChannelToken(tenantAChannelToken);
+      await adminClient.asUserWithCredentials(readAdminEmail, readAdminPassword);
 
       const { administrators } = await adminClient.query(ADMINISTRATORS);
 
-      expect(administrators.totalItems).toBe(1);
-      expect(administrators.items[0].emailAddress).toBe(tenantBEmail);
+      // The read-admin must NOT see the global SuperAdmin account.
+      // The only administrators visible are those in tenant A's channel:
+      // the tenant A admin themselves + the read-admin.
+      expect(administrators.totalItems).toBe(2);
+      const emails = administrators.items.map((a: any) => a.emailAddress);
+      expect(emails).toContain(tenantAEmail);
+      expect(emails).toContain(readAdminEmail);
+      expect(emails).not.toContain('superadmin');
+    });
+
+    it('tenant B read-admin only sees administrators in their own channel', async () => {
+      adminClient.setChannelToken(tenantBChannelToken);
+      await adminClient.asUserWithCredentials(readAdminBEmail, readAdminBPassword);
+
+      const { administrators } = await adminClient.query(ADMINISTRATORS);
+
+      // The read-admin must NOT see the global SuperAdmin account.
+      // The only administrators visible are those in tenant B's channel:
+      // the tenant B admin themselves + the read-admin.
+      expect(administrators.totalItems).toBe(2);
+      const emails = administrators.items.map((a: any) => a.emailAddress);
+      expect(emails).toContain(tenantBEmail);
+      expect(emails).toContain(readAdminBEmail);
+      expect(emails).not.toContain('superadmin');
     });
 
     it('SuperAdmin sees all administrators', async () => {
@@ -944,9 +1078,9 @@ describe('TenantPlugin', () => {
       expect(tenantRole).toBeTruthy();
     });
 
-    it('tenant A admin only sees roles in their own channel', async () => {
+    it('tenant A read-admin only sees roles in their own channel', async () => {
       adminClient.setChannelToken(tenantAChannelToken);
-      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      await adminClient.asUserWithCredentials(readAdminEmail, readAdminPassword);
 
       const { roles } = await adminClient.query(ROLES);
 
@@ -960,7 +1094,98 @@ describe('TenantPlugin', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════
-  // 8. Singular role & administrator visibility (BUG-026)
+  // 8. Tenant admin role permissions & channel assignment (BUG-028/BUG-029)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('Tenant admin role permissions & channel assignment (BUG-028/BUG-029)', () => {
+    it('newly provisioned tenant admin role has BBB, CMS, Reviews permissions', async () => {
+      // Find the tenant A role as SuperAdmin.
+      adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
+      await adminClient.asSuperAdmin();
+
+      const { roles } = await adminClient.query(ROLES);
+      const tenantRole = roles.items.find(
+        (r: any) => r.description?.includes('Mehta Coaching'),
+      );
+      expect(tenantRole).toBeTruthy();
+
+      const { role } = await adminClient.query(ROLE_WITH_PERMISSIONS, {
+        id: tenantRole.id,
+      });
+
+      const permissions: string[] = role.permissions;
+
+      // BBB granular permissions (Phase B) — must be present.
+      expect(permissions).toContain('BBBManageOrganizations');
+      expect(permissions).toContain('BBBManageRooms');
+      expect(permissions).toContain('BBBManageSessions');
+      expect(permissions).toContain('BBBManageMeetings');
+      expect(permissions).toContain('BBBManageEntitlements');
+      expect(permissions).toContain('BBBManageMembers');
+
+      // CMS CRUD permissions — must be present.
+      expect(permissions).toContain('ReadCmsArticle');
+      expect(permissions).toContain('CreateCmsArticle');
+      expect(permissions).toContain('ReadCmsBanner');
+      expect(permissions).toContain('CreateCmsBanner');
+      expect(permissions).toContain('ReadCmsPage');
+      expect(permissions).toContain('CreateCmsPage');
+
+      // Reviews — must be present.
+      expect(permissions).toContain('ReviewAdmin');
+
+      // Tenant plugin CRUD permissions — must be present.
+      expect(permissions).toContain('ReadTenantProfile');
+      expect(permissions).toContain('ReadInstructorProfile');
+      expect(permissions).toContain('ReadMediaResource');
+    });
+
+    it('tenant admin role does NOT include BBBPlatformInfrastructure (ADR-033)', async () => {
+      adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
+      await adminClient.asSuperAdmin();
+
+      const { roles } = await adminClient.query(ROLES);
+      const tenantRole = roles.items.find(
+        (r: any) => r.description?.includes('Mehta Coaching'),
+      );
+      expect(tenantRole).toBeTruthy();
+
+      const { role } = await adminClient.query(ROLE_WITH_PERMISSIONS, {
+        id: tenantRole.id,
+      });
+
+      // BBBPlatformInfrastructure is Portal/SuperAdmin-only — must NOT be
+      // granted to tenant admins (ADR-033, BUG-029).
+      expect(role.permissions).not.toContain('BBBPlatformInfrastructure');
+    });
+
+    it('tenant admin role is scoped to the tenant channel only', async () => {
+      adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
+      await adminClient.asSuperAdmin();
+
+      const { roles } = await adminClient.query(ROLES);
+      const tenantRole = roles.items.find(
+        (r: any) => r.description?.includes('Mehta Coaching'),
+      );
+      expect(tenantRole).toBeTruthy();
+
+      const { role } = await adminClient.query(ROLE_WITH_PERMISSIONS, {
+        id: tenantRole.id,
+      });
+
+      // The role must be assigned to exactly one tenant channel (INV-001:
+      // Channel = Tenant). The channel code is generated as
+      // `mehta-coaching-<random-suffix>`.
+      const channelCodes = role.channels.map((c: any) => c.code);
+      expect(channelCodes).toHaveLength(1);
+      expect(channelCodes[0]).toMatch(/^mehta-coaching-/);
+      // It must NOT be assigned to tenant B's channel.
+      expect(channelCodes.some((code: string) => code.startsWith('sharma-academy'))).toBe(false);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 9. Singular role & administrator visibility (BUG-026)
   // ═══════════════════════════════════════════════════════════════════════
 
   describe('Singular role & administrator visibility (BUG-026)', () => {
@@ -982,7 +1207,7 @@ describe('TenantPlugin', () => {
       expect(role.description).toContain('Tenant administrator');
     });
 
-    it('tenant A admin gets null for tenant B role by id', async () => {
+    it('tenant A read-admin gets null for tenant B role by id', async () => {
       // Get tenant B role id as SuperAdmin.
       adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
       await adminClient.asSuperAdmin();
@@ -993,9 +1218,9 @@ describe('TenantPlugin', () => {
       );
       expect(tenantBRole).toBeTruthy();
 
-      // Switch to tenant A and try to fetch tenant B's role by id.
+      // Switch to tenant A read-admin and try to fetch tenant B's role by id.
       adminClient.setChannelToken(tenantAChannelToken);
-      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      await adminClient.asUserWithCredentials(readAdminEmail, readAdminPassword);
 
       const { role } = await adminClient.query(ROLE, { id: tenantBRole.id });
       expect(role).toBeNull();
@@ -1020,7 +1245,7 @@ describe('TenantPlugin', () => {
       expect(administrator.emailAddress).toBe(tenantAEmail);
     });
 
-    it('tenant A admin gets null for tenant B administrator by id', async () => {
+    it('tenant A read-admin gets null for tenant B administrator by id', async () => {
       // Get tenant B admin id as SuperAdmin.
       adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
       await adminClient.asSuperAdmin();
@@ -1031,9 +1256,9 @@ describe('TenantPlugin', () => {
       );
       expect(tenantBAdmin).toBeTruthy();
 
-      // Switch to tenant A and try to fetch tenant B's admin by id.
+      // Switch to tenant A read-admin and try to fetch tenant B's admin by id.
       adminClient.setChannelToken(tenantAChannelToken);
-      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      await adminClient.asUserWithCredentials(readAdminEmail, readAdminPassword);
 
       const { administrator } = await adminClient.query(ADMINISTRATOR, {
         id: tenantBAdmin.id,

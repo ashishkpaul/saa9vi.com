@@ -7,10 +7,10 @@ import { MediaResourcesList } from './routes/media/MediaResourcesList';
 import { ACADEMY_NAV_ITEMS, AcademyHome } from './shared/academy-dashboard';
 
 const academyPermissions: Record<string, string[]> = {
-  'academy-overview': ['SuperAdmin', 'TenantProfileRead'],
-  'tenant-profile': ['SuperAdmin', 'TenantProfileRead'],
-  instructors: ['SuperAdmin', 'InstructorProfileRead'],
-  'media-resources': ['SuperAdmin', 'MediaResourceRead'],
+  'academy-overview': ['SuperAdmin', 'ReadTenantProfile'],
+  'tenant-profile': ['SuperAdmin', 'ReadTenantProfile'],
+  instructors: ['SuperAdmin', 'ReadInstructorProfile'],
+  'media-resources': ['SuperAdmin', 'ReadMediaResource'],
 };
 
 export default defineDashboardExtension({

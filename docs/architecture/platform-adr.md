@@ -504,6 +504,7 @@ export class BbbPlatformCapacityPolicy extends VendureEntity {
 - Resolver `@Allow` decorators include both `BbbAdminPermission.Permission` and the granular permission
 - Dashboard `requiresPermission` arrays include both `BBBAdmin` and the granular permission
 - `TENANT_ADMIN_ROLE_PERMISSIONS` grants the granular permissions (not `BBBAdmin`) to new tenant admins
+- **`BBBPlatformInfrastructure` is intentionally NOT granted to tenant admins** — it is Portal/SuperAdmin-only. Tenant admins receive the six operational granular permissions (`BBBManageOrganizations`, `BBBManageRooms`, `BBBManageSessions`, `BBBManageMeetings`, `BBBManageEntitlements`, `BBBManageMembers`) but NOT `BBBPlatformInfrastructure` (server/capacity management). This boundary is enforced by the tenant role reconciliation tool (`npm run tenant:roles:repair -- --remove-unexpected`), which reports and can remove `BBBPlatformInfrastructure` from any tenant role that has it (BUG-029).
 - See INV-001 and Phase B
 
 **Alternatives Rejected:**

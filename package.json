@@ -16,6 +16,8 @@
     "start": "concurrently npm:start:*",
     "deploy": "npm run build:all && npm run start",
     "verify:invariants": "ts-node ./src/platform/invariants/cli.ts",
+    "tenant:roles:check": "ts-node ./scripts/tenant-role-reconcile.ts",
+    "tenant:roles:repair": "ts-node ./scripts/tenant-role-reconcile.ts --apply",
     "codegen": "graphql-codegen --config codegen.ts",
     "test:e2e": "vitest run --config vitest.config.mts",
     "test:e2e:watch": "vitest --config vitest.config.mts",

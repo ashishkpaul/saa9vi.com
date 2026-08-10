@@ -18,6 +18,7 @@ import { InstructorIndexerService } from './services/instructor-indexer.service'
 import { DomainChannelResolverService } from './services/domain-channel-resolver.service';
 import { TenantDeletionService } from './services/tenant-deletion.service';
 import { TenantRegistrationService } from './services/tenant-registration.service';
+import { TenantRoleReconciliationService } from './services/tenant-role-reconciliation.service';
 import { TenantAdminResolver } from './api/tenant-admin.resolver';
 import { TenantShopResolver } from './api/tenant-shop.resolver';
 import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
@@ -34,6 +35,7 @@ import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
     DomainChannelResolverService,
     TenantDeletionService,
     TenantRegistrationService,
+    TenantRoleReconciliationService,
   ],
   adminApiExtensions: {
     schema: adminApiExtensions,
