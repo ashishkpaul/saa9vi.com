@@ -38,11 +38,14 @@ export class TenantAdminResolver {
     const skip = Math.max(args.options?.skip ?? 0, 0);
 
     // SuperAdmin sees all administrators (platform-level view).
+    // NOTE: `user.roles.channels` is loaded so the nested graph is consistent
+    // with the direct `roles` query — without it, TypeORM returns `channels: []`
+    // for a tenant role even though the role-channel join exists (BUG-030).
     if (ctx.userHasPermissions([Permission.SuperAdmin])) {
       const [items, totalItems] = await this.connection
         .getRepository(ctx, Administrator)
         .findAndCount({
-          relations: ['user', 'user.roles'],
+          relations: ['user', 'user.roles', 'user.roles.channels'],
           order: { createdAt: 'ASC' },
           skip,
           take,
@@ -51,12 +54,15 @@ export class TenantAdminResolver {
     }
 
     // Tenant admin: only administrators whose roles include the active channel.
+    // `role.channels` is loaded via leftJoinAndSelect so the returned
+    // administrator's user.roles[].channels[] is populated consistently.
     const channelId = ctx.channelId as string;
     const qb = this.connection
       .getRepository(ctx, Administrator)
       .createQueryBuilder('administrator')
       .leftJoinAndSelect('administrator.user', 'user')
       .leftJoinAndSelect('user.roles', 'role')
+      .leftJoinAndSelect('role.channels', 'roleChannel')
       .leftJoin('role.channels', 'channel')
       .where('channel.id = :channelId', { channelId })
       .orderBy('administrator.createdAt', 'ASC');
@@ -83,23 +89,26 @@ export class TenantAdminResolver {
     @Args() args: { id: string },
   ): Promise<Administrator | undefined> {
     // SuperAdmin sees any administrator regardless of channel.
+    // NOTE: `user.roles.channels` loaded for graph consistency (BUG-030).
     if (ctx.userHasPermissions([Permission.SuperAdmin])) {
       return this.connection
         .getRepository(ctx, Administrator)
         .findOne({
           where: { id: args.id as any },
-          relations: ['user', 'user.roles'],
+          relations: ['user', 'user.roles', 'user.roles.channels'],
         })
         .then((a) => a ?? undefined);
     }
 
     // Tenant admin: only if the administrator's roles include the active channel.
+    // `role.channels` loaded via leftJoinAndSelect for graph consistency (BUG-030).
     const channelId = ctx.channelId as string;
     return this.connection
       .getRepository(ctx, Administrator)
       .createQueryBuilder('administrator')
       .leftJoinAndSelect('administrator.user', 'user')
       .leftJoinAndSelect('user.roles', 'role')
+      .leftJoinAndSelect('role.channels', 'roleChannel')
       .leftJoin('role.channels', 'channel')
       .where('administrator.id = :id', { id: args.id })
       .andWhere('channel.id = :channelId', { channelId })

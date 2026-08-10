@@ -290,6 +290,13 @@ const ADMINISTRATORS = gql`
         emailAddress
         firstName
         lastName
+        user {
+          roles {
+            channels {
+              code
+            }
+          }
+        }
       }
       totalItems
     }
@@ -1025,6 +1032,18 @@ describe('TenantPlugin', () => {
       expect(emails).toContain(tenantAEmail);
       expect(emails).toContain(readAdminEmail);
       expect(emails).not.toContain('superadmin');
+
+      // BUG-030: the nested user.roles.channels relation must be populated
+      // consistently with the direct `roles` query. Without loading
+      // `user.roles.channels`, TypeORM returns `channels: []` even though the
+      // role-channel join exists.
+      const tenantAdmin = administrators.items.find(
+        (a: any) => a.emailAddress === tenantAEmail,
+      );
+      const roleChannels = tenantAdmin.user.roles.flatMap((r: any) =>
+        r.channels.map((c: any) => c.code),
+      );
+      expect(roleChannels.some((code: string) => code.startsWith('mehta-coaching'))).toBe(true);
     });
 
     it('tenant B read-admin only sees administrators in their own channel', async () => {
