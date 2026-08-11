@@ -61,12 +61,16 @@ export class ArticleService {
     ) {}
 
     findAll(ctx: RequestContext, options?: ListQueryOptions<Article>) {
-        // ListQueryBuilder automatically restricts results to the active
-        // Channel (ctx.channelId) because Article implements ChannelAware.
+        // ADR-036: restrict to the active channel via explicit inner join
+        // on the channels relation (ListQueryBuilder ctx channel filtering is
+        // not applied automatically for join-table ChannelAware entities).
         return this.listQueryBuilder
             .build(Article, options, {
                 ctx,
                 relations: ['featuredAsset', 'channels'],
+            })
+            .innerJoin('article.channels', 'channel', 'channel.id = :channelId', {
+                channelId: ctx.channelId,
             })
             .getManyAndCount()
             .then(([items, totalItems]) => ({ items, totalItems }));

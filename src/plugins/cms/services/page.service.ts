@@ -57,6 +57,9 @@ export class PageService {
     findAll(ctx: RequestContext, options?: ListQueryOptions<Page>) {
         return this.listQueryBuilder
             .build(Page, options, { ctx, relations: ['channels'] })
+            .innerJoin('page.channels', 'channel', 'channel.id = :channelId', {
+                channelId: ctx.channelId,
+            })
             .getManyAndCount()
             .then(([items, totalItems]) => ({ items, totalItems }));
     }

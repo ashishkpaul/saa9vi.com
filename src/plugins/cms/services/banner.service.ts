@@ -59,6 +59,9 @@ export class BannerService {
     findAll(ctx: RequestContext, options?: ListQueryOptions<Banner>) {
         return this.listQueryBuilder
             .build(Banner, options, { ctx, relations: ['image', 'channels'] })
+            .innerJoin('banner.channels', 'channel', 'channel.id = :channelId', {
+                channelId: ctx.channelId,
+            })
             .getManyAndCount()
             .then(([items, totalItems]) => ({ items, totalItems }));
     }
