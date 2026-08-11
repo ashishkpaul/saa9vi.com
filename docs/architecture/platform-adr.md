@@ -13,10 +13,12 @@
 **Rationale:** Vendure's `RequestContext` carries the active `channelId`. `ListQueryBuilder` and `TransactionalConnection.findOneInChannel` automatically filter by this channel. A parallel identity system creates two sources of truth that drift in production under concurrent writes.
 
 **Alternatives Rejected:**
+
 - Separate `tenantId` column (dual source of truth)
 - Separate database per tenant (operational overhead)
 
 **Consequences:**
+
 - All tenant-scoped entities must implement `ChannelAware`
 - Exceptions documented for `InstructorProfile` (DL-010), `BbbEntitlement` (DL-011), `BbbOrganizationMembership` (DL-017)
 - See INV-001 in `docs/architecture/invariants.md`
@@ -32,9 +34,11 @@
 **Rationale:** Generalizing now prevents 5 separate access tables in 18 months.
 
 **Alternatives Rejected:**
+
 - Keep `BbbEnrollment` forever (accumulates tech debt per new product type)
 
 **Consequences:**
+
 - `BbbEntitlement` supports `bbb_session` and `bbb_room` types
 - `BbbEnrollment` remains as legacy room-access path
 - See INV-003 in `docs/architecture/invariants.md`
@@ -50,6 +54,7 @@
 **Rationale:** `channels[]` enables framework tooling (`assignToCurrentChannel`, `findOneInChannel`). `channelId` scalar enables efficient direct joins without querying the join table.
 
 **Alternatives Rejected:**
+
 - `channelId` scalar only (loses framework channel-safety)
 - `channels[]` only (loses query efficiency)
 
@@ -64,9 +69,11 @@
 **Rationale:** Immutable billing facts; no retroactive mutation risk; enables audit.
 
 **Alternatives Rejected:**
+
 - Live calculation from `BbbMeeting.durationMinutes` (fragile, mutation risk)
 
 **Consequences:**
+
 - Extended to `AdSpendLedger`, `AdWalletLedger`, `BbbCapacityAlertLog`, `CommissionLedger`, `TenantRegistrationLog`
 - See INV-002 in `docs/architecture/invariants.md`
 
@@ -81,9 +88,11 @@
 **Rationale:** Enables replay, audit, recovery; idempotency guaranteed by job deduplication.
 
 **Alternatives Rejected:**
+
 - Inline processing (no replay, silent loss on crash)
 
 **Consequences:**
+
 - See INV-004 in `docs/architecture/invariants.md`
 
 ---
@@ -97,6 +106,7 @@
 **Rationale:** Trainers sell scheduled time slots, not abstract rooms. Marketplace requires browsable sessions with price and capacity.
 
 **Alternatives Rejected:**
+
 - `BbbRoom` as the product entity (too abstract, no time dimension)
 
 ---
@@ -110,6 +120,7 @@
 **Rationale:** Single source of truth in PG; ES as a derived read projection rebuilt on event.
 
 **Alternatives Rejected:**
+
 - Dual-write to ES (synchronization failures)
 - PG-only search (performance degrades at 10K+ instructors)
 
@@ -124,6 +135,7 @@
 **Rationale:** Data residency (India), cost control, integration depth.
 
 **Alternatives Rejected:**
+
 - Zoom/Meet (no API for room-level access control)
 - BBB SaaS (loses per-meeting credential control)
 
@@ -138,6 +150,7 @@
 **Rationale:** Automatic Let's Encrypt; Caddyfile is programmable via Admin API.
 
 **Alternatives Rejected:**
+
 - Nginx (manual cert management)
 - Traefik (more complex for this use case)
 
@@ -152,6 +165,7 @@
 **Rationale:** 1:N channel-to-instructors; `assignToCurrentChannel` overhead per create not warranted; all queries are explicit and code-verified.
 
 **Alternatives Rejected:**
+
 - Full `ChannelAware` implementation (adds join table, no practical benefit)
 
 ---
@@ -165,6 +179,7 @@
 **Rationale:** Same pattern as DL-010: simple access checks rarely need the join table.
 
 **Alternatives Rejected:**
+
 - Full `ChannelAware` implementation (adds join table with no query-benefit at current access-check volume)
 
 ---
@@ -178,6 +193,7 @@
 **Rationale:** Sessions are scoped to organizations. Org-to-channel is 1:1 making org-scoped slugs equivalent to channel-scoped slugs while matching domain semantics.
 
 **Alternatives Rejected:**
+
 - `(channelId, slug)` composite (requires joining org to resolve channel for every slug lookup)
 
 ---
@@ -191,6 +207,7 @@
 **Rationale:** Keeps Postgres as the only DB dependency; avoids migration if switching DB provider; no query-time JSON-path queries needed.
 
 **Alternatives Rejected:**
+
 - `jsonb` (enables PG-specific JSON queries not needed for the replay/audit use case)
 
 ---
@@ -204,6 +221,7 @@
 **Rationale:** Decouples selection algorithm from scoring formula; reconciliation service owns scoring logic and can evolve it without touching selection.
 
 **Alternatives Rejected:**
+
 - Hard-coded `activeMeetingCount × avgParticipants` formula inside selection service (couples two concerns)
 
 ---
@@ -217,6 +235,7 @@
 **Rationale:** `DashboardNavSectionDefinition` type constraint enforced by TypeScript; confirmed by BBB and Tenant plugin code audit.
 
 **Alternatives Rejected:**
+
 - `items` array inside section (fails at compile time — TS-2353)
 
 ---
@@ -230,6 +249,7 @@
 **Rationale:** Eliminates per-tenant code deployments; backend plugin evolution is decoupled from storefront deployments; matches Shopify/Kajabi/Teachable operating model at scale.
 
 **Alternatives Rejected:**
+
 - Per-tenant Next.js fork (500 tenants = 500 deployment pipelines)
 - iframe embedding (SEO dead, mobile broken)
 
@@ -244,6 +264,7 @@
 **Rationale:** Membership checks are high-frequency, low-data-volume queries. The join table overhead of full `ChannelAware` implementation adds no practical channel-safety benefit since all queries include explicit `organizationId` which already implies the channel via the 1:1 org-to-channel mapping.
 
 **Alternatives Rejected:**
+
 - Full `ChannelAware` implementation (adds join table, redundant with org-scoped filter)
 
 ---
@@ -257,6 +278,7 @@
 **Rationale:** Preserves INV-003 (one access-control system). Membership short-circuits the waterfall rather than replacing it. Commercial and internal access paths are additive, not competing.
 
 **Alternatives Rejected:**
+
 - Separate `InternalRoomAccess` entity (creates a second access-control system, violates INV-003)
 - Adding `isInternal` flag to `BbbRoom` and bypassing all checks (no audit trail)
 
@@ -271,6 +293,7 @@
 **Rationale:** The plugin implements cross-vendor order splitting for the Amazon/Etsy model. Saa9vi uses the Shopify/Kajabi model — each academy is a completely isolated storefront; cross-academy carts do not exist.
 
 **Alternatives Rejected:**
+
 - Vendure multivendor-plugin (wrong data model)
 - Separate marketplace microservice (operational overhead, dual source of truth)
 
@@ -285,6 +308,7 @@
 **Rationale:** Marketplace discovery requires reading across tenant boundaries. A single platform index is a derived read projection — PG remains authoritative per-channel. INV-001 (Channel = Tenant for writes) is preserved.
 
 **Alternatives Rejected:**
+
 - Per-tenant index only (no cross-tenant discovery)
 - PG-only search (performance degrades at 10K+ sessions)
 
@@ -299,6 +323,7 @@
 **Rationale:** Streams are additive and reinforce each other. Subscription provides predictable base revenue. Commission aligns Saa9vi's growth with academy growth. Advertising creates a self-serve high-margin stream. Zero commission on direct traffic protects academy relationships.
 
 **Alternatives Rejected:**
+
 - Single-stream SaaS only (leaves growth revenue on table)
 - Commission on all traffic (penalises academies for existing students, risks churn)
 
@@ -313,6 +338,7 @@
 **Rationale:** Bid-boost multiplier (`weight: 3.0` on `isSponsored: true`) integrates cleanly with existing `bayesianRating` function score. Organic ranking below sponsored results. Organic ordering is never manipulated.
 
 **Alternatives Rejected:**
+
 - Position injection (couples ranking and ad logic, fragile)
 - Separate sponsored endpoint (bad UX, no interleaving)
 
@@ -327,6 +353,7 @@
 **Rationale:** The education context makes reactive throttling uniquely harmful. A live class with enrolled students cannot be cancelled at provisioning time. A 48-hour forecast with 15-minute alert cadence gives operators enough warning to add infrastructure before any student is affected.
 
 **Alternatives Rejected:**
+
 - Hard capacity ceiling blocking meetings (rejected — INV-012)
 - Per-join capacity checks (too late — meeting already provisioned)
 - Cloud auto-scaling (deferred to Phase 4 — current BBB servers are self-hosted)
@@ -342,6 +369,7 @@
 **Rationale:** Access is computed at runtime. The transition `IN_GRACE → SUSPENDED` is driven by an async BullMQ cron job — a student technically past grace expiry retains access until the job processes. In a live education billing context, granting a few extra minutes during a queue delay is an acceptable business tolerance.
 
 **Alternatives Rejected:**
+
 - Persisting `SubscriptionEntitlement` explicitly (creates fragile sync between billing state and access state, introduces drift risk on job failure)
 
 ---
@@ -355,6 +383,7 @@
 **Rationale:** Vendure assigns new products to both the default channel and the current channel by default. Allowing session products on the default channel would create an accidental cross-tenant product listing visible to all storefronts. The marketplace ES index is the correct and only cross-tenant discovery surface.
 
 **Alternatives Rejected:**
+
 - Allow default channel assignment (creates uncontrolled cross-tenant product leakage)
 - Per-tenant index only for discovery (acceptable for Phase 1.5; not scalable for Phase 3 marketplace)
 
@@ -369,6 +398,7 @@
 **Rationale:** Registration is a critical platform operation. Append-only logging provides an immutable audit trail for every tenant creation attempt, enabling retrospective analysis of registration failures and abuse patterns.
 
 **Alternatives Rejected:**
+
 - Mutable `TenantRegistrationLog` (loses audit trail on failure)
 - No log at all (no observability into registration failures)
 
@@ -383,6 +413,7 @@
 **Rationale:** `RequestContextService.create()` expects a `channelToken: string` parameter. Passing a raw `Channel` entity object causes `TypeError: channelOrToken.startsWith is not a function`.
 
 **Alternatives Rejected:**
+
 - Passing `Channel` entity directly (crashes with TypeError)
 - Refactoring `RequestContextService.create()` to accept both types (adds complexity to a Vendure core method)
 
@@ -397,6 +428,7 @@
 **Rationale:** Three-stream revenue model has three separate control mechanisms. Stream 2 (marketplace commission) is the only one where "the event happened but the rate is zero" is a recurring state worth recording. Writing $0 rows preserves complete `orderSource = 'marketplace'` GMV history so future rate changes have full historical data. The env var name must be unambiguous about which stream it controls.
 
 **Alternatives Rejected:**
+
 - `PLATFORM_FEE_PERCENT` (ambiguous — reads like it controls all three streams)
 - Not writing $0 rows (loses GMV history when rate is turned up later)
 - Applying $0-row pattern to Stream 1 or 3 (incorrect — absence of rows in those streams correctly means no usage/no ad spend)
@@ -459,12 +491,14 @@ export class BbbPlatformCapacityPolicy extends VendureEntity {
 ```
 
 **Consequences:**
+
 - `BbbOrganization.maxParticipantsPerMeeting` becomes a denormalized cache of the policy limit
 - `BbbRoom.maxParticipants` is set from policy default on room creation, tenant can increase up to `maxRoomCapacity`
 - `BbbScheduledSession.maxAttendees` is a separate commercial field — tenant controls it for selling, but actual BBB room capacity is the runtime ceiling
 - Portal Admin dashboard needs a capacity policy management UI
 
 **Alternatives Rejected:**
+
 - Tenant-controlled BBB capacity (resource abuse risk, unpredictable infrastructure costs)
 - Fixed hardcoded capacity in code (not adaptable to different plan tiers)
 - BBB server as only capacity authority (too late — impacts user experience at join time)
@@ -480,12 +514,14 @@ export class BbbPlatformCapacityPolicy extends VendureEntity {
 **Rationale:** The BBB services previously resolved resources by ID without verifying channel ownership, so a tenant admin could read or mutate another tenant's BBB resources if they knew the ID. Centralizing the check in a single injectable service (rather than scattering `if (org.channelId !== ctx.channelId)` across every method) keeps the invariant enforceable and testable.
 
 **Consequences:**
+
 - `BbbChannelAccessService` is registered in the BBB plugin providers and injected into `BbbOrganizationService`, `BbbRoomService`, `BbbMeetingService`, `BbbScheduledSessionService`, and `BbbEntitlementService`
 - `findAll` methods filter by `ctx.channelId`; `findById`/`update`/`delete`/`create` assert ownership
 - Worker/webhook callbacks (e.g. `onMeetingActive`) bypass the guard — they run under internal context, not tenant-admin context
 - See INV-001 and the Phase A isolation e2e suite
 
 **Alternatives Rejected:**
+
 - Relying on Vendure's `ListQueryBuilder` channel filtering alone (does not cover scalar-`channelId` entities like `BbbEntitlement`, and does not guard by-ID mutations)
 - Scattering inline channel checks per method (duplication, drift risk)
 
@@ -500,6 +536,7 @@ export class BbbPlatformCapacityPolicy extends VendureEntity {
 **Rationale:** A single `BBBAdmin` permission forces every tenant admin to have full BBB access or none. Granular permissions let the platform grant scoped access (e.g. a tenant admin who manages rooms but not platform servers) and align with the Phase C expansion of `TENANT_ADMIN_ROLE_PERMISSIONS`.
 
 **Consequences:**
+
 - `BBB_GRANULAR_PERMISSIONS` registered in `config.authOptions.customPermissions`
 - Resolver `@Allow` decorators include both `BbbAdminPermission.Permission` and the granular permission
 - Dashboard `requiresPermission` arrays include both `BBBAdmin` and the granular permission
@@ -508,6 +545,7 @@ export class BbbPlatformCapacityPolicy extends VendureEntity {
 - See INV-001 and Phase B
 
 **Alternatives Rejected:**
+
 - Replacing `BBBAdmin` entirely (breaks existing roles that hold `BBBAdmin`)
 - Keeping only `BBBAdmin` (no scoped access possible)
 
@@ -522,12 +560,14 @@ export class BbbPlatformCapacityPolicy extends VendureEntity {
 **Rationale:** Vendure's built-in `administrators` query is not channel-aware — it returns all administrators regardless of the active channel. If a tenant role is ever granted `ReadAdministrator`, the built-in query would expose global/SuperAdmin accounts to tenant admins. Overriding the query closes this latent leak.
 
 **Consequences:**
+
 - `TenantAdminResolver.administrators` filters by `role.channels` join on `ctx.channelId`
 - SuperAdmin path returns all administrators
 - Enforced by INV-016 and the `administratorVisibility` invariant checker
 - Regression tests cover tenant A, tenant B, and SuperAdmin visibility
 
 **Alternatives Rejected:**
+
 - Relying on the built-in query (leaks global admins if `ReadAdministrator` is granted)
 - Removing `ReadAdministrator` from tenant roles entirely (over-restrictive; the override is the correct fix)
 
@@ -542,6 +582,7 @@ export class BbbPlatformCapacityPolicy extends VendureEntity {
 **Rationale:** Vendure's built-in `roles` query is implicitly channel-scoped — it only returns roles whose `channels[]` includes the active channel. Tenant-created roles are deliberately scoped to only their tenant channel (see `TenantRegistrationService.registerTenant()`), so they are invisible to a SuperAdmin operating on the Default channel. This breaks role-name resolution in the dashboard (a role shows as a bare numeric id). Overriding the query closes this gap.
 
 **Consequences:**
+
 - `TenantAdminResolver.roles` returns all roles for SuperAdmin, channel-scoped for tenant admins
 - `TenantAdminResolver.role(id)` singular query also overridden (BUG-026) — same channel-scoping gap existed on the singular endpoint, causing "not found" on the role detail page
 - `TenantAdminResolver.administrator(id)` singular query also overridden (BUG-026) — same gap on the administrator detail page
@@ -551,5 +592,47 @@ export class BbbPlatformCapacityPolicy extends VendureEntity {
 **Standing Checklist:** When overriding a built-in list query for cross-channel SuperAdmin visibility, check for and override the singular `id`-based counterpart in the same change. Vendure ships both a list and a by-id query for most Admin API entities, and both are independently channel-scoped. Missing the singular sibling was the root cause of BUG-026 (the `role(id)` gap left after BUG-025's `roles` fix) and would have been the root cause of a similar `administrator(id)` gap if INV-016 hadn't been caught here too.
 
 **Alternatives Rejected:**
+
 - Relying on the built-in query (tenant roles invisible to SuperAdmin on Default channel)
 - Assigning tenant roles to the Default channel (violates channel isolation)
+
+---
+
+## ADR-036: CMS Channel Ownership Model
+
+**Status:** Active
+
+**Context:** Saa9vi uses Vendure Channels as tenant boundaries (INV-001). However, not all content follows identical channel-visibility rules. Generic Vendure channel-assignment helpers (e.g. `assignToCurrentChannel`) are designed for shared multi-channel commerce — they assign an entity to the default channel **and** the current channel. Using them blindly for CMS entities causes tenant-created CMS content to leak onto `__default_channel__`, making it visible to other tenants (BUG-031).
+
+**Decision:** Channel ownership depends on the domain entity; not all entities follow the same channel-sharing model.
+
+```
+Saa9vi Platform Channel (__default_channel__)
+    ├── Platform CMS (SuperAdmin-created): About, Pricing, Help, announcements, featured content
+    └── Marketplace shared catalogue (intentionally channel-spanning, discovery via search index)
+
+Tenant Channel (test-academy-f9hmus)
+    ├── Academy CMS (Tenant-created): academy pages, instructor pages, local banners, course landing pages
+    ├── Tenant Commerce: products, courses, orders, customers, BBB sessions, entitlements
+```
+
+1. **`__default_channel__` represents Saa9vi platform scope.**
+2. **Platform CMS resources** — created by SuperAdmin, assigned to the default channel only.
+3. **Tenant CMS resources** — created by Tenant Admin, assigned to the tenant channel only. They must **never** automatically attach to `__default_channel__`.
+4. **Marketplace catalogue resources** — may intentionally span channels; the search/discovery index controls cross-channel visibility.
+5. **Channel assignment must be explicit per domain.** Generic channel-assignment helpers must not be used where ownership semantics differ.
+
+**Consequences:**
+
+- CMS `create` methods (`PageService`, `BannerService`, `ArticleService`) must resolve channel assignment by the creator's role:
+  - SuperAdmin → default channel
+  - Tenant Admin → tenant channel only
+- Implemented via a `CmsChannelAssignmentPolicy` / `assignCmsChannels(ctx, entity)` helper (not blind `assignToCurrentChannel`).
+- E2E coverage: tenant CMS isolation (tenant A content not visible to tenant B) and platform CMS visibility.
+- Filed as BUG-031.
+- Aligns with ADR-027 (session products are tenant-channel-only), INV-001 (Channel = Tenant for tenant-owned resources), and the marketplace exception for intentionally shared catalogue.
+
+**Alternatives Rejected:**
+
+- Using `assignToCurrentChannel` globally for CMS (leaks tenant content to default channel — the BUG-031 root cause).
+- Removing default-channel content entirely (would break platform CMS).
