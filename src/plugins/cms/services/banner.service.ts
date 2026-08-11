@@ -6,6 +6,7 @@ import {
     ListQueryBuilder,
     ListQueryOptions,
     Logger,
+    Permission,
     RequestContext,
     TransactionalConnection,
     VendureEvent,
@@ -107,7 +108,7 @@ export class BannerService {
         await this.cmsChannelAssignmentPolicy.assign(banner, ctx);
         const saved = await this.connection.getRepository(ctx, Banner).save(banner);
 
-        if (input.channelIds?.length) {
+        if (input.channelIds?.length && ctx.userHasPermissions([Permission.SuperAdmin])) {
             await this.channelService.assignToChannels(ctx, Banner, saved.id, input.channelIds);
         }
 
@@ -124,10 +125,10 @@ export class BannerService {
         const updated = new Banner({ ...banner, ...input });
         await this.connection.getRepository(ctx, Banner).save(updated);
 
-        if (input.channelIds?.length) {
+        if (input.channelIds?.length && ctx.userHasPermissions([Permission.SuperAdmin])) {
             await this.channelService.assignToChannels(ctx, Banner, updated.id, input.channelIds);
         }
-        if (input.removeFromChannelIds?.length) {
+        if (input.removeFromChannelIds?.length && ctx.userHasPermissions([Permission.SuperAdmin])) {
             await this.channelService.removeFromChannels(ctx, Banner, updated.id, input.removeFromChannelIds);
         }
 

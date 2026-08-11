@@ -1344,6 +1344,37 @@ describe('TenantPlugin', () => {
       const channelCodes = found.channels.map((c: any) => c.code);
       expect(channelCodes).toEqual(['__default_channel__']);
     });
+
+    it('tenant admin cannot bypass ADR-036 via channelIds input', async () => {
+      adminClient.setChannelToken(tenantAChannelToken);
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+
+      const bypassPageSlug = `bypass-test-${Date.now()}`;
+      const { createPage } = await adminClient.query(CREATE_CMS_PAGE, {
+        input: {
+          slug: bypassPageSlug,
+          title: 'Bypass Attempt Page',
+          isPublished: true,
+          channelIds: ['T_1'], // attempt to assign default channel
+        },
+      });
+
+      expect(createPage).toMatchObject({
+        slug: bypassPageSlug,
+        title: 'Bypass Attempt Page',
+      });
+
+      // ADR-036: channelIds override is silently ignored for tenant admins.
+      // The page must be on the tenant channel only, not the default channel.
+      const { cmsPages } = await adminClient.query(ADMIN_CMS_PAGES);
+      const found = cmsPages.items.find(
+        (p: any) => p.slug === bypassPageSlug,
+      );
+      expect(found).toBeTruthy();
+      const channelCodes = found.channels.map((c: any) => c.code);
+      expect(channelCodes).not.toContain('__default_channel__');
+      expect(channelCodes.some((code: string) => code.startsWith('mehta-coaching'))).toBe(true);
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════════════

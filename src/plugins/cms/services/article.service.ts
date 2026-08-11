@@ -6,6 +6,7 @@ import {
     ListQueryBuilder,
     ListQueryOptions,
     Logger,
+    Permission,
     RequestContext,
     TransactionalConnection,
     UserInputError,
@@ -111,7 +112,7 @@ export class ArticleService {
 
         const saved = await this.connection.getRepository(ctx, Article).save(article);
 
-        if (input.channelIds?.length) {
+        if (input.channelIds?.length && ctx.userHasPermissions([Permission.SuperAdmin])) {
             await this.channelService.assignToChannels(ctx, Article, saved.id, input.channelIds);
         }
 
@@ -139,10 +140,10 @@ export class ArticleService {
 
         await this.connection.getRepository(ctx, Article).save(updated);
 
-        if (input.channelIds?.length) {
+        if (input.channelIds?.length && ctx.userHasPermissions([Permission.SuperAdmin])) {
             await this.channelService.assignToChannels(ctx, Article, updated.id, input.channelIds);
         }
-        if (input.removeFromChannelIds?.length) {
+        if (input.removeFromChannelIds?.length && ctx.userHasPermissions([Permission.SuperAdmin])) {
             await this.channelService.removeFromChannels(ctx, Article, updated.id, input.removeFromChannelIds);
         }
 

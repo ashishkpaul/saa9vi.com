@@ -6,6 +6,7 @@ import {
     ListQueryBuilder,
     ListQueryOptions,
     Logger,
+    Permission,
     RequestContext,
     TransactionalConnection,
     UserInputError,
@@ -93,7 +94,7 @@ export class PageService {
         await this.cmsChannelAssignmentPolicy.assign(page, ctx);
         const saved = await this.connection.getRepository(ctx, Page).save(page);
 
-        if (input.channelIds?.length) {
+        if (input.channelIds?.length && ctx.userHasPermissions([Permission.SuperAdmin])) {
             await this.channelService.assignToChannels(ctx, Page, saved.id, input.channelIds);
         }
 
@@ -118,10 +119,10 @@ export class PageService {
         const updated = new Page({ ...page, ...input });
         await this.connection.getRepository(ctx, Page).save(updated);
 
-        if (input.channelIds?.length) {
+        if (input.channelIds?.length && ctx.userHasPermissions([Permission.SuperAdmin])) {
             await this.channelService.assignToChannels(ctx, Page, updated.id, input.channelIds);
         }
-        if (input.removeFromChannelIds?.length) {
+        if (input.removeFromChannelIds?.length && ctx.userHasPermissions([Permission.SuperAdmin])) {
             await this.channelService.removeFromChannels(ctx, Page, updated.id, input.removeFromChannelIds);
         }
 
