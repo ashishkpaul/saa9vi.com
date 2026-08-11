@@ -14,6 +14,7 @@ import {
 } from '@vendure/core';
 import { loggerCtx } from '../constants';
 import { Article } from '../entities/article.entity';
+import { CmsChannelAssignmentPolicy } from './cms-channel-assignment.policy';
 
 export class ArticleEvent extends VendureEvent {
     createdAt: Date;
@@ -56,6 +57,7 @@ export class ArticleService {
         private listQueryBuilder: ListQueryBuilder,
         private channelService: ChannelService,
         private eventBus: EventBus,
+        private cmsChannelAssignmentPolicy: CmsChannelAssignmentPolicy,
     ) {}
 
     findAll(ctx: RequestContext, options?: ListQueryOptions<Article>) {
@@ -98,9 +100,10 @@ export class ArticleService {
             publishedAt: input.isPublished ? new Date() : null,
         });
 
-        // Assigns to the default Channel + whichever Channel the admin is
-        // currently operating in (the seller's channel, if a seller admin).
-        await this.channelService.assignToCurrentChannel(article, ctx);
+        // ADR-036: assign by creator role (SuperAdmin → default, Tenant → tenant only).
+        // Previously used assignToCurrentChannel(), which leaked tenant-created
+        // articles onto the default channel (BUG-031).
+        await this.cmsChannelAssignmentPolicy.assign(article, ctx);
 
         const saved = await this.connection.getRepository(ctx, Article).save(article);
 

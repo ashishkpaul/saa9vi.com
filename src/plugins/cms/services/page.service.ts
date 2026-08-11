@@ -15,6 +15,7 @@ import {
 import { Page } from '../entities/page.entity';
 import { PageSection } from '../types';
 import { loggerCtx } from '../constants';
+import { CmsChannelAssignmentPolicy } from './cms-channel-assignment.policy';
 
 export class PageEvent extends VendureEvent {
     createdAt: Date;
@@ -50,6 +51,7 @@ export class PageService {
         private listQueryBuilder: ListQueryBuilder,
         private channelService: ChannelService,
         private eventBus: EventBus,
+        private cmsChannelAssignmentPolicy: CmsChannelAssignmentPolicy,
     ) {}
 
     findAll(ctx: RequestContext, options?: ListQueryOptions<Page>) {
@@ -84,7 +86,8 @@ export class PageService {
         Logger.verbose(`Creating Page slug="${input.slug}" channel=${ctx.channelId}`, loggerCtx);
 
         const page = new Page({ ...input, sections: input.sections ?? [] });
-        await this.channelService.assignToCurrentChannel(page, ctx);
+        // ADR-036: assign by creator role (SuperAdmin → default, Tenant → tenant only).
+        await this.cmsChannelAssignmentPolicy.assign(page, ctx);
         const saved = await this.connection.getRepository(ctx, Page).save(page);
 
         if (input.channelIds?.length) {

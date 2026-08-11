@@ -7,6 +7,7 @@ import { Page } from './entities/page.entity';
 import { ArticleService } from './services/article.service';
 import { BannerService } from './services/banner.service';
 import { PageService } from './services/page.service';
+import { CmsChannelAssignmentPolicy } from './services/cms-channel-assignment.policy';
 import { CmsAdminResolver } from './api/cms-admin.resolver';
 import { CmsShopResolver } from './api/cms-shop.resolver';
 import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
@@ -15,7 +16,7 @@ import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
     compatibility: '^3.0.0',
     imports: [PluginCommonModule],
     entities: [Article, Banner, Page],
-    providers: [ArticleService, BannerService, PageService],
+    providers: [ArticleService, BannerService, PageService, CmsChannelAssignmentPolicy],
     adminApiExtensions: {
         schema: adminApiExtensions,
         resolvers: [CmsAdminResolver],

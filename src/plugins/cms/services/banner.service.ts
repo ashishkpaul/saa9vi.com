@@ -14,6 +14,7 @@ import {
 import { Banner } from '../entities/banner.entity';
 import { BannerPlacement } from '../types';
 import { loggerCtx } from '../constants';
+import { CmsChannelAssignmentPolicy } from './cms-channel-assignment.policy';
 
 export class BannerEvent extends VendureEvent {
     createdAt: Date;
@@ -52,6 +53,7 @@ export class BannerService {
         private listQueryBuilder: ListQueryBuilder,
         private channelService: ChannelService,
         private eventBus: EventBus,
+        private cmsChannelAssignmentPolicy: CmsChannelAssignmentPolicy,
     ) {}
 
     findAll(ctx: RequestContext, options?: ListQueryOptions<Banner>) {
@@ -98,7 +100,8 @@ export class BannerService {
     async create(ctx: RequestContext, input: CreateBannerInput): Promise<Banner> {
         Logger.verbose(`Creating Banner placement="${input.placement}" channel=${ctx.channelId}`, loggerCtx);
         const banner = new Banner(input);
-        await this.channelService.assignToCurrentChannel(banner, ctx);
+        // ADR-036: assign by creator role (SuperAdmin → default, Tenant → tenant only).
+        await this.cmsChannelAssignmentPolicy.assign(banner, ctx);
         const saved = await this.connection.getRepository(ctx, Banner).save(banner);
 
         if (input.channelIds?.length) {

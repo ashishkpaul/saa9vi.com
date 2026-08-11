@@ -352,6 +352,45 @@ const ADMINISTRATOR = gql`
   }
 `;
 
+// ─── CMS channel isolation (ADR-036 / BUG-031) ───────────────────────────
+
+const CREATE_CMS_PAGE = gql`
+  mutation CreateCmsPage($input: CreatePageInput!) {
+    createPage(input: $input) {
+      id
+      slug
+      title
+      isPublished
+    }
+  }
+`;
+
+const ADMIN_CMS_PAGES = gql`
+  query AdminCmsPages {
+    cmsPages {
+      items {
+        id
+        slug
+        title
+        channels {
+          code
+        }
+      }
+      totalItems
+    }
+  }
+`;
+
+const SHOP_CMS_PAGE = gql`
+  query ShopCmsPage($slug: String!) {
+    cmsPage(slug: $slug) {
+      id
+      slug
+      title
+    }
+  }
+`;
+
 // ─── Test suite ───────────────────────────────────────────────────────────
 
 describe('TenantPlugin', () => {
@@ -1204,7 +1243,111 @@ describe('TenantPlugin', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════
-  // 9. Singular role & administrator visibility (BUG-026)
+  // 9. CMS channel isolation (ADR-036 / BUG-031)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('CMS channel isolation (ADR-036 / BUG-031)', () => {
+    let tenantAPageSlug: string;
+    let platformPageSlug: string;
+
+    it('tenant A admin can create a CMS page scoped to their channel only', async () => {
+      adminClient.setChannelToken(tenantAChannelToken);
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+
+      tenantAPageSlug = `tenant-a-page-${Date.now()}`;
+      const { createPage } = await adminClient.query(CREATE_CMS_PAGE, {
+        input: {
+          slug: tenantAPageSlug,
+          title: 'Tenant A Page',
+          isPublished: true,
+        },
+      });
+
+      expect(createPage).toMatchObject({
+        slug: tenantAPageSlug,
+        title: 'Tenant A Page',
+        isPublished: true,
+      });
+    });
+
+    it('tenant A admin sees their own CMS page scoped to tenant channel only', async () => {
+      adminClient.setChannelToken(tenantAChannelToken);
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+
+      const { cmsPages } = await adminClient.query(ADMIN_CMS_PAGES);
+
+      const found = cmsPages.items.find(
+        (p: any) => p.slug === tenantAPageSlug,
+      );
+      expect(found).toBeTruthy();
+      // ADR-036: tenant-created page must be on the tenant channel ONLY,
+      // never the default channel (BUG-031).
+      const channelCodes = found.channels.map((c: any) => c.code);
+      expect(channelCodes).toHaveLength(1);
+      expect(channelCodes[0]).toMatch(/^mehta-coaching-/);
+      expect(channelCodes).not.toContain('__default_channel__');
+    });
+
+    it('tenant B admin cannot see tenant A CMS page (channel isolation)', async () => {
+      adminClient.setChannelToken(tenantBChannelToken);
+      await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
+
+      const { cmsPages } = await adminClient.query(ADMIN_CMS_PAGES);
+
+      const leak = cmsPages.items.find(
+        (p: any) => p.slug === tenantAPageSlug,
+      );
+      expect(leak).toBeUndefined();
+    });
+
+    it('Shop API cmsPage(slug) is channel-scoped', async () => {
+      // Tenant A's storefront token can resolve the page.
+      shopClient.setChannelToken(tenantAChannelToken);
+      const { cmsPage: pageA } = await shopClient.query(SHOP_CMS_PAGE, {
+        slug: tenantAPageSlug,
+      });
+      expect(pageA).toMatchObject({ slug: tenantAPageSlug });
+
+      // Tenant B's storefront token cannot resolve tenant A's page.
+      shopClient.setChannelToken(tenantBChannelToken);
+      const { cmsPage: pageB } = await shopClient.query(SHOP_CMS_PAGE, {
+        slug: tenantAPageSlug,
+      });
+      expect(pageB).toBeNull();
+    });
+
+    it('SuperAdmin can create a platform CMS page on the default channel', async () => {
+      adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
+      await adminClient.asSuperAdmin();
+
+      platformPageSlug = `platform-page-${Date.now()}`;
+      const { createPage } = await adminClient.query(CREATE_CMS_PAGE, {
+        input: {
+          slug: platformPageSlug,
+          title: 'Platform Page',
+          isPublished: true,
+        },
+      });
+
+      expect(createPage).toMatchObject({
+        slug: platformPageSlug,
+        title: 'Platform Page',
+        isPublished: true,
+      });
+
+      // ADR-036: platform page must be on the default channel ONLY.
+      const { cmsPages } = await adminClient.query(ADMIN_CMS_PAGES);
+      const found = cmsPages.items.find(
+        (p: any) => p.slug === platformPageSlug,
+      );
+      expect(found).toBeTruthy();
+      const channelCodes = found.channels.map((c: any) => c.code);
+      expect(channelCodes).toEqual(['__default_channel__']);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 10. Singular role & administrator visibility (BUG-026)
   // ═══════════════════════════════════════════════════════════════════════
 
   describe('Singular role & administrator visibility (BUG-026)', () => {
