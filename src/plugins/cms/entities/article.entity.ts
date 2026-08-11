@@ -47,10 +47,11 @@ export class Article extends VendureEntity implements ChannelAware {
     @Column({ type: 'simple-json', nullable: true })
     tags?: string[];
 
-    // ChannelAware: assigned via ChannelService.assignToCurrentChannel on create.
-    // Platform-wide content -> only ever assigned to the default Channel.
-    // Seller content -> assigned to default Channel + the seller's own Channel
-    // (mirrors how ProductVariant is scoped in the multi-vendor guide).
+    // ChannelAware: channel assignment via CmsChannelAssignmentPolicy (ADR-036).
+    // Platform CMS (SuperAdmin) -> __default_channel__ only.
+    // Tenant CMS (Tenant Admin) -> tenant channel only, never default.
+    // See CmsChannelAssignmentPolicy.assign() for the two-class ownership model
+    // that replaces the old assignToCurrentChannel() behaviour (BUG-031).
     @ManyToMany(type => Channel)
     @JoinTable()
     channels: Channel[];

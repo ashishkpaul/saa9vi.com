@@ -23,6 +23,8 @@ Seller (Vendure core — Phase 3)
 - `BbbEntitlement` — scalar `channelId` (DL-011)
 - `BbbOrganizationMembership` — scalar `channelId` (DL-017)
 
+- **Channel assignment mechanism (ADR-036):** `CmsPlugin` entities (`Article`, `Page`, `Banner`) implement `ChannelAware` but do **not** use the generic `assignToCurrentChannel()` helper. Instead, `CmsChannelAssignmentPolicy.assign()` resolves channel assignment by the creator's role: SuperAdmin → default channel only; Tenant Admin → tenant channel only (never default). This two-class ownership model prevents tenant-created CMS content from leaking onto `__default_channel__` (BUG-031).
+
 **Rejection criterion:** Any PR introducing a `tenantId` column that is not `ctx.channelId` is rejected without review.
 
 ---

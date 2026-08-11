@@ -35,11 +35,13 @@ Recent completions (see `release-notes.md`):
 - BUG-027 (pendingReviewRequests `undefined` options) — fixed
 - BUG-028 (Academy Console permission names) — fixed
 - BUG-029 (BBB platform infrastructure boundary) — fixed
+- BUG-030 (tenant admin role channel relations) — fixed
+- BUG-031 (CMS channel ownership leak) — fixed
 - `myLearningDashboard` Shop API query — complete
 - `GrantReaderService` — implemented
 - Capacity Intelligence System (CI-001 to CI-006) — implemented
 - Tenant role reconciliation tooling (`tenant:roles:check` / `tenant:roles:repair`) — added
-- E2E suite: 39 tests passing
+- E2E suite: 44 tests passing
 
 ---
 

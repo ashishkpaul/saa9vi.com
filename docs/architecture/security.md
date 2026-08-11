@@ -10,7 +10,7 @@ Admin resolvers are registered only under `adminApiExtensions`; Shop resolvers o
 
 ## SEC-002: Channel Isolation — ✅ Fixed
 
-Tenant-scoped data must never leak across channels. Enforced at the service layer by `BbbChannelAccessService` (Phase A, ADR-032) and the channel-scoped `administrators` query override (Phase D, ADR-034 / INV-016). `findAll` filters by `ctx.channelId`; by-ID reads/mutations assert ownership.
+Tenant-scoped data must never leak across channels. Enforced at the service layer by `BbbChannelAccessService` (Phase A, ADR-032) and the channel-scoped `administrators` query override (Phase D, ADR-034 / INV-016). `findAll` filters by `ctx.channelId`; by-ID reads/mutations assert ownership. CMS entities (`Article`, `Page`, `Banner`) use `CmsChannelAssignmentPolicy` (ADR-036, BUG-031) instead of the generic `assignToCurrentChannel()` helper — SuperAdmin → default channel only; Tenant Admin → tenant channel only (never default).
 
 ## SEC-003: Rate Limiting on Public Mutations — ✅ Fixed
 

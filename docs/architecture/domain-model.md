@@ -298,7 +298,79 @@ Pending → Provisioning → Active → Completed → Archived
 
 ---
 
-## BbbUsageLedger
+## Article
+
+| Property | Value |
+|---|---|
+| **Plugin** | CmsPlugin |
+| **Table** | `article` |
+| **ChannelAware** | Yes (ADR-036: two-class ownership via `CmsChannelAssignmentPolicy`) |
+| **Purpose** | Blog/news article content for tenant storefronts and platform announcements. |
+
+**Relationships:**
+- `@ManyToMany(() => Channel) channels[]` — join table for channel assignment
+- `@ManyToOne(() => Asset) featuredAsset` — optional featured image
+
+**Lifecycle:**
+- Created by admin (SuperAdmin → platform/default channel; Tenant Admin → tenant channel only)
+- Updated/deleted by admin within channel scope
+- `publishedAt` timestamp set on publish toggle
+
+**Invariants:**
+- `(channelId, slug)` composite unique index — enforced by both DB index and `assertSlugIsUnique()` in `ArticleService.create()`
+- Slugs are unique per channel, not globally — a platform article and a seller article may share a slug
+- Channel assignment via `CmsChannelAssignmentPolicy.assign()`, not `assignToCurrentChannel()` (ADR-036 / BUG-031)
+
+---
+
+## Page
+
+| Property | Value |
+|---|---|
+| **Plugin** | CmsPlugin |
+| **Table** | `page` |
+| **ChannelAware** | Yes (ADR-036: two-class ownership via `CmsChannelAssignmentPolicy`) |
+| **Purpose** | Static CMS pages (About, Help, Pricing, academy landing pages, etc.). |
+
+**Relationships:**
+- `@ManyToMany(() => Channel) channels[]` — join table for channel assignment
+- `sections: PageSection[]` — JSON blob of page section blocks (hero, richText, productGrid, articleGrid, bannerSlot)
+
+**Lifecycle:**
+- Created by admin (SuperAdmin → platform/default channel; Tenant Admin → tenant channel only)
+- Updated/deleted by admin within channel scope
+
+**Invariants:**
+- `(channelId, slug)` composite unique index — enforced by both DB index and `assertSlugIsUnique()` in `PageService.create()`
+- Channel assignment via `CmsChannelAssignmentPolicy.assign()`, not `assignToCurrentChannel()` (ADR-036 / BUG-031)
+
+---
+
+## Banner
+
+| Property | Value |
+|---|---|
+| **Plugin** | CmsPlugin |
+| **Table** | `banner` |
+| **ChannelAware** | Yes (ADR-036: two-class ownership via `CmsChannelAssignmentPolicy`) |
+| **Purpose** | Promotional banners for storefront placements (hero, sidebar, footer, etc.). |
+
+**Relationships:**
+- `@ManyToOne(() => Asset) image` — banner image asset
+- `@ManyToMany(() => Channel) channels[]` — join table for channel assignment
+
+**Lifecycle:**
+- Created by admin (SuperAdmin → platform/default channel; Tenant Admin → tenant channel only)
+- Activation state managed by `banner-activator` BullMQ scheduled task (CMS-002 / BUG-015) — precomputes `isCurrentlyActive` every 60s
+- Updated/deleted by admin within channel scope
+
+**Invariants:**
+- `isCurrentlyActive` is precomputed by scheduled task — storefront queries filter on this boolean, not date-range comparisons
+- Channel assignment via `CmsChannelAssignmentPolicy.assign()`, not `assignToCurrentChannel()` (ADR-036 / BUG-031)
+
+---
+
+## CommissionLedger
 
 | Property | Value |
 |---|---|
