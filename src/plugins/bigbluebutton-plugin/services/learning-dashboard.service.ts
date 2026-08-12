@@ -19,6 +19,16 @@ export interface LearningCourse {
   isTrial: boolean;
   entitlementType: string;
   entitlementSource: string;
+  /**
+   * Server-driven CTA (INV-008). The storefront must not re-derive
+   * entitlement/eligibility from the clock — it only renders these fields.
+   * `join` | `none`
+   */
+  ctaAction: "join" | "none";
+  /**
+   * Server-driven CTA label (INV-008).
+   */
+  ctaLabel: string;
 }
 
 /**
@@ -143,6 +153,36 @@ export class LearningDashboardService {
         instructorName = instructorNameMap.get(session.trainer.customerId) ?? null;
       }
 
+      // Determine the CTA entirely server-side (INV-008). The storefront must
+      // not re-derive entitlement/eligibility from the clock — it only renders
+      // ctaAction/ctaLabel. This mirrors the previous client-side logic in
+      // session-cta.ts / course-card.tsx, now owned by the domain API.
+      let ctaAction: "join" | "none" = "none";
+      let ctaLabel: string;
+      if (canJoin && joinUrl) {
+        ctaAction = "join";
+        ctaLabel = "Join class";
+      } else if (canJoin) {
+        // Entitled, but the meeting hasn't been provisioned yet — a join link
+        // is coming. Distinct from the !canJoin live-window case below.
+        ctaLabel = "Provisioning your join link…";
+      } else {
+        const now = new Date();
+        const start = new Date(session.startTime);
+        const end = new Date(session.endTime);
+        const inLiveWindow = now >= start && now <= end;
+        const isUpcoming = now < start;
+        if (inLiveWindow) {
+          // Session is live but this student has no valid entitlement — do not
+          // imply a join link is coming.
+          ctaLabel = "Session in progress — access required";
+        } else if (isUpcoming) {
+          ctaLabel = "Not yet available";
+        } else {
+          ctaLabel = "No upcoming sessions";
+        }
+      }
+
       courses.push({
         id: String(session.id),
         title: session.title,
@@ -156,6 +196,8 @@ export class LearningDashboardService {
         isTrial: session.isTrial,
         entitlementType: entitlement.type,
         entitlementSource: entitlement.source,
+        ctaAction,
+        ctaLabel,
       });
     }
 

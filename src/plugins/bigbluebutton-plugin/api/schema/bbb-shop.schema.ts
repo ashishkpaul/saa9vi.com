@@ -100,6 +100,15 @@ export const shopApiExtensions = gql`
     isTrial: Boolean!
     entitlementType: String!
     entitlementSource: String!
+    """
+    Server-driven CTA action (INV-008). join | none. The storefront renders
+    this — it must not re-derive entitlement/eligibility from the clock.
+    """
+    ctaAction: String!
+    """
+    Server-driven CTA label (INV-008).
+    """
+    ctaLabel: String!
   }
 
   type LearningDashboard {

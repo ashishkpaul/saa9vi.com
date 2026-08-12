@@ -521,6 +521,8 @@ export class BbbShopResolver {
     instructorName: string | null;
     entitlementType: string;
     entitlementSource: string;
+    ctaAction: string;
+    ctaLabel: string;
   }> }> {
     return this.learningDashboardService.getDashboard(ctx);
   }

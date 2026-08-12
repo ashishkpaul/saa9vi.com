@@ -370,7 +370,7 @@ Pending → Provisioning → Active → Completed → Archived
 
 ---
 
-## CommissionLedger
+## BbbUsageLedger
 
 | Property | Value |
 |---|---|
