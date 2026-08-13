@@ -50,6 +50,7 @@ import { REVIEW_ADMIN_PERMISSION } from "./constants";
  * 3. Access Admin UI at /admin under the "product-reviews" route
  */
 @VendurePlugin({
+  compatibility: '>=3.0.0',
   imports: [PluginCommonModule, CustomerDeletionModule],
   controllers: [ReviewUploadController],
   entities: [

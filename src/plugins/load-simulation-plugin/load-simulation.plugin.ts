@@ -7,6 +7,7 @@ import { VendureHttpClient } from "./executor/vendure-http.client";
 import { adminApiExtensions } from "./api/api-extensions";
 
 @VendurePlugin({
+  compatibility: '>=3.0.0',
   imports: [PluginCommonModule],
   providers: [
     LoadSimulationService,
