@@ -5,7 +5,7 @@ const config: CodegenConfig = {
     // To generate this schema file, run `npx vendure schema`
     // whenever your schema changes, e.g. after adding custom fields
     // or API extensions
-    schema: 'schema.graphql',
+    schema: 'schema-shop.graphql',
     config: {
         // This tells codegen that the `Money` scalar is a number
         scalars: { Money: 'number' },
