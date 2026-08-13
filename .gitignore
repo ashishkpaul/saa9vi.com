@@ -35,3 +35,8 @@ _fix_script.js
 *.njsproj
 *.sln
 *.swp
+
+# Local patch & cache artifacts
+changes.patch
+.vendure-docs-cache/
+*.tsbuildinfo
