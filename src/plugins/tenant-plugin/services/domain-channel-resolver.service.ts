@@ -27,7 +27,8 @@ export class DomainChannelResolverService implements OnModuleDestroy {
   }
 
   private initRedis(): void {
-    const host = process.env.REDIS_HOST || "localhost";
+    if (!process.env.REDIS_HOST) return;
+    const host = process.env.REDIS_HOST;
     const port = Number(process.env.REDIS_PORT) || 6379;
     const password = process.env.REDIS_PASSWORD || undefined;
 

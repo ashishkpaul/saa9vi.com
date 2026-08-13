@@ -1,12 +1,37 @@
-node_modules
-dist
-admin-ui
-static/assets
-static/email/test-emails
-.vendure/
+# Dependencies
+node_modules/
 
-# Local development
+# Production & Build Outputs
+dist/
+build/
+
+# Generated GraphQL Types
+**/gql/generated.ts
+src/plugins/**/gql/
+
+# Environment & Secret Files
 .env
-.vscode/
-*.tsbuildinfo
-.vendure-docs-cache/
+.env.local
+.env.*.local
+
+# Framework Caches & Temporary Folders
+.vendure/
+.tanstack/
+*.log
+
+# Helper / One-off Fix Scripts
+_edit_script.js
+_fix_script.js
+
+# IDE & OS Files
+.DS_Store
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp

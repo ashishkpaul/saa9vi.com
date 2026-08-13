@@ -14,6 +14,7 @@ export const bbbWebhookRateLimiter = rateLimit({
   max: 100,
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false },
   message: { ok: false, error: "Too many requests — rate limit exceeded" },
   skip: (req) => {
     // Allowlist: skip rate limiting for known BBB server IPs

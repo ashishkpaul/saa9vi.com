@@ -1,0 +1,6 @@
+{
+  "name": "Saa9vi",
+  "description": "Saa9vi e-commerce and academy platform built with Vendure",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

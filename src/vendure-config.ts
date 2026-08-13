@@ -2,6 +2,7 @@ import {
   dummyPaymentHandler,
   DefaultSchedulerPlugin,
   DefaultSearchPlugin,
+  DefaultJobQueuePlugin,
   VendureConfig,
   RedisCachePlugin,
 } from "@vendure/core";
@@ -26,11 +27,33 @@ import { MarketplaceIndexerPlugin } from "./plugins/marketplace";
 import { CustomerSuspensionPlugin } from './plugins/customer-suspension/customer-suspension.plugin';
 import { PlatformDashboardPlugin } from './plugins/platform-dashboard/platform-dashboard.plugin';
 
+/**
+ * Security headers middleware enforcing HTTP header hardening for production safety.
+ */
+export const securityHeadersMiddleware = (req: any, res: any, next: any) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "geolocation=(), camera=(), microphone=()");
+
+  if (process.env.APP_ENV !== "dev") {
+    res.setHeader(
+      "Strict-Transport-Security",
+      "max-age=31536000; includeSubDomains; preload"
+    );
+  }
+
+  res.removeHeader("X-Powered-By");
+  next();
+};
+
 const IS_DEV = process.env.APP_ENV === "dev";
 const serverPort = +process.env.PORT || 3000;
 
 export const config: VendureConfig = {
 apiOptions: {
+    hostname: "0.0.0.0",
     port: serverPort,
     adminApiPath: "admin-api",
     shopApiPath: "shop-api",
@@ -50,9 +73,24 @@ apiOptions: {
 
     middleware: [
       {
+        // Enforce HTTP security headers hardening
+        route: '*',
+        handler: securityHeadersMiddleware,
+      },
+      {
         // Resolve custom domain → channel token via Redis (SEC-006)
         route: '*',
         handler: domainChannelMiddleware,
+      },
+      {
+        // Root redirect to platform dashboard
+        route: '/',
+        handler: (req: any, res: any, next: any) => {
+          if (req.originalUrl === '/' || req.path === '/') {
+            return res.redirect('/dashboard');
+          }
+          next();
+        },
       },
     ],
 
@@ -68,26 +106,24 @@ apiOptions: {
   authOptions: {
     tokenMethod: ["bearer", "cookie"],
     superadminCredentials: {
-      identifier: process.env.SUPERADMIN_USERNAME,
-      password: process.env.SUPERADMIN_PASSWORD,
+      identifier: process.env.SUPERADMIN_USERNAME || "superadmin",
+      password: process.env.SUPERADMIN_PASSWORD || "superadmin",
     },
     cookieOptions: {
-      secret: process.env.COOKIE_SECRET,
+      secret: process.env.COOKIE_SECRET || "cookie-secret-dev-fallback",
     },
   },
   dbConnectionOptions: {
     type: "postgres",
-    // See the README.md "Migrations" section for an explanation of
-    // the `synchronize` and `migrations` options.
     synchronize: false,
     migrations: [path.join(__dirname, "./migrations/*.+(js|ts)")],
     logging: false,
-    database: process.env.DB_NAME,
-    schema: process.env.DB_SCHEMA,
-    host: process.env.DB_HOST,
-    port: +process.env.DB_PORT,
-    username: process.env.DB_USERNAME,
-    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME || "vendure",
+    schema: process.env.DB_SCHEMA || "public",
+    host: process.env.DB_HOST || "localhost",
+    port: +process.env.DB_PORT || 5432,
+    username: process.env.DB_USERNAME || "postgres",
+    password: process.env.DB_PASSWORD || "postgres",
   },
   paymentOptions: {
     paymentMethodHandlers: [dummyPaymentHandler],
@@ -122,22 +158,26 @@ apiOptions: {
       assetUrlPrefix: IS_DEV ? undefined : "http://localhost:3000/assets/",
     }),
     DefaultSchedulerPlugin.init(),
-    BullMQJobQueuePlugin.init({
-      connection: {
-        host: process.env.REDIS_HOST || "localhost",
-        port: Number(process.env.REDIS_PORT) || 6379,
-        password: process.env.REDIS_PASSWORD || undefined,
-        maxRetriesPerRequest: null,
-      },
-    }),
+    ...(process.env.REDIS_HOST
+      ? [
+          BullMQJobQueuePlugin.init({
+            connection: {
+              host: process.env.REDIS_HOST,
+              port: Number(process.env.REDIS_PORT) || 6379,
+              password: process.env.REDIS_PASSWORD || undefined,
+              maxRetriesPerRequest: null,
+            },
+          }),
+          RedisCachePlugin.init({
+            redisOptions: {
+              host: process.env.REDIS_HOST,
+              port: Number(process.env.REDIS_PORT) || 6379,
+              password: process.env.REDIS_PASSWORD || undefined,
+            },
+          }),
+        ]
+      : [DefaultJobQueuePlugin.init({})]),
     DefaultSearchPlugin.init({ bufferUpdates: false, indexStockStatus: true }),
-    RedisCachePlugin.init({
-      redisOptions: {
-        host: process.env.REDIS_HOST || 'localhost',
-        port: Number(process.env.REDIS_PORT) || 6379,
-        password: process.env.REDIS_PASSWORD || undefined,
-      },
-    }),
     EmailPlugin.init({
       devMode: true,
       outputPath: path.join(__dirname, "../static/email/test-emails"),

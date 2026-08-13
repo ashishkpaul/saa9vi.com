@@ -70,7 +70,11 @@ export class BbbRoomLockService implements OnModuleInit, OnModuleDestroy {
     this.strictMode =
       options.roomLockStrict ?? process.env.BBB_ROOM_LOCK_STRICT === "true";
 
-    const host = options.redisHost ?? process.env.REDIS_HOST ?? "localhost";
+    const host = options.redisHost ?? process.env.REDIS_HOST;
+    if (!host) {
+      this.redis = null as any;
+      return;
+    }
     const port = options.redisPort ?? Number(process.env.REDIS_PORT ?? 6379);
     const password = options.redisPassword ?? process.env.REDIS_PASSWORD;
 
@@ -113,6 +117,7 @@ export class BbbRoomLockService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleInit() {
+    if (!this.redis) return;
     try {
       await this.redis.connect();
       this.logger.log("BBB room lock Redis initialization completed");
@@ -127,6 +132,7 @@ export class BbbRoomLockService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
+    if (!this.redis) return;
     try {
       await this.redis.quit();
     } catch (err) {
@@ -140,6 +146,18 @@ export class BbbRoomLockService implements OnModuleInit, OnModuleDestroy {
    */
   async acquire(roomId: ID): Promise<string | null> {
     const token = crypto.randomUUID();
+
+    if (!this.redis) {
+      if (this.strictMode) {
+        this.logger.error(
+          `Room lock Redis unavailable in strict mode for room ${roomId}`,
+        );
+        throw new Error(
+          "Room provisioning is temporarily unavailable because Redis locking is required",
+        );
+      }
+      return token;
+    }
 
     try {
       const result = await this.redis.set(
@@ -183,6 +201,7 @@ export class BbbRoomLockService implements OnModuleInit, OnModuleDestroy {
    * (prevents releasing a lock acquired by another instance after TTL expiry).
    */
   async release(roomId: ID, token: string): Promise<void> {
+    if (!this.redis) return;
     try {
       await this.redis.eval(RELEASE_SCRIPT, 1, this.key(roomId), token);
       this.logger.verbose(`Room lock released: ${roomId}`);
@@ -202,6 +221,7 @@ export class BbbRoomLockService implements OnModuleInit, OnModuleDestroy {
     token: string,
     ttlSeconds?: number,
   ): Promise<boolean> {
+    if (!this.redis) return false;
     const ttl = ttlSeconds ?? this.lockTtlSeconds;
     try {
       const result = await this.redis.eval(

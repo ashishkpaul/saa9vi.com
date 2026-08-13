@@ -13,7 +13,9 @@
     "sourceMap": false,
     "skipLibCheck": true,
     "outDir": "./dist",
-    "baseUrl": "./"
+    "rootDir": "./src",
+    "baseUrl": "./",
+    "ignoreDeprecations": "5.0"
   },
   "include": ["src/**/*.ts"],
   "exclude": [

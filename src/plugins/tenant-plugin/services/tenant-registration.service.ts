@@ -19,6 +19,7 @@ import {
   TransactionalConnection,
   User,
   UserInputError,
+  Zone,
 } from '@vendure/core';
 import { Repository } from 'typeorm';
 import { TenantRegistrationLog } from '../entities/tenant-registration-log.entity';
@@ -144,10 +145,17 @@ export class TenantRegistrationService {
         relations: ['defaultTaxZone', 'defaultShippingZone'],
       });
 
-      if (!defaultChannel.defaultTaxZone || !defaultChannel.defaultShippingZone) {
-        throw new Error(
-          'Default channel has no defaultTaxZone/defaultShippingZone configured',
-        );
+      let defaultTaxZoneId = defaultChannel.defaultTaxZone?.id;
+      let defaultShippingZoneId = defaultChannel.defaultShippingZone?.id;
+
+      if (!defaultTaxZoneId || !defaultShippingZoneId) {
+        const zoneRepo = this.connection.getRepository(superAdminCtx, Zone);
+        let defaultZone = await zoneRepo.findOne({ where: {} });
+        if (!defaultZone) {
+          defaultZone = await zoneRepo.save(new Zone({ name: 'Default Zone' }));
+        }
+        if (!defaultTaxZoneId) defaultTaxZoneId = defaultZone.id;
+        if (!defaultShippingZoneId) defaultShippingZoneId = defaultZone.id;
       }
 
       Logger.debug(`About to create channel with sellerId: ${seller.id}`, loggerCtx);
@@ -159,8 +167,8 @@ export class TenantRegistrationService {
         pricesIncludeTax: defaultChannel.pricesIncludeTax,
         currencyCode: defaultChannel.defaultCurrencyCode,
         defaultCurrencyCode: defaultChannel.defaultCurrencyCode,
-        defaultTaxZoneId: defaultChannel.defaultTaxZone.id,
-        defaultShippingZoneId: defaultChannel.defaultShippingZone.id,
+        defaultTaxZoneId,
+        defaultShippingZoneId,
       });
 
       if (!('id' in channelResult)) {
