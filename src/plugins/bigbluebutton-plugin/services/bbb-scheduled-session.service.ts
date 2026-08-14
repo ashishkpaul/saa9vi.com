@@ -105,9 +105,19 @@ export class BbbScheduledSessionService {
       input.organizationId,
     );
 
-    const trainer = await this.connection
+    let trainer = await this.connection
       .getRepository(ctx, BbbOrganizationMember)
       .findOne({ where: { id: input.trainerId as string } });
+    if (!trainer) {
+      trainer = await this.connection
+        .getRepository(ctx, BbbOrganizationMember)
+        .findOne({
+          where: {
+            customerId: input.trainerId as string,
+            organization: { id: input.organizationId as string },
+          },
+        });
+    }
     if (!trainer) {
       throw new EntityNotFoundError("BbbOrganizationMember", input.trainerId);
     }

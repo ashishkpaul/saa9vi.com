@@ -110,6 +110,15 @@ export class BbbRoomService {
       input.maxParticipants ?? org.maxParticipantsPerMeeting,
       org.maxParticipantsPerMeeting,
     );
+    if (input.slug) {
+      const existing = await this.connection.getRepository(ctx, BbbRoom).findOne({
+        where: { slug: input.slug },
+        relations: ["organization"],
+      });
+      if (existing) {
+        return existing;
+      }
+    }
     const room = new BbbRoom({
       organization: org,
       name: input.name,

@@ -172,9 +172,7 @@ export class BbbMemberService {
 
     if (existing) {
       if (existing.active) {
-        throw new UserInputError(
-          `Customer ${input.customerId} is already a member of this organization.`,
-        );
+        return existing;
       }
       // Re-activate a previously deactivated member with the new role
       existing.active = true;

@@ -72,8 +72,18 @@ export class InstructorProfileService {
   }
 
   async create(ctx: RequestContext, input: Partial<InstructorProfile>): Promise<InstructorProfile> {
+    const channelId = ctx.channelId as string;
+    if (input.slug) {
+      const existing = await this.connection.getRepository(ctx, InstructorProfile).findOne({
+        where: { channelId, slug: input.slug },
+        relations: ['customer', 'createdBy'],
+      });
+      if (existing) {
+        return existing;
+      }
+    }
     const profile = new InstructorProfile(input);
-    profile.channelId = ctx.channelId as string;
+    profile.channelId = channelId;
     profile.createdById = ctx.activeUserId as string;
     const saved = await this.connection.getRepository(ctx, InstructorProfile).save(profile);
 
