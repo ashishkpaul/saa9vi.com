@@ -55,7 +55,7 @@ end
 @Injectable()
 export class BbbRoomLockService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BbbRoomLockService.name);
-  private readonly redis: Redis;
+  private redis: Redis | null = null;
   private readonly lockTtlSeconds: number;
   private readonly lockHeartbeatIntervalMs: number;
   private readonly strictMode: boolean;
@@ -87,7 +87,10 @@ export class BbbRoomLockService implements OnModuleInit, OnModuleDestroy {
       enableOfflineQueue: false,
 
       retryStrategy: (times: number) => {
-        const delay = Math.min(100 * 2 ** (times - 1), 5000);
+        if (times > 3) {
+          return null; // Stop retrying
+        }
+        const delay = Math.min(100 * 2 ** (times - 1), 2000);
         this.logger.warn(`Redis retry #${times}: reconnecting in ${delay}ms`);
         return delay;
       },
@@ -122,9 +125,13 @@ export class BbbRoomLockService implements OnModuleInit, OnModuleDestroy {
       await this.redis.connect();
       this.logger.log("BBB room lock Redis initialization completed");
     } catch (err) {
-      this.logger.error(
-        `Failed to initialize BBB room lock Redis: ${(err as Error).message}`,
+      this.logger.warn(
+        `BBB room lock Redis unreachable: ${(err as Error).message}. Operating in fallback mode.`,
       );
+      try {
+        this.redis.disconnect();
+      } catch {}
+      this.redis = null as any;
       if (this.strictMode) {
         throw err;
       }

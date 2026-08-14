@@ -1,7 +1,33 @@
-import { bootstrap, runMigrations } from '@vendure/core';
+import { bootstrap, runMigrations, DefaultJobQueuePlugin } from '@vendure/core';
 import { config } from './vendure-config';
 import { Client } from 'pg';
 import { newDb } from 'pg-mem';
+import Redis from 'ioredis';
+
+async function isRedisReachable(): Promise<boolean> {
+    if (!process.env.REDIS_HOST) return false;
+    const redis = new Redis({
+        host: process.env.REDIS_HOST,
+        port: Number(process.env.REDIS_PORT) || 6379,
+        password: process.env.REDIS_PASSWORD || undefined,
+        connectTimeout: 1500,
+        maxRetriesPerRequest: 0,
+        lazyConnect: true,
+        retryStrategy: () => null,
+    });
+    redis.on('error', () => {});
+    try {
+        await redis.connect();
+        await redis.ping();
+        await redis.quit();
+        return true;
+    } catch {
+        try {
+            redis.disconnect();
+        } catch {}
+        return false;
+    }
+}
 
 async function start() {
     let useRealPostgres = false;
@@ -41,9 +67,25 @@ async function start() {
         await runMigrations(config);
     }
 
+    const redisAvailable = await isRedisReachable();
+    if (!redisAvailable && process.env.REDIS_HOST) {
+        console.warn(`Redis at ${process.env.REDIS_HOST}:${process.env.REDIS_PORT || 6379} is unreachable. Falling back to DefaultJobQueuePlugin.`);
+        delete process.env.REDIS_HOST;
+        const currentPlugins = config.plugins || [];
+        config.plugins = currentPlugins.filter(p => {
+            const pName = p && (p as any).name;
+            return pName !== 'BullMQJobQueuePlugin' && pName !== 'RedisCachePlugin';
+        });
+        const hasJobQueue = (config.plugins || []).some(p => p && (p as any).name === 'DefaultJobQueuePlugin');
+        if (!hasJobQueue) {
+            (config.plugins as any[]).push(DefaultJobQueuePlugin.init({}));
+        }
+    }
+
     await bootstrap(config);
 }
 
 start().catch(err => {
     console.error('Server startup error:', err);
 });
+

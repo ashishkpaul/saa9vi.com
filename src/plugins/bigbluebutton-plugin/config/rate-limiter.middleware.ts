@@ -44,6 +44,7 @@ function createMutationRateLimiter(
     max: maxRequests,
     standardHeaders: true,
     legacyHeaders: false,
+    validate: { trustProxy: false },
     message: {
       errors: [
         {
