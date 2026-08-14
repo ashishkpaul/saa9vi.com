@@ -7,10 +7,13 @@ import {
   RedisCachePlugin,
 } from "@vendure/core";
 import {
-  defaultEmailHandlers,
   EmailPlugin,
-  FileBasedTemplateLoader,
 } from "@vendure/email-plugin";
+import {
+  ChannelBasedTemplateLoader,
+  customerEmailHandlers,
+  sellerEmailHandlers,
+} from "./email-services";
 import { AssetServerPlugin } from "@vendure/asset-server-plugin";
 import { DashboardPlugin } from "@vendure/dashboard/plugin";
 import { GraphiqlPlugin } from "@vendure/graphiql-plugin";
@@ -49,7 +52,7 @@ export const securityHeadersMiddleware = (req: any, res: any, next: any) => {
 };
 
 const IS_DEV = process.env.APP_ENV === "dev";
-const serverPort = +process.env.PORT || 3000;
+const serverPort = 3000;
 
 export const config: VendureConfig = {
 apiOptions: {
@@ -182,18 +185,24 @@ apiOptions: {
       devMode: true,
       outputPath: path.join(__dirname, "../static/email/test-emails"),
       route: "mailbox",
-      handlers: defaultEmailHandlers,
-      templateLoader: new FileBasedTemplateLoader(
+      handlers: [
+        ...customerEmailHandlers,
+        ...sellerEmailHandlers,
+      ],
+      templateLoader: new ChannelBasedTemplateLoader(
         path.join(__dirname, "../static/email/templates"),
       ),
       globalTemplateVars: {
-        // The following variables will change depending on your storefront implementation.
-        // Here we are assuming a storefront running at http://localhost:8080.
-        fromAddress: '"example" <noreply@example.com>',
-        verifyEmailAddressUrl: "http://localhost:8080/verify",
-        passwordResetUrl: "http://localhost:8080/password-reset",
-        changeEmailAddressUrl:
-          "http://localhost:8080/verify-email-address-change",
+        fromAddress: process.env.EMAIL_FROM_ADDRESS || '"Saa9vi" <noreply@saa9vi.com>',
+        verifyEmailAddressUrl: IS_DEV
+          ? "http://localhost:8080/verify"
+          : (process.env.STOREFRONT_URL ? `${process.env.STOREFRONT_URL}/verify` : "https://www.saa9vi.com/verify"),
+        passwordResetUrl: IS_DEV
+          ? "http://localhost:8080/password-reset"
+          : (process.env.STOREFRONT_URL ? `${process.env.STOREFRONT_URL}/password-reset` : "https://www.saa9vi.com/password-reset"),
+        changeEmailAddressUrl: IS_DEV
+          ? "http://localhost:8080/verify-email-address-change"
+          : (process.env.STOREFRONT_URL ? `${process.env.STOREFRONT_URL}/verify-email-address-change` : "https://www.saa9vi.com/verify-email-address-change"),
       },
     }),
     DashboardPlugin.init({
