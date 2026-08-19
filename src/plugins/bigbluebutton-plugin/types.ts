@@ -129,4 +129,38 @@ export interface BigBlueButtonPluginOptions {
    * @default 5000
    */
   provisioningJobBackoffMs?: number;
+
+  // ─── Capacity Intelligence Load Estimation (CI-001) ──────────────────────
+
+  /**
+   * Ratio of attendees expected to enable camera during a session.
+   * Used by CapacityIntelligenceService for PILOS virtual load forecasting.
+   * @default 0.40
+   */
+  cameraRatio?: number;
+
+  /**
+   * Ratio of attendees expected to unmute (enable mic) during a session.
+   * Used by CapacityIntelligenceService for PILOS virtual load forecasting.
+   * @default 0.70
+   */
+  micRatio?: number;
+
+  /**
+   * PILOS virtual load weight for video streams.
+   * @default 3
+   */
+  videoWeight?: number;
+
+  /**
+   * PILOS virtual load weight for microphone streams.
+   * @default 2
+   */
+  micWeight?: number;
+
+  /**
+   * PILOS virtual load weight for listen-only attendees.
+   * @default 1
+   */
+  listenerWeight?: number;
 }

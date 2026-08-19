@@ -189,6 +189,12 @@ export const shopApiExtensions = gql`
         administratorId: ID!
     }
 
+    type VerifyTenantAdminResult {
+        success: Boolean!
+        message: String
+        channelToken: String
+    }
+
     extend type Query {
         instructorProfile(slug: String!): InstructorProfile
         instructorProfiles(options: InstructorProfileListOptions): InstructorProfileList!
@@ -198,5 +204,6 @@ export const shopApiExtensions = gql`
 
     extend type Mutation {
         registerNewTenant(input: RegisterTenantInput!): RegisterTenantResult!
+        verifyTenantAdmin(token: String!): VerifyTenantAdminResult!
     }
 `;

@@ -1,9 +1,11 @@
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import { RequestContext, TransactionalConnection } from "@vendure/core";
 import { BbbServer } from "../entities/bbb-server.entity";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbUsageLedger } from "../entities/bbb-usage-ledger.entity";
+import { BBB_PLUGIN_OPTIONS } from "../constants";
+import type { BigBlueButtonPluginOptions } from "../types";
 
 /**
  * Aggregates server pool health, forecasts future load from scheduled sessions,
@@ -16,16 +18,32 @@ import { BbbUsageLedger } from "../entities/bbb-usage-ledger.entity";
  */
 @Injectable()
 export class CapacityIntelligenceService {
-  // PILOS load estimation parameters (hardcoded per ADR §6A CI-002)
-  private readonly cameraRatio = 0.40;
-  private readonly micRatio = 0.70;
-  private readonly videoWeight = 3;
-  private readonly micWeight = 2;
-  private readonly listenerWeight = 1;
+  // PILOS load estimation parameters — configurable via BigBlueButtonPluginOptions
+  // (CI-001). Defaults per ADR §6A CI-002; tunable from first 2 weeks of
+  // BbbUsageLedger data.
+  private get cameraRatio(): number {
+    return this.options.cameraRatio ?? 0.40;
+  }
+  private get micRatio(): number {
+    return this.options.micRatio ?? 0.70;
+  }
+  private get videoWeight(): number {
+    return this.options.videoWeight ?? 3;
+  }
+  private get micWeight(): number {
+    return this.options.micWeight ?? 2;
+  }
+  private get listenerWeight(): number {
+    return this.options.listenerWeight ?? 1;
+  }
   private readonly targetUtilization = 0.70;
   private readonly standardServerCapacity = 200;
 
-  constructor(private readonly connection: TransactionalConnection) {}
+  constructor(
+    private readonly connection: TransactionalConnection,
+    @Inject(BBB_PLUGIN_OPTIONS)
+    private readonly options: BigBlueButtonPluginOptions,
+  ) {}
 
   /**
    * Computes live pool health from current server loads and active meetings.

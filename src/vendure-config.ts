@@ -251,6 +251,15 @@ apiOptions: {
       provisioningJobBackoffMs: Number(
         process.env.BBB_PROVISIONING_JOB_BACKOFF_MS ?? 5000,
       ),
+
+      // ─── Capacity Intelligence Load Estimation (CI-001) ─────────────
+      // PILOS virtual-load ratios/weights. Defaults per ADR §6A CI-002.
+      // Tune from first 2 weeks of BbbUsageLedger data (Phase 1.5 blocker).
+      cameraRatio: Number(process.env.BBB_CAMERA_RATIO ?? 0.40),
+      micRatio: Number(process.env.BBB_MIC_RATIO ?? 0.70),
+      videoWeight: Number(process.env.BBB_VIDEO_WEIGHT ?? 3),
+      micWeight: Number(process.env.BBB_MIC_WEIGHT ?? 2),
+      listenerWeight: Number(process.env.BBB_LISTENER_WEIGHT ?? 1),
     }),
     CmsPlugin,
     ReviewsPlugin,

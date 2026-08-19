@@ -1,10 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
+  AccountRegistrationEvent,
   Administrator,
   AdministratorService,
   Channel,
   ChannelService,
   ConfigService,
+  EventBus,
   ID,
   NativeAuthenticationMethod,
   PasswordCipher,
@@ -19,6 +21,7 @@ import {
   TransactionalConnection,
   User,
   UserInputError,
+  UserService,
   Zone,
 } from '@vendure/core';
 import { Repository } from 'typeorm';
@@ -91,6 +94,8 @@ export class TenantRegistrationService {
     private readonly shippingMethodService: ShippingMethodService,
     private readonly paymentMethodService: PaymentMethodService,
     private readonly stockLocationService: StockLocationService,
+    private readonly userService: UserService,
+    private readonly eventBus: EventBus,
   ) {}
 
   async registerTenant(
@@ -226,11 +231,14 @@ export class TenantRegistrationService {
       let administrator;
       try {
         // Create User first (via repository to bypass permission checks).
-        // Set verified=true because requireVerification is enabled by default
-        // in Vendure's authOptions, and unverified users cannot log in.
+        // Email verification (Phase 1.5): the user is created UNVERIFIED and
+        // a verification token is set. The AccountRegistrationEvent is published
+        // so the EmailPlugin sends the verification email. The admin cannot log
+        // in until they click the verification link (mirrors the
+        // registerCustomerAccount / verifyCustomerAccount pattern).
         const user = new User();
         user.identifier = input.emailAddress;
-        user.verified = true;
+        user.verified = false;
         const savedUser = await this.connection.getRepository(superAdminCtx, User).save(user);
         Logger.debug(`User created with id: ${savedUser.id}`, loggerCtx);
 
@@ -248,12 +256,24 @@ export class TenantRegistrationService {
         const userRepo = this.connection.getRepository(superAdminCtx, User);
         const userWithRoles = await userRepo.findOne({
           where: { id: savedUser.id },
-          relations: ['roles'],
+          relations: ['roles', 'authenticationMethods'],
         });
         if (userWithRoles && role) {
           userWithRoles.roles = [role];
           await userRepo.save(userWithRoles);
           Logger.debug('Role assigned to user', loggerCtx);
+        }
+
+        // Set verification token and publish AccountRegistrationEvent so the
+        // EmailPlugin sends the verification email (Phase 1.5 blocker).
+        const userWithAuth = await userRepo.findOne({
+          where: { id: savedUser.id },
+          relations: ['authenticationMethods'],
+        });
+        if (userWithAuth) {
+          await this.userService.setVerificationToken(superAdminCtx, userWithAuth);
+          this.eventBus.publish(new AccountRegistrationEvent(superAdminCtx, userWithAuth));
+          Logger.debug('Verification token set and AccountRegistrationEvent published', loggerCtx);
         }
 
         // Create Administrator (via repository to bypass permission checks)
