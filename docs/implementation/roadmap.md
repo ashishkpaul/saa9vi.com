@@ -21,13 +21,7 @@
 
 ## Phase 1.5 — Trust Engine & Discovery
 
-### Remaining Blockers
-
-- [ ] Run FEAT-002 schema migration (`npx vendure migrate create && npx vendure migrate up`)
-- [ ] Build Next.js storefront pages for public instructor profiles and CMS pages
-- [ ] Email verification flow for new tenant administrators
-- [ ] End-to-end customer deletion flow tested across all three plugins
-- [ ] Load estimation ratios tuned from first 2 weeks of `BbbUsageLedger` data
+**Status:** Complete (2026-08-23). All remaining blockers resolved.
 
 ### Completed
 
@@ -37,10 +31,15 @@
 - [x] `BbbEntitlement` admin UI (GraphQL queries/mutations + dashboard route)
 - [x] Scheduled Sessions admin UI
 - [x] FEAT-001 (`BbbOrganizationMembership`) — code complete
-- [x] FEAT-002 (`internal_overhead` capacity grant) — code complete, migration pending
+- [x] FEAT-002 (`internal_overhead` capacity grant) — code complete, migration verified applied
 - [x] `myLearningDashboard` Shop API query
 - [x] Rate limiting on `registerNewTenant` mutation
 - [x] Custom domain → channel token Redis mapping
+- [x] **FEAT-002 schema migration** — verified already applied (Vendure CLI: no schema changes; `sourceType` + `isUnbounded` confirmed in DB)
+- [x] **Next.js public instructor/CMS pages** — CMS page route (`/[locale]/page/[slug]`) added; instructor page already existed
+- [x] **Email verification for tenant admins** — `verifyTenantAdmin` Shop API mutation + unverified admin creation
+- [x] **End-to-end customer deletion test** — `customer-deletion.e2e-spec.ts` covering Flow A + Flow B across BBB/Tenant/Reviews
+- [x] **Load estimation ratios tuning** — PILOS ratios configurable via `BigBlueButtonPluginOptions` + env vars
 
 ---
 

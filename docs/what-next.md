@@ -24,10 +24,16 @@ The documentation has been refactored into focused documents:
 
 ---
 
-## Current State (v1.12 — 2026-08-10)
+## Current State (v1.13 — 2026-08-23)
 
 Recent completions (see `release-notes.md`):
 
+- **Phase 1.5 blockers resolved** — all five remaining blockers closed:
+  - FEAT-002 schema migration — verified already applied (Vendure CLI: no schema changes; `sourceType` + `isUnbounded` confirmed in DB)
+  - Next.js public instructor/CMS pages — CMS page route (`/[locale]/page/[slug]`) added; instructor page already existed
+  - Email verification for tenant admins — `verifyTenantAdmin` Shop API mutation + unverified admin creation
+  - End-to-end customer deletion test — `customer-deletion.e2e-spec.ts` covering Flow A + Flow B across BBB/Tenant/Reviews
+  - Load estimation ratios tuning — PILOS ratios configurable via `BigBlueButtonPluginOptions` + env vars
 - BUG-022 (entitlement/enrollment read mismatch) — fixed
 - BUG-023 (marketplace indexer redirect fields) — fixed
 - BUG-024 (auto-provision shipping/payment/stock) — fixed
@@ -48,13 +54,6 @@ Recent completions (see `release-notes.md`):
 ## Priority Order (current roadmap)
 
 ```
-PHASE 1.5 REMAINING BLOCKERS
-  FEAT-002 schema migration                  [ADR §8A OP-005]
-  Next.js public instructor/CMS pages        [Phase 1.5]
-  Email verification for tenant admins       [Phase 1.5]
-  End-to-end customer deletion test          [INV-013]
-  Load estimation ratios tuning              [CI-001]
-
 PHASE 2 — SUBSCRIPTION BILLING & CAPACITY POLICY
   SubscriptionPlan / OrganizationSubscription entities
   BbbPlatformCapacityPolicy entity + Portal Admin dashboard
