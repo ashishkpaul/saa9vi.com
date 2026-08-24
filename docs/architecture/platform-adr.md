@@ -1,6 +1,8 @@
 # Architecture Decision Record
 
 > **Purpose:** Document enduring architectural decisions, their rationale, alternatives considered, and consequences. This document is **timeless** — it does not track implementation status, bugs, or roadmaps. Those belong in `docs/implementation/`.
+>
+> **Canonical source.** This is the authoritative ADR archive and supersedes the legacy `docs/adr/platform-adr.md` (whose archived ADR/DL numbering differs). Invariants live in `docs/architecture/invariants.md`. Add new ADRs/invariants here, not in the legacy file.
 
 ---
 
@@ -253,6 +255,10 @@
 - Per-tenant Next.js fork (500 tenants = 500 deployment pipelines)
 - iframe embedding (SEO dead, mobile broken)
 
+**Formerly:** the legacy `docs/adr/platform-adr.md` recorded this decision as **DL-016** and discussed it under legacy **ADR-013 "Frontend Independence & API Evolution"**. Renumbered to **ADR-016** here to resolve the two-file collision. Cite **ADR-016** for the shared-storefront decision (see INV-005 in `docs/architecture/invariants.md`).
+
+> **ⓘ Historical collision (see SEC-004 precedent in `docs/architecture/security.md`):** the legacy `docs/adr/platform-adr.md` also uses **ADR-016** for an unrelated decision — *"Platform Dashboard Branding Layer"* (`PlatformDashboardPlugin`). That decision was never ported into this canonical numbering, so **ADR-016 is unambiguously the shared storefront here**. The legacy branding entry and its release-notes citation retain ADR-016 for historical reasons only and are superseded by this canonical ADR-016.
+
 ---
 
 ## ADR-017: BbbOrganizationMembership Uses Scalar channelId (DL-017)
@@ -341,6 +347,8 @@
 
 - Position injection (couples ranking and ad logic, fragile)
 - Separate sponsored endpoint (bad UX, no interleaving)
+
+> **ADR-023 and ADR-024 are intentionally unassigned.** The canonical sequence runs **ADR-022 → ADR-025**; no ADR-023 or ADR-024 exists in the canonical archive or the legacy file, and neither is referenced anywhere. When adding a new decision, use the next free number (**ADR-037**) rather than claiming ADR-023/024.
 
 ---
 

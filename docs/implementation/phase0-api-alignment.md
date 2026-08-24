@@ -25,7 +25,7 @@
 
 **Finding:** Contains `getSessionCta()` — client-side entitlement isolation layer that:
 - Determines CTA label/action based on `joinUrl`, `isTrial`, `trial.status`
-- Should live server-side as `courseAccess(courseId)` per ADR-013 INV-006/INV-008
+- Should live server-side as `courseAccess(courseId)` per ADR-016 (formerly ADR-013 "Frontend Independence & API Evolution") INV-006/INV-008
 - File header contains explicit TODO documenting this exception
 
 **Action taken:**

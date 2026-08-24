@@ -87,7 +87,8 @@
 
 - **Capacity Intelligence System** — `CapacityIntelligenceService`, `BbbCapacityAlertLog`, `BbbServer.capacity`, `poolCapacityDashboard`, `capacity-alert` job (CI-001 through CI-006)
 - **MarketplaceIndexerPlugin** — all Phase 3 gaps closed (sponsored listing bid-boost, Bayesian rating, price from ProductVariant, ProductVariantEvent subscription, BullMQ job queue, Product custom fields)
-- **PlatformDashboardPlugin** — Saa9vi login branding layer with CSS override for Vendure core branding footer (ADR-016)
+- **PlatformDashboardPlugin** — Saa9vi login branding layer with CSS override for Vendure core branding footer (ADR-016) *(legacy ADR-016 "Platform Dashboard Branding"; see collision note on canonical ADR-016 — the storefront — in `platform-adr.md`)*
+
 - **ADR-017 (Observability Architecture)** — correlation tracing, event causality validation, runtime invariant monitoring
 - **Phase 1.6 (Live Classroom Experience)** — Scheduled Sessions follow-ups as a dedicated phase
 
@@ -168,7 +169,7 @@
 
 - Reviews plugin audit (4th plugin)
 - §5A Dashboard Extension Pattern
-- ADR-013 (Frontend Independence)
+- ADR-016 (formerly ADR-013 "Frontend Independence & API Evolution")
 - DL-015/016
 
 ### Fixed

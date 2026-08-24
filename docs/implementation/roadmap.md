@@ -38,7 +38,7 @@
 - [x] **FEAT-002 schema migration** — verified already applied (Vendure CLI: no schema changes; `sourceType` + `isUnbounded` confirmed in DB)
 - [x] **Next.js public instructor/CMS pages** — CMS page route (`/[locale]/page/[slug]`) added; instructor page already existed
 - [x] **Email verification for tenant admins** — `verifyTenantAdmin` Shop API mutation + unverified admin creation
-- [x] **End-to-end customer deletion test** — `customer-deletion.e2e-spec.ts` covering Flow A + Flow B across BBB/Tenant/Reviews
+- [x] **End-to-end customer deletion test** — `customer-deletion.e2e-spec.ts` covering Flow A + Flow B across BBB/Tenant/Reviews. **⚠ 2 Flow A tests remain blocked** by a test-harness auth issue (Shop API customer session doesn't resolve tenant channel in the isolated e2e schema); production paths correct + TS-verified. Tracked separately (see Phase 2 — deferred).
 - [x] **Load estimation ratios tuning** — PILOS ratios configurable via `BigBlueButtonPluginOptions` + env vars
 
 ---
@@ -51,9 +51,9 @@
 - [ ] `BbbRoom.maxParticipants` set from policy default on creation, tenant can increase up to `maxRoomCapacity`
 - [ ] `BbbOrganization.maxParticipantsPerMeeting` becomes denormalized cache of policy limit
 - [ ] Portal Admin dashboard for capacity policy management
-- [ ] `BbbCapacityGrant.sourceType` discriminator
+- [ ] **`BbbCapacityGrant.sourceType` discriminator** — column + union type exist (FEAT-002); only `"order"`/`"internal_overhead"` are written today. The open piece is wiring `sourceType: "subscription"` grant creation once `OrganizationSubscription` exists.
 - [ ] Monthly invoice generation job
-- [ ] Juspay recurring billing integration
+- [ ] Juspay recurring billing integration — **not greenfield:** generated Shop/Admin types already expose `initiateJuspaySession`, `cancelJuspaySession`, `JuspaySessionResult`, `QueryJuspayOrderStatus`, but with **no handwritten schema, resolver, or service** (vestigial generated-only surface). Build entities + state machine first (testable without money movement), then Juspay webhook ingestion following the INV-004 persist-before-process shape reused from `BbbWebhookEvent`; reconcile the vestigial generated surface.
 - [ ] Tenant onboarding flow in storefront
 - [ ] `NavigationMenu` entity in CMS
 - [ ] Banner BullMQ scheduling (CMS-002)
@@ -108,3 +108,21 @@
 - [ ] Student Corner (CMS-native)
 - [ ] Cross-academy placement network
 - [ ] 3CX telephony bridge for academy CRM
+
+---
+
+## Deferred / Tracked Items
+
+> **Purpose:** Consciously-deferred work that was flagged for tracking but not yet scheduled into a phase. Kept visible so it isn't silently carried across releases. Status: **open.**
+
+**Storefront channel-isolation cache gaps** (`nextjs-starter-vendure`)
+- [ ] `getActiveChannelCached()` / `getAvailableCountriesCached()` (`lib/vendure/cached.ts`) still resolve channel token from env-var fallback, not per-request header. Fix pattern already established in the same file (dynamic-outer / cached-inner split used for product, collection, layout data).
+- [ ] `cart.tsx`'s `'use cache: private'` block tags only `cacheTag('cart')` — no channel dimension. Lower risk (private scope is per-user) but should align with the rest of the caching strategy.
+
+These are the same channel-isolation class as BUG-031 / INV-001. **Why tracked here:** new subscription-billing data paths should be built against a codebase where the channel-cache pattern is 100% consistent (not 90%).
+
+**Storefront template contract Phase A — ESLint guardrail** (`nextjs-starter-vendure`)
+- [ ] The Storefront Template Contract's §4a lint guardrail (two ESLint rules) is unimplemented: `eslint.config.mjs` is still just Next.js defaults (`eslint-config-next/typescript`), no custom rules. **Sequence:** land the §4a rules *before* the Phase 2 "Tenant onboarding flow in storefront" surface work, so new storefront surface area is protected by the mechanical channel-isolation checks first. See `nextjs-starter-vendure/docs/adr/storefront-template-contract.md` (cross-repo; the backend's `docs/what-next.md` points to it).
+
+**Blocked Flow A e2e tests** (tracked ticket)
+- [ ] 2 Flow A tests in `customer-deletion.e2e-spec.ts` remain blocked by a test-harness auth issue (Shop API customer session doesn't resolve tenant channel in the isolated e2e schema). Production code is correct + TypeScript-verified. Deferred so it doesn't become silently permanent once Phase 2 attention moves elsewhere.

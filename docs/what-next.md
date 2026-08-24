@@ -71,3 +71,11 @@ PHASE 4 — SCALE & PREMIUM
 ```
 
 See `docs/implementation/roadmap.md` for full details and per-phase task lists.
+
+---
+
+**Storefront template contract (cross-repo pointer):** the Storefront Template Contract — governing what template code may do in the `nextjs-starter-vendure` storefront repo — lives in that repo's own docs tree:
+
+> `docs/adr/storefront-template-contract.md` (in the `nextjs-starter-vendure` repository)
+
+It is a frontend-governing contract and deliberately lives with the component/template enforcement it describes, not in this backend ADR tree. See that repo for details.

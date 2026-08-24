@@ -125,6 +125,8 @@ BullMQ processor
 
 **Rejection criterion:** Any service method that calls `.update()` on an `AdSpendLedger` row is rejected.
 
+> **INV-011 is intentionally unassigned.** The current canonical sequence runs INV-010 → INV-012; nothing in `invariants.md` or the legacy ADR defines an INV-011. When adding a new invariant, use the next free number (**INV-017**) rather than claiming INV-011.
+
 ---
 
 ## INV-012: Capacity Intelligence Is Advisory. Meetings Are Never Blocked for Capacity Reasons.

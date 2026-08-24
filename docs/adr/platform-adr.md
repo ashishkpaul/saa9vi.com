@@ -1,6 +1,12 @@
 # Architecture Decision Record (Legacy)
 
 > **This document has been refactored.** The enduring architectural decisions have been moved to `docs/architecture/platform-adr.md`. Implementation status, bugs, and roadmap have been moved to `docs/implementation/`.
+>
+> **⚠️ SUPERSEDED — do not cite this file's ADR/DL numbers as current.** This file is an archived historical record. The canonical, current ADR numbering lives in **`docs/architecture/platform-adr.md`** (invariants in **`docs/architecture/invariants.md`**).
+>
+> **Numbering reconciliation (the collision central here):** the shared storefront appears in this file as both **ADR-013 "Frontend Independence & API Evolution"** and decision-log **DL-016**. In the canonical file that decision is **ADR-016 "Single Shared Next.js Storefront"** — and canonical **ADR-013** is a *different* decision (webhook payload `simple-json`, which this file calls DL-013).
+>
+> When adding an invariant or ADR, document it in `docs/architecture/platform-adr.md` — not this file.
 
 ## What moved where
 

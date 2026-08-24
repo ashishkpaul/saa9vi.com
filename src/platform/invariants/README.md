@@ -1,6 +1,6 @@
 # Platform Invariant Verification System
 
-This module provides automated drift detection between architecture documentation (`docs/adr/`) and code behavior in the Saa9vi platform.
+This module provides automated drift detection between architecture documentation (`docs/architecture/`) and code behavior in the Saa9vi platform.
 
 ## Purpose
 
@@ -55,7 +55,7 @@ To add a new invariant check:
 
 1. Add a method to the appropriate checker class, or create a new checker class implementing `Checker`
 2. Register it in `cli.ts`
-3. Document the invariant in `docs/adr/platform-adr.md` first
+3. Document the invariant in `docs/architecture/platform-adr.md` first
 
 ## Design Notes
 

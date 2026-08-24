@@ -82,7 +82,7 @@ export const shopApiExtensions = gql`
     attendedAt: DateTime
   }
 
-  # ─── Learning Dashboard (Phase 1.5, ADR-013 INV-006) ──────────────────────
+  # Learning Dashboard (Phase 1.5, ADR-016 formerly ADR-013 "Frontend Independence & API Evolution"; INV-006)
   # Domain API — no Bbb* prefix. Storefront-facing contract.
 
   type SessionWindow {
