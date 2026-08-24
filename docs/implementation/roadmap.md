@@ -45,7 +45,7 @@
 
 ## Phase 2 — Subscription Billing & Capacity Policy
 
-- [ ] `SubscriptionPlan` and `OrganizationSubscription` entities
+- [x] `SubscriptionPlan` and `OrganizationSubscription` entities — implemented via `SubscriptionPlugin` (`src/plugins/subscription/`); platform-global plan catalogue + channel-scoped org subscriptions (ADR-003 dual pattern). Admin API: `subscriptionPlans`, `organizationSubscriptions`, `createSubscriptionPlan`, `updateSubscriptionPlan`. Migration `1787547472479` generated + applied via Vendure CLI.
 - [ ] `BbbPlatformCapacityPolicy` entity — platform-level BBB capacity limits controlled by Portal Admin
 - [ ] Plan-based capacity tiers (Starter: 50, Growth: 200, Enterprise: 500 default room capacity)
 - [ ] `BbbRoom.maxParticipants` set from policy default on creation, tenant can increase up to `maxRoomCapacity`

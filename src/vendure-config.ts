@@ -29,6 +29,7 @@ import { LoadSimulationPlugin } from "./plugins/load-simulation-plugin/load-simu
 import { MarketplaceIndexerPlugin } from "./plugins/marketplace";
 import { CustomerSuspensionPlugin } from './plugins/customer-suspension/customer-suspension.plugin';
 import { PlatformDashboardPlugin } from './plugins/platform-dashboard/platform-dashboard.plugin';
+import { SubscriptionPlugin } from './plugins/subscription/subscription.plugin';
 
 /**
  * Security headers middleware enforcing HTTP header hardening for production safety.
@@ -267,5 +268,6 @@ apiOptions: {
     MarketplaceIndexerPlugin,
     CustomerSuspensionPlugin.init({}),
     PlatformDashboardPlugin.init({}),
+    SubscriptionPlugin.init({}),
 ],
 };
