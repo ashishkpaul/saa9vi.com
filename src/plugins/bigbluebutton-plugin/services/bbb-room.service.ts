@@ -11,6 +11,7 @@ import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { MEETING_STATE } from "../constants";
 import { BBB_PLUGIN_OPTIONS } from "../constants";
 import { BbbRoomLockService } from "./bbb-room-lock.service";
+import { BbbPlatformCapacityPolicyService } from "./bbb-platform-capacity-policy.service";
 import { BbbServerService } from "./bbb-server.service";
 import { BbbApiService } from "./bbb-api.service";
 import { BbbMetricsService } from "./bbb-metrics.service";
@@ -50,6 +51,7 @@ export class BbbRoomService {
     private readonly metrics: BbbMetricsService,
     private readonly eventBus: EventBus,
     private readonly channelAccess: BbbChannelAccessService,
+    private readonly capacityPolicyService: BbbPlatformCapacityPolicyService,
     @Inject(forwardRef(() => BbbMeetingService))
     private readonly meetingService: BbbMeetingService,
     @Inject(BBB_PLUGIN_OPTIONS)
@@ -102,14 +104,31 @@ export class BbbRoomService {
       BbbOrganization,
       input.organizationId,
     );
-    // INV-014: BbbRoom.maxParticipants must never exceed
-    // BbbOrganization.maxParticipantsPerMeeting. The org value is the
-    // default when no explicit value is given, and an explicitly-provided
-    // value is clamped to the org ceiling.
-    const maxParticipants = Math.min(
-      input.maxParticipants ?? org.maxParticipantsPerMeeting,
-      org.maxParticipantsPerMeeting,
-    );
+    // ADR-031 room capacity rule: default from the effective platform
+    // capacity policy, tenant may raise up to maxRoomCapacity. When no
+    // policy rows exist (feature not adopted), preserve INV-014 current
+    // behavior exactly (org value is both default and ceiling).
+    let maxParticipants: number;
+    if (await this.capacityPolicyService.hasAnyPolicy(ctx)) {
+      const policy = await this.capacityPolicyService.getEffectivePolicy(
+        ctx,
+        org.channelId,
+      );
+      // Write-through denormalized cache (INV-014 invariant stays true:
+      // room can never exceed the org value, which now tracks the policy
+      // limit). Manual admin-form edits are overridden by policy per ADR-031.
+      await this.capacityPolicyService.syncOrganizationCache(ctx, org, policy);
+      maxParticipants = this.capacityPolicyService.resolveRoomCapacity(
+        policy,
+        input.maxParticipants,
+      );
+    } else {
+      // INV-014 (pre-adoption): org value is default and ceiling.
+      maxParticipants = Math.min(
+        input.maxParticipants ?? org.maxParticipantsPerMeeting,
+        org.maxParticipantsPerMeeting,
+      );
+    }
     if (input.slug) {
       const existing = await this.connection.getRepository(ctx, BbbRoom).findOne({
         where: { slug: input.slug },

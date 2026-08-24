@@ -12,6 +12,7 @@ import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { MEETING_STATE } from "../constants";
 import { BbbChannelAccessService } from "./bbb-channel-access.service";
+import { BbbPlatformCapacityPolicyService } from "./bbb-platform-capacity-policy.service";
 
 export interface CreateBbbOrganizationInput {
   channelId: string;
@@ -37,6 +38,7 @@ export class BbbOrganizationService {
     private readonly connection: TransactionalConnection,
     private readonly channelService: ChannelService,
     private readonly channelAccess: BbbChannelAccessService,
+    private readonly capacityPolicyService: BbbPlatformCapacityPolicyService,
   ) {}
 
   async findAll(
@@ -176,6 +178,18 @@ export class BbbOrganizationService {
     });
     await this.channelService.assignToCurrentChannel(org, ctx);
     const saved = await this.connection.getRepository(ctx, BbbOrganization).save(org);
+
+    // ADR-031: org.maxParticipantsPerMeeting is a denormalized cache of the
+    // effective platform capacity policy limit. Policy wins once adopted
+    // (any policy row exists); before that, the legacy form-supplied value
+    // above is preserved (opt-in adoption, same guard as room creation).
+    if (await this.capacityPolicyService.hasAnyPolicy(ctx)) {
+      const policy = await this.capacityPolicyService.getEffectivePolicy(
+        ctx,
+        saved.channelId,
+      );
+      await this.capacityPolicyService.syncOrganizationCache(ctx, saved, policy);
+    }
 
     // FEAT-002: Auto-provision an internal_overhead grant for this org.
     // This grant is unbounded — internal sessions always have something to debit against.

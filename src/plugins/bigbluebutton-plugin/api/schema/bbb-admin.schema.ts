@@ -565,4 +565,59 @@ export const adminApiExtensions = gql`
     role: String
     isActive: Boolean
   }
+
+  # ─── Platform Capacity Policy (ADR-031) ─────────────────────────────────────
+  # Portal Admin-owned BBB infrastructure limits. One row per SubscriptionPlan
+  # tier plus a platform-default row (subscriptionPlanId null).
+
+  type BbbPlatformCapacityPolicy {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    defaultRoomCapacity: Int!
+    maxRoomCapacity: Int!
+    maxConcurrentParticipants: Int!
+    "Null = platform-default policy for tenants without a matching plan."
+    subscriptionPlanId: ID
+  }
+
+  input PlatformCapacityPolicyInput {
+    "Null/omitted targets the platform-default policy row."
+    subscriptionPlanId: ID
+    defaultRoomCapacity: Int!
+    maxRoomCapacity: Int!
+    maxConcurrentParticipants: Int!
+  }
+
+  extend type Query {
+    """
+    All platform capacity policy rows (ADR-031). Portal infrastructure only.
+    """
+    platformCapacityPolicies: [BbbPlatformCapacityPolicy!]!
+
+    """
+    The effective capacity policy for a channel (plan-matched → default → fallback).
+    Portal infrastructure only.
+    """
+    effectiveCapacityPolicy(channelId: ID!): EffectiveCapacityPolicy!
+  }
+
+  type EffectiveCapacityPolicy {
+    defaultRoomCapacity: Int!
+    maxRoomCapacity: Int!
+    maxConcurrentParticipants: Int!
+    source: String!
+  }
+
+  extend type Mutation {
+    """
+    Create or update the policy row for a plan tier (or the platform default).
+    Portal infrastructure only. Enabling adoption switches room provisioning
+    and org cache sync to policy-driven values.
+    """
+    upsertPlatformCapacityPolicy(input: PlatformCapacityPolicyInput!): BbbPlatformCapacityPolicy!
+
+    "Delete a policy row by id. Portal infrastructure only."
+    deletePlatformCapacityPolicy(id: ID!): Boolean!
+  }
 `;

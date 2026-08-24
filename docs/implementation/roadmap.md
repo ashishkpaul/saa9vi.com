@@ -47,9 +47,9 @@
 
 - [x] `SubscriptionPlan` and `OrganizationSubscription` entities — implemented via `SubscriptionPlugin` (`src/plugins/subscription/`); platform-global plan catalogue + channel-scoped org subscriptions (ADR-003 dual pattern). Admin API: `subscriptionPlans`, `organizationSubscriptions`, `createSubscriptionPlan`, `updateSubscriptionPlan`. Migration `1787547472479` generated + applied via Vendure CLI.
 - [ ] `BbbPlatformCapacityPolicy` entity — platform-level BBB capacity limits controlled by Portal Admin
-- [ ] Plan-based capacity tiers (Starter: 50, Growth: 200, Enterprise: 500 default room capacity)
-- [ ] `BbbRoom.maxParticipants` set from policy default on creation, tenant can increase up to `maxRoomCapacity`
-- [ ] `BbbOrganization.maxParticipantsPerMeeting` becomes denormalized cache of policy limit
+- [x] Plan-based capacity tiers (Starter: 50, Growth: 200, Enterprise: 500 default room capacity) — implemented as DATA rows on `BbbPlatformCapacityPolicy` keyed by `subscriptionPlanId` (`PLAN_TIER_DEFAULTS` in `bbb-platform-capacity-policy.service.ts` records the ADR-031 table for seeding/dashboard presets). Tier values are Portal-Admin-created policy rows, not code branches.
+- [x] `BbbRoom.maxParticipants` set from policy default on creation, tenant can increase up to `maxRoomCapacity` — `BbbRoomService.create()` resolves effective policy (plan-matched → platform-default → fallback) and clamps; **opt-in adoption**: with zero policy rows, legacy INV-014 behavior is preserved. Admin API: `upsertPlatformCapacityPolicy`, `platformCapacityPolicies`, `effectiveCapacityPolicy` (Portal infrastructure permission).
+- [x] `BbbOrganization.maxParticipantsPerMeeting` becomes denormalized cache of policy limit — write-through sync on org creation and on room provisioning (`syncOrganizationCache`, cache = effective `maxRoomCapacity` so INV-014's rejection criterion still holds).
 - [ ] Portal Admin dashboard for capacity policy management
 - [ ] **`BbbCapacityGrant.sourceType` discriminator** — column + union type exist (FEAT-002); only `"order"`/`"internal_overhead"` are written today. The open piece is wiring `sourceType: "subscription"` grant creation once `OrganizationSubscription` exists.
 - [ ] Monthly invoice generation job

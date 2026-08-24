@@ -159,6 +159,8 @@ This pattern does **not** apply to Stream 1 (`BbbUsageLedger`) or Stream 3 (`AdS
 
 **Rejection criterion:** `BbbRoom.maxParticipants` must never exceed `BbbOrganization.maxParticipantsPerMeeting` at provisioning time.
 
+> **Transition note (2026-08, ADR-031 implementation):** once Portal Admin creates any `BbbPlatformCapacityPolicy` row, `maxParticipantsPerMeeting` becomes a write-through denormalized cache of the effective policy limit (`maxRoomCapacity`) — synced on organization creation and on room provisioning; manual form edits are then overridden by policy. The rejection criterion above is preserved by construction (the cache holds the ceiling). Pre-adoption (zero policy rows), the rule above applies unchanged. See `BbbPlatformCapacityPolicyService` and the roadmap Phase 2 entries.
+
 ---
 
 ## INV-016: Administrator Visibility Is Channel-Scoped

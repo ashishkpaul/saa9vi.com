@@ -26,6 +26,7 @@ import { BbbWebhookEvent } from "./entities/bbb-webhook-event.entity";
 import { BbbEntitlement } from "./entities/bbb-entitlement.entity";
 import { BbbOrganizationMembership } from "./entities/bbb-organization-membership.entity";
 import { BbbCapacityAlertLog } from "./entities/bbb-capacity-alert-log.entity";
+import { BbbPlatformCapacityPolicy } from "./entities/bbb-platform-capacity-policy.entity";
 import { EventLog } from "../../platform/tracing/entities/event-log.entity";
 
 import { BbbChannelAccessService } from "./services/bbb-channel-access.service";
@@ -49,6 +50,7 @@ import { BbbMembershipService } from "./services/bbb-membership.service";
 import { GrantReaderService } from "./services/grant-reader.service";
 import { LearningDashboardService } from "./services/learning-dashboard.service";
 import { CapacityIntelligenceService } from "./services/capacity-intelligence.service";
+import { BbbPlatformCapacityPolicyService } from "./services/bbb-platform-capacity-policy.service";
 import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.listener";
 
 import { PlatformTracingModule } from "../../platform/tracing/platform-tracing.module";
@@ -94,6 +96,7 @@ import {
     BbbEntitlement,
     BbbOrganizationMembership,
     BbbCapacityAlertLog,
+    BbbPlatformCapacityPolicy,
     CustomerDeletionLog,
     EventLog,
   ],
@@ -126,6 +129,7 @@ import {
     BbbMembershipService,
     GrantReaderService,
     LearningDashboardService,
+    BbbPlatformCapacityPolicyService,
     CapacityIntelligenceService,
     BbbOrderFulfillmentListener,
   ],

@@ -41,6 +41,11 @@ import {
 import { TrialRegistrationService } from "../services/trial-registration.service";
 import { BbbMembershipService } from "../services/bbb-membership.service";
 import { CapacityIntelligenceService } from "../services/capacity-intelligence.service";
+import {
+  BbbPlatformCapacityPolicyService,
+  EffectiveCapacityPolicy,
+} from "../services/bbb-platform-capacity-policy.service";
+import { BbbPlatformCapacityPolicy } from "../entities/bbb-platform-capacity-policy.entity";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
 
 import { Customer, EntityNotFoundError } from "@vendure/core";
@@ -145,6 +150,7 @@ export class BbbAdminResolver {
     private readonly trialRegistrationService: TrialRegistrationService,
     private readonly membershipService: BbbMembershipService,
     private readonly capacityIntelligenceService: CapacityIntelligenceService,
+    private readonly capacityPolicyService: BbbPlatformCapacityPolicyService,
     private readonly connection: TransactionalConnection,
   ) {}
 
@@ -963,5 +969,80 @@ export class BbbAdminResolver {
     @Args("id") id: string,
   ) {
     return this.scheduledSessionService.cancel(ctx, id);
+  }
+
+  // ─── Platform Capacity Policy (ADR-031) ────────────────────────────────────
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
+  async platformCapacityPolicies(
+    @Ctx() ctx: RequestContext,
+  ): Promise<BbbPlatformCapacityPolicy[]> {
+    return this.connection.getRepository(ctx, BbbPlatformCapacityPolicy).find({
+      order: { createdAt: "ASC" },
+    });
+  }
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
+  async effectiveCapacityPolicy(
+    @Ctx() ctx: RequestContext,
+    @Args("channelId") channelId: string,
+  ): Promise<EffectiveCapacityPolicy> {
+    return this.capacityPolicyService.getEffectivePolicy(ctx, channelId);
+  }
+
+  /**
+   * Upsert keyed by subscriptionPlanId (null = platform-default row).
+   * Creating the first row flips capacity enforcement to policy-driven
+   * (opt-in adoption — see hasAnyPolicy() guards in room/org services).
+   */
+  @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
+  @Transaction()
+  @Mutation()
+  async upsertPlatformCapacityPolicy(
+    @Ctx() ctx: RequestContext,
+    @Args("input")
+    input: {
+      subscriptionPlanId?: string | null;
+      defaultRoomCapacity: number;
+      maxRoomCapacity: number;
+      maxConcurrentParticipants: number;
+    },
+  ): Promise<BbbPlatformCapacityPolicy> {
+    if (input.maxRoomCapacity < input.defaultRoomCapacity) {
+      throw new Error(
+        `maxRoomCapacity (${input.maxRoomCapacity}) must be >= defaultRoomCapacity (${input.defaultRoomCapacity})`,
+      );
+    }
+    const repo = this.connection.getRepository(ctx, BbbPlatformCapacityPolicy);
+    const existing = await repo.findOne({
+      where: { subscriptionPlanId: input.subscriptionPlanId ?? (null as any) },
+    });
+    if (existing) {
+      existing.defaultRoomCapacity = input.defaultRoomCapacity;
+      existing.maxRoomCapacity = input.maxRoomCapacity;
+      existing.maxConcurrentParticipants = input.maxConcurrentParticipants;
+      return repo.save(existing);
+    }
+    return repo.save(
+      new BbbPlatformCapacityPolicy({
+        subscriptionPlanId: input.subscriptionPlanId ?? null,
+        defaultRoomCapacity: input.defaultRoomCapacity,
+        maxRoomCapacity: input.maxRoomCapacity,
+        maxConcurrentParticipants: input.maxConcurrentParticipants,
+      }),
+    );
+  }
+
+  @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
+  @Transaction()
+  @Mutation()
+  async deletePlatformCapacityPolicy(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+  ): Promise<boolean> {
+    await this.connection.getRepository(ctx, BbbPlatformCapacityPolicy).delete(id);
+    return true;
   }
 }
