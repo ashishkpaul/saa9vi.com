@@ -1,0 +1,22 @@
+{{> header title="Account Verified" }}
+
+<mj-section background-color="#fafafa">
+    <mj-column>
+        <mj-text font-size="20px" font-weight="bold" color="#333333">
+            Welcome, {{ customer.firstName }}!
+        </mj-text>
+        <mj-text color="#525252" font-size="15px" line-height="1.6">
+            Your account with <strong>{{ customer.emailAddress }}</strong> has been successfully verified. You can now log in, explore our catalog, and access all your account features.
+        </mj-text>
+        <mj-button font-family="Helvetica, Arial, sans-serif"
+                   background-color="#375a67"
+                   color="white"
+                   border-radius="4px"
+                   font-size="15px"
+                   href="{{ storefrontUrl }}">
+            Go to Store
+        </mj-button>
+    </mj-column>
+</mj-section>
+
+{{> footer }}

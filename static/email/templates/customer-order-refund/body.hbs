@@ -1,0 +1,43 @@
+{{> header title="Refund Confirmation" }}
+
+<mj-section background-color="#fafafa">
+    <mj-column>
+        <mj-text font-size="20px" font-weight="bold" color="#2e7d32">
+            Refund Processed for Order #{{ order.code }}
+        </mj-text>
+        <mj-text color="#525252" font-size="15px" line-height="1.6">
+            Dear {{ order.customer.firstName }} {{ order.customer.lastName }},
+        </mj-text>
+        <mj-text color="#525252" font-size="15px" line-height="1.6">
+            A refund has been successfully processed for your order <strong>#{{ order.code }}</strong>.
+        </mj-text>
+        <mj-text font-size="16px" color="#333333" font-weight="bold">
+            Refund Details:
+        </mj-text>
+        <mj-table cellpadding="6px">
+            <tr style="border-bottom: 1px dashed #eee;">
+                <td style="padding: 6px 0;">Refund Amount:</td>
+                <td style="text-align: right; font-weight: bold; padding: 6px 0; color: #2e7d32;">
+                    {{ formatMoney refund.total order.currencyCode 'en' }}
+                </td>
+            </tr>
+            {{#if refund.reason}}
+            <tr style="border-bottom: 1px dashed #eee;">
+                <td style="padding: 6px 0;">Reason:</td>
+                <td style="text-align: right; padding: 6px 0;">{{ refund.reason }}</td>
+            </tr>
+            {{/if}}
+            {{#if refund.transactionId}}
+            <tr>
+                <td style="padding: 6px 0;">Transaction ID:</td>
+                <td style="text-align: right; padding: 6px 0;">{{ refund.transactionId }}</td>
+            </tr>
+            {{/if}}
+        </mj-table>
+        <mj-text color="#777777" font-size="13px" line-height="1.5">
+            Depending on your bank or payment provider, it may take 3-5 business days for the funds to reflect in your account.
+        </mj-text>
+    </mj-column>
+</mj-section>
+
+{{> footer }}

@@ -1,0 +1,23 @@
+{{> header title="Order Confirmation Code" }}
+
+<mj-section background-color="#fafafa">
+    <mj-column>
+        <mj-text font-size="20px" font-weight="bold" color="#375a67">
+            Your Order Confirmation Code
+        </mj-text>
+        <mj-text color="#525252" font-size="15px" line-height="1.6">
+            Dear {{ order.customer.firstName }} {{ order.customer.lastName }},
+        </mj-text>
+        <mj-text color="#525252" font-size="15px" line-height="1.6">
+            Thank you for placing an order with us. Here is your reference confirmation code:
+        </mj-text>
+        <mj-text align="center" font-size="26px" font-weight="bold" color="#375a67" padding="20px 0">
+            <span style="background-color: #e8f0f2; padding: 10px 24px; border-radius: 6px; letter-spacing: 2px;">{{ confirmationCode }}</span>
+        </mj-text>
+        <mj-text color="#525252" font-size="14px" line-height="1.5">
+            Keep this code for your records when tracking order status or communicating with support.
+        </mj-text>
+    </mj-column>
+</mj-section>
+
+{{> footer }}

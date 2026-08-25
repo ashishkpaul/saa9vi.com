@@ -1,12 +1,12 @@
-{{> header title="Order Shipped Notification" }}
+{{> header title="Order Delivered Notification" }}
 
 <mj-section background-color="#fafafa">
     <mj-column>
-        <mj-text font-size="20px" font-weight="bold" color="#375a67">
-            [Seller Notification] Order #{{ order.code }} Shipped
+        <mj-text font-size="20px" font-weight="bold" color="#2e7d32">
+            [Seller Notification] Order #{{ order.code }} Delivered
         </mj-text>
         <mj-text color="#525252" font-size="15px" line-height="1.6">
-            Order <strong>#{{ order.code }}</strong> for customer <strong>{{ order.customer.firstName }} {{ order.customer.lastName }}</strong> has been transitioned to Shipped status.
+            Order <strong>#{{ order.code }}</strong> for customer <strong>{{ order.customer.firstName }} {{ order.customer.lastName }}</strong> has been successfully marked as delivered.
         </mj-text>
         <mj-button font-family="Helvetica, Arial, sans-serif"
                    background-color="#375a67"
@@ -14,7 +14,7 @@
                    border-radius="4px"
                    font-size="15px"
                    href="{{ adminUrl }}/admin/orders/{{ order.id }}">
-            View Order
+            View Order Details
         </mj-button>
     </mj-column>
 </mj-section>

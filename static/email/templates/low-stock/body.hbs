@@ -1,0 +1,43 @@
+{{> header title="Low Stock Warning" }}
+
+<mj-section background-color="#fafafa">
+    <mj-column>
+        <mj-text font-size="20px" font-weight="bold" color="#e65100">
+            Low Stock Alert
+        </mj-text>
+        <mj-text color="#525252" font-size="15px" line-height="1.6">
+            The following product variants have dropped to or below your configured stock threshold ({{ threshold }} units) after order <strong>#{{ order.code }}</strong>:
+        </mj-text>
+    </mj-column>
+</mj-section>
+
+<mj-section background-color="#ffffff">
+    <mj-column>
+        <mj-table cellpadding="8px">
+            <tr style="background-color: #f5f5f5; font-weight: bold;">
+                <td style="padding: 8px;">Product Variant</td>
+                <td style="padding: 8px;">SKU</td>
+                <td style="padding: 8px; text-align: center;">Stock on Hand</td>
+            </tr>
+            {{#each lowStockVariants }}
+                <tr style="border-bottom: 1px dashed #eee;">
+                    <td style="padding: 8px;">{{ name }}</td>
+                    <td style="padding: 8px; color: #666;">{{ sku }}</td>
+                    <td style="padding: 8px; text-align: center; color: #d32f2f; font-weight: bold;">
+                        {{ stockOnHand }}
+                    </td>
+                </tr>
+            {{/each}}
+        </mj-table>
+        <mj-button font-family="Helvetica, Arial, sans-serif"
+                   background-color="#375a67"
+                   color="white"
+                   border-radius="4px"
+                   font-size="15px"
+                   href="{{ adminUrl }}/admin/inventory">
+            Manage Inventory
+        </mj-button>
+    </mj-column>
+</mj-section>
+
+{{> footer }}

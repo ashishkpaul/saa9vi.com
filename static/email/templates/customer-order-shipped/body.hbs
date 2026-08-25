@@ -1,0 +1,47 @@
+{{> header title="Order Shipped" }}
+
+<mj-section background-color="#fafafa">
+    <mj-column>
+        <mj-text font-size="20px" font-weight="bold" color="#375a67">
+            Your Order Has Shipped!
+        </mj-text>
+        <mj-text color="#525252" font-size="15px" line-height="1.6">
+            Dear {{ order.customer.firstName }} {{ order.customer.lastName }},
+        </mj-text>
+        <mj-text color="#525252" font-size="15px" line-height="1.6">
+            Items from your order <strong>#{{ order.code }}</strong> are on their way to you!
+        </mj-text>
+    </mj-column>
+</mj-section>
+
+<mj-section background-color="#ffffff">
+    <mj-column>
+        <mj-text font-size="16px" font-weight="bold" color="#333333">
+            Shipping Details:
+        </mj-text>
+        {{#with order.shippingAddress }}
+            <mj-text color="#525252" font-size="14px" line-height="1.4">
+                <strong>Recipient:</strong> {{ fullName }}<br/>
+                <strong>Address:</strong> {{ streetLine1 }}{{#if streetLine2}}, {{ streetLine2 }}{{/if}}, {{ city }}, {{ postalCode }}, {{ country }}
+            </mj-text>
+        {{/with}}
+        <mj-table cellpadding="6px">
+            {{#each order.lines }}
+                <tr style="border-bottom: 1px dashed #eee;">
+                    <td style="padding: 8px 0;">{{ quantity }} x {{ productVariant.name }}</td>
+                    <td style="text-align: right; padding: 8px 0;">{{ formatMoney discountedLinePriceWithTax ../order.currencyCode 'en' }}</td>
+                </tr>
+            {{/each}}
+        </mj-table>
+        <mj-button font-family="Helvetica, Arial, sans-serif"
+                   background-color="#375a67"
+                   color="white"
+                   border-radius="4px"
+                   font-size="15px"
+                   href="{{ storefrontUrl }}/account/orders/{{ order.code }}">
+            Track Your Order
+        </mj-button>
+    </mj-column>
+</mj-section>
+
+{{> footer }}

@@ -1,0 +1,36 @@
+{{> header title="Payment Failed" }}
+
+<mj-section background-color="#fafafa">
+    <mj-column>
+        <mj-text font-size="20px" font-weight="bold" color="#d32f2f">
+            Payment Failed for Order #{{ order.code }}
+        </mj-text>
+        <mj-text color="#525252" font-size="15px" line-height="1.6">
+            Dear {{ order.customer.firstName }} {{ order.customer.lastName }},
+        </mj-text>
+        <mj-text color="#525252" font-size="15px" line-height="1.6">
+            We were unable to process your payment for order <strong>#{{ order.code }}</strong>.
+        </mj-text>
+        {{#if errorMessage}}
+        <mj-text color="#d32f2f" font-size="14px" font-style="italic">
+            Reason: {{ errorMessage }}
+        </mj-text>
+        {{/if}}
+        <mj-text color="#525252" font-size="15px" line-height="1.6">
+            Total Amount: <strong>{{ formatMoney order.totalWithTax order.currencyCode 'en' }}</strong>
+        </mj-text>
+        <mj-button font-family="Helvetica, Arial, sans-serif"
+                   background-color="#375a67"
+                   color="white"
+                   border-radius="4px"
+                   font-size="15px"
+                   href="{{ checkoutUrl }}">
+            Retry Payment
+        </mj-button>
+        <mj-text color="#777777" font-size="13px" line-height="1.5">
+            Please check your payment details or choose an alternate payment method.
+        </mj-text>
+    </mj-column>
+</mj-section>
+
+{{> footer }}
