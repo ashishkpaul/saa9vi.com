@@ -173,11 +173,35 @@ This pattern does **not** apply to Stream 1 (`BbbUsageLedger`) or Stream 3 (`AdS
 
 ---
 
-## INV-015 (Proposed): BBB Infrastructure Capacity Is Platform-Controlled (Future — See ADR-031)
+## INV-017: Subscription Renewals Use CAS Optimistic Locking.
 
-**Status:** Proposed — not yet implemented. See ADR-031.
+**Rule:** `OrganizationSubscription` renewals must use a version-incrementing Compare-And-Swap (CAS) update to ensure idempotency across multiple workers. The worker must verify `affectedRows === 1` before publishing events or initiating billing.
 
-**Rule (future):** BBB infrastructure capacity limits (`BbbRoom.maxParticipants`, `BbbOrganization.maxParticipantsPerMeeting`) will be governed by `BbbPlatformCapacityPolicy` controlled by Portal Admin. Tenant administrators will control commercial capacity (`ProductVariant.stockLevel`, `BbbScheduledSession.maxAttendees`) but will not be able to increase BBB resource limits beyond what the platform policy allows.
+**Rejection criterion:** Any renewal logic that updates `currentPeriodEnd` without checking a `version` column is rejected.
+
+---
+
+## INV-018: Billing Context Requires Explicit Channel Resolution.
+
+**Rule:** Services operating on tenant subscriptions outside of a standard request-response cycle must resolve the `Channel` entity by ID and use its `token` or entity reference for `RequestContext` creation. Raw IDs must never be used for channel-based context resolution (BUG-021/BUG-033).
+
+**Rejection criterion:** Any code that passes a raw database `channelId` to `RequestContextService.create({ channelOrToken })` is rejected.
+
+---
+
+## ADR-037: Separation of Subscription Discovery and Execution.
+
+**Rule:** To ensure durability and horizontal scalability, subscription renewal is split into two phases:
+1. **Discovery (ScheduledTask):** Identifies due subscriptions and enqueues BullMQ jobs.
+2. **Execution (JobQueue):** Performs the actual renewal, billing, and event publication.
+
+---
+
+## INV-015: BBB Infrastructure Capacity Is Platform-Controlled.
+
+**Status:** Live (ADR-031).
+
+**Rule:** BBB infrastructure capacity limits (`BbbRoom.maxParticipants`, `BbbOrganization.maxParticipantsPerMeeting`) are governed by `BbbPlatformCapacityPolicy` controlled by Portal Admin. Tenant administrators control commercial capacity (`ProductVariant.stockLevel`) but cannot increase BBB resource limits beyond what the platform policy allows.
 
 **Three distinct capacity layers (proposed):**
 

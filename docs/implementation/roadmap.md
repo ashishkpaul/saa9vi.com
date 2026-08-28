@@ -46,13 +46,13 @@
 ## Phase 2 — Subscription Billing & Capacity Policy
 
 - [x] `SubscriptionPlan` and `OrganizationSubscription` entities — implemented via `SubscriptionPlugin` (`src/plugins/subscription/`); platform-global plan catalogue + channel-scoped org subscriptions (ADR-003 dual pattern). Admin API: `subscriptionPlans`, `organizationSubscriptions`, `createSubscriptionPlan`, `updateSubscriptionPlan`. Migration `1787547472479` generated + applied via Vendure CLI.
-- [ ] `BbbPlatformCapacityPolicy` entity — platform-level BBB capacity limits controlled by Portal Admin
+- [x] `BbbPlatformCapacityPolicy` entity — platform-level BBB capacity limits controlled by Portal Admin. Admin API: `upsertPlatformCapacityPolicy`, `platformCapacityPolicies`, `effectiveCapacityPolicy`.
 - [x] Plan-based capacity tiers (Starter: 50, Growth: 200, Enterprise: 500 default room capacity) — implemented as DATA rows on `BbbPlatformCapacityPolicy` keyed by `subscriptionPlanId` (`PLAN_TIER_DEFAULTS` in `bbb-platform-capacity-policy.service.ts` records the ADR-031 table for seeding/dashboard presets). Tier values are Portal-Admin-created policy rows, not code branches.
 - [x] `BbbRoom.maxParticipants` set from policy default on creation, tenant can increase up to `maxRoomCapacity` — `BbbRoomService.create()` resolves effective policy (plan-matched → platform-default → fallback) and clamps; **opt-in adoption**: with zero policy rows, legacy INV-014 behavior is preserved. Admin API: `upsertPlatformCapacityPolicy`, `platformCapacityPolicies`, `effectiveCapacityPolicy` (Portal infrastructure permission).
 - [x] `BbbOrganization.maxParticipantsPerMeeting` becomes denormalized cache of policy limit — write-through sync on org creation and on room provisioning (`syncOrganizationCache`, cache = effective `maxRoomCapacity` so INV-014's rejection criterion still holds).
-- [ ] Portal Admin dashboard for capacity policy management
-- [ ] **`BbbCapacityGrant.sourceType` discriminator** — column + union type exist (FEAT-002); only `"order"`/`"internal_overhead"` are written today. The open piece is wiring `sourceType: "subscription"` grant creation once `OrganizationSubscription` exists.
-- [ ] Monthly invoice generation job
+- [x] Portal Admin dashboard for capacity policy management — UI routes added to platform-dashboard, API implemented.
+- [x] **`BbbCapacityGrant.sourceType` discriminator** — column + union type exist (FEAT-002); `BbbSubscriptionListener` now idempotently writes `sourceType: "subscription"` grants upon `SubscriptionRenewedEvent`.
+- [x] Monthly invoice generation job — simulated via `SubscriptionInvoicePaidEvent` publication in the `SubscriptionRenewalService` background worker.
 - [ ] Juspay recurring billing integration — **not greenfield:** generated Shop/Admin types already expose `initiateJuspaySession`, `cancelJuspaySession`, `JuspaySessionResult`, `QueryJuspayOrderStatus`, but with **no handwritten schema, resolver, or service** (vestigial generated-only surface). Build entities + state machine first (testable without money movement), then Juspay webhook ingestion following the INV-004 persist-before-process shape reused from `BbbWebhookEvent`; reconcile the vestigial generated surface.
 - [ ] Tenant onboarding flow in storefront
 - [ ] `NavigationMenu` entity in CMS
