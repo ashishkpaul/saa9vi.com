@@ -25,13 +25,13 @@ export class BbbWebhookEvent extends VendureEntity {
   @Column({ type: "simple-json" })
   payload: Record<string, unknown>;
 
-  @Column({ type: "timestamp with time zone" })
+  @Column()
   receivedAt: Date;
 
   @Column({ type: "varchar", default: "PENDING" })
   status: WebhookEventStatus;
 
-  @Column({ type: "timestamp with time zone", nullable: true })
+  @Column({ type: 'timestamp', nullable: true })
   processedAt: Date | null;
 
   @Column({ type: "text", nullable: true })

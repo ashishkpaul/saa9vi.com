@@ -39,11 +39,11 @@ export class BbbEnrollment extends VendureEntity {
   @Column({ nullable: true })
   validFrom: Date;
 
-  @Column({ type: "timestamp", nullable: true })
+  @Column({ type: 'timestamp', nullable: true })
   validUntil: Date | null;
 
   /** @deprecated Use validUntil = createdAt + accessDays. Kept for migration. */
-  @Column({ type: "timestamp", nullable: true })
+  @Column({ type: 'timestamp', nullable: true })
   expiresAt: Date | null;
 
   /**

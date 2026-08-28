@@ -43,4 +43,15 @@ export class SubscriptionAdminResolver {
   ): Promise<SubscriptionPlan> {
     return this.subscriptionService.updatePlan(ctx, id, input);
   }
+
+  @Transaction()
+  @Mutation()
+  @Allow(Permission.SuperAdmin)
+  async subscribeToPlan(
+    @Ctx() ctx: RequestContext,
+    @Args("channelId") channelId: string,
+    @Args("planId") planId: ID,
+  ): Promise<OrganizationSubscription> {
+    return this.subscriptionService.subscribeToPlan(ctx, channelId, planId);
+  }
 }

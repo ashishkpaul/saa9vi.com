@@ -34,10 +34,10 @@ export class BbbScheduledSession extends VendureEntity {
   @Column()
   title: string;
 
-  @Column({ type: "timestamp" })
+  @Column()
   startTime: Date;
 
-  @Column({ type: "timestamp" })
+  @Column()
   endTime: Date;
 
   @Column({ default: "SCHEDULED" })

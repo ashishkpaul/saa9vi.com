@@ -1,9 +1,12 @@
 import { Injectable } from "@nestjs/common";
 import {
+  Channel,
+  ChannelService,
   ID,
   ListQueryBuilder,
   Logger,
   RequestContext,
+  RequestContextService,
   TransactionalConnection,
 } from "@vendure/core";
 
@@ -24,6 +27,8 @@ export class SubscriptionService {
   constructor(
     private readonly connection: TransactionalConnection,
     private readonly listBuilder: ListQueryBuilder,
+    private readonly channelService: ChannelService,
+    private readonly requestContextService: RequestContextService,
   ) {}
 
   async findAllPlans(ctx: RequestContext): Promise<SubscriptionPlan[]> {
@@ -95,5 +100,68 @@ export class SubscriptionService {
     return this.connection
       .getRepository(ctx, OrganizationSubscription)
       .findOne({ where: { channelId }, relations: ["plan"] });
+  }
+
+  /**
+   * Subscribes a channel to a plan (INV-001/ADR-003).
+   * Populates both the join table (assignToCurrentChannel) and the scalar channelId.
+   */
+  async subscribeToPlan(
+    ctx: RequestContext,
+    channelId: string,
+    planId: ID,
+  ): Promise<OrganizationSubscription> {
+    const repo = this.connection.getRepository(ctx, OrganizationSubscription);
+
+    // 1. Check for existing subscription
+    const existing = await repo.findOne({ where: { channelId } });
+    if (existing && existing.status !== "cancelled") {
+      throw new Error(`Channel ${channelId} already has an active or trialing subscription`);
+    }
+
+    // 2. Resolve plan
+    const plan = await this.connection
+      .getRepository(ctx, SubscriptionPlan)
+      .findOne({ where: { id: planId } });
+    if (!plan) {
+      throw new Error(`SubscriptionPlan ${planId} not found`);
+    }
+
+    // 3. Resolve channel
+    const channel = await this.connection.rawConnection
+      .getRepository(Channel)
+      .findOne({ where: { id: channelId } });
+    if (!channel) {
+      throw new Error(`Channel ${channelId} not found`);
+    }
+
+    const now = new Date();
+    const periodEnd = new Date(now);
+    periodEnd.setMonth(periodEnd.getMonth() + 1);
+
+    // 4. Create and assign
+    const sub = new OrganizationSubscription({
+      channelId,
+      plan,
+      status: "active",
+      currentPeriodStart: now,
+      currentPeriodEnd: periodEnd,
+      version: 1,
+    });
+
+    // Ensure the entity is assigned to the target channel (INV-001)
+    const targetCtx = await this.requestContextService.create({
+      apiType: "admin",
+      channelOrToken: channel,
+    });
+
+    await this.channelService.assignToCurrentChannel(sub, targetCtx);
+
+    const saved = await repo.save(sub);
+    Logger.info(
+      `Channel ${channelId} ('${channel.code}') subscribed to plan '${plan.name}'`,
+      loggerCtx,
+    );
+    return saved;
   }
 }

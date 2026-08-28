@@ -9,14 +9,15 @@ import {
   TransactionalConnection,
 } from "@vendure/core";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
-import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbProductAccess } from "../entities/bbb-product-access.entity";
 import { BbbOrganizationService } from "../services/bbb-organization.service";
+import { BbbEntitlementService } from "../services/bbb-entitlement.service";
 
 const loggerCtx = "BbbFulfillment";
 
 let connection: TransactionalConnection;
 let orgService: BbbOrganizationService;
+let entitlementService: BbbEntitlementService;
 let orderService: OrderService;
 
 /**
@@ -24,9 +25,8 @@ let orderService: OrderService;
  *
  * Two things happen:
  *  1. A BbbCapacityGrant is written for the organization (existing behaviour).
- *  2. If the variant maps to a BbbRoom via BbbProductAccess, a BbbEnrollment
- *     is created for the buyer — this is the enrollment-first access path that
- *     replaces manual "Add Member by Customer ID" for students.
+ *  2. If the variant maps to a BbbRoom via BbbProductAccess, a BbbEntitlement
+ *     (source: 'purchase') is created for the buyer via BbbEntitlementService.
  */
 export const bbbFulfillmentHandler = new FulfillmentHandler({
   code: "bbb-access-fulfillment",
@@ -56,6 +56,7 @@ export const bbbFulfillmentHandler = new FulfillmentHandler({
   init(injector) {
     connection = injector.get(TransactionalConnection);
     orgService = injector.get(BbbOrganizationService);
+    entitlementService = injector.get(BbbEntitlementService);
   },
 
   async createFulfillment(ctx, orders, lines, args) {
@@ -112,9 +113,8 @@ export const bbbFulfillmentHandler = new FulfillmentHandler({
         );
       }
 
-      // ── 2. Room enrollment ─────────────────────────────────────────────────
-      // Resolve the productVariantId from the order lines (already fetched above
-      // for the capacity grant, but guard against a missing line just in case).
+      // ── 2. Room entitlement (INV-003) ──────────────────────────────────────
+      // Resolve the productVariantId from the order lines.
       const orderLine = order.lines.find(
         (l) => String(l.id) === String(line.orderLineId),
       );
@@ -136,9 +136,7 @@ export const bbbFulfillmentHandler = new FulfillmentHandler({
               )
             : null;
 
-        // Resolve the buyer's customerId from the order — load explicitly to
-        // avoid `(order as any).customer?.id` being undefined when the relation
-        // is not eagerly loaded by the fulfillment caller.
+        // Resolve buyer's customerId
         const orderWithCustomer = await connection
           .getRepository(ctx, Order)
           .findOne({
@@ -154,36 +152,19 @@ export const bbbFulfillmentHandler = new FulfillmentHandler({
           continue;
         }
 
-        // Upsert: re-activate if a deactivated enrollment exists
-        const existing = await connection
-          .getRepository(ctx, BbbEnrollment)
-          .findOne({
-            where: { roomId: String(productAccess.room.id), customerId },
-          });
-
-        if (existing) {
-          const now = new Date();
-          existing.active = true;
-          existing.expiresAt = expiresAt;
-          existing.orderId = String(order.id);
-          existing.validFrom = now;
-          existing.validUntil = expiresAt ?? null;
-          await connection.getRepository(ctx, BbbEnrollment).save(existing);
-        } else {
-          await connection.getRepository(ctx, BbbEnrollment).save(
-            new BbbEnrollment({
-              room: productAccess.room,
-              roomId: String(productAccess.room.id),
-              customerId,
-              orderId: String(order.id),
-              active: true,
-              expiresAt,
-            }),
-          );
-        }
+        const now = new Date();
+        await entitlementService.create(ctx, {
+          type: "bbb_room",
+          resourceId: String(productAccess.room.id),
+          customerId,
+          source: "purchase",
+          validFrom: now,
+          validUntil: expiresAt,
+          channelId: (ctx.channelId as string) || null,
+        });
 
         Logger.info(
-          `BBB enrollment created: room=${productAccess.room.id} customerId=${customerId} orderId=${order.id}`,
+          `BBB entitlement created: room=${productAccess.room.id} customerId=${customerId} orderId=${order.id}`,
           loggerCtx,
         );
       }

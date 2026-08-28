@@ -90,7 +90,7 @@ export class BbbMeeting extends VendureEntity {
   @Column({ type: "varchar", nullable: true })
   attendeeJoinUrl: string | null;
 
-  @Column({ type: "timestamp", nullable: true })
+  @Column({ type: 'timestamp', nullable: true })
   attendeeJoinUrlExpiresAt: Date | null;
 
   // ─── FSM State ──────────────────────────────────────────────────────────

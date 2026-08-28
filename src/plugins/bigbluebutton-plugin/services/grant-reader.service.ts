@@ -37,23 +37,21 @@ export class GrantReaderService {
 
   /**
    * Resolve a grant by ID and source type.
-   * Phase 1: order and internal_overhead grants come from BbbCapacityGrant.
-   * Phase 2: subscription grants will come from RecurringCapacityGrant.
+   * Handles order, subscription (recurring), and internal_overhead grants.
    */
   async resolveGrantForMeeting(
     grantId: string,
     sourceType: "order" | "subscription" | "internal_overhead",
   ): Promise<CapacityGrantLike | null> {
-    if (sourceType === "order" || sourceType === "internal_overhead") {
-      const grant = await this.repo.findOneBy({ id: grantId });
-      return grant ? this.toLike(grant) : null;
+    const grant = await this.repo.findOneBy({ id: grantId });
+    if (!grant) return null;
+    if (grant.sourceType !== sourceType) {
+      Logger.warn(
+        `Grant ${grantId} sourceType mismatch: expected ${sourceType}, found ${grant.sourceType}`,
+        loggerCtx,
+      );
     }
-    // Phase 2: query RecurringCapacityGrant table
-    Logger.warn(
-      `RecurringCapacityGrant not yet implemented — Phase 2 (grantId=${grantId})`,
-      loggerCtx,
-    );
-    return null;
+    return this.toLike(grant);
   }
 
   /**

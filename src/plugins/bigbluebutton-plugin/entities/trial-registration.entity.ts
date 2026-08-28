@@ -29,6 +29,6 @@ export class BbbTrialRegistration extends VendureEntity {
   @Column()
   registeredAt: Date;
 
-  @Column({ type: "timestamp", nullable: true })
+  @Column({ type: 'timestamp', nullable: true })
   attendedAt: Date | null;
 }

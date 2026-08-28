@@ -133,7 +133,7 @@ export const shopApiExtensions = gql`
     myBbbRooms: [BbbRoomPublic!]!
     bbbRoomStatus(id: ID!): BbbRoomPublic
     myScheduledSessions: [BbbScheduledSessionPublic!]!
-    myBbbEnrollments: [BbbEnrollmentPublic!]!
+    myBbbEnrollments: [BbbEnrollmentPublic!]! @deprecated(reason: "Use myLearningDashboard or myBbbRooms backed by BbbEntitlement")
     myTrialRegistrations: [BbbTrialRegistrationPublic!]!
     publicScheduledSessions: [BbbScheduledSessionPublic!]!
     """

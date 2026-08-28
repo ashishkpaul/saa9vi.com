@@ -66,5 +66,8 @@ export const adminApiExtensions = gql`
 
     "Update an existing plan. SuperAdmin only."
     updateSubscriptionPlan(id: ID!, input: SubscriptionPlanInput!): SubscriptionPlan!
+
+    "Subscribe a channel to a plan. SuperAdmin only."
+    subscribeToPlan(channelId: String!, planId: ID!): OrganizationSubscription!
   }
 `;

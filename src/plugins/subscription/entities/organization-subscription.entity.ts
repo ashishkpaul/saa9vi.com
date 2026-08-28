@@ -1,6 +1,6 @@
 import type { DeepPartial } from "@vendure/common/lib/shared-types";
 import { Channel, ChannelAware, VendureEntity } from "@vendure/core";
-import { Column, Entity, JoinTable, ManyToMany, ManyToOne } from "typeorm";
+import { Column, Entity, Index, JoinTable, ManyToMany, ManyToOne } from "typeorm";
 import { SubscriptionPlan } from "./subscription-plan.entity";
 
 export type OrganizationSubscriptionStatus =
@@ -22,6 +22,7 @@ export type OrganizationSubscriptionStatus =
  * Dunning/retry mechanics reuse RFC-001 §4.2 patterns at org level.
  */
 @Entity("organization_subscription")
+@Index(["channelId"], { unique: true, where: '"status" != \'cancelled\'' })
 export class OrganizationSubscription extends VendureEntity implements ChannelAware {
   constructor(input?: DeepPartial<OrganizationSubscription>) {
     super(input);

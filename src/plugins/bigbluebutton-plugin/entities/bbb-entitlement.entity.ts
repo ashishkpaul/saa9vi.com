@@ -47,11 +47,11 @@ export class BbbEntitlement extends VendureEntity {
   source: EntitlementSource;
 
   /** Optional: when access begins. null = immediate */
-  @Column({ type: "timestamp", nullable: true })
+  @Column({ type: 'timestamp', nullable: true })
   validFrom: Date | null;
 
   /** Optional: when access expires. null = no expiration */
-  @Column({ type: "timestamp", nullable: true })
+  @Column({ type: 'timestamp', nullable: true })
   validUntil: Date | null;
 
   /** Channel isolation — scalar FK to Channel.id (not junction table) */

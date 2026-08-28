@@ -49,7 +49,7 @@ export class BbbRoom extends VendureEntity {
    * Last time BBB runtime was positively validated for the linked active meeting.
    * Used as a short TTL cache to avoid hammering isMeetingRunning() under load.
    */
-  @Column({ type: "timestamp", nullable: true })
+  @Column({ type: 'timestamp', nullable: true })
   lastRuntimeValidatedAt: Date | null;
 
   /** Optimistic lock version — prevents concurrent double-provisioning. */

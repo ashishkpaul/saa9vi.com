@@ -17,7 +17,7 @@ export class BbbCapacityAlertLog extends VendureEntity {
     super(input);
   }
 
-  @Column({ type: "timestamp" })
+  @Column()
   checkedAt: Date;
 
   /**
@@ -39,7 +39,7 @@ export class BbbCapacityAlertLog extends VendureEntity {
   peakForecastPercent: number;
 
   /** When the projected peak load is expected to occur (next 48 hours) */
-  @Column({ type: "timestamp", nullable: true })
+  @Column({ type: 'timestamp', nullable: true })
   peakForecastAt: Date | null;
 
   /** Plain English explanation of the recommendation */

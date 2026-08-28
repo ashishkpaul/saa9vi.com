@@ -1,29 +1,40 @@
-import { PluginCommonModule, Type, VendurePlugin } from '@vendure/core';
-
+import { PluginCommonModule, RuntimeVendureConfig, Type, VendurePlugin } from '@vendure/core';
+ 
 import { SUBSCRIPTION_PLUGIN_OPTIONS } from './constants';
 import { OrganizationSubscription } from './entities/organization-subscription.entity';
 import { SubscriptionPlan } from './entities/subscription-plan.entity';
 import { SubscriptionAdminResolver } from './api/subscription-admin.resolver';
 import { adminApiExtensions } from './api/schema/subscription-admin.schema';
 import { SubscriptionService } from './services/subscription.service';
+import { SubscriptionRenewalService } from './services/subscription-renewal.service';
+import { SubscriptionRenewalQueueService } from './services/subscription-renewal-queue.service';
+import { subscriptionRenewalTask } from './jobs/subscription-renewal.task';
 import { PluginInitOptions } from './types';
-
+ 
 @VendurePlugin({
     imports: [PluginCommonModule],
     entities: [SubscriptionPlan, OrganizationSubscription],
     providers: [
         { provide: SUBSCRIPTION_PLUGIN_OPTIONS, useFactory: () => SubscriptionPlugin.options },
         SubscriptionService,
+        SubscriptionRenewalService,
+        SubscriptionRenewalQueueService,
     ],
     adminApiExtensions: {
         schema: adminApiExtensions,
         resolvers: [SubscriptionAdminResolver],
     },
-    configuration: config => {
-        // Plugin-specific configuration
-        // such as custom fields, custom permissions,
-        // strategies etc. can be configured here by
-        // modifying the `config` object.
+    configuration: (config: RuntimeVendureConfig) => {
+        // Register the renewal task in the Vendure scheduler
+        const existingIds = new Set(
+            (config.schedulerOptions.tasks ?? []).map((t) => t.id),
+        );
+        if (!existingIds.has(subscriptionRenewalTask.id)) {
+            config.schedulerOptions.tasks = [
+                ...(config.schedulerOptions.tasks ?? []),
+                subscriptionRenewalTask,
+            ];
+        }
         return config;
     },
     compatibility: '^3.0.0',

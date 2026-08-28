@@ -51,7 +51,10 @@ import { GrantReaderService } from "./services/grant-reader.service";
 import { LearningDashboardService } from "./services/learning-dashboard.service";
 import { CapacityIntelligenceService } from "./services/capacity-intelligence.service";
 import { BbbPlatformCapacityPolicyService } from "./services/bbb-platform-capacity-policy.service";
+import { BbbJoinUrlService } from "./services/bbb-join-url.service";
+import { BbbProvisioningWorkerService } from "./services/bbb-provisioning-worker.service";
 import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.listener";
+import { BbbSubscriptionListener } from "./listeners/bbb-subscription.listener";
 
 import { PlatformTracingModule } from "../../platform/tracing/platform-tracing.module";
 import { CorrelationInterceptor } from "../../platform/tracing/correlation-interceptor";
@@ -130,8 +133,11 @@ import {
     GrantReaderService,
     LearningDashboardService,
     BbbPlatformCapacityPolicyService,
+    BbbJoinUrlService,
+    BbbProvisioningWorkerService,
     CapacityIntelligenceService,
     BbbOrderFulfillmentListener,
+    BbbSubscriptionListener,
   ],
 
   adminApiExtensions: {
