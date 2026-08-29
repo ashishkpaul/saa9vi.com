@@ -36,7 +36,7 @@ import { SubscriptionPlugin } from './plugins/subscription/subscription.plugin';
  */
 export const securityHeadersMiddleware = (req: any, res: any, next: any) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  // res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("X-XSS-Protection", "1; mode=block");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Permissions-Policy", "geolocation=(), camera=(), microphone=()");
@@ -57,23 +57,27 @@ const serverPort = 3000;
 
 export const config: VendureConfig = {
 apiOptions: {
-    hostname: "0.0.0.0",
+    // NOTE: Do NOT set `hostname` to a bind address like "0.0.0.0" — the GraphiQL
+    // plugin injects `window.GRAPHIQL_SETTINGS` with an absolute URL built from
+    // this value (see @vendure/graphiql-plugin graphiql.service.js createApiUrl),
+    // and browsers cannot connect to "0.0.0.0", producing "NetworkError when
+    // attempting to fetch resource". Leaving it unset makes GraphiQL use a
+    // RELATIVE API path, which is correct behind the nginx reverse proxy
+    // (core.meeting.lan) as well as for direct localhost access.
     port: serverPort,
     adminApiPath: "admin-api",
     shopApiPath: "shop-api",
 
-    // Trust proxy headers from Nginx (use true in dev, 1 proxy hop in production)
-    trustProxy: IS_DEV ? true : 1,
+    // Trust proxy headers from Nginx (use true for AI Studio proxy chain)
+    trustProxy: 1,
 
-    // Enable CORS to allow secure requests from your local domain infrastructure
+    // Enable permissive CORS for development to allow GraphiQL/Dashboard access via AI Studio proxy
     cors: {
-      origin: [
-        "https://core.meeting.lan",
-        "https://storefront.meeting.lan",
-        "http://localhost:5173", // Direct access fallback for local Vite dev
-      ],
+      origin: (origin: any, callback: any) => callback(null, true),
       credentials: true,
     },
+    adminApiPlayground: true,
+    shopApiPlayground: true,
 
     middleware: [
       {
@@ -208,9 +212,7 @@ apiOptions: {
     }),
     DashboardPlugin.init({
       route: "dashboard",
-      appDir: IS_DEV
-        ? path.join(__dirname, "../dist/dashboard")
-        : path.join(__dirname, "dashboard"),
+      appDir: path.join(__dirname, "../dist/dashboard"),
     }),
 
     TenantPlugin,

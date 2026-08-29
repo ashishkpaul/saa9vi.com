@@ -15,24 +15,24 @@ export class TenantProfile extends VendureEntity implements ChannelAware {
   @Column('varchar', { length: 255 })
   channelId: ID;
 
-  @Column()
+  @Column('varchar')
   businessName: string;
 
-  @Column({ nullable: true })
+  @Column('varchar', { nullable: true })
   tagline: string;
 
   @EntityId({ nullable: true })
   logoAssetId: ID;
 
-  @Column({ default: 'UTC' })
+  @Column('varchar', { default: 'UTC' })
   timezone: string;
 
-  @Column()
+  @Column('varchar')
   contactEmail: string;
 
-  @Column({ nullable: true, unique: true })
+  @Column('varchar', { nullable: true, unique: true })
   customDomain: string;
 
-  @Column({ default: false })
+  @Column('boolean', { default: false })
   onboardingComplete: boolean;
 }
