@@ -1,6 +1,6 @@
 # Roadmap
 
-> **Purpose:** Track future work only. Organized by phase. When work is completed, move it to release-notes.md.
+> **Purpose:** Track future work only. Organized by phase. When work is completed, move it to `release-notes.md`.
 
 ---
 
@@ -21,7 +21,7 @@
 
 ## Phase 1.5 — Trust Engine & Discovery
 
-**Status:** Complete (2026-08-23). All remaining blockers resolved.
+**Status:** Complete (2026-08-23). All remaining blockers resolved except the explicitly deferred Flow A e2e harness issue.
 
 ### Completed
 
@@ -35,28 +35,42 @@
 - [x] `myLearningDashboard` Shop API query
 - [x] Rate limiting on `registerNewTenant` mutation
 - [x] Custom domain → channel token Redis mapping
-- [x] **FEAT-002 schema migration** — verified already applied (Vendure CLI: no schema changes; `sourceType` + `isUnbounded` confirmed in DB)
+- [x] **FEAT-002 schema migration** — verified already applied (`sourceType` + `isUnbounded` confirmed in DB)
 - [x] **Next.js public instructor/CMS pages** — CMS page route (`/[locale]/page/[slug]`) added; instructor page already existed
 - [x] **Email verification for tenant admins** — `verifyTenantAdmin` Shop API mutation + unverified admin creation
-- [x] **End-to-end customer deletion test** — `customer-deletion.e2e-spec.ts` covering Flow A + Flow B across BBB/Tenant/Reviews. **⚠ 2 Flow A tests remain blocked** by a test-harness auth issue (Shop API customer session doesn't resolve tenant channel in the isolated e2e schema); production paths correct + TS-verified. Tracked separately (see Phase 2 — deferred).
+- [x] **End-to-end customer deletion test** — covers Flow A + Flow B across BBB/Tenant/Reviews. **2 Flow A tests remain blocked** by a test-harness auth issue; production paths are correct + TypeScript-verified.
 - [x] **Load estimation ratios tuning** — PILOS ratios configurable via `BigBlueButtonPluginOptions` + env vars
 
 ---
 
 ## Phase 2 — Subscription Billing & Capacity Policy
 
-- [x] `SubscriptionPlan` and `OrganizationSubscription` entities — implemented via `SubscriptionPlugin` (`src/plugins/subscription/`); platform-global plan catalogue + channel-scoped org subscriptions (ADR-003 dual pattern). Admin API: `subscriptionPlans`, `organizationSubscriptions`, `createSubscriptionPlan`, `updateSubscriptionPlan`. Migration `1787547472479` generated + applied via Vendure CLI.
-- [x] `BbbPlatformCapacityPolicy` entity — platform-level BBB capacity limits controlled by Portal Admin. Admin API: `upsertPlatformCapacityPolicy`, `platformCapacityPolicies`, `effectiveCapacityPolicy`.
-- [x] Plan-based capacity tiers (Starter: 50, Growth: 200, Enterprise: 500 default room capacity) — implemented as DATA rows on `BbbPlatformCapacityPolicy` keyed by `subscriptionPlanId` (`PLAN_TIER_DEFAULTS` in `bbb-platform-capacity-policy.service.ts` records the ADR-031 table for seeding/dashboard presets). Tier values are Portal-Admin-created policy rows, not code branches.
-- [x] `BbbRoom.maxParticipants` set from policy default on creation, tenant can increase up to `maxRoomCapacity` — `BbbRoomService.create()` resolves effective policy (plan-matched → platform-default → fallback) and clamps; **opt-in adoption**: with zero policy rows, legacy INV-014 behavior is preserved. Admin API: `upsertPlatformCapacityPolicy`, `platformCapacityPolicies`, `effectiveCapacityPolicy` (Portal infrastructure permission).
-- [x] `BbbOrganization.maxParticipantsPerMeeting` becomes denormalized cache of policy limit — write-through sync on org creation and on room provisioning (`syncOrganizationCache`, cache = effective `maxRoomCapacity` so INV-014's rejection criterion still holds).
-- [x] Portal Admin dashboard for capacity policy management — UI routes added to platform-dashboard, API implemented.
-- [x] **`BbbCapacityGrant.sourceType` discriminator** — column + union type exist (FEAT-002); `BbbSubscriptionListener` now idempotently writes `sourceType: "subscription"` grants upon `SubscriptionRenewedEvent`.
-- [x] Monthly invoice generation job — simulated via `SubscriptionInvoicePaidEvent` publication in the `SubscriptionRenewalService` background worker.
-- [x] **Juspay recurring billing foundation** — Step 0 BuyLits reference analysis (`reference/buylits/`, port-pattern-not-files); Step 1 vestigial surface inventory; Step 2 entities `JuspaySubscriptionMandate` (FSM `pending→active→paused|revoked`, partial unique index enforcing one current mandate per subscription), `JuspayPaymentAttempt` (INV-019 stateful attempt ledger with scalar `channelId` isolation), `JuspayWebhookEvent` (INV-004 PENDING→PROCESSED lifecycle + period-aware `dedupeKey` `juspay:{event_type}:{mandateId}:{billingPeriodStart}`); migrations `1788058421475` + `1788059200478` generated via Vendure CLI and applied. Renewal state model corrected: CLAIM CAS → attempt → charge → FINALIZE CAS — period advancement only on payment success; finalize conflict after a successful charge is a logged operator reconciliation incident. INV-019 registered in `invariants.md`.
-- [ ] Juspay webhook ingestion (Step 3) — fail-closed Basic Auth + HMAC-SHA256 over raw body, persist-before-process, BullMQ processor reconciling existing attempts
-- [ ] Juspay real recurring charge (Step 4) — SDK mandate endpoints, failure-path tests first, operator-visible reconciliation state for finalize conflicts
-- [ ] Juspay Portal Admin surface (Step 5) — read-only mandate status + payment-attempt ledger
+### Subscription and capacity policy — complete
+
+- [x] `SubscriptionPlan` and `OrganizationSubscription` entities — platform-global plan catalogue + channel-scoped organization subscriptions.
+- [x] `BbbPlatformCapacityPolicy` entity and Portal Admin API — `upsertPlatformCapacityPolicy`, `platformCapacityPolicies`, `effectiveCapacityPolicy`.
+- [x] Plan-based capacity tiers — Starter 50 / Growth 200 / Enterprise 500 default room capacity, represented as policy data rows keyed by `subscriptionPlanId`, not hard-coded control-flow branches.
+- [x] `BbbRoom.maxParticipants` policy enforcement — effective policy resolved on room creation; tenant value may not exceed the policy ceiling. Zero policy rows preserve legacy INV-014 behaviour.
+- [x] `BbbOrganization.maxParticipantsPerMeeting` write-through policy cache — synchronized from effective policy during organization creation / room provisioning.
+- [x] Portal Admin capacity-policy dashboard and infrastructure permission boundary.
+- [x] `BbbCapacityGrant.sourceType` discriminator and subscription-sourced grants on `SubscriptionRenewedEvent`.
+- [x] Monthly subscription invoice-generation path — current implementation publishes `SubscriptionInvoicePaidEvent` from the renewal worker; provider-backed settlement is the Juspay work below.
+
+### Juspay recurring billing — implementation complete; production gates pending
+
+- [x] Step 0 — BuyLits reference analysis (`reference/buylits/`; port patterns, not files).
+- [x] Step 1 — vestigial Juspay surface inventory and subscription-aware integration seam.
+- [x] Step 2 — `JuspaySubscriptionMandate`, `JuspayPaymentAttempt` (INV-019), `JuspayWebhookEvent`, `JuspayWebhookEndpoint`, reconciliation incident record; migrations generated/applied.
+- [x] Step 2 — renewal CLAIM CAS → attempt → charge → FINALIZE CAS state model.
+- [x] Step 2 — mandate cardinality and payment-attempt channel isolation.
+- [x] **Step 3 — webhook ingestion** — fail-closed Basic Auth + HMAC, raw-body verification, persist-before-process, BullMQ processing, idempotent existing-attempt reconciliation, and per-tenant endpoint routing.
+- [x] **Step 4 — recurring charge implementation** — SDK boundary, mandate charge initiation, asynchronous `initiated` semantics, webhook-authoritative terminal result, success finalization, failure `past_due`, and reconciliation incident handling.
+- [ ] **Provider-contract verification gate** — verify exact sandbox/live mandate, charge, webhook event, signature, idempotency, retry, order-ID and transaction-ID contracts before production use.
+- [ ] **Step 5 — Portal Admin billing surface** — read-only mandate status, payment-attempt ledger, webhook/reconciliation incidents, operational filters.
+- [ ] **Step 6 — production hardening** — encrypt stored webhook credentials, final secrets review, production credential validation, regression/e2e coverage.
+
+### Remaining Phase 2 product/platform work
+
 - [ ] Tenant onboarding flow in storefront
 - [ ] `NavigationMenu` entity in CMS
 - [ ] Banner BullMQ scheduling (CMS-002)
@@ -116,16 +130,15 @@
 
 ## Deferred / Tracked Items
 
-> **Purpose:** Consciously-deferred work that was flagged for tracking but not yet scheduled into a phase. Kept visible so it isn't silently carried across releases. Status: **open.**
-
 **Storefront channel-isolation cache gaps** (`nextjs-starter-vendure`)
-- [ ] `getActiveChannelCached()` / `getAvailableCountriesCached()` (`lib/vendure/cached.ts`) still resolve channel token from env-var fallback, not per-request header. Fix pattern already established in the same file (dynamic-outer / cached-inner split used for product, collection, layout data).
-- [ ] `cart.tsx`'s `'use cache: private'` block tags only `cacheTag('cart')` — no channel dimension. Lower risk (private scope is per-user) but should align with the rest of the caching strategy.
-
-These are the same channel-isolation class as BUG-031 / INV-001. **Why tracked here:** new subscription-billing data paths should be built against a codebase where the channel-cache pattern is 100% consistent (not 90%).
+- [ ] `getActiveChannelCached()` / `getAvailableCountriesCached()` still resolve channel token from env-var fallback, not per-request header.
+- [ ] `cart.tsx` private cache tags do not include a channel dimension; lower risk because the scope is per-user.
 
 **Storefront template contract Phase A — ESLint guardrail** (`nextjs-starter-vendure`)
-- [ ] The Storefront Template Contract's §4a lint guardrail (two ESLint rules) is unimplemented: `eslint.config.mjs` is still just Next.js defaults (`eslint-config-next/typescript`), no custom rules. **Sequence:** land the §4a rules *before* the Phase 2 "Tenant onboarding flow in storefront" surface work, so new storefront surface area is protected by the mechanical channel-isolation checks first. See `nextjs-starter-vendure/docs/adr/storefront-template-contract.md` (cross-repo; the backend's `docs/what-next.md` points to it).
+- [ ] §4a lint guardrail remains unimplemented. Land the mechanical channel-isolation checks before expanding storefront onboarding.
 
-**Blocked Flow A e2e tests** (tracked ticket)
-- [ ] 2 Flow A tests in `customer-deletion.e2e-spec.ts` remain blocked by a test-harness auth issue (Shop API customer session doesn't resolve tenant channel in the isolated e2e schema). Production code is correct + TypeScript-verified. Deferred so it doesn't become silently permanent once Phase 2 attention moves elsewhere.
+**Blocked Flow A e2e tests**
+- [ ] 2 tests remain blocked by the isolated-e2e Shop API customer-session/channel-resolution harness issue. Production code is TypeScript-verified.
+
+**Development infrastructure verification**
+- [ ] Local PostgreSQL tunnel (`127.0.0.1:5435`) and Redis tunnel (`127.0.0.1:6385`) must be reachable before runtime verification. If either is unavailable, the application intentionally falls back to pg-mem / `DefaultJobQueuePlugin`; that fallback is suitable for development diagnostics, not production verification.
