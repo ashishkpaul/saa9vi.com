@@ -6,7 +6,6 @@ import {
   RequestContextService,
   TransactionalConnection,
 } from "@vendure/core";
-import { LessThan, In } from "typeorm";
 import { OrganizationSubscription } from "../entities/organization-subscription.entity";
 import { JuspaySubscriptionMandate } from "../entities/juspay-subscription-mandate.entity";
 import { JuspayPaymentAttempt } from "../entities/juspay-payment-attempt.entity";
@@ -41,22 +40,77 @@ export class SubscriptionRenewalService {
   ) {}
 
   /**
+   * How long the discovery scan waits before considering an in-flight
+   * ("initiated") charge attempt "abandoned" and re-discovering the
+   * subscription for a retry charge.
+   *
+   * Default is 1 hour — well beyond normal Juspay webhook latency (seconds
+   * to a few minutes). This is the subscription-billing equivalent of
+   * BbbReconciliationService.stuckProvisioningTimeoutMs (5 min for BBB).
+   * Configurable via SUBSCRIPTION_CHARGE_ABANDON_TIMEOUT_MS.
+   */
+  private get chargeAbandonmentTimeoutMs(): number {
+    return Number(process.env.SUBSCRIPTION_CHARGE_ABANDON_TIMEOUT_MS ?? 3_600_000);
+  }
+
+  /**
    * Scans for subscriptions that have passed their currentPeriodEnd and
    * enqueues them for background processing.
+   *
+   * SCOPE NOTE: subscriptions in "past_due" are intentionally excluded —
+   * recovery from past_due (dunning retry, grace-period notification,
+   * eventual cancellation) is deferred to a separate dunning job per
+   * RFC-001 §4.2. This scan only discovers "active"/"trialing" subscriptions
+   * that need their billing period advanced or re-attempted for the
+   * upcoming cycle.
    */
   async processRenewals(): Promise<{ enqueued: number; failures: number }> {
     const now = new Date();
-    
-    // Find subscriptions that are due for renewal.
-    const subscriptionsToRenew = await this.connection.rawConnection
+    const chargeTimeout = new Date(now.getTime() - this.chargeAbandonmentTimeoutMs);
+
+    /**
+     * Discovery exclusion: do NOT rediscover subscriptions that already have
+     * an in-flight ("initiated") charge attempt within the abandonment window.
+     *
+     * This prevents the 10-minute scan from re-firing a charge while a webhook
+     * is still outstanding to confirm (or deny) the first one. The CLAIM CAS
+     * in executeRenewal() provides the hard anti-double-charge guarantee; this
+     * filter avoids unnecessary BullMQ job enqueues and misleading CAS_CONFLICT
+     * log noise.
+     *
+     * Pattern mirrors BbbReconciliationService.reconcileProvisioning(): a
+     * resource still progressing toward a terminal status within the timeout
+     * is left alone; one that has exceeded the timeout is eligible for
+     * re-processing (treated as abandoned).
+     */
+    const inFlightAttemptRows = await this.connection.rawConnection
+      .getRepository(JuspayPaymentAttempt)
+      .createQueryBuilder("attempt")
+      .select("DISTINCT attempt.subscriptionId", "subscriptionId")
+      .where("attempt.status = :status", { status: "initiated" })
+      .andWhere("attempt.attemptedAt >= :chargeTimeout", { chargeTimeout })
+      .getRawMany();
+
+    const inFlightSubIds = inFlightAttemptRows
+      .map((row) => row.subscriptionId)
+      .filter((id): id is string => id != null);
+
+    let query = this.connection.rawConnection
       .getRepository(OrganizationSubscription)
-      .find({
-        where: {
-          currentPeriodEnd: LessThan(now),
-          status: In(["active", "trialing"]),
-        },
-        select: ["id"],
+      .createQueryBuilder("sub")
+      .select(["sub.id"])
+      .where("sub.currentPeriodEnd < :now", { now })
+      .andWhere("sub.status IN (:...statuses)", {
+        statuses: ["active", "trialing"],
       });
+
+    if (inFlightSubIds.length > 0) {
+      query = query.andWhere("sub.id NOT IN (:...inFlightIds)", {
+        inFlightIds: inFlightSubIds,
+      });
+    }
+
+    const subscriptionsToRenew = await query.getMany();
 
     let enqueued = 0;
     let failures = 0;
@@ -254,87 +308,17 @@ export class SubscriptionRenewalService {
     }
 
     // Phase 4 — FINALIZE CAS: period advancement ONLY on payment success.
-    const finalizeResult = await this.connection.rawConnection
-      .createQueryBuilder()
-      .update(OrganizationSubscription)
-      .set({
-        version: claimedVersion + 1,
-        currentPeriodStart: newPeriodStart,
-        currentPeriodEnd: newPeriodEnd,
-        status: "active",
-      })
-      .where("id = :id AND version = :version", {
-        id: sub.id,
-        version: claimedVersion,
-      })
-      .execute();
-
-    if (finalizeResult.affected !== 1) {
-      /**
-       * DANGEROUS WINDOW HIT (Step 4D): the charge succeeded but the finalize
-       * CAS lost (another worker claimed between phases, or manual state edit).
-       * Money has moved; the period has not advanced. Record an operator-visible
-       * reconciliation incident — never an automatic retry (that would double-charge).
-       */
-      await this.recordReconciliationRequired(sub, sub.channelId, invoiceId, charge.juspayOrderId);
-      this.logger.error(
-        `FINALIZE CONFLICT for subscription ${sub.id}: charge ${invoiceId} succeeded but period was not advanced. MANUAL RECONCILIATION REQUIRED.`,
-        loggerCtx,
-      );
-      return RenewalResult.CAS_CONFLICT;
-    }
-
-    // Fix BUG-021-style channel resolution: create() expects token or entity, not raw ID.
-    const channel = await this.connection.rawConnection
-      .getRepository(Channel)
-      .findOne({ where: { id: sub.channelId } });
-
-    if (!channel) {
-      /**
-       * CRITICAL: Channel missing (INV-018 / BUG-021 class).
-       * Ownership was claimed but the period has NOT advanced and no charge
-       * was made — the next scan will retry cleanly with the new version.
-       */
-      this.logger.error(
-        `Channel ${sub.channelId} not found for subscription ${sub.id}. Renewal claimed but not executed; will retry on next scan.`,
-        loggerCtx,
-      );
-      return RenewalResult.CHANNEL_NOT_FOUND;
-    }
-
-    const ctx = await this.requestContextService.create({
-      apiType: "admin",
-      channelOrToken: channel, // Passing the entity is safe and avoids token-lookup failure
-    });
-
-    // 1. Publish Renewed Event (Triggers BbbSubscriptionListener → minutes grant)
-    this.eventBus.publish(
-      new SubscriptionRenewedEvent(
-        ctx,
-        sub,
-        sub.channelId,
-        newPeriodStart,
-        newPeriodEnd,
-        sub.plan.includedBbbMinutes,
-      ),
+    // Delegates to the shared finalizeRenewalPeriod() — both the worker
+    // (this path) and the webhook (finalizeAfterPayment) call it to prevent
+    // finalize-logic drift (INV-019).
+    return this.finalizeRenewalPeriod(
+      sub,
+      claimedVersion,
+      invoiceId,
+      charge.juspayOrderId,
+      newPeriodStart,
+      newPeriodEnd,
     );
-
-    // 2. Publish Invoice Paid Event (Future-proofing for accounting/tax/Juspay reconciliation)
-    this.eventBus.publish(
-      new SubscriptionInvoicePaidEvent(
-        ctx,
-        sub,
-        invoiceId,
-        sub.plan.monthlyPriceInPaise,
-      ),
-    );
-
-    Logger.info(
-      `Renewed subscription ${sub.id} for channel ${sub.channelId} (New Period: ${newPeriodStart.toISOString()} -> ${newPeriodEnd.toISOString()})`,
-      loggerCtx,
-    );
-
-    return RenewalResult.SUCCESS;
   }
 
   /**
@@ -367,7 +351,7 @@ export class SubscriptionRenewalService {
         return RenewalResult.SUBSCRIPTION_NOT_FOUND;
     }
 
-    /**
+        /**
      * The renewal worker's Phase 1 CLAIM already incremented `version` from
      * its original value to original+1. finalizeAfterPayment does NOT perform
      * its own CLAIM — it must guard on the loaded version (= original+1, the
@@ -391,82 +375,135 @@ export class SubscriptionRenewalService {
     const newPeriodEnd = new Date(oldPeriodEnd);
     newPeriodEnd.setMonth(newPeriodEnd.getMonth() + 1);
 
-    // FINALIZE CAS: period advancement + status, guarded on the current
-    // (already-claimed) version. A lost CAS means another writer already
-    // finalized — record a reconciliation incident (Step 4D).
+    // FINALIZE CAS: shared handler — both worker and webhook paths delegate
+    // to finalizeRenewalPeriod(). The webhook path guards on the loaded
+    // sub.version (= V+1 after the worker's Phase 1 CLAIM) and advances to V+2.
+    return this.finalizeRenewalPeriod(
+        sub,
+        oldVersion,
+        attempt.invoiceId,
+        attempt.juspayOrderId ?? "",
+        newPeriodStart,
+        newPeriodEnd,
+    );
+  }
+
+  /**
+   * Shared Phase 4 FINALIZE CAS handler — advances the billing period on a
+   * successfully charged subscription. Called by both:
+   * - executeRenewal() (synchronous simulation path), and
+   * - finalizeAfterPayment() (async webhook-driven path).
+   *
+   * WHY SHARED: the worker and webhook paths were previously duplicated here
+   * line-for-line, which is exactly the drift pattern that birthed the INV-019
+   * "stateful attempt record" model (see JuspayPaymentAttemptService.transition).
+   * Both call sites now delegate to this single method to guarantee identical
+   * finalization semantics regardless of which writer wins the CAS.
+   *
+   * The caller passes `guardVersion` — the version it expects to find in the
+   * DB. For the worker this is `claimedVersion` (= V+1 after Phase 1 CLAIM);
+   * for the webhook this is the freshly-loaded `sub.version` (also V+1). Both
+   * advance to V+2. Only one wins; the loser gets affected=0 and a
+   * reconciliation incident is recorded (Step 4D).
+   */
+  private async finalizeRenewalPeriod(
+    sub: OrganizationSubscription,
+    guardVersion: number,
+    invoiceId: string,
+    juspayOrderId: string,
+    newPeriodStart: Date,
+    newPeriodEnd: Date,
+  ): Promise<RenewalResult> {
     const finalizeResult = await this.connection.rawConnection
-        .createQueryBuilder()
-        .update(OrganizationSubscription)
-        .set({
-            version: oldVersion + 1,
-            currentPeriodStart: newPeriodStart,
-            currentPeriodEnd: newPeriodEnd,
-            status: "active",
-        })
-        .where("id = :id AND version = :version", {
-            id: sub.id,
-            version: oldVersion,
-        })
-        .execute();
+      .createQueryBuilder()
+      .update(OrganizationSubscription)
+      .set({
+        version: guardVersion + 1,
+        currentPeriodStart: newPeriodStart,
+        currentPeriodEnd: newPeriodEnd,
+        status: "active",
+      })
+      .where("id = :id AND version = :version", {
+        id: sub.id,
+        version: guardVersion,
+      })
+      .execute();
 
     if (finalizeResult.affected !== 1) {
-        /**
-         * DANGEROUS WINDOW HIT (Step 4D): the charge succeeded but the finalize
-         * CAS lost (another worker claimed between phases, or manual state edit).
-         * Money has moved; the period has not advanced. Record an operator-visible
-         * reconciliation incident — never an automatic retry (that would double-charge).
-         */
-        await this.recordReconciliationRequired(sub, sub.channelId, attempt.invoiceId, attempt.juspayOrderId ?? "");
-        this.logger.error(
-            `FINALIZE CONFLICT for subscription ${sub.id}: charge ${attempt.invoiceId} succeeded but period was not advanced. MANUAL RECONCILIATION REQUIRED.`,
-            loggerCtx,
-        );
-        return RenewalResult.CAS_CONFLICT;
+      /**
+       * DANGEROUS WINDOW HIT (Step 4D): the charge succeeded but the finalize
+       * CAS lost (another worker finalized between phases, or manual state edit).
+       * Money has moved; the period has not advanced. Record an operator-visible
+       * reconciliation incident — never an automatic retry (that would
+       * double-charge).
+       */
+      await this.recordReconciliationRequired(sub, sub.channelId, invoiceId, juspayOrderId);
+      this.logger.error(
+        `FINALIZE CONFLICT for subscription ${sub.id}: charge ${invoiceId} succeeded but period was not advanced. MANUAL RECONCILIATION REQUIRED.`,
+        loggerCtx,
+      );
+      return RenewalResult.CAS_CONFLICT;
     }
 
-    // Resolve the channel for RequestContext creation (BUG-021 fix).
+    // Resolve the channel for RequestContext creation (BUG-021 fix):
+    // create() expects a token or entity, not a raw ID.
     const channel = await this.connection.rawConnection
-        .getRepository(Channel)
-        .findOne({ where: { id: sub.channelId } });
+      .getRepository(Channel)
+      .findOne({ where: { id: sub.channelId } });
 
     if (!channel) {
-        this.logger.error(
-            `Channel ${sub.channelId} not found for subscription ${sub.id}. Renewal claimed but not executed; will retry on next scan.`,
-            loggerCtx,
-        );
-        return RenewalResult.CHANNEL_NOT_FOUND;
+      /**
+       * CRITICAL: Channel missing (INV-018 / BUG-021 class). The period WAS
+       * advanced (version incremented), but the event-publishing context
+       * cannot be constructed. This is a reconciliation gap — the subscription
+       * is now in 'active' with an advanced period but no SubscriptionRenewedEvent
+       * was emitted (so BBB minutes were not granted). The next scan will NOT
+       * reprocess this (currentPeriodEnd is in the future), so this requires
+       * an operator-visible reconciliation incident.
+       */
+      await this.recordReconciliationRequired(
+        sub,
+        sub.channelId,
+        invoiceId,
+        juspayOrderId,
+      );
+      this.logger.error(
+        `Channel ${sub.channelId} not found for subscription ${sub.id} AFTER finalize CAS won — period advanced but events not published. MANUAL RECONCILIATION REQUIRED.`,
+        loggerCtx,
+      );
+      return RenewalResult.CHANNEL_NOT_FOUND;
     }
 
     const ctx = await this.requestContextService.create({
-        apiType: "admin",
-        channelOrToken: channel,
+      apiType: "admin",
+      channelOrToken: channel,
     });
 
     // 1. Publish Renewed Event (Triggers BbbSubscriptionListener → minutes grant)
     this.eventBus.publish(
-        new SubscriptionRenewedEvent(
-            ctx,
-            sub,
-            sub.channelId,
-            newPeriodStart,
-            newPeriodEnd,
-            sub.plan.includedBbbMinutes,
-        ),
+      new SubscriptionRenewedEvent(
+        ctx,
+        sub,
+        sub.channelId,
+        newPeriodStart,
+        newPeriodEnd,
+        sub.plan.includedBbbMinutes,
+      ),
     );
 
     // 2. Publish Invoice Paid Event (Future-proofing for accounting/tax/Juspay reconciliation)
     this.eventBus.publish(
-        new SubscriptionInvoicePaidEvent(
-            ctx,
-            sub,
-            attempt.invoiceId,
-            sub.plan.monthlyPriceInPaise,
-        ),
+      new SubscriptionInvoicePaidEvent(
+        ctx,
+        sub,
+        invoiceId,
+        sub.plan.monthlyPriceInPaise,
+      ),
     );
 
     Logger.info(
-        `Finalized renewal for subscription ${sub.id} for channel ${sub.channelId} (New Period: ${newPeriodStart.toISOString()} -> ${newPeriodEnd.toISOString()})`,
-        loggerCtx,
+      `Finalized renewal for subscription ${sub.id} for channel ${sub.channelId} (New Period: ${newPeriodStart.toISOString()} -> ${newPeriodEnd.toISOString()})`,
+      loggerCtx,
     );
 
     return RenewalResult.SUCCESS;
@@ -498,11 +535,21 @@ export class SubscriptionRenewalService {
       loggerCtx,
     );
   }
-
   /**
    * Marks a subscription as past_due after a failed charge. The period is
    * NOT advanced — the next renewal scan will retry with a new attempt.
    * Uses CAS on version to avoid clobbering concurrent state changes.
+   *
+   * SCOPE NOTE: Once a subscription is past_due, processRenewals() will
+   * NOT rediscover it (the discovery query filters on status IN
+   * ('active','trialing')). Recovery from past_due — dunning retry schedule,
+   * grace-period notification, eventual cancellation — is intentionally
+   * deferred to a separate dunning job per RFC-001 §4.2. The
+   * "subscription-renewal" scheduled task description mentions "dunning
+   * cycles" as an aspirational target; this method does NOT implement
+   * dunning. A past_due subscription stays stranded until the dunning job
+   * (or an admin action) is built. This is a deliberate scope decision,
+   * not an oversight.
    */
   private async markSubscriptionPastDue(
     subscription: OrganizationSubscription,

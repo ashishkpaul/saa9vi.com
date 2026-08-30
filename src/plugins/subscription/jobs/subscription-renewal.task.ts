@@ -9,7 +9,7 @@ const loggerCtx = "SubscriptionRenewalTask";
  */
 export const subscriptionRenewalTask = new ScheduledTask({
   id: "subscription-renewal",
-  description: "Process organization subscription renewals and dunning cycles",
+  description: "Discover and enqueue subscription renewals (dunning: deferred to RFC-001 §4.2)",
   schedule: (cron) => cron.every(10).minutes(),
   async execute({ injector }) {
     const renewalService = injector.get(SubscriptionRenewalService);
