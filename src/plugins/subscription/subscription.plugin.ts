@@ -3,6 +3,9 @@ import { PluginCommonModule, RuntimeVendureConfig, Type, VendurePlugin } from '@
 import { SUBSCRIPTION_PLUGIN_OPTIONS } from './constants';
 import { OrganizationSubscription } from './entities/organization-subscription.entity';
 import { SubscriptionPlan } from './entities/subscription-plan.entity';
+import { JuspaySubscriptionMandate } from './entities/juspay-subscription-mandate.entity';
+import { JuspayPaymentAttempt } from './entities/juspay-payment-attempt.entity';
+import { JuspayWebhookEvent } from './entities/juspay-webhook-event.entity';
 import { SubscriptionAdminResolver } from './api/subscription-admin.resolver';
 import { adminApiExtensions } from './api/schema/subscription-admin.schema';
 import { SubscriptionService } from './services/subscription.service';
@@ -13,7 +16,7 @@ import { PluginInitOptions } from './types';
  
 @VendurePlugin({
     imports: [PluginCommonModule],
-    entities: [SubscriptionPlan, OrganizationSubscription],
+    entities: [SubscriptionPlan, OrganizationSubscription, JuspaySubscriptionMandate, JuspayPaymentAttempt, JuspayWebhookEvent],
     providers: [
         { provide: SUBSCRIPTION_PLUGIN_OPTIONS, useFactory: () => SubscriptionPlugin.options },
         SubscriptionService,

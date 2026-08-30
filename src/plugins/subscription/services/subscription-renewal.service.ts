@@ -121,7 +121,10 @@ export class SubscriptionRenewalService {
     }
 
     /**
-     * PROD SEAM: Juspay Billing Path (INV-018 / INV-023).
+     * PROD SEAM: Juspay Billing Path (INV-018; payment-attempt ledger
+     * invariant will be registered as INV-019 in docs/architecture/invariants.md
+     * when the Juspay integration lands — do NOT cite INV-023, it was never
+     * registered; see known-bugs.md drift class).
      * In a real environment, this is where we'd call the Juspay API.
      * For now, we simulate a successful charge.
      */
@@ -134,7 +137,7 @@ export class SubscriptionRenewalService {
 
     if (!channel) {
       /**
-       * CRITICAL: Channel missing (INV-018 / BUG-033).
+       * CRITICAL: Channel missing (INV-018 / BUG-021 class).
        * The subscription period has already advanced in the DB via CAS!
        * This needs manual investigation as side effects (grants/invoices) failed.
        */
