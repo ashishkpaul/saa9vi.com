@@ -1,102 +1,132 @@
-# What Next — Saa9vi Platform: Cline Development Prompt
+# What Next — Saa9vi Platform
 
-**Generated:** 2026-08-10
-**Based on:** All plugin codebases, Vendure live docs, current release state (v1.12)
-
----
+**Updated:** 2026-08-30
 
 ## Documentation Architecture
 
-The documentation has been refactored into focused documents:
-
 | Directory | Document | Purpose |
 |---|---|---|
-| `docs/architecture/` | `platform-adr.md` | Enduring architectural decisions only |
-| `docs/architecture/` | `domain-model.md` | Every aggregate, its purpose, lifecycle, relationships |
-| `docs/architecture/` | `plugin-map.md` | Plugin ownership, entities, events, API surfaces |
-| `docs/architecture/` | `runtime-flow.md` | Event-driven flows, service interactions, queues |
-| `docs/architecture/` | `invariants.md` | Non-negotiable rules (INV-001 through INV-015) |
-| `docs/product/` | `platform-story.md` | Capability-based actor lifecycles |
-| `docs/product/` | `glossary.md` | Domain term definitions |
-| `docs/implementation/` | `roadmap.md` | Future work only, by phase |
+| `docs/architecture/` | `platform-adr.md` | Enduring architectural decisions |
+| `docs/architecture/` | `domain-model.md` | Aggregates, lifecycles, relationships |
+| `docs/architecture/` | `plugin-map.md` | Plugin ownership and API surfaces |
+| `docs/architecture/` | `runtime-flow.md` | Event-driven flows and queues |
+| `docs/architecture/` | `invariants.md` | Non-negotiable platform rules |
+| `docs/product/` | `platform-story.md` | Actor/capability lifecycles |
+| `docs/product/` | `glossary.md` | Domain terminology |
+| `docs/implementation/` | `roadmap.md` | Future work only |
 | `docs/implementation/` | `known-bugs.md` | Active and fixed bugs |
-| `docs/implementation/` | `release-notes.md` | Completed work, chronologically |
+| `docs/implementation/` | `release-notes.md` | Completed work |
 
 ---
 
-## Current State (v1.14 — 2026-08-30)
+## Current State — 2026-08-30
 
-Recent completions (see `release-notes.md`):
+### Verified complete
 
-- **Juspay recurring billing foundation** — Step 0–2 complete: mandate/payment-attempt/webhook entities + migrations, renewal claim/finalize state model, INV-019 registered, BuyLits reference analyzed (`reference/buylits/`). Remaining: Step 3 webhook ingestion, Step 4 real charge, Step 5 admin surface.
-- **Phase 1.5 blockers resolved** — all five remaining blockers closed:
-  - FEAT-002 schema migration — verified already applied (Vendure CLI: no schema changes; `sourceType` + `isUnbounded` confirmed in DB)
-  - Next.js public instructor/CMS pages — CMS page route (`/[locale]/page/[slug]`) added; instructor page already existed
-  - Email verification for tenant admins — `verifyTenantAdmin` Shop API mutation + unverified admin creation
-  - End-to-end customer deletion test — `customer-deletion.e2e-spec.ts` covering Flow A + Flow B across BBB/Tenant/Reviews
-  - Load estimation ratios tuning — PILOS ratios configurable via `BigBlueButtonPluginOptions` + env vars
-- BUG-022 (entitlement/enrollment read mismatch) — fixed
-- BUG-023 (marketplace indexer redirect fields) — fixed
-- BUG-024 (auto-provision shipping/payment/stock) — fixed
-- BUG-025 / BUG-026 (role & administrator visibility) — fixed
-- BUG-027 (pendingReviewRequests `undefined` options) — fixed
-- BUG-028 (Academy Console permission names) — fixed
-- BUG-029 (BBB platform infrastructure boundary) — fixed
-- BUG-030 (tenant admin role channel relations) — fixed
-- BUG-031 (CMS channel ownership leak) — fixed
-- `myLearningDashboard` Shop API query — complete
-- `GrantReaderService` — implemented
-- Capacity Intelligence System (CI-001 to CI-006) — implemented
-- Tenant role reconciliation tooling (`tenant:roles:check` / `tenant:roles:repair`) — added
-- E2E suite: 44 tests passing
+- TypeScript build succeeds (`npm run build`).
+- Vendure starts successfully on v3.6.5.
+- SubscriptionPlan / OrganizationSubscription foundation is implemented.
+- BbbPlatformCapacityPolicy and plan-based capacity enforcement are implemented.
+- Capacity policy Portal Admin API/dashboard is implemented.
+- Juspay recurring billing Steps 0–4 implementation is present:
+  - mandate/payment-attempt/webhook entities;
+  - INV-019 payment-attempt ledger semantics;
+  - renewal CLAIM → ATTEMPT → CHARGE → FINALIZE state model;
+  - fail-closed webhook authentication and raw-body verification;
+  - persist-before-process webhook ingestion;
+  - BullMQ webhook processing;
+  - per-tenant webhook endpoints;
+  - webhook reconciliation of the existing initiated attempt;
+  - asynchronous real-charge semantics (`initiated` is not payment success);
+  - terminal success is webhook-authoritative;
+  - failed charges move the subscription to `past_due`;
+  - successful-charge finalize conflicts become reconciliation incidents.
 
----
+### Still pending before calling Juspay production-ready
 
-## Priority Order (current roadmap)
+1. **Provider-contract verification** — verify the exact sandbox/live Juspay mandate, charge, webhook, signature, idempotency, retry, order-ID and transaction-ID contracts. The implementation seam is ready; provider verification is still a release gate.
+2. **Portal Admin billing surface** — read-only mandate status, payment-attempt ledger, webhook/reconciliation incidents and operational filters.
+3. **Production hardening** — encrypt stored webhook credentials, complete secrets review, verify production credentials, and finish regression/e2e coverage.
 
+### Runtime environment issue found on 2026-08-30
+
+The application was started with:
+
+```text
+DB_HOST=localhost
+DB_PORT=5435
+REDIS_HOST=localhost
+REDIS_PORT=6385
 ```
+
+The intended development infrastructure is supplied by Cloudflare Access TCP tunnels:
+
+```text
+cloudflared access tcp --hostname db.saa9vi.com --url 127.0.0.1:5435
+cloudflared access tcp --hostname redis.saa9vi.com --url 127.0.0.1:6385
+```
+
+The tunnels reported local listeners, but the application still reported PostgreSQL and Redis as unreachable and therefore fell back to pg-mem and `DefaultJobQueuePlugin`.
+
+**Next verification:** use `127.0.0.1` rather than `localhost` in `.env`, then independently verify the tunnels with `pg_isready`/`psql` and `redis-cli` before starting Vendure. The current startup log proves that the fallback path works; it does not prove connectivity to the intended public PostgreSQL/Redis services.
+
+For real runtime verification, the application must start against the intended PostgreSQL and Redis services rather than the fallback implementations.
+
+---
+
+## Phase 2 — Remaining Work
+
+```text
 PHASE 2 — SUBSCRIPTION BILLING & CAPACITY POLICY
-  [x] SubscriptionPlan / OrganizationSubscription entities (SubscriptionPlugin, migration 1787547472479)
-  [x] BbbPlatformCapacityPolicy entity + Portal Admin dashboard
-  [x] Plan-based capacity tiers (Starter 50 / Growth 200 / Enterprise 500)
 
-  Juspay recurring billing — foundation complete, integration in progress:
-  [x] Step 0 — BuyLits reference analysis (reference/buylits/; port pattern, not files)
-  [x] Step 1 — vestigial Juspay surface inventory (initiateJuspaySession,
-      cancelJuspaySession, JuspaySessionResult, juspayOrderStatus — order-checkout
-      shaped; implement for real with subscription-aware variants, no removal, INV-007)
-  [x] Step 2 — entities: JuspaySubscriptionMandate (FSM pending→active→paused/revoked),
-      JuspayPaymentAttempt (INV-019), JuspayWebhookEvent (INV-004 PENDING→PROCESSED
-      + period-aware dedupeKey); migrations 1788058421475 + 1788059200478
-  [x] Step 2 — renewal claim/finalize state model (CLAIM CAS → attempt → charge →
-      FINALIZE CAS; period advancement only on payment success)
-  [x] Step 2 — mandate cardinality (partial unique index, one current mandate)
-  [x] Step 2 — payment-attempt channel isolation (scalar channelId)
-  [ ] Step 3 — Juspay webhook ingestion (fail-closed Basic Auth + HMAC; raw-body
-      middleware; persist PENDING → BullMQ → processor; webhook reconciles the
-      existing attempt — never a second payment engine)
-  [ ] Step 4 — real Juspay recurring charge (SDK mandate extension; failure-path
-      tests FIRST; finalize-conflict reconciliation state must be operator-visible,
-      not hidden under generic CAS_CONFLICT)
-  [ ] Step 5 — Portal Admin mandate + payment-attempt ledger surface (read-only)
-  [ ] Step 6 — docs/production hardening closeout
+[x] SubscriptionPlan / OrganizationSubscription
+[x] BbbPlatformCapacityPolicy
+[x] Starter / Growth / Enterprise capacity tiers
+[x] Plan-based BBB room capacity enforcement
+[x] Portal Admin capacity policy surface
+[x] Subscription capacity-grant integration
+[x] Juspay Steps 0–4 implementation
 
-PHASE 3 — MARKETPLACE & RETENTION
-  CommissionLedger $0-row pattern            [DL-030]
-  MarketplaceSearchResolver (Shop API)
-  Order.customFields.orderSource attribution
-  Advertising stream (AdWallet, AdSpendLedger)
+[ ] Juspay provider-contract verification
+[ ] Portal Admin billing/mandate/payment-attempt surface
+[ ] Production credential/secrets hardening
+[ ] Final Juspay regression/e2e verification
 
-PHASE 4 — SCALE & PREMIUM
-  White-label theming, TimescaleDB, AI features
+[ ] Tenant onboarding flow in storefront
+[ ] NavigationMenu entity in CMS
+[ ] Banner BullMQ scheduling
+[ ] Custom-domain routing via Caddy
 ```
 
-See `docs/implementation/roadmap.md` for full details and per-phase task lists.
+## Phase 3 — Marketplace & Retention
 
----
+Planned work remains the marketplace read projection/search, commission ledger, advertising stream, retention/analytics and related capabilities documented in `docs/implementation/roadmap.md`.
 
-**Storefront template contract (cross-repo pointer):** the Storefront Template Contract — governing what template code may do in the `nextjs-starter-vendure` storefront repo — lives in that repo's own docs tree:
+## Phase 4 — Scale & Premium
 
-> `docs/adr/storefront-template-contract.md` (in the `nextjs-starter-vendure` repository)
+Planned work remains white-label theming, TimescaleDB analytics, AI features, multi-BBB-server routing, Student Corner, placement network and CRM/telephony integration.
 
-It is a frontend-governing contract and deliberately lives with the component/template enforcement it describes, not in this backend ADR tree. See that repo for details.
+## Important architectural boundary
+
+Do not create a second billing engine or second payment-attempt model. The current recurring-billing architecture is:
+
+```text
+Due OrganizationSubscription
+        ↓
+CLAIM CAS
+        ↓
+JuspayPaymentAttempt (initiated)
+        ↓
+Juspay charge request
+        ↓
+Juspay webhook
+        ↓
+reconcile existing attempt
+        ↓
+CHARGE_SUCCEEDED → FINALIZE CAS
+CHARGE_FAILED    → past_due
+```
+
+A successful HTTP response from the real Juspay charge request means the request was accepted/initiated; it is not terminal payment success. This distinction must remain intact.
+
+The storefront template contract remains owned by the `nextjs-starter-vendure` repository and is intentionally not duplicated here.
