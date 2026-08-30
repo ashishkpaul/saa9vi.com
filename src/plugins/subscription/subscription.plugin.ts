@@ -37,19 +37,33 @@ import { PluginInitOptions } from './types';
     ],
     providers: [
         { provide: SUBSCRIPTION_PLUGIN_OPTIONS, useFactory: () => SubscriptionPlugin.options },
-        // Juspay SDK provided under a token; null when no billing credentials
-        // are configured → JuspayBillingService falls back to simulation.
+        // Juspay SDK provided under a token. When no billing credentials are
+        // configured:
+        //   - dev/test: null → JuspayBillingService falls back to a clearly-logged
+        //     SIMULATED charge so the state machine still runs without real money.
+        //   - production: throws at startup — silently simulating renewals in
+        //     production would mean advancing subscription periods without ever
+        //     charging customers (a revenue-destroying failure mode).
         {
             provide: JUSPAY_SDK,
             inject: [SUBSCRIPTION_PLUGIN_OPTIONS],
-            useFactory: (opts: PluginInitOptions) =>
-                opts.billing?.apiKey && opts.billing?.merchantId
-                    ? new JuspaySdk({
-                          apiKey: opts.billing.apiKey,
-                          merchantId: opts.billing.merchantId,
-                          sandbox: opts.billing.sandbox ?? false,
-                      })
-                    : null,
+            useFactory: (opts: PluginInitOptions) => {
+                if (opts.billing?.apiKey && opts.billing?.merchantId) {
+                    return new JuspaySdk({
+                        apiKey: opts.billing.apiKey,
+                        merchantId: opts.billing.merchantId,
+                        sandbox: opts.billing.sandbox ?? false,
+                    });
+                }
+                if (process.env.NODE_ENV === "production") {
+                    throw new Error(
+                        "Juspay billing credentials are required in production. " +
+                            "Set JUSPAY_API_KEY and JUSPAY_MERCHANT_ID, or the plugin will not load. " +
+                            "Without credentials, real subscriptions would be renewed without payment.",
+                    );
+                }
+                return null;
+            },
         },
         SubscriptionService,
         SubscriptionRenewalService,

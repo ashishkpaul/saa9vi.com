@@ -52,20 +52,31 @@ export interface JuspayMandateExecutionResponse {
 }
 
 /**
- * A synchronous charge result exposed to the renewal worker.
+ * Charge result exposed to the renewal worker.
  *
- * NOTE — ASYNC REALITY: real Juspay mandate execution creates an order and
- * the TERMINAL outcome arrives asynchronously via a webhook (charge_*).
- * Treating the initiation call's result as the synchronous charge outcome is
- * a documented-but-unverified simplification chosen so the CLAIM→ATTEMPT→
- * CHARGE→FINALIZE state machine can be exercised against a single isolated
- * boundary. The webhook processor independently reconciles the same attempt
- * (CAS-guarded via JuspayPaymentAttemptService), so both paths converge on
- * identical terminal state. Revisit if live verification confirms webhook is
- * authoritative.
+ * ASYNC REALITY (corrected Step 4): real Juspay mandate execution creates an
+ * order and the TERMINAL outcome arrives asynchronously via a webhook
+ * (CHARGE_SUCCEEDED / CHARGE_FAILED). The initiation call returning
+ * successfully only means Juspay ACCEPTED the charge request — it is NOT a
+ * confirmed debit.
+ *
+ * Therefore:
+ *   - "initiated"  → charge request accepted; worker stores the provider
+ *                     order ID and WAITS for the webhook to reconcile.
+ *   - "succeeded"  → simulation-only: the full lifecycle is assumed to have
+ *                     succeeded (dev/test without webhook). Production never
+ *                     returns this from the real SDK path.
+ *   - "failed"     → the initiation call itself failed (HTTP error, mandate
+ *                     rejected synchronously).
+ *
+ * The webhook processor independently reconciles the same attempt (CAS-guarded
+ * via JuspayPaymentAttemptService) and triggers finalization. Both paths
+ * converge on identical terminal state.
  */
+export type JuspayChargeStatus = "initiated" | "succeeded" | "failed";
+
 export interface JuspayChargeResult {
-    ok: boolean;
+    status: JuspayChargeStatus;
     juspayOrderId: string;
     txnId?: string;
     errorMessage?: string;

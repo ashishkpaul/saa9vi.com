@@ -9,6 +9,7 @@ import {
 import { LessThan, In } from "typeorm";
 import { OrganizationSubscription } from "../entities/organization-subscription.entity";
 import { JuspaySubscriptionMandate } from "../entities/juspay-subscription-mandate.entity";
+import { JuspayPaymentAttempt } from "../entities/juspay-payment-attempt.entity";
 import { RenewalPaymentReconciliationRequired } from "../entities/juspay-reconciliation-required.entity";
 import { SubscriptionRenewedEvent, SubscriptionInvoicePaidEvent } from "../events/subscription.events";
 import { SubscriptionRenewalQueueService } from "./subscription-renewal-queue.service";
@@ -27,6 +28,8 @@ const loggerCtx = "SubscriptionRenewalService";
  */
 @Injectable()
 export class SubscriptionRenewalService {
+  private readonly logger = Logger;
+
   constructor(
     private readonly connection: TransactionalConnection,
     private readonly eventBus: EventBus,
@@ -64,7 +67,7 @@ export class SubscriptionRenewalService {
         enqueued++;
       } catch (err: any) {
         failures++;
-        Logger.error(
+        this.logger.error(
           `Failed to enqueue renewal for subscription ${sub.id}: ${err.message}`,
           loggerCtx,
         );
@@ -87,7 +90,7 @@ export class SubscriptionRenewalService {
       });
 
     if (!sub) {
-      Logger.error(`Subscription ${subscriptionId} not found for renewal`, loggerCtx);
+      this.logger.error(`Subscription ${subscriptionId} not found for renewal`, loggerCtx);
       return RenewalResult.SUBSCRIPTION_NOT_FOUND;
     }
 
@@ -172,24 +175,83 @@ export class SubscriptionRenewalService {
       orderId,
     });
 
-    if (!charge.ok) {
-      const reason = charge.errorMessage ?? "charge_failed";
-      await this.attemptService.recordAttemptFailure(attempt.id, reason, charge.txnId);
-      // Payment failed: subscription becomes past_due, period NOT advanced.
-      await this.connection.rawConnection
-        .createQueryBuilder()
-        .update(OrganizationSubscription)
-        .set({ status: "past_due" })
-        .where("id = :id AND version = :version", {
-          id: sub.id,
-          version: claimedVersion,
-        })
-        .execute();
-      return RenewalResult.PAYMENT_FAILED;
+    if (charge.status === "failed") {
+        const reason = charge.errorMessage ?? "charge_initiation_failed";
+        const won = await this.attemptService.recordAttemptFailure(attempt.id, reason, charge.txnId);
+        if (!won) {
+            // CAS lost — another writer (likely the webhook processor) already
+            // moved the attempt to terminal. Re-read the attempt to determine
+            // the actual outcome rather than trusting our (possibly stale) charge result.
+            const currentAttempt = await this.connection.rawConnection
+                .getRepository(JuspayPaymentAttempt)
+                .findOne({ where: { id: attempt.id } });
+            if (currentAttempt?.status === "succeeded") {
+                // The webhook already won the CHARGE_SUCCEEDED CAS and owns
+                // finalization — it calls finalizeAfterPayment() synchronously
+                // after recording the attempt as succeeded. Returning
+                // CHARGE_INITIATED prevents us from clobbering the subscription
+                // with past_due. The period will be advanced by the webhook's
+                // finalize call, not by us.
+                this.logger.warn(
+                    `Attempt ${attempt.id} CAS lost on failure-write but attempt is 'succeeded' — webhook owns finalization; returning CHARGE_INITIATED`,
+                    loggerCtx,
+                );
+                return RenewalResult.CHARGE_INITIATED;
+            } else {
+                // Payment failed: subscription becomes past_due, period NOT advanced.
+                await this.markSubscriptionPastDue(sub, claimedVersion);
+                return RenewalResult.PAYMENT_FAILED;
+            }
+        } else {
+            // Payment failed: subscription becomes past_due, period NOT advanced.
+            await this.markSubscriptionPastDue(sub, claimedVersion);
+            return RenewalResult.PAYMENT_FAILED;
+        }
     }
 
-    // Terminal attempt result (shared INV-019 CAS primitive).
-    await this.attemptService.recordAttemptSuccess(attempt.id, charge.txnId);
+    if (charge.status === "initiated") {
+        // Charge request accepted by Juspay. Store the provider-issued
+        // order ID so the webhook processor can match the incoming
+        // CHARGE_SUCCEEDED/FAILED event to this attempt. The period is NOT
+        // advanced here — finalization happens only after the webhook
+        // confirms the debit (see finalizeAfterPayment()).
+        await this.attemptService.recordProviderOrderId(attempt.id, charge.juspayOrderId);
+        Logger.info(
+            `Charge initiated for subscription ${sub.id} (order ${charge.juspayOrderId}) — awaiting webhook for terminal outcome`,
+            loggerCtx,
+        );
+        return RenewalResult.CHARGE_INITIATED;
+    }
+
+    // charge.status === "succeeded" (simulation path only): the full
+    // lifecycle is assumed to have succeeded. Record the attempt as
+    // succeeded and proceed to finalization.
+    const won = await this.attemptService.recordAttemptSuccess(attempt.id, charge.txnId);
+    if (!won) {
+        // The attempt already left 'initiated' (e.g. webhook raced ahead
+        // and already moved it to terminal). Re-read to determine actual status.
+        const currentAttempt = await this.connection.rawConnection
+            .getRepository(JuspayPaymentAttempt)
+            .findOne({ where: { id: attempt.id } });
+        if (currentAttempt?.status === "failed") {
+            // The webhook already recorded failure — follow the failure path.
+            this.logger.warn(
+                `Attempt ${attempt.id} CAS lost on success-write but attempt is 'failed' — webhook raced ahead, following failure path`,
+                loggerCtx,
+            );
+            await this.markSubscriptionPastDue(sub, claimedVersion);
+            return RenewalResult.PAYMENT_FAILED;
+        }
+        // Otherwise the attempt is 'succeeded' — another writer already
+        // recorded success and owns finalization (Phase 4 FINALIZE by the
+        // first worker, or finalizeAfterPayment by the webhook). The period
+        // is already being advanced; we just return CHARGE_INITIATED.
+        this.logger.warn(
+            `Attempt ${attempt.id} for subscription ${sub.id} already left 'initiated' — another writer owns finalization`,
+            loggerCtx,
+        );
+        return RenewalResult.CHARGE_INITIATED;
+    }
 
     // Phase 4 — FINALIZE CAS: period advancement ONLY on payment success.
     const finalizeResult = await this.connection.rawConnection
@@ -215,7 +277,7 @@ export class SubscriptionRenewalService {
        * reconciliation incident — never an automatic retry (that would double-charge).
        */
       await this.recordReconciliationRequired(sub, sub.channelId, invoiceId, charge.juspayOrderId);
-      Logger.error(
+      this.logger.error(
         `FINALIZE CONFLICT for subscription ${sub.id}: charge ${invoiceId} succeeded but period was not advanced. MANUAL RECONCILIATION REQUIRED.`,
         loggerCtx,
       );
@@ -233,7 +295,7 @@ export class SubscriptionRenewalService {
        * Ownership was claimed but the period has NOT advanced and no charge
        * was made — the next scan will retry cleanly with the new version.
        */
-      Logger.error(
+      this.logger.error(
         `Channel ${sub.channelId} not found for subscription ${sub.id}. Renewal claimed but not executed; will retry on next scan.`,
         loggerCtx,
       );
@@ -276,6 +338,141 @@ export class SubscriptionRenewalService {
   }
 
   /**
+   * Finalizes a subscription renewal after a successful payment reconciliation.
+   * Called by the webhook processor after the attempt has been moved to
+   * 'succeeded' via the shared INV-019 CAS primitive.
+   *
+   * This is the webhook-path equivalent of Phase 4 (FINALIZE CAS) in
+   * executeRenewal(). It advances the subscription period and publishes the
+   * renewal events, but ONLY if the finalize CAS wins — a lost CAS means
+   * another worker already finalized, and this event is a no-op (terminal
+   * protection against double-advancement).
+   */
+  async finalizeAfterPayment(attemptId: string): Promise<RenewalResult> {
+    const attempt = await this.connection.rawConnection
+        .getRepository(JuspayPaymentAttempt)
+        .findOne({
+            where: { id: attemptId as any },
+            relations: ["subscription", "subscription.plan"],
+        });
+
+    if (!attempt) {
+        this.logger.error(`Attempt ${attemptId} not found for finalization`, loggerCtx);
+        return RenewalResult.SUBSCRIPTION_NOT_FOUND;
+    }
+
+    const sub = attempt.subscription;
+    if (!sub) {
+        this.logger.error(`Attempt ${attemptId} has no subscription — cannot finalize`, loggerCtx);
+        return RenewalResult.SUBSCRIPTION_NOT_FOUND;
+    }
+
+    /**
+     * The renewal worker's Phase 1 CLAIM already incremented `version` from
+     * its original value to original+1. finalizeAfterPayment does NOT perform
+     * its own CLAIM — it must guard on the loaded version (= original+1, the
+     * already-claimed value) and advance it by one (= original+2). Using
+     * `oldVersion + 1` as the guard would produce an off-by-one: the guard
+     * would expect original+2 but the DB actually has original+1 (from CLAIM),
+     * causing the CAS to always fail and triggering false reconciliation
+     * incidents for every webhook-driven finalization.
+     *
+     *   Worker: CLAIM sets V→V+1, then FINALIZE sets V+1→V+2  (guard: V+1)
+     *   Webhook: FINALIZE sets V+1→V+2                       (guard: V+1)
+     *
+     * Both paths converge on the same guard value (V+1) and the same target
+     * (V+2). Only one wins; the loser gets affected=0 and records a
+     * reconciliation incident.
+     */
+    const oldVersion = sub.version;
+    const oldPeriodEnd = sub.currentPeriodEnd;
+
+    const newPeriodStart = new Date(oldPeriodEnd);
+    const newPeriodEnd = new Date(oldPeriodEnd);
+    newPeriodEnd.setMonth(newPeriodEnd.getMonth() + 1);
+
+    // FINALIZE CAS: period advancement + status, guarded on the current
+    // (already-claimed) version. A lost CAS means another writer already
+    // finalized — record a reconciliation incident (Step 4D).
+    const finalizeResult = await this.connection.rawConnection
+        .createQueryBuilder()
+        .update(OrganizationSubscription)
+        .set({
+            version: oldVersion + 1,
+            currentPeriodStart: newPeriodStart,
+            currentPeriodEnd: newPeriodEnd,
+            status: "active",
+        })
+        .where("id = :id AND version = :version", {
+            id: sub.id,
+            version: oldVersion,
+        })
+        .execute();
+
+    if (finalizeResult.affected !== 1) {
+        /**
+         * DANGEROUS WINDOW HIT (Step 4D): the charge succeeded but the finalize
+         * CAS lost (another worker claimed between phases, or manual state edit).
+         * Money has moved; the period has not advanced. Record an operator-visible
+         * reconciliation incident — never an automatic retry (that would double-charge).
+         */
+        await this.recordReconciliationRequired(sub, sub.channelId, attempt.invoiceId, attempt.juspayOrderId ?? "");
+        this.logger.error(
+            `FINALIZE CONFLICT for subscription ${sub.id}: charge ${attempt.invoiceId} succeeded but period was not advanced. MANUAL RECONCILIATION REQUIRED.`,
+            loggerCtx,
+        );
+        return RenewalResult.CAS_CONFLICT;
+    }
+
+    // Resolve the channel for RequestContext creation (BUG-021 fix).
+    const channel = await this.connection.rawConnection
+        .getRepository(Channel)
+        .findOne({ where: { id: sub.channelId } });
+
+    if (!channel) {
+        this.logger.error(
+            `Channel ${sub.channelId} not found for subscription ${sub.id}. Renewal claimed but not executed; will retry on next scan.`,
+            loggerCtx,
+        );
+        return RenewalResult.CHANNEL_NOT_FOUND;
+    }
+
+    const ctx = await this.requestContextService.create({
+        apiType: "admin",
+        channelOrToken: channel,
+    });
+
+    // 1. Publish Renewed Event (Triggers BbbSubscriptionListener → minutes grant)
+    this.eventBus.publish(
+        new SubscriptionRenewedEvent(
+            ctx,
+            sub,
+            sub.channelId,
+            newPeriodStart,
+            newPeriodEnd,
+            sub.plan.includedBbbMinutes,
+        ),
+    );
+
+    // 2. Publish Invoice Paid Event (Future-proofing for accounting/tax/Juspay reconciliation)
+    this.eventBus.publish(
+        new SubscriptionInvoicePaidEvent(
+            ctx,
+            sub,
+            attempt.invoiceId,
+            sub.plan.monthlyPriceInPaise,
+        ),
+    );
+
+    Logger.info(
+        `Finalized renewal for subscription ${sub.id} for channel ${sub.channelId} (New Period: ${newPeriodStart.toISOString()} -> ${newPeriodEnd.toISOString()})`,
+        loggerCtx,
+    );
+
+    return RenewalResult.SUCCESS;
+  }
+
+  /**
    * Records an operator-visible reconciliation incident (Step 4D) for the
    * charge-succeeded-but-period-not-finalized window. Append-only.
    */
@@ -296,8 +493,32 @@ export class SubscriptionRenewalService {
         detectedAt: new Date(),
       }),
     );
-    Logger.error(
+    this.logger.error(
       `Recorded RenewalPaymentReconciliationRequired for subscription ${subscription.id}, order ${juspayOrderId}, invoice ${invoiceId}`,
+      loggerCtx,
+    );
+  }
+
+  /**
+   * Marks a subscription as past_due after a failed charge. The period is
+   * NOT advanced — the next renewal scan will retry with a new attempt.
+   * Uses CAS on version to avoid clobbering concurrent state changes.
+   */
+  private async markSubscriptionPastDue(
+    subscription: OrganizationSubscription,
+    claimedVersion: number,
+  ): Promise<void> {
+    await this.connection.rawConnection
+      .createQueryBuilder()
+      .update(OrganizationSubscription)
+      .set({ status: "past_due" })
+      .where("id = :id AND version = :version", {
+        id: subscription.id,
+        version: claimedVersion,
+      })
+      .execute();
+    Logger.info(
+      `Subscription ${subscription.id} (channel ${subscription.channelId}) marked past_due after failed charge`,
       loggerCtx,
     );
   }

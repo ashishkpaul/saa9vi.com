@@ -4,6 +4,7 @@ import { JuspayWebhookEvent } from "../entities/juspay-webhook-event.entity";
 import { JuspaySubscriptionMandate } from "../entities/juspay-subscription-mandate.entity";
 import { JuspayPaymentAttempt } from "../entities/juspay-payment-attempt.entity";
 import { JuspayPaymentAttemptService } from "./juspay-payment-attempt.service";
+import { SubscriptionRenewalService } from "./subscription-renewal.service";
 import type { JuspayWebhookPayload } from "../types";
 
 const loggerCtx = "JuspayWebhookProcessorService";
@@ -51,6 +52,7 @@ export class JuspayWebhookProcessorService {
         private readonly connection: TransactionalConnection,
         private readonly ctxService: RequestContextService,
         private readonly attemptService: JuspayPaymentAttemptService,
+        private readonly renewalService: SubscriptionRenewalService,
     ) {}
 
     async processEvent(eventId: string): Promise<void> {
@@ -254,6 +256,43 @@ export class JuspayWebhookProcessorService {
 
         this.logger.log(
             `Attempt ${attempt.id} (order ${orderId}, subscription ${attempt.subscription.id}, channel ${attempt.channelId}) → ${eventName === "CHARGE_SUCCEEDED" ? "succeeded" : "failed"}`,
+        );
+
+        // On a successful charge, finalize the subscription: advance the
+        // period and publish renewal events. This is the webhook-path
+        // equivalent of Phase 4 (FINALIZE CAS) in the renewal worker.
+        if (eventName === "CHARGE_SUCCEEDED") {
+            const result = await this.renewalService.finalizeAfterPayment(attempt.id as string);
+            if (result !== "SUCCESS") {
+                // finalizeAfterPayment already logs the specific failure
+                // (CAS_CONFLICT → reconciliation incident recorded, etc.).
+                this.logger.warn(
+                    `Finalize-after-payment for attempt ${attempt.id} returned ${result} — subscription ${attempt.subscription.id} period may need manual reconciliation`,
+                );
+            }
+        } else {
+            // CHARGE_FAILED: mark the subscription past_due. The period is
+            // NOT advanced — the next renewal scan will retry.
+            await this.markSubscriptionPastDue(attempt);
+        }
+    }
+
+    /**
+     * Marks a subscription as past_due after a failed charge. The period is
+     * NOT advanced — the next renewal scan will retry with a new attempt.
+     */
+    private async markSubscriptionPastDue(attempt: JuspayPaymentAttempt): Promise<void> {
+        if (!attempt.subscription) {
+            return;
+        }
+        await this.connection.rawConnection
+            .createQueryBuilder()
+            .update("organization_subscription")
+            .set({ status: "past_due" })
+            .where("id = :id", { id: attempt.subscription.id })
+            .execute();
+        this.logger.log(
+            `Subscription ${attempt.subscription.id} (channel ${attempt.channelId}) marked past_due after failed charge`,
         );
     }
 }

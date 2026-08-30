@@ -53,6 +53,24 @@ export class JuspayPaymentAttemptService {
         return Array.isArray(created) ? created[0] : created;
     }
 
+    /**
+     * Stores the provider-issued order ID on an existing attempt. Called by the
+     * renewal worker after the charge request is accepted, so the webhook
+     * processor can match the incoming CHARGE_SUCCEEDED/FAILED event to this
+     * attempt via juspayOrderId.
+     *
+     * This is a metadata-only update on an attempt that is still in 'initiated'
+     * state — it does NOT perform the terminal transition.
+     */
+    async recordProviderOrderId(attemptId: ID, juspayOrderId: string): Promise<void> {
+        await this.connection.rawConnection
+            .createQueryBuilder()
+            .update(JuspayPaymentAttempt)
+            .set({ juspayOrderId })
+            .where("id = :id AND status = 'initiated'", { id: attemptId })
+            .execute();
+    }
+
     /** Guards the initiated → succeeded transition. Returns false if it lost the CAS. */
     async recordAttemptSuccess(attemptId: ID, txnId?: string): Promise<boolean> {
         return this.transition(attemptId, "succeeded", { txnId });

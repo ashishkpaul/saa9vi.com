@@ -16,7 +16,11 @@ import { OrganizationSubscription } from "./organization-subscription.entity";
  * detect a success-without-finalize, so the incident surfaces on an operator
  * query instead of being inferred from logs.
  *
- * Append-only (INV-002 discipline). No mutation path is exposed.
+ * SEMANTICS: this is an OPERATIONAL INCIDENT RECORD, not a financial ledger.
+ * It has a controlled PENDING → RESOLVED workflow (an operator resolves it
+ * after verifying the payment and manually advancing the period if needed).
+ * INV-002 (immutable ledger rows) applies to financial facts like
+ * JuspayPaymentAttempt — not to this incident-tracking record.
  */
 @Entity("juspay_payment_reconciliation_required")
 @Index(["channelId"])
