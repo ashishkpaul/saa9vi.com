@@ -29,6 +29,17 @@ export interface JuspayWebhookConfig {
 export interface PluginInitOptions {
     exampleOption?: string;
     webhook?: JuspayWebhookConfig;
+    /**
+     * Juspay API credentials for real recurring billing (Step 4). When absent
+     * (dev/sandbox without creds), the renewal worker falls back to a clearly
+     * logged SIMULATED charge so the CLAIM→ATTEMPT→CHARGE→FINALIZE model still
+     * runs. When present, the real Juspay API is used.
+     */
+    billing?: {
+        apiKey: string;
+        merchantId: string;
+        sandbox?: boolean;
+    };
 }
 
 export enum RenewalResult {
@@ -36,6 +47,7 @@ export enum RenewalResult {
   CAS_CONFLICT = "CAS_CONFLICT",
   SUBSCRIPTION_NOT_FOUND = "SUBSCRIPTION_NOT_FOUND",
   CHANNEL_NOT_FOUND = "CHANNEL_NOT_FOUND",
+  MANDATE_NOT_FOUND = "MANDATE_NOT_FOUND",
   PAYMENT_FAILED = "PAYMENT_FAILED",
 }
 

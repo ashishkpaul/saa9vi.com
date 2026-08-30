@@ -3,6 +3,7 @@ import { RequestContextService, TransactionalConnection } from "@vendure/core";
 import { JuspayWebhookEvent } from "../entities/juspay-webhook-event.entity";
 import { JuspaySubscriptionMandate } from "../entities/juspay-subscription-mandate.entity";
 import { JuspayPaymentAttempt } from "../entities/juspay-payment-attempt.entity";
+import { JuspayPaymentAttemptService } from "./juspay-payment-attempt.service";
 import type { JuspayWebhookPayload } from "../types";
 
 const loggerCtx = "JuspayWebhookProcessorService";
@@ -49,6 +50,7 @@ export class JuspayWebhookProcessorService {
     constructor(
         private readonly connection: TransactionalConnection,
         private readonly ctxService: RequestContextService,
+        private readonly attemptService: JuspayPaymentAttemptService,
     ) {}
 
     async processEvent(eventId: string): Promise<void> {
@@ -140,9 +142,17 @@ export class JuspayWebhookProcessorService {
             return;
         }
         if (mandate.status === "revoked") {
-            // Revoked is terminal — a later pause/activate redelivery must
-            // not resurrect it.
-            this.logger.warn(`Mandate ${mandateId} is revoked (terminal) — ignoring ${eventName}`);
+            // EVENT-ORDERING POLICY (Step 4B): "revoked" is terminal. No
+            // provider event can untransition a revoked mandate, so ANY
+            // mandate event arriving against a revoked mandate is by
+            // definition stale/out-of-order (a revoked mandate cannot be
+            // re-activated, paused, or re-revoked). We therefore treat it as
+            // a PROCESSED no-op — never resurrecting the mandate — while
+            // logging an anomaly for operator visibility. This is codified
+            // as the documented event-ordering policy for the revoked state.
+            this.logger.warn(
+                `Mandate ${mandateId} is revoked (terminal) — ${eventName} is stale/out-of-order; PROCESSED as no-op (event-ordering policy, Step 4B)`,
+            );
             return;
         }
         if (!this.isValidMandateTransition(mandate.status as any, targetStatus)) {
@@ -219,36 +229,23 @@ export class JuspayWebhookProcessorService {
         }
 
         const txnId = payload.content?.order?.txn_id;
-        const target =
-            eventName === "CHARGE_SUCCEEDED"
-                ? ("succeeded" as const)
-                : ("failed" as const);
-        const failureReason =
-            target === "failed"
-                ? (payload.content?.order?.error_message ??
-                  payload.content?.order?.error_code ??
-                  "charge_failed_webhook")
-                : null;
+        let won: boolean;
+        if (eventName === "CHARGE_SUCCEEDED") {
+            won = await this.attemptService.recordAttemptSuccess(attempt.id, txnId);
+        } else {
+            won = await this.attemptService.recordAttemptFailure(
+                attempt.id,
+                payload.content?.order?.error_message ??
+                    payload.content?.order?.error_code ??
+                    "charge_failed_webhook",
+                txnId,
+            );
+        }
 
-        // Terminal transition is a CAS (Step 3 review 🟠 / INV-019): the only
-        // permitted mutation is initiated → succeeded|failed, and it must win
-        // exactly once. Two workers reconciling different events for the same
-        // attempt (or a redelivery) cannot both write — the update is guarded
-        // on status = 'initiated'. A lost race (affected 0) means another
-        // worker already moved the attempt to terminal → this event is a no-op,
-        // NOT a retry and NOT a second financial write.
-        const updateResult = await this.connection.rawConnection
-            .createQueryBuilder()
-            .update(JuspayPaymentAttempt)
-            .set({
-                status: target,
-                juspayTransactionId: txnId ?? attempt.juspayTransactionId ?? undefined,
-                failureReason: failureReason ?? undefined,
-            })
-            .where("id = :id AND status = 'initiated'", { id: attempt.id })
-            .execute();
-
-        if (updateResult.affected !== 1) {
+        // Shared INV-019 CAS primitive won/lost. A lost race (won === false)
+        // means another writer already moved the attempt to terminal → this
+        // event is a no-op, NOT a retry and NOT a second financial write.
+        if (!won) {
             this.logger.warn(
                 `Attempt ${attempt.id} (order ${orderId}) already left 'initiated' — CAS no-op for ${eventName} (INV-019 terminal protection)`,
             );
@@ -256,7 +253,7 @@ export class JuspayWebhookProcessorService {
         }
 
         this.logger.log(
-            `Attempt ${attempt.id} (order ${orderId}, subscription ${attempt.subscription.id}, channel ${attempt.channelId}) → ${target}`,
+            `Attempt ${attempt.id} (order ${orderId}, subscription ${attempt.subscription.id}, channel ${attempt.channelId}) → ${eventName === "CHARGE_SUCCEEDED" ? "succeeded" : "failed"}`,
         );
     }
 }

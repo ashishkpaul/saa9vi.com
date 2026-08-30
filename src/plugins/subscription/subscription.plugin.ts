@@ -1,12 +1,13 @@
 import { PluginCommonModule, RuntimeVendureConfig, Type, VendurePlugin } from '@vendure/core';
  
-import { SUBSCRIPTION_PLUGIN_OPTIONS } from './constants';
+import { SUBSCRIPTION_PLUGIN_OPTIONS, JUSPAY_SDK } from './constants';
 import { OrganizationSubscription } from './entities/organization-subscription.entity';
 import { SubscriptionPlan } from './entities/subscription-plan.entity';
 import { JuspaySubscriptionMandate } from './entities/juspay-subscription-mandate.entity';
 import { JuspayPaymentAttempt } from './entities/juspay-payment-attempt.entity';
 import { JuspayWebhookEvent } from './entities/juspay-webhook-event.entity';
 import { JuspayWebhookEndpoint } from './entities/juspay-webhook-endpoint.entity';
+import { RenewalPaymentReconciliationRequired } from './entities/juspay-reconciliation-required.entity';
 import { SubscriptionAdminResolver } from './api/subscription-admin.resolver';
 import { adminApiExtensions } from './api/schema/subscription-admin.schema';
 import { SubscriptionService } from './services/subscription.service';
@@ -17,14 +18,39 @@ import { JuspayWebhookProcessorService } from './services/juspay-webhook-process
 import { JuspayWebhookAuthService } from './auth/juspay-webhook-auth.service';
 import { JuspayWebhookController } from './api/juspay-webhook.controller';
 import { JuspayWebhookEndpointService } from './services/juspay-webhook-endpoint.service';
+import { JuspayPaymentAttemptService } from './services/juspay-payment-attempt.service';
+import { JuspayBillingService } from './services/juspay-billing.service';
+import { JuspaySdk } from './juspay/juspay-sdk';
 import { subscriptionRenewalTask } from './jobs/subscription-renewal.task';
 import { PluginInitOptions } from './types';
 
 @VendurePlugin({
     imports: [PluginCommonModule],
-    entities: [SubscriptionPlan, OrganizationSubscription, JuspaySubscriptionMandate, JuspayPaymentAttempt, JuspayWebhookEvent, JuspayWebhookEndpoint],
+    entities: [
+        SubscriptionPlan,
+        OrganizationSubscription,
+        JuspaySubscriptionMandate,
+        JuspayPaymentAttempt,
+        JuspayWebhookEvent,
+        JuspayWebhookEndpoint,
+        RenewalPaymentReconciliationRequired,
+    ],
     providers: [
         { provide: SUBSCRIPTION_PLUGIN_OPTIONS, useFactory: () => SubscriptionPlugin.options },
+        // Juspay SDK provided under a token; null when no billing credentials
+        // are configured → JuspayBillingService falls back to simulation.
+        {
+            provide: JUSPAY_SDK,
+            inject: [SUBSCRIPTION_PLUGIN_OPTIONS],
+            useFactory: (opts: PluginInitOptions) =>
+                opts.billing?.apiKey && opts.billing?.merchantId
+                    ? new JuspaySdk({
+                          apiKey: opts.billing.apiKey,
+                          merchantId: opts.billing.merchantId,
+                          sandbox: opts.billing.sandbox ?? false,
+                      })
+                    : null,
+        },
         SubscriptionService,
         SubscriptionRenewalService,
         SubscriptionRenewalQueueService,
@@ -32,6 +58,8 @@ import { PluginInitOptions } from './types';
         JuspayWebhookQueueService,
         JuspayWebhookProcessorService,
         JuspayWebhookEndpointService,
+        JuspayPaymentAttemptService,
+        JuspayBillingService,
     ],
     controllers: [JuspayWebhookController],
     adminApiExtensions: {

@@ -5,6 +5,7 @@ export * from './entities/juspay-subscription-mandate.entity';
 export * from './entities/juspay-payment-attempt.entity';
 export * from './entities/juspay-webhook-event.entity';
 export * from './entities/juspay-webhook-endpoint.entity';
+export * from './entities/juspay-reconciliation-required.entity';
 export * from './events/subscription.events';
 export * from './services/subscription.service';
 export * from './types';

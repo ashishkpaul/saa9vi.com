@@ -8,9 +8,12 @@ import {
 } from "@vendure/core";
 import { LessThan, In } from "typeorm";
 import { OrganizationSubscription } from "../entities/organization-subscription.entity";
-import { JuspayPaymentAttempt } from "../entities/juspay-payment-attempt.entity";
+import { JuspaySubscriptionMandate } from "../entities/juspay-subscription-mandate.entity";
+import { RenewalPaymentReconciliationRequired } from "../entities/juspay-reconciliation-required.entity";
 import { SubscriptionRenewedEvent, SubscriptionInvoicePaidEvent } from "../events/subscription.events";
 import { SubscriptionRenewalQueueService } from "./subscription-renewal-queue.service";
+import { JuspayPaymentAttemptService } from "./juspay-payment-attempt.service";
+import { JuspayBillingService } from "./juspay-billing.service";
 import { RenewalResult } from "../types";
 
 const loggerCtx = "SubscriptionRenewalService";
@@ -30,6 +33,8 @@ export class SubscriptionRenewalService {
     private readonly requestContextService: RequestContextService,
     @Inject(forwardRef(() => SubscriptionRenewalQueueService))
     private readonly queueService: SubscriptionRenewalQueueService,
+    private readonly attemptService: JuspayPaymentAttemptService,
+    private readonly billingService: JuspayBillingService,
   ) {}
 
   /**
@@ -131,32 +136,45 @@ export class SubscriptionRenewalService {
     }
 
     // Phase 2 — ATTEMPT record (INV-019 stateful attempt semantics).
-    const invoiceId = `INV-${sub.id}-${newPeriodStart.toISOString().slice(0, 10)}`;
-    const attemptRepo = this.connection.rawConnection.getRepository(JuspayPaymentAttempt);
-    const attempt = await attemptRepo.save(
-      attemptRepo.create({
-        subscription: { id: sub.id } as any,
-        channelId: sub.channelId,
-        invoiceId,
-        billingPeriodStart: newPeriodStart.toISOString().slice(0, 10),
-        amountPaise: sub.plan.monthlyPriceInPaise,
-        status: "initiated",
-      }),
-    );
+    const billingPeriodStart = newPeriodStart.toISOString().slice(0, 10);
+    const invoiceId = `INV-${sub.id}-${billingPeriodStart}`;
+    const orderId = `saa9vi-${sub.id}-${billingPeriodStart}`;
+
+    const attempt = await this.attemptService.recordAttemptInitiated({
+      subscriptionId: sub.id,
+      channelId: sub.channelId,
+      invoiceId,
+      billingPeriodStart,
+      amountPaise: sub.plan.monthlyPriceInPaise,
+      juspayOrderId: orderId,
+    });
+
+    // Resolve the current active mandate for the charge (channel-scoped).
+    const mandate = await this.connection.rawConnection
+      .getRepository(JuspaySubscriptionMandate)
+      .findOne({
+        where: { channelId: sub.channelId, status: "active", subscription: { id: sub.id } as any },
+      });
 
     /**
-     * Phase 3 — PROD SEAM: Juspay Billing Path (INV-018 / INV-019).
-     * In a real environment, this is where we'd call the Juspay API.
-     * For now, we simulate a successful charge.
+     * Phase 3 — CHARGE (INV-019). The Juspay call is isolated inside
+     * JuspayBillingService; the renewal worker only sees JuspayChargeResult.
+     * When no billing credentials are configured this simulates success
+     * (clearly logged), so the state machine still runs in dev/sandbox.
      */
-    const chargeSucceeded = true;
-    const failureReason: string | null = null;
+    const charge = await this.billingService.chargeSubscription({
+      subscriptionId: sub.id,
+      channelId: sub.channelId,
+      juspayCustomerId: mandate?.juspayCustomerId ?? "",
+      mandateId: mandate?.mandateId ?? "",
+      invoiceId,
+      amountPaise: sub.plan.monthlyPriceInPaise,
+      orderId,
+    });
 
-    if (!chargeSucceeded) {
-      await attemptRepo.update(attempt.id, {
-        status: "failed",
-        failureReason: failureReason ?? "charge_failed",
-      });
+    if (!charge.ok) {
+      const reason = charge.errorMessage ?? "charge_failed";
+      await this.attemptService.recordAttemptFailure(attempt.id, reason, charge.txnId);
       // Payment failed: subscription becomes past_due, period NOT advanced.
       await this.connection.rawConnection
         .createQueryBuilder()
@@ -170,8 +188,8 @@ export class SubscriptionRenewalService {
       return RenewalResult.PAYMENT_FAILED;
     }
 
-    // Record terminal attempt result (the ONLY permitted lifecycle transition).
-    await attemptRepo.update(attempt.id, { status: "succeeded" });
+    // Terminal attempt result (shared INV-019 CAS primitive).
+    await this.attemptService.recordAttemptSuccess(attempt.id, charge.txnId);
 
     // Phase 4 — FINALIZE CAS: period advancement ONLY on payment success.
     const finalizeResult = await this.connection.rawConnection
@@ -191,11 +209,12 @@ export class SubscriptionRenewalService {
 
     if (finalizeResult.affected !== 1) {
       /**
-       * DANGEROUS WINDOW HIT: the charge succeeded but the finalize CAS
-       * lost (another worker claimed between phases, or manual state edit).
-       * Money has moved; the period has not advanced. Needs reconciliation,
-       * never an automatic retry — a retry would double-charge.
+       * DANGEROUS WINDOW HIT (Step 4D): the charge succeeded but the finalize
+       * CAS lost (another worker claimed between phases, or manual state edit).
+       * Money has moved; the period has not advanced. Record an operator-visible
+       * reconciliation incident — never an automatic retry (that would double-charge).
        */
+      await this.recordReconciliationRequired(sub, sub.channelId, invoiceId, charge.juspayOrderId);
       Logger.error(
         `FINALIZE CONFLICT for subscription ${sub.id}: charge ${invoiceId} succeeded but period was not advanced. MANUAL RECONCILIATION REQUIRED.`,
         loggerCtx,
@@ -254,5 +273,32 @@ export class SubscriptionRenewalService {
     );
 
     return RenewalResult.SUCCESS;
+  }
+
+  /**
+   * Records an operator-visible reconciliation incident (Step 4D) for the
+   * charge-succeeded-but-period-not-finalized window. Append-only.
+   */
+  private async recordReconciliationRequired(
+    subscription: OrganizationSubscription,
+    channelId: string,
+    invoiceId: string,
+    juspayOrderId: string,
+  ): Promise<void> {
+    const repo = this.connection.rawConnection.getRepository(RenewalPaymentReconciliationRequired);
+    await repo.save(
+      repo.create({
+        subscription: { id: subscription.id } as any,
+        channelId,
+        juspayOrderId,
+        invoiceId,
+        status: "PENDING",
+        detectedAt: new Date(),
+      }),
+    );
+    Logger.error(
+      `Recorded RenewalPaymentReconciliationRequired for subscription ${subscription.id}, order ${juspayOrderId}, invoice ${invoiceId}`,
+      loggerCtx,
+    );
   }
 }
