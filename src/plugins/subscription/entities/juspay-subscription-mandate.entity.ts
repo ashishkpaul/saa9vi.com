@@ -8,7 +8,11 @@ export type JuspayMandateStatus = "pending" | "active" | "paused" | "revoked";
 /**
  * A Juspay recurring-payment mandate for one OrganizationSubscription.
  *
- * One row per subscription (INV-001: Channel = Tenant). This is net-new
+ * One CURRENT mandate per subscription (INV-001: Channel = Tenant):
+ * a partial unique index on subscriptionId WHERE status != 'revoked'
+ * enforces this at the DB level. Revoked mandates are retained as
+ * history, so mandate replacement over a subscription's lifetime is
+ * supported without a separate history model.
  * even against the BuyLits reference (reference/buylits/juspay-plugin),
  * which is one-off order checkout only — mandates, customer vault and
  * the mandate FSM do not exist there. Pattern ported, not the file.
@@ -25,6 +29,7 @@ export type JuspayMandateStatus = "pending" | "active" | "paused" | "revoked";
  */
 @Entity("juspay_subscription_mandate")
 @Index(["channelId"])
+@Index(["subscription"], { unique: true, where: '"status" != \'revoked\'' })
 export class JuspaySubscriptionMandate extends VendureEntity implements ChannelAware {
     constructor(input?: DeepPartial<JuspaySubscriptionMandate>) {
         super(input);
