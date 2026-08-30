@@ -55,10 +55,13 @@ Recent completions (see `release-notes.md`):
 
 ```
 PHASE 2 — SUBSCRIPTION BILLING & CAPACITY POLICY
-  SubscriptionPlan / OrganizationSubscription entities
-  BbbPlatformCapacityPolicy entity + Portal Admin dashboard
-  Plan-based capacity tiers
-  Juspay recurring billing integration
+  [x] SubscriptionPlan / OrganizationSubscription entities (SubscriptionPlugin, migration 1787547472479)
+  [x] BbbPlatformCapacityPolicy entity + Portal Admin dashboard
+  [x] Plan-based capacity tiers (Starter 50 / Growth 200 / Enterprise 500)
+  [ ] Juspay recurring billing integration   ← ONLY REMAINING PHASE 2 ITEM
+      (vestigial generated types: initiateJuspaySession, cancelJuspaySession,
+       JuspaySessionResult, QueryJuspayOrderStatus — no handwritten schema/resolver yet;
+       PROD SEAM marked in SubscriptionRenewalService; billingCustomerId column unused)
 
 PHASE 3 — MARKETPLACE & RETENTION
   CommissionLedger $0-row pattern            [DL-030]
