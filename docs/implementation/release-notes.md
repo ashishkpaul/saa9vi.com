@@ -4,6 +4,30 @@
 
 ---
 
+## v1.14 — 2026-08-30
+
+### New
+
+- **Juspay recurring billing foundation** (Phase 2; Step 0–2 of the integration plan):
+  - `JuspaySubscriptionMandate` entity — mandate FSM `pending → active → paused/revoked`, transitions driven only by the webhook processor; dual `channels[]` + scalar `channelId` per ADR-003; partial unique index (`subscriptionId WHERE status != 'revoked'`) enforcing one current mandate per subscription with revoked mandates retained as history.
+  - `JuspayPaymentAttempt` entity — INV-019 stateful attempt ledger: every attempt is an independently recorded financial fact written before the gateway call; only `initiated → succeeded|failed` may mutate a row; retries are new rows; denormalized scalar `channelId` for BUG-031-class-safe ledger queries.
+  - `JuspayWebhookEvent` entity — INV-004 persist-before-process lifecycle (`PENDING → PROCESSING → PROCESSED|FAILED`, same shape as `BbbWebhookEvent`) plus a unique period-aware `dedupeKey` (`juspay:{event_type}:{mandateId}:{billingPeriodStart}`) guarding against provider redelivery. Two idempotency layers protect different failure modes (documented in-entity).
+  - Migrations `1788058421475-JuspayRecurringBillingEntities` and `1788059200478-JuspayLedgerHardening` generated via Vendure CLI and applied.
+- **Subscription renewal claim/finalize state model** — `executeRenewal()` restructured: CLAIM CAS (ownership only, period untouched) → payment attempt → charge → FINALIZE CAS (period advancement + events only on payment success). Payment failure → attempt `failed` + guarded `past_due` transition, period never advanced. A finalize CAS conflict after a successful charge is logged as a manual-reconciliation incident and never auto-retried. Channel resolution moved before the charge.
+- **INV-019 registered** in `invariants.md` (Subscription Payment Attempts Are Independently Recorded Financial Facts); invariant-numbering bookkeeping corrected (next free = INV-020).
+- **BuyLits reference analysis** — `juspay-plugin` + `payments-core` from the BuyLits codebase preserved under `reference/buylits/` (outside the build tree); findings: dual Basic-Auth + optional HMAC webhook verification (to be ported fail-closed), genuinely reusable `payments-core` primitives (Redis checkout lock, `PaymentEventLog` idempotency, shared SDK), and confirmed **no recurring-mandate concept exists in BuyLits** — mandates are net-new. Port the pattern, not the file.
+
+### Fixed
+
+- Citation drift: undefined `INV-023` and `BUG-033` citations in `SubscriptionRenewalService` corrected (INV-018 / BUG-021 class); `invariants.md` INV-018 text and stale "next free invariant = INV-017" bookkeeping updated.
+
+### Tests / Verification
+
+- TypeScript compilation clean; production build clean.
+- Migrations applied; mandate uniqueness constraint verified against PostgreSQL (duplicate non-revoked mandates rejected; revoked rows allowed alongside the current mandate).
+
+---
+
 ## v1.13 — 2026-08-23
 
 ### New

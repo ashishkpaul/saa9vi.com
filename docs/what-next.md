@@ -24,10 +24,11 @@ The documentation has been refactored into focused documents:
 
 ---
 
-## Current State (v1.13 — 2026-08-23)
+## Current State (v1.14 — 2026-08-30)
 
 Recent completions (see `release-notes.md`):
 
+- **Juspay recurring billing foundation** — Step 0–2 complete: mandate/payment-attempt/webhook entities + migrations, renewal claim/finalize state model, INV-019 registered, BuyLits reference analyzed (`reference/buylits/`). Remaining: Step 3 webhook ingestion, Step 4 real charge, Step 5 admin surface.
 - **Phase 1.5 blockers resolved** — all five remaining blockers closed:
   - FEAT-002 schema migration — verified already applied (Vendure CLI: no schema changes; `sourceType` + `isUnbounded` confirmed in DB)
   - Next.js public instructor/CMS pages — CMS page route (`/[locale]/page/[slug]`) added; instructor page already existed
@@ -58,10 +59,27 @@ PHASE 2 — SUBSCRIPTION BILLING & CAPACITY POLICY
   [x] SubscriptionPlan / OrganizationSubscription entities (SubscriptionPlugin, migration 1787547472479)
   [x] BbbPlatformCapacityPolicy entity + Portal Admin dashboard
   [x] Plan-based capacity tiers (Starter 50 / Growth 200 / Enterprise 500)
-  [ ] Juspay recurring billing integration   ← ONLY REMAINING PHASE 2 ITEM
-      (vestigial generated types: initiateJuspaySession, cancelJuspaySession,
-       JuspaySessionResult, QueryJuspayOrderStatus — no handwritten schema/resolver yet;
-       PROD SEAM marked in SubscriptionRenewalService; billingCustomerId column unused)
+
+  Juspay recurring billing — foundation complete, integration in progress:
+  [x] Step 0 — BuyLits reference analysis (reference/buylits/; port pattern, not files)
+  [x] Step 1 — vestigial Juspay surface inventory (initiateJuspaySession,
+      cancelJuspaySession, JuspaySessionResult, juspayOrderStatus — order-checkout
+      shaped; implement for real with subscription-aware variants, no removal, INV-007)
+  [x] Step 2 — entities: JuspaySubscriptionMandate (FSM pending→active→paused/revoked),
+      JuspayPaymentAttempt (INV-019), JuspayWebhookEvent (INV-004 PENDING→PROCESSED
+      + period-aware dedupeKey); migrations 1788058421475 + 1788059200478
+  [x] Step 2 — renewal claim/finalize state model (CLAIM CAS → attempt → charge →
+      FINALIZE CAS; period advancement only on payment success)
+  [x] Step 2 — mandate cardinality (partial unique index, one current mandate)
+  [x] Step 2 — payment-attempt channel isolation (scalar channelId)
+  [ ] Step 3 — Juspay webhook ingestion (fail-closed Basic Auth + HMAC; raw-body
+      middleware; persist PENDING → BullMQ → processor; webhook reconciles the
+      existing attempt — never a second payment engine)
+  [ ] Step 4 — real Juspay recurring charge (SDK mandate extension; failure-path
+      tests FIRST; finalize-conflict reconciliation state must be operator-visible,
+      not hidden under generic CAS_CONFLICT)
+  [ ] Step 5 — Portal Admin mandate + payment-attempt ledger surface (read-only)
+  [ ] Step 6 — docs/production hardening closeout
 
 PHASE 3 — MARKETPLACE & RETENTION
   CommissionLedger $0-row pattern            [DL-030]

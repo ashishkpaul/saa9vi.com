@@ -125,7 +125,7 @@ BullMQ processor
 
 **Rejection criterion:** Any service method that calls `.update()` on an `AdSpendLedger` row is rejected.
 
-> **INV-011 is intentionally unassigned.** The current canonical sequence runs INV-010 → INV-012; nothing in `invariants.md` or the legacy ADR defines an INV-011. When adding a new invariant, use the next free number (**INV-017**) rather than claiming INV-011.
+> **INV-011 is intentionally unassigned.** The current canonical sequence runs INV-010 → INV-012; nothing in `invariants.md` or the legacy ADR defines an INV-011. When adding a new invariant, use the next free number (**INV-020**) rather than claiming INV-011. The canonical sequence currently runs through **INV-019**.
 
 ---
 
@@ -183,9 +183,24 @@ This pattern does **not** apply to Stream 1 (`BbbUsageLedger`) or Stream 3 (`AdS
 
 ## INV-018: Billing Context Requires Explicit Channel Resolution.
 
-**Rule:** Services operating on tenant subscriptions outside of a standard request-response cycle must resolve the `Channel` entity by ID and use its `token` or entity reference for `RequestContext` creation. Raw IDs must never be used for channel-based context resolution (BUG-021/BUG-033).
+**Rule:** Services operating on tenant subscriptions outside of a standard request-response cycle must resolve the `Channel` entity by ID and use its `token` or entity reference for `RequestContext` creation. Raw IDs must never be used for channel-based context resolution (BUG-021).
 
 **Rejection criterion:** Any code that passes a raw database `channelId` to `RequestContextService.create({ channelOrToken })` is rejected.
+
+---
+
+## INV-019: Subscription Payment Attempts Are Independently Recorded Financial Facts.
+
+**Status:** Live (registered 2026-08-30 with the Juspay recurring billing foundation; semantics decided in the Step 2 review as the "stateful attempt record" model).
+
+**Rule:** Every Juspay charge attempt against an `OrganizationSubscription` is recorded as a `JuspayPaymentAttempt` row **before** the gateway call. The only permitted mutation of an attempt row is the single lifecycle transition `initiated → succeeded | failed`, performed exclusively by the tightly-scoped attempt-recording service (renewal worker or webhook processor). A retry is always a **new** row; terminal results are never overwritten, history is never rewritten, and no API surface may expose mutation of an existing attempt.
+
+Related constraints:
+- `OrganizationSubscription` period advancement must never be treated as equivalent to successful payment — the renewal flow is CLAIM CAS → attempt → charge → FINALIZE CAS (see `SubscriptionRenewalService` state model; a finalize conflict after a successful charge is an operator-visible reconciliation incident, never an automatic retry).
+- `JuspayPaymentAttempt` carries a denormalized scalar `channelId` (ADR-003 scalar-only exception); all ledger queries must scope by it — a bare `repository.find()` is a BUG-031-class channel-isolation bug.
+- Webhook-derived attempt results must reconcile the existing `initiated` attempt for that billing period, never create a parallel one.
+
+**Rejection criterion:** Any code path that updates a `JuspayPaymentAttempt` row already in a terminal state (`succeeded`/`failed`), collapses retries into an existing row, advances the subscription period without a successful payment finalize, or queries the ledger without channel scoping is rejected.
 
 ---
 
