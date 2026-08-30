@@ -63,7 +63,7 @@ export class JuspayPaymentAttempt extends VendureEntity {
     @Column()
     amountPaise: number;
 
-    @Column({ default: "initiated" })
+    @Column({ type: "varchar", default: "initiated" })
     status: JuspayPaymentAttemptStatus;
 
     /** Juspay order created for this charge attempt. */

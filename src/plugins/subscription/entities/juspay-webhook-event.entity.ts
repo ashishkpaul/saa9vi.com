@@ -25,8 +25,17 @@ export type JuspayWebhookEventStatus = "PENDING" | "PROCESSING" | "PROCESSED" | 
  * WITHOUT the billing period would collide across renewal periods and
  * silently drop the second month's charge event. Saa9vi key format:
  *
- *   subscription events:  juspay:{event_type}:{mandateId}:{billingPeriodStart}
- *   order-checkout events: juspay:{event_type}:{juspayOrderId}
+ *   `juspay:{event_name}:{channelId}:{primaryProviderId}`
+ *
+ * where primaryProviderId is the provider-issued txn_id > order_id >
+ * mandate_id, and channelId scopes the key per tenant (multi-tenant:
+ * the same provider txn under two tenant endpoints is two logical
+ * events). Crucially, the key NEVER uses a payload-declared billing
+ * period: webhook payloads are untrusted, and the processor establishes
+ * the attempt relationship through provider identifiers we issued/stored
+ * (juspayOrderId on the attempt), failing reconciliation when uncertain
+ * rather than guessing. Redelivery of the same logical Juspay event
+ * carries the same provider txn/order id → same key → harmless 200.
  */
 @Entity("juspay_webhook_event")
 @Index(["status"])
@@ -39,6 +48,10 @@ export class JuspayWebhookEvent extends VendureEntity {
     @Column({ length: 512, unique: true })
     dedupeKey: string;
 
+    /** Owning tenant channel — stamped from the resolved endpoint at ingestion. */
+    @Column()
+    channelId: string;
+
     /** Raw Juspay event name (e.g. MANDATE_ACTIVATED, CHARGE_SUCCEEDED). */
     @Column({ length: 128 })
     eventName: string;
@@ -48,7 +61,7 @@ export class JuspayWebhookEvent extends VendureEntity {
     })
     payload: unknown;
 
-    @Column({ default: "PENDING" })
+    @Column({ type: "varchar", default: "PENDING" })
     status: JuspayWebhookEventStatus;
 
     @Column({ nullable: true })

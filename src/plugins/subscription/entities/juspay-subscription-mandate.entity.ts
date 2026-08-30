@@ -62,7 +62,7 @@ export class JuspaySubscriptionMandate extends VendureEntity implements ChannelA
     @Column({ nullable: true })
     mandateId: string;
 
-    @Column({ default: "pending" })
+    @Column({ type: "varchar", default: "pending" })
     status: JuspayMandateStatus;
 
     @Column({ nullable: true })

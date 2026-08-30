@@ -145,10 +145,7 @@ export class SubscriptionRenewalService {
     );
 
     /**
-     * Phase 3 — PROD SEAM: Juspay Billing Path (INV-018; attempt ledger
-     * invariant INV-019 to be registered in docs/architecture/invariants.md
-     * when the Juspay integration lands — do NOT cite INV-023, it was never
-     * registered; see known-bugs.md drift class).
+     * Phase 3 — PROD SEAM: Juspay Billing Path (INV-018 / INV-019).
      * In a real environment, this is where we'd call the Juspay API.
      * For now, we simulate a successful charge.
      */

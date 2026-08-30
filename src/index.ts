@@ -82,7 +82,12 @@ async function start() {
         }
     }
 
-    await bootstrap(config);
+    // rawBody: true — Nest's documented flag makes the built-in JSON parser
+    // capture the exact request bytes into req.rawBody. Required for Juspay
+    // webhook HMAC verification over the raw body (a plugin-layer json()
+    // middleware cannot work — Nest's global parser consumes the stream
+    // before any Nest middleware runs).
+    await bootstrap(config, { nestApplicationOptions: { rawBody: true } });
 }
 
 start().catch(err => {

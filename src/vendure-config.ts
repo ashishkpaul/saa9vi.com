@@ -270,6 +270,15 @@ apiOptions: {
     MarketplaceIndexerPlugin,
     CustomerSuspensionPlugin.init({}),
     PlatformDashboardPlugin.init({}),
-    SubscriptionPlugin.init({}),
+    SubscriptionPlugin.init({
+        webhook: {
+            // Fail-closed: empty values reject ALL webhook traffic (the auth
+            // service never allows when unset — unlike the BuyLits reference).
+            username: process.env.JUSPAY_WEBHOOK_USERNAME ?? '',
+            password: process.env.JUSPAY_WEBHOOK_PASSWORD ?? '',
+            hmacSecret: process.env.JUSPAY_WEBHOOK_HMAC_SECRET ?? '',
+            hmacSecretVersion: process.env.JUSPAY_WEBHOOK_HMAC_SECRET_VERSION,
+        },
+    }),
 ],
 };

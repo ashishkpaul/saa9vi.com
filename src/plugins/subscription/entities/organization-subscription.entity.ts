@@ -46,7 +46,7 @@ export class OrganizationSubscription extends VendureEntity implements ChannelAw
   @Column()
   channelId: string;
 
-  @Column({ default: "trialing" })
+  @Column({ type: "varchar", default: "trialing" })
   status: OrganizationSubscriptionStatus;
 
   @Column({ nullable: true })
