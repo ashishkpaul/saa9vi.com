@@ -1,11 +1,11 @@
 /**
  * Juspay SDK — isolated at the gateway boundary.
  *
- * ✅ CONTRACT STATUS (Step 4C — verified against live Juspay docs):
- * All endpoints, request fields, response shapes, and authentication semantics
+ * CONTRACT STATUS (Step 4C — partially verified against live Juspay docs):
+ * Most endpoints, request fields, response shapes, and authentication semantics
  * below have been verified against the current Juspay HyperCheckout documentation
- * (see ADR-037 for the full verification matrix). The SDK markers have been
- * updated from UNVERIFIED to VERIFIED.
+ * (see ADR-037 for the full verification matrix). Markers indicate per-endpoint
+ * verification status; createMandate() remains UNVERIFIED pending live sandbox.
  *
  * API CONTRACT (verified from Juspay docs):
  *
@@ -150,7 +150,14 @@ export class JuspaySdk {
         return this.get<JuspayOrderResponse>(`/orders/${encodeURIComponent(orderId)}`, orderId);
     }
 
-    /** UNVERIFIED: creates/registers a recurring mandate for a customer. */
+    /**
+     * UNVERIFIED: creates/registers a recurring mandate for a customer.
+     * Contract (documented, not yet live-verified): POST /mandates with
+     * customer_id, mandate_start_date, mandate_end_date, mandate_frequency,
+     * amount, currency, unique_request_id.
+     * Verification pending: live sandbox test against the specific mandate
+     * product configured for Saa9vi (Express Checkout / UPI Autopay / card).
+     */
     async createMandate(opts: JuspayMandateOptions): Promise<{ mandate_id: string; status: string }> {
         const body = new URLSearchParams();
         Object.entries({
