@@ -1,5 +1,31 @@
 # Release Notes
 
+## v1.15 — 2026-08-31
+
+### New
+
+- **Production secret hardening (Step 6)**:
+  - `JuspayEncryptionService` — AES-256-GCM encryption for webhook credentials at rest. Uses existing `BBB_ENCRYPTION_KEY` (same 64-char hex key as BBB API secrets). Encrypts before persist, decrypts on demand for verification.
+  - `JuspayWebhookEndpoint` entity updated: `basicAuthPassword` and `hmacSecret` now stored as ciphertext, `encryptionKeyVersion` column added for key rotation.
+  - `JuspayWebhookEndpointService.ensureEndpoint()` encrypts secrets before write; `getDecryptedCredentials()` decrypts on read.
+  - Fail-closed in production: if `BBB_ENCRYPTION_KEY` is unset in production, endpoint creation throws rather than storing plaintext.
+  - Migration `1788151666245-JuspayWebhookEndpointEncryption` generated via Vendure CLI.
+
+- **Portal Admin billing Dashboard surface (Step 5)**:
+  - Vendure Dashboard extension with "Billing" nav section: Subscriptions, Mandates, Payment Attempts, Reconciliation.
+  - All routes SuperAdmin-only. Channel-scoped filtering.
+
+- **Full lifecycle e2e regression suite** (`subscription-lifecycle.e2e-spec.ts`):
+  - Covers: secret encryption, mandate FSM, charge success/failure, duplicate idempotency, orphan reconciliation.
+
+### Tests / Verification
+
+- TypeScript compilation clean; production build clean.
+- Existing `juspay-webhook.e2e-spec.ts` updated for new auth service signature.
+
+---
+
+
 > **Purpose:** Track completed work only. Organized chronologically. When new work is completed, add it here and remove from roadmap.md.
 
 ---

@@ -5,6 +5,7 @@ import { Inject } from "@nestjs/common";
 import { JuspayWebhookEndpoint } from "../entities/juspay-webhook-endpoint.entity";
 import { SUBSCRIPTION_PLUGIN_OPTIONS } from "../constants";
 import type { PluginInitOptions } from "../types";
+import { JuspayEncryptionService } from "./juspay-encryption.service";
 
 const loggerCtx = "JuspayWebhookEndpointService";
 
@@ -14,6 +15,11 @@ const loggerCtx = "JuspayWebhookEndpointService";
  * webhooks). Admin CRUD surface lands in Step 5; today endpoints are
  * created programmatically and the platform-default endpoint can be
  * seeded from env (JUSPAY_WEBHOOK_* on the default channel).
+ *
+ * SECRETS: basicAuthPassword and hmacSecret are encrypted at rest via
+ * JuspayEncryptionService (AES-256-GCM, BBB_ENCRYPTION_KEY). The service
+ * encrypts on write and exposes decrypted credentials only through
+ * getDecryptedCredentials() — the webhook auth service calls this.
  */
 @Injectable()
 export class JuspayWebhookEndpointService implements OnApplicationBootstrap {
@@ -21,12 +27,14 @@ export class JuspayWebhookEndpointService implements OnApplicationBootstrap {
 
     constructor(
         private readonly connection: TransactionalConnection,
+        private readonly encryption: JuspayEncryptionService,
         @Inject(SUBSCRIPTION_PLUGIN_OPTIONS) private readonly options: PluginInitOptions,
     ) {}
 
     /**
      * Creates an endpoint for a tenant channel. One endpoint per channel
      * (unique index) — recreating returns the existing row.
+     * Secrets are encrypted before persistence.
      */
     async ensureEndpoint(channelId: string, credentials: { basicAuthUsername: string; basicAuthPassword: string; hmacSecret: string; hmacSecretVersion?: string }, token?: string): Promise<JuspayWebhookEndpoint> {
         const repo = this.connection.rawConnection.getRepository(JuspayWebhookEndpoint);
@@ -34,13 +42,22 @@ export class JuspayWebhookEndpointService implements OnApplicationBootstrap {
         if (existing) {
             return existing;
         }
+        // Fail-closed: if encryption is unavailable in production, refuse
+        // to store plaintext secrets.
+        if (process.env.NODE_ENV === "production" && !this.encryption.isAvailable()) {
+            throw new Error("JuspayEncryptionService not available in production — refusing to store plaintext webhook secrets. Set BBB_ENCRYPTION_KEY.");
+        }
         const created = (await repo.save(
             repo.create({
                 token: token ?? crypto.randomBytes(24).toString("hex"),
                 channelId,
                 basicAuthUsername: credentials.basicAuthUsername,
-                basicAuthPassword: credentials.basicAuthPassword,
-                hmacSecret: credentials.hmacSecret,
+                basicAuthPassword: this.encryption.isAvailable()
+                    ? this.encryption.encrypt(credentials.basicAuthPassword)
+                    : credentials.basicAuthPassword,
+                hmacSecret: this.encryption.isAvailable()
+                    ? this.encryption.encrypt(credentials.hmacSecret)
+                    : credentials.hmacSecret,
                 hmacSecretVersion: credentials.hmacSecretVersion ?? undefined,
                 enabled: true,
             } as any),
@@ -48,6 +65,34 @@ export class JuspayWebhookEndpointService implements OnApplicationBootstrap {
         const endpoint = Array.isArray(created) ? created[0] : created;
         this.logger.log(`Juspay webhook endpoint created for channel ${channelId} (token=${endpoint.token})`);
         return endpoint;
+    }
+
+    /**
+     * Returns the decrypted credentials for an endpoint. Used by the webhook
+     * auth service to verify incoming requests. Secrets are decrypted on
+     * demand — plaintext only lives in memory for the duration of the check.
+     */
+    getDecryptedCredentials(endpoint: JuspayWebhookEndpoint): {
+        basicAuthUsername: string;
+        basicAuthPassword: string;
+        hmacSecret: string;
+        hmacSecretVersion?: string;
+    } {
+        if (!this.encryption.isAvailable()) {
+            // Dev/test fallback: secrets may be stored plaintext when no key is set.
+            return {
+                basicAuthUsername: endpoint.basicAuthUsername,
+                basicAuthPassword: endpoint.basicAuthPassword,
+                hmacSecret: endpoint.hmacSecret,
+                hmacSecretVersion: endpoint.hmacSecretVersion,
+            };
+        }
+        return {
+            basicAuthUsername: endpoint.basicAuthUsername,
+            basicAuthPassword: this.encryption.decrypt(endpoint.basicAuthPassword),
+            hmacSecret: this.encryption.decrypt(endpoint.hmacSecret),
+            hmacSecretVersion: endpoint.hmacSecretVersion,
+        };
     }
 
     /**

@@ -64,26 +64,23 @@ export class JuspayWebhookController {
         }
 
         // Fail-closed per-endpoint verification (Basic Auth + HMAC).
+        // The auth service decrypts credentials from the endpoint entity
+        // (stored as AES-256-GCM ciphertext) and verifies in constant time.
         if (!this.authService.verify(basicAuthHeader, signatureHeader, rawBody, endpoint)) {
             Logger.warn(`Webhook authentication failed for channel ${endpoint.channelId}`, loggerCtx);
             throw new ForbiddenException("Invalid webhook credentials");
         }
 
-        let payload: JuspayWebhookPayload;
-        try {
-            payload = typeof body === "string" ? JSON.parse(body) : (body as JuspayWebhookPayload);
-        } catch {
-            Logger.warn(`Webhook payload is not valid JSON (channel ${endpoint.channelId})`, loggerCtx);
-            throw new ForbiddenException("Invalid webhook payload");
-        }
-
-        const eventName = payload.event_name;
+        // Parse after auth (authenticated requests only).
+        const payload = body as JuspayWebhookPayload;
+        const eventName = payload?.event_name;
         if (!eventName) {
-            Logger.warn(`Webhook missing event_name (channel ${endpoint.channelId})`, loggerCtx);
+            Logger.warn(`Webhook ${eventName} has no event_name (channel ${endpoint.channelId})`, loggerCtx);
             throw new ForbiddenException("Invalid webhook payload");
         }
 
-        // Provider-issued primary identifier: txn_id > order_id > mandate_id.
+        // Extract the provider-issued primary identifier for the dedupe key.
+        // Priority: txn_id > order_id > mandate_id (provider-issued, unique).
         const providerId =
             payload.content?.order?.txn_id ??
             payload.content?.order?.order_id ??
@@ -138,7 +135,7 @@ export class JuspayWebhookController {
         // recovery path: if a previous enqueue FAILED, the row sat PENDING and
         // Juspay's non-200 retry now lands here and re-enqueues it.
         //
-        // ENQUEUE FAILURE HANDLING (Step 3 review 🔴): if enqueueing fails we
+        // ENQUEUE FAILURE HANDLING (Step 3 review): if enqueueing fails we
         // return NON-2xx (503) so Juspay retries the HTTP delivery. The row is
         // durably persisted (PENDING), and the provider retry re-enters here
         // and re-enqueues — no event can be lost or sit PENDING forever.

@@ -1,5 +1,5 @@
 import { PluginCommonModule, RuntimeVendureConfig, Type, VendurePlugin } from '@vendure/core';
- 
+
 import { SUBSCRIPTION_PLUGIN_OPTIONS, JUSPAY_SDK } from './constants';
 import { OrganizationSubscription } from './entities/organization-subscription.entity';
 import { SubscriptionPlan } from './entities/subscription-plan.entity';
@@ -20,6 +20,7 @@ import { JuspayWebhookController } from './api/juspay-webhook.controller';
 import { JuspayWebhookEndpointService } from './services/juspay-webhook-endpoint.service';
 import { JuspayPaymentAttemptService } from './services/juspay-payment-attempt.service';
 import { JuspayBillingService } from './services/juspay-billing.service';
+import { JuspayEncryptionService } from './services/juspay-encryption.service';
 import { JuspaySdk } from './juspay/juspay-sdk';
 import { subscriptionRenewalTask } from './jobs/subscription-renewal.task';
 import { PluginInitOptions } from './types';
@@ -39,9 +40,9 @@ import { PluginInitOptions } from './types';
         { provide: SUBSCRIPTION_PLUGIN_OPTIONS, useFactory: () => SubscriptionPlugin.options },
         // Juspay SDK provided under a token. When no billing credentials are
         // configured:
-        //   - dev/test: null → JuspayBillingService falls back to a clearly-logged
+        //   - dev/test: null -> JuspayBillingService falls back to a clearly-logged
         //     SIMULATED charge so the state machine still runs without real money.
-        //   - production: throws at startup — silently simulating renewals in
+        //   - production: throws at startup - silently simulating renewals in
         //     production would mean advancing subscription periods without ever
         //     charging customers (a revenue-destroying failure mode).
         {
@@ -55,11 +56,11 @@ import { PluginInitOptions } from './types';
                         sandbox: opts.billing.sandbox ?? false,
                     });
                 }
-                if (process.env.NODE_ENV === "production") {
+                if (process.env.NODE_ENV === 'production') {
                     throw new Error(
-                        "Juspay billing credentials are required in production. " +
-                            "Set JUSPAY_API_KEY and JUSPAY_MERCHANT_ID, or the plugin will not load. " +
-                            "Without credentials, real subscriptions would be renewed without payment.",
+                        'Juspay billing credentials are required in production. ' +
+                            'Set JUSPAY_API_KEY and JUSPAY_MERCHANT_ID, or the plugin will not load. ' +
+                            'Without credentials, real subscriptions would be renewed without payment.',
                     );
                 }
                 return null;
@@ -68,6 +69,7 @@ import { PluginInitOptions } from './types';
         SubscriptionService,
         SubscriptionRenewalService,
         SubscriptionRenewalQueueService,
+        JuspayEncryptionService,
         JuspayWebhookAuthService,
         JuspayWebhookQueueService,
         JuspayWebhookProcessorService,
@@ -76,14 +78,15 @@ import { PluginInitOptions } from './types';
         JuspayBillingService,
     ],
     controllers: [JuspayWebhookController],
-            adminApiExtensions: {
+    adminApiExtensions: {
         schema: adminApiExtensions,
         resolvers: [SubscriptionAdminResolver],
     },
+    dashboard: './dashboard/index.tsx',
     configuration: (config: RuntimeVendureConfig) => {
         // Raw body is captured by Nest's built-in JSON parser via
         // bootstrap({ nestApplicationOptions: { rawBody: true } }) in
-        // src/index.ts — required so the Juspay webhook HMAC can hash the
+        // src/index.ts - required so the Juspay webhook HMAC can hash the
         // exact bytes Juspay signed. No route middleware is registered here
         // (a plugin json() middleware loses the race against the global
         // parser and would double-parse).

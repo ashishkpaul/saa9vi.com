@@ -1,15 +1,9 @@
 import { Injectable, Logger } from "@nestjs/common";
 import * as crypto from "crypto";
+import { JuspayWebhookEndpoint } from "../entities/juspay-webhook-endpoint.entity";
+import { JuspayWebhookEndpointService } from "../services/juspay-webhook-endpoint.service";
 
-/**
- * Per-endpoint verification inputs (multi-tenant: each JuspayWebhookEndpoint
- * carries its own credentials).
- */
-export interface WebhookEndpointCredentials {
-    basicAuthUsername: string;
-    basicAuthPassword: string;
-    hmacSecret: string;
-}
+const loggerCtx = "JuspayWebhookAuthService";
 
 /**
  * Fail-closed webhook authentication for the Juspay ingestion endpoint.
@@ -30,15 +24,32 @@ export interface WebhookEndpointCredentials {
  *   - THIS service answers "did this request really come from the Juspay
  *     account that owns this tenant endpoint?".
  *   - The DB layers answer "have we already durably processed this event?".
+ *
+ * SECRETS: credentials are decrypted on demand from the endpoint entity
+ * (which stores them as AES-256-GCM ciphertext). The endpoint service
+ * handles decryption; this service only sees plaintext in memory.
  */
 @Injectable()
 export class JuspayWebhookAuthService {
-    verify(basicAuthHeader: string | undefined, signatureHeader: string | undefined, rawBody: Buffer | undefined, credentials: WebhookEndpointCredentials | undefined | null): boolean {
-        return this.verifyBasicAuth(basicAuthHeader, credentials) && this.verifyHmac(signatureHeader, rawBody, credentials);
+    constructor(
+        private readonly endpointService: JuspayWebhookEndpointService,
+    ) {}
+
+    verify(basicAuthHeader: string | undefined, signatureHeader: string | undefined, rawBody: Buffer | undefined, endpoint: JuspayWebhookEndpoint | undefined | null): boolean {
+        if (!endpoint) {
+            return false;
+        }
+        let creds: { basicAuthUsername: string; basicAuthPassword: string; hmacSecret: string };
+        try {
+            creds = this.endpointService.getDecryptedCredentials(endpoint);
+        } catch (err) {
+            Logger.error(`Failed to decrypt webhook credentials for endpoint ${endpoint.id}: ${(err as Error).message}`, loggerCtx);
+            return false;
+        }
+        return this.verifyBasicAuth(basicAuthHeader, creds) && this.verifyHmac(signatureHeader, rawBody, creds);
     }
 
-    private verifyBasicAuth(header: string | undefined, creds: WebhookEndpointCredentials | undefined | null): boolean {
-        // Fail-closed: no configured credentials → reject everything.
+    private verifyBasicAuth(header: string | undefined, creds: { basicAuthUsername: string; basicAuthPassword: string }): boolean {
         if (!creds?.basicAuthUsername || !creds.basicAuthPassword || !header) {
             return false;
         }
@@ -49,8 +60,7 @@ export class JuspayWebhookAuthService {
         return crypto.timingSafeEqual(Buffer.from(header), Buffer.from(expected));
     }
 
-    private verifyHmac(signature: string | undefined, rawBody: Buffer | undefined, creds: WebhookEndpointCredentials | undefined | null): boolean {
-        // Fail-closed: no configured secret → reject everything (BuyLits allowed this).
+    private verifyHmac(signature: string | undefined, rawBody: Buffer | undefined, creds: { hmacSecret: string }): boolean {
         if (!creds?.hmacSecret || !signature || !rawBody || rawBody.length === 0) {
             return false;
         }

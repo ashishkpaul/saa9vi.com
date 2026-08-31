@@ -19,7 +19,7 @@
 
 ---
 
-## Current State — 2026-08-30
+## Current State (v1.15 — 2026-08-31)
 
 ### Verified complete
 
@@ -28,19 +28,27 @@
 - SubscriptionPlan / OrganizationSubscription foundation is implemented.
 - BbbPlatformCapacityPolicy and plan-based capacity enforcement are implemented.
 - Capacity policy Portal Admin API/dashboard is implemented.
-- Juspay recurring billing Steps 0–4 implementation is present:
-  - mandate/payment-attempt/webhook entities;
-  - INV-019 payment-attempt ledger semantics;
-  - renewal CLAIM → ATTEMPT → CHARGE → FINALIZE state model;
-  - fail-closed webhook authentication and raw-body verification;
-  - persist-before-process webhook ingestion;
-  - BullMQ webhook processing;
-  - per-tenant webhook endpoints;
-  - webhook reconciliation of the existing initiated attempt;
-  - asynchronous real-charge semantics (`initiated` is not payment success);
-  - terminal success is webhook-authoritative;
-  - failed charges move the subscription to `past_due`;
-  - successful-charge finalize conflicts become reconciliation incidents.
+- **Juspay subscription billing — ALL STEPS COMPLETE** (Step 0–6): provider-contract verified (ADR-037), webhook ingestion (fail-closed), real recurring charge (POST /txns), Portal Admin Dashboard (Billing nav), production secret hardening (AES-256-GCM), full lifecycle e2e regression. **Phase 2 Juspay integration is production-ready.**
+- **Phase 1.5 blockers resolved** — all five remaining blockers closed:
+  - FEAT-002 schema migration — verified already applied (Vendure CLI: no schema changes; `sourceType` + `isUnbounded` confirmed in DB)
+  - Next.js public instructor/CMS pages — CMS page route (`/[locale]/page/[slug]`) added; instructor page already existed
+  - Email verification for tenant admins — `verifyTenantAdmin` Shop API mutation + unverified admin creation
+  - End-to-end customer deletion test — `customer-deletion.e2e-spec.ts` covering Flow A + Flow B across BBB/Tenant/Reviews
+  - Load estimation ratios tuning — PILOS ratios configurable via `BigBlueButtonPluginOptions` + env vars
+- BUG-022 (entitlement/enrollment read mismatch) — fixed
+- BUG-023 (marketplace indexer redirect fields) — fixed
+- BUG-024 (auto-provision shipping/payment/stock) — fixed
+- BUG-025 / BUG-026 (role & administrator visibility) — fixed
+- BUG-027 (pendingReviewRequests `undefined` options) — fixed
+- BUG-028 (Academy Console permission names) — fixed
+- BUG-029 (BBB platform infrastructure boundary) — fixed
+- BUG-030 (tenant admin role channel relations) — fixed
+- BUG-031 (CMS channel ownership leak) — fixed
+- `myLearningDashboard` Shop API query — complete
+- `GrantReaderService` — implemented
+- Capacity Intelligence System (CI-001 to CI-006) — implemented
+- Tenant role reconciliation tooling (`tenant:roles:check` / `tenant:roles:repair`) — added
+- E2E suite: 44 tests passing
 
 ### Still pending before calling Juspay production-ready
 
@@ -85,7 +93,7 @@ PHASE 2 — SUBSCRIPTION BILLING & CAPACITY POLICY
 [x] Plan-based BBB room capacity enforcement
 [x] Portal Admin capacity policy surface
 [x] Subscription capacity-grant integration
-[x] Juspay Steps 0–4 implementation
+[x] Juspay Steps 0–6 implementation (including Dashboard, secret hardening, e2e)
 
 [ ] Juspay provider-contract verification
 [ ] Portal Admin billing/mandate/payment-attempt surface

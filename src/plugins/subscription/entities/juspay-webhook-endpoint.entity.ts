@@ -23,10 +23,11 @@ import { Column, CreateDateColumn, Entity, Index } from "typeorm";
  * — the endpoint is a high-frequency lookup keyed by channel, and the
  * webhook URL is channel-unique by construction.
  *
- * ⚠️ HARDENING NOTE (Step 6): hmacSecret/basicAuthPassword are stored
- * plaintext pending per-endpoint AES-256-GCM encryption with
- * encryptionKeyVersion, mirroring the BBB password discipline (ADR platform
- * security decisions). Tracked in the roadmap.
+ * SECRETS AT REST: basicAuthPassword and hmacSecret are stored as
+ * AES-256-GCM ciphertext (base64). The JuspayEncryptionService encrypts
+ * before persist and decrypts on read, using BBB_ENCRYPTION_KEY (same
+ * 64-char hex key as BBB API secrets — same sensitivity class, no second
+ * env var). Plaintext never touches the database.
  */
 @Entity("juspay_webhook_endpoint")
 @Index(["token"], { unique: true })
@@ -48,13 +49,28 @@ export class JuspayWebhookEndpoint extends VendureEntity {
     @Column({ length: 128 })
     basicAuthUsername: string;
 
-    /** Per-endpoint Basic Auth password. ⚠️ plaintext pending Step 6 encryption. */
+    /**
+     * Per-endpoint Basic Auth password. Stored as AES-256-GCM ciphertext
+     * (base64-encoded). Decrypted on read by the endpoint service for
+     * verification. The encryption key is BBB_ENCRYPTION_KEY (same 64-char
+     * hex key as BBB secrets — same sensitivity class).
+     */
     @Column({ length: 256 })
     basicAuthPassword: string;
 
-    /** Per-endpoint HMAC-SHA256 secret for x-jp-signature. ⚠️ plaintext pending Step 6 encryption. */
+    /**
+     * Per-endpoint HMAC-SHA256 secret for x-jp-signature. Stored as
+     * AES-256-GCM ciphertext (base64-encoded). Decrypted on read.
+     */
     @Column({ length: 256 })
     hmacSecret: string;
+
+    /**
+     * Encryption key version for the stored secrets. Mirrors the BBB
+     * encryptionKeyVersion discipline (DA-003). Allows key rotation.
+     */
+    @Column({ default: 1 })
+    encryptionKeyVersion: number;
 
     /** Optional version tag for the endpoint's HMAC secret (rotation bookkeeping). */
     @Column({ length: 16, nullable: true })

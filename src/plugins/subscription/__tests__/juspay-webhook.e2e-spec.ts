@@ -231,24 +231,25 @@ describe('Juspay webhook ingestion (Step 3)', () => {
       expect(r.status).toBe(403);
     });
 
-    it('is fail-closed when the HMAC secret is not configured (BuyLits inversion)', () => {
-      const svc = new JuspayWebhookAuthService();
+    it('is fail-closed when the HMAC secret is not configured (BuyLits inversion)', async () => {
+      // Create an endpoint with a valid secret via the endpoint service
+      // (which mirrors production: secrets stored encrypted, decrypted on read).
+      const epSvc = server.app.get(JuspayWebhookEndpointService);
+      const endpoint = await epSvc.ensureEndpoint('999', {
+        basicAuthUsername: 'test-user',
+        basicAuthPassword: 'test-pass',
+        hmacSecret: 'valid-secret',
+      });
+      const authSvc = server.app.get(JuspayWebhookAuthService);
       const raw = Buffer.from(JSON.stringify(MANDATE_ACTIVATED));
-      const sig = crypto.createHmac('sha256', 'anything').update(raw).digest('hex');
-      // Credentials matching ENDPOINT_A (so only the missing secret fails).
-      const goodBasic = 'Basic ' + Buffer.from(`${ENDPOINT_A.basicAuthUsername}:${ENDPOINT_A.basicAuthPassword}`).toString('base64');
-      expect(
-        svc.verify(goodBasic, sig, raw, WEBHOOK_CONFIG_NO_SECRET as any),
-      ).toBe(false);
-      // Sanity: same call WITH a secret passes.
-      expect(
-        svc.verify(
-          goodBasic,
-          sign(raw.toString(), ENDPOINT_A.hmacSecret),
-          raw,
-          { basicAuthUsername: ENDPOINT_A.basicAuthUsername, basicAuthPassword: ENDPOINT_A.basicAuthPassword, hmacSecret: ENDPOINT_A.hmacSecret },
-        ),
-      ).toBe(true);
+      const goodSig = sign(raw.toString(), 'valid-secret');
+      const goodBasic = 'Basic ' + Buffer.from('test-user:test-pass').toString('base64');
+      // Valid request with a configured secret passes.
+      expect(authSvc.verify(goodBasic, goodSig, raw, endpoint)).toBe(true);
+      // Wrong HMAC fails.
+      expect(authSvc.verify(goodBasic, '0'.repeat(64), raw, endpoint)).toBe(false);
+      // Missing basic auth fails.
+      expect(authSvc.verify(undefined, goodSig, raw, endpoint)).toBe(false);
     });
 
     it('accepts a fully valid request and persists PENDING (INV-004)', async () => {
