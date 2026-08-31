@@ -1,6 +1,18 @@
 # What Next — Saa9vi Platform
 
-**Updated:** 2026-08-30
+**Updated:** 2026-08-31
+
+---
+
+> **Precondition — runtime environment not yet verified against real infrastructure.**
+>
+> The application was started with `DB_HOST=localhost`/`DB_PORT=5435` and `REDIS_HOST=localhost`/`REDIS_PORT=6385`, intended to reach Cloudflare Access TCP tunnels (`db.saa9vi.com`, `redis.saa9vi.com`). The tunnels reported local listeners, but the application still fell back to pg-mem (in-memory Postgres) and `DefaultJobQueuePlugin` (in-memory job queue). The startup log proves the fallback path works; it does **not** prove connectivity to the intended public PostgreSQL/Redis services.
+>
+> **Nothing in the "Current State" section below can be trusted until this is confirmed resolved** — CAS locking, idempotent grants, the payment-attempt ledger, and the webhook queue all depend on a real Postgres and Redis connection to mean anything.
+>
+> **Next verification:** use `127.0.0.1` rather than `localhost` in `.env`, then independently verify the tunnels with `pg_isready`/`psql` and `redis-cli` before starting Vendure.
+
+---
 
 ## Documentation Architecture
 
@@ -24,11 +36,11 @@
 ### Verified complete
 
 - TypeScript build succeeds (`npm run build`).
-- Vendure starts successfully on v3.6.5.
+- Vendure starts successfully on v3.6.5 (against fallback pg-mem/DefaultJobQueue — see precondition above).
 - SubscriptionPlan / OrganizationSubscription foundation is implemented.
 - BbbPlatformCapacityPolicy and plan-based capacity enforcement are implemented.
 - Capacity policy Portal Admin API/dashboard is implemented.
-- **Juspay subscription billing — ALL STEPS COMPLETE** (Step 0–6): provider-contract verified (ADR-037), webhook ingestion (fail-closed), real recurring charge (POST /txns), Portal Admin Dashboard (Billing nav), production secret hardening (AES-256-GCM), full lifecycle e2e regression. **Phase 2 Juspay integration is production-ready.**
+- **Juspay subscription billing — feature-complete** (Step 0–6): provider-contract verified against docs (ADR-037), webhook ingestion (fail-closed Basic Auth + HMAC), real recurring charge (POST /txns), Portal Admin Dashboard (Billing nav with 4 routes), production secret hardening (AES-256-GCM encryption at rest, fail-closed in production), full lifecycle e2e regression suite. **Pending: live provider-contract verification and production credential rollout.**
 - **Phase 1.5 blockers resolved** — all five remaining blockers closed:
   - FEAT-002 schema migration — verified already applied (Vendure CLI: no schema changes; `sourceType` + `isUnbounded` confirmed in DB)
   - Next.js public instructor/CMS pages — CMS page route (`/[locale]/page/[slug]`) added; instructor page already existed
@@ -52,33 +64,9 @@
 
 ### Still pending before calling Juspay production-ready
 
-1. **Provider-contract verification** — verify the exact sandbox/live Juspay mandate, charge, webhook, signature, idempotency, retry, order-ID and transaction-ID contracts. The implementation seam is ready; provider verification is still a release gate.
-2. **Portal Admin billing surface** — read-only mandate status, payment-attempt ledger, webhook/reconciliation incidents and operational filters.
-3. **Production hardening** — encrypt stored webhook credentials, complete secrets review, verify production credentials, and finish regression/e2e coverage.
-
-### Runtime environment issue found on 2026-08-30
-
-The application was started with:
-
-```text
-DB_HOST=localhost
-DB_PORT=5435
-REDIS_HOST=localhost
-REDIS_PORT=6385
-```
-
-The intended development infrastructure is supplied by Cloudflare Access TCP tunnels:
-
-```text
-cloudflared access tcp --hostname db.saa9vi.com --url 127.0.0.1:5435
-cloudflared access tcp --hostname redis.saa9vi.com --url 127.0.0.1:6385
-```
-
-The tunnels reported local listeners, but the application still reported PostgreSQL and Redis as unreachable and therefore fell back to pg-mem and `DefaultJobQueuePlugin`.
-
-**Next verification:** use `127.0.0.1` rather than `localhost` in `.env`, then independently verify the tunnels with `pg_isready`/`psql` and `redis-cli` before starting Vendure. The current startup log proves that the fallback path works; it does not prove connectivity to the intended public PostgreSQL/Redis services.
-
-For real runtime verification, the application must start against the intended PostgreSQL and Redis services rather than the fallback implementations.
+1. **Provider-contract verification** — verify the exact sandbox/live Juspay mandate, charge, webhook, signature, idempotency, retry, order-ID and transaction-ID contracts against the live Juspay sandbox API. The implementation seam is ready; provider verification is still a release gate.
+2. **Production credential rollout** — provision real production Juspay API keys and webhook credentials, configure `JUSPAY_WEBHOOK_*` env vars, and confirm the fail-closed guards behave correctly in a `NODE_ENV=production` deployment.
+3. **E2e coverage gaps** — the existing 552-line `juspay-webhook.e2e-spec.ts` covers auth, dedupe, concurrency, and queue-failure semantics. Not yet covered: live sandbox charge round-trip, mandate pause/revoke lifecycle, and dunning (past_due → retry → cancellation) flow.
 
 ---
 
@@ -93,12 +81,11 @@ PHASE 2 — SUBSCRIPTION BILLING & CAPACITY POLICY
 [x] Plan-based BBB room capacity enforcement
 [x] Portal Admin capacity policy surface
 [x] Subscription capacity-grant integration
-[x] Juspay Steps 0–6 implementation (including Dashboard, secret hardening, e2e)
+[x] Juspay Steps 0–6 implementation (Dashboard, secret hardening, e2e)
 
-[ ] Juspay provider-contract verification
-[ ] Portal Admin billing/mandate/payment-attempt surface
-[ ] Production credential/secrets hardening
-[ ] Final Juspay regression/e2e verification
+[ ] Juspay provider-contract verification (live sandbox)
+[ ] Production credential rollout and fail-closed verification
+[ ] E2e coverage gaps (sandbox round-trip, mandate lifecycle, dunning)
 
 [ ] Tenant onboarding flow in storefront
 [ ] NavigationMenu entity in CMS
