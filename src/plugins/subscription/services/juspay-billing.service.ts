@@ -51,8 +51,8 @@ export class JuspayBillingService {
             };
         }
 
-        try {
-            const response = await this.sdk.executeMandateCharge({
+                        try {
+            const chargeResult = await this.sdk.executeMandateCharge({
                 mandate_id: params.mandateId,
                 amount: params.amountPaise / 100, // paise → rupees
                 order_id: params.orderId,
@@ -60,15 +60,13 @@ export class JuspayBillingService {
                 description: `SubscriptionInvoice ${params.invoiceId}`,
             });
             this.logger.log(
-                `Mandate charge initiated for subscription ${params.subscriptionId} (order ${response.order_id}, status ${response.status}) — awaiting webhook for terminal outcome`,
+                `Mandate charge ${chargeResult.status} for subscription ${params.subscriptionId} (order ${chargeResult.juspayOrderId}) — webhook will reconcile terminal outcome`,
             );
-            // HTTP 200 here means Juspay ACCEPTED the request. The terminal
-            // debit result arrives asynchronously via webhook.
-            return {
-                status: "initiated",
-                juspayOrderId: response.order_id,
-                txnId: response.txn_id,
-            };
+            // executeMandateCharge() already maps the Juspay response status
+            // to our tri-state (initiated/succeeded/failed). A 200 from Juspay
+            // means the charge request was accepted — the terminal debit result
+            // arrives asynchronously via webhook. No remapping is needed here.
+            return chargeResult;
         } catch (err) {
             this.logger.error(
                 `Mandate charge FAILED for subscription ${params.subscriptionId}: ${(err as Error).message}`,

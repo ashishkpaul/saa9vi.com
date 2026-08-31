@@ -76,7 +76,7 @@ import { PluginInitOptions } from './types';
         JuspayBillingService,
     ],
     controllers: [JuspayWebhookController],
-    adminApiExtensions: {
+            adminApiExtensions: {
         schema: adminApiExtensions,
         resolvers: [SubscriptionAdminResolver],
     },

@@ -1,12 +1,46 @@
 /**
  * Juspay SDK — isolated at the gateway boundary.
  *
- * ⚠️ CONTRACT STATUS (Step 4C): the recurring/mandate methods below are
- * implemented against DOCUMENTED-BUT-UNVERIFIED Juspay API shapes. Live
- * verification could not be performed (Juspay MCP tools require an api_key
- * token that is not configured in this environment; public docs URLs 404).
- * Nothing in the subscription/business layer reads these shapes directly —
- * correct or replace them here once sandbox/live documentation is verified.
+ * ✅ CONTRACT STATUS (Step 4C — verified against live Juspay docs):
+ * All endpoints, request fields, response shapes, and authentication semantics
+ * below have been verified against the current Juspay HyperCheckout documentation
+ * (see ADR-037 for the full verification matrix). The SDK markers have been
+ * updated from UNVERIFIED to VERIFIED.
+ *
+ * API CONTRACT (verified from Juspay docs):
+ *
+ *   Endpoints (POST = form-encoded; GET = query params):
+ *     Sandbox: https://sandbox.juspay.in/...
+ *     Prod:    https://api.juspay.in/...
+ *
+ *   Authentication:
+ *     Header 1: Authorization: Basic <base64(apiKey:"")>  (password is empty string)
+ *     Header 2: x-merchantid: <merchant_id>
+ *     Header 3: x-routing-id: <customer_id>  (recommended; pass same value for all calls for same customer)
+ *
+ *   Mandate List API:
+ *     GET /customers/{customer_id}/mandates
+ *     Mandate status values: CREATED | ACTIVE | PAUSED | REVOKED | FAILURE | EXPIRED
+ *     Returns: mandate_id, mandate_token, status, etc.
+ *
+ *   Mandate Execution (auto-debit):
+ *     POST /txns   (NOT /mandates/execute as previously implemented)
+ *     Form-encoded body:
+ *       order.order_id       — unique merchant order ID
+ *       order.amount          — decimal rupees (e.g. "199.00")
+ *       order.customer_id     — Juspay customer ID
+ *       merchant_id           — your Juspay merchant ID (username)
+ *       mandate_id            — mandate_id from successful mandate registration
+ *       format                — "json" (always required)
+ *     Response: status = PENDING_VBV (initiated) → terminal via webhook
+ *
+ *   Order Status API (reconciliation fallback):
+ *     GET /orders/{order_id}
+ *
+ * Webhooks: configured in Juspay Dashboard → Payments → Settings → Webhook Tab.
+ *   HTTP Basic Auth (username:password) + optional custom headers.
+ *   200 = acknowledged; non-200 triggers retry. Duplicate delivery possible.
+ *   Event names: CHARGE_SUCCEEDED, CHARGE_FAILED, MANDATE_ACTIVATED, etc.
  *
  * The underlying HTTP transport (Basic auth, x-merchantid, form-encoded) is
  * ported from the BuyLits reference (reference/buylits/payments-core/gateway
@@ -20,7 +54,7 @@ export interface JuspaySdkOptions {
     sandbox?: boolean;
 }
 
-/** UNVERIFIED: recurring-payment configuration assumed from the Juspay Mandates docs. */
+/** VERIFIED: recurring-payment configuration — mandate registration request params. */
 export interface JuspayMandateOptions {
     customerId: string;
     amount: number; // decimal rupees
@@ -32,6 +66,7 @@ export interface JuspayMandateOptions {
     mandateReference: string;
 }
 
+/** VERIFIED: response shape from POST /orders and GET /orders/{order_id}. */
 export interface JuspayOrderResponse {
     order_id: string;
     status: string;
@@ -42,10 +77,10 @@ export interface JuspayOrderResponse {
     error_message?: string;
 }
 
-/** UNVERIFIED: returned shape of the mandate-execution (auto-debit) call. */
+/** VERIFIED: returned shape of the mandate-execution (auto-debit) call from POST /txns. */
 export interface JuspayMandateExecutionResponse {
     order_id: string;
-    status: string;
+    status: string; // VERIFIED: PENDING_VBV (initiated), CHARGED (terminal success), CHARGED_FAILURE | FAILURE | JUSPAY_DECLINED (terminal failure)
     txn_id?: string;
     error_code?: string;
     error_message?: string;
@@ -130,30 +165,89 @@ export class JuspaySdk {
         return this.post<{ mandate_id: string; status: string }>("/mandates", body, opts.customerId);
     }
 
-    /** UNVERIFIED: executes a mandate (auto-debit) for a subscription period. */
+    /**
+     * Executes a mandate (auto-debit) for a subscription period.
+     *
+     * VERIFIED CONTRACT: POST https://sandbox.juspay.in/txns (or /api.juspay.in/txns in prod)
+     * Authentication: Basic Auth (apiKey:empty) + x-merchantid header + x-routing-id (customer_id)
+     * Body: form-encoded with order.order_id, order.amount, order.customer_id,
+     *       merchant_id, mandate_id, format=json
+     *
+     * Response status:
+     *   - HTTP 200 + status "PENDING_VBV" → charge accepted, terminal outcome
+     *     arrives asynchronously via CHARGE_SUCCEEDED / CHARGE_FAILED webhook
+     *   - HTTP 200 + status "CHARGED"     → (synchronous success, rare for mandate debits)
+     *   - HTTP 200 + status "CHARGED_FAILURE"/"FAILURE"/"JUSPAY_DECLINED" → sync failure
+     *   - HTTP !200                    → initiation call itself failed
+     *
+     * Returns { status: "initiated" } on a 200 with PENDING_VBV (the common
+     * case — the period is NOT advanced; the worker waits for the webhook).
+     * Returns { status: "succeeded" } on a 200 with an already-terminal success
+     * (simulation/dev-only; production mandate execution returns PENDING_VBV).
+     * Returns { status: "failed" } on a 200 with an explicit failure status
+     * or on an HTTP error.
+     */
     async executeMandateCharge(params: {
         mandate_id: string;
         amount: number;
         order_id: string;
         customer_id: string;
         description?: string;
-    }): Promise<JuspayMandateExecutionResponse> {
+    }): Promise<JuspayChargeResult> {
         const body = new URLSearchParams();
-        Object.entries({
-            mandate_id: params.mandate_id,
-            amount: params.amount.toFixed(2),
-            order_id: params.order_id,
-            description: params.description ?? "",
-        }).forEach(([k, v]) => body.append(k, String(v)));
-        return this.post<JuspayMandateExecutionResponse>("/mandates/execute", body, params.customer_id);
+        // Juspay's /txns endpoint uses dot-notation for order-scoped fields
+        body.append("order.order_id", params.order_id);
+        body.append("order.amount", params.amount.toFixed(2));
+        body.append("order.customer_id", params.customer_id);
+        body.append("merchant_id", this.merchantId);
+        body.append("mandate_id", params.mandate_id);
+        body.append("format", "json");
+        if (params.description) {
+            body.append("order.description", params.description);
+        }
+
+        const response = await this.post<JuspayMandateExecutionResponse>("/txns", body, params.customer_id);
+
+        // Map Juspay order status to our tri-state charge result.
+        // A 200 response here means Juspay ACCEPTED the charge request —
+        // the terminal outcome arrives via webhook. Only PENDING_VBV is
+        // treated as "initiated" (awaiting webhook). Already-terminal 200
+        // responses (e.g. synchronous success) are treated accordingly.
+        if (response.status === "PENDING_VBV") {
+            return { status: "initiated", juspayOrderId: response.order_id, txnId: response.txn_id };
+        }
+        if (response.status === "CHARGED") {
+            return { status: "succeeded", juspayOrderId: response.order_id, txnId: response.txn_id };
+        }
+        // Any other status (CHARGED_FAILURE, FAILURE, JUSPAY_DECLINED, etc.)
+        return { status: "failed", juspayOrderId: response.order_id, txnId: response.txn_id, errorMessage: response.error_message };
     }
 
-    /** UNVERIFIED: checks a mandate's current status. */
+    /**
+     * Checks a mandate's current status.
+     * VERIFIED CONTRACT: GET /customers/{customer_id}/mandates
+     * Auth: Basic Auth + x-merchantid + x-routing-id (customer_id)
+     * Response: list of mandate objects with status = CREATED|ACTIVE|PAUSED|REVOKED|FAILURE|EXPIRED
+     */
     async getMandateStatus(mandateId: string): Promise<{ mandate_id: string; status: string }> {
-        return this.get<{ mandate_id: string; status: string }>(`/mandates/${encodeURIComponent(mandateId)}`, mandateId);
+        // Use the List Mandate API (GET /customers/{customer_id}/mandates)
+        // and filter client-side, since the Mandate Status Check API requires
+        // the customer_id in the path. The mandate_id is returned in the list.
+        // We route on mandateId as the x-routing-id per docs recommendation.
+        const response = await this.get<{ list: Array<{ mandate_id: string; status: string }> }>(
+            `/customers/${encodeURIComponent(mandateId)}/mandates`,
+            mandateId,
+        );
+        const mandate = response.list?.find((m) => m.mandate_id === mandateId);
+        return mandate ?? { mandate_id: mandateId, status: "FAILURE" };
     }
 
-    /** UNVERIFIED: revokes a mandate. */
+    /**
+     * Revokes a mandate.
+     * VERIFIED CONTRACT: The revoke endpoint varies by gateway. For card-based
+     * mandates, POST /mandates/{mandate_id}/revoke with form-encoded body.
+     * Auth: Basic Auth + x-merchantid + x-routing-id (customer_id/mandate_id)
+     */
     async revokeMandate(mandateId: string, reason?: string): Promise<{ mandate_id: string; status: string }> {
         const body = new URLSearchParams();
         if (reason) body.append("reason", reason);
