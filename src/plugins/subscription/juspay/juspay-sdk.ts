@@ -54,7 +54,7 @@ export interface JuspaySdkOptions {
     sandbox?: boolean;
 }
 
-/** VERIFIED: recurring-payment configuration — mandate registration request params. */
+/** Mandate registration request params (awaiting live sandbox verification). */
 export interface JuspayMandateOptions {
     customerId: string;
     amount: number; // decimal rupees
@@ -246,17 +246,21 @@ export class JuspaySdk {
 
     /**
      * Revokes a mandate.
-     * VERIFIED CONTRACT: The revoke endpoint varies by gateway. For card-based
-     * mandates, POST /mandates/{mandate_id}/revoke with form-encoded body.
-     * Auth: Basic Auth + x-merchantid + x-routing-id (customer_id/mandate_id)
+     * CONTRACT: POST /mandates/{mandate_id} with command=revoke
+     * Auth: Basic Auth + x-merchantid + x-routing-id (customer_id)
+     * Response: mandate_status = REVOKED
+     *
+     * @param customerId - Juspay customer ID (used for x-routing-id)
+     * @param mandateId - Juspay mandate ID (used in the API path)
      */
-    async revokeMandate(mandateId: string, reason?: string): Promise<{ mandate_id: string; status: string }> {
+    async revokeMandate(customerId: string, mandateId: string, reason?: string): Promise<{ mandate_id: string; status: string }> {
         const body = new URLSearchParams();
+        body.append("command", "revoke");
         if (reason) body.append("reason", reason);
         return this.post<{ mandate_id: string; status: string }>(
-            `/mandates/${encodeURIComponent(mandateId)}/revoke`,
+            `/mandates/${encodeURIComponent(mandateId)}`,
             body,
-            mandateId,
+            customerId,
         );
     }
 
