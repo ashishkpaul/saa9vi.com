@@ -208,7 +208,7 @@ const assertions: ContractAssertion[] = [
             if (!generatedMandateId) {
                 return { pass: false, expected: "mandate available", actual: "no mandate_id from previous step" };
             }
-            const resp = await sdk.getMandateStatus(generatedMandateId);
+            const resp = await sdk.getMandateStatus(generatedCustomerId, generatedMandateId);
             const validStatuses = ["CREATED", "ACTIVE", "PAUSED", "REVOKED", "FAILURE", "EXPIRED"];
             const pass = validStatuses.includes(resp.status);
             return {

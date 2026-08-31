@@ -228,15 +228,17 @@ export class JuspaySdk {
      * VERIFIED CONTRACT: GET /customers/{customer_id}/mandates
      * Auth: Basic Auth + x-merchantid + x-routing-id (customer_id)
      * Response: list of mandate objects with status = CREATED|ACTIVE|PAUSED|REVOKED|FAILURE|EXPIRED
+     *
+     * @param customerId - Juspay customer ID (used in the API path)
+     * @param mandateId - Juspay mandate ID (used for client-side filtering)
      */
-    async getMandateStatus(mandateId: string): Promise<{ mandate_id: string; status: string }> {
+    async getMandateStatus(customerId: string, mandateId: string): Promise<{ mandate_id: string; status: string }> {
         // Use the List Mandate API (GET /customers/{customer_id}/mandates)
-        // and filter client-side, since the Mandate Status Check API requires
-        // the customer_id in the path. The mandate_id is returned in the list.
-        // We route on mandateId as the x-routing-id per docs recommendation.
+        // and filter client-side to find the specific mandate by mandate_id.
+        // Route on customerId as the x-routing-id per docs recommendation.
         const response = await this.get<{ list: Array<{ mandate_id: string; status: string }> }>(
-            `/customers/${encodeURIComponent(mandateId)}/mandates`,
-            mandateId,
+            `/customers/${encodeURIComponent(customerId)}/mandates`,
+            customerId,
         );
         const mandate = response.list?.find((m) => m.mandate_id === mandateId);
         return mandate ?? { mandate_id: mandateId, status: "FAILURE" };
