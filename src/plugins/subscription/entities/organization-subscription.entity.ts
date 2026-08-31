@@ -62,6 +62,21 @@ export class OrganizationSubscription extends VendureEntity implements ChannelAw
   @Column({ nullable: true })
   cancelledAt: Date;
 
+  /**
+   * Dunning retry count — incremented by the dunning job each time a
+   * past_due subscription is re-enqueued for payment retry (RFC-001 §4.2).
+   * Null = never been dunning-retried.
+   */
+  @Column({ type: "int", nullable: true })
+  dunningRetryCount: number | null;
+
+  /**
+   * Timestamp of the last dunning retry attempt. Used by the dunning job
+   * to enforce the retry interval (DUNNING_RETRY_INTERVAL_DAYS).
+   */
+  @Column({ type: "timestamp", nullable: true })
+  lastDunningAttemptAt: Date | null;
+
   /** Juspay customer reference for recurring charges. */
   @Column({ nullable: true })
   billingCustomerId: string;

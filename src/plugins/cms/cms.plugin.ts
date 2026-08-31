@@ -3,9 +3,11 @@ import { bannerActivatorTask } from './jobs/banner-activator.task';
 import { articlePermission, bannerPermission, pagePermission } from './constants';
 import { Article } from './entities/article.entity';
 import { Banner } from './entities/banner.entity';
+import { NavigationMenu } from './entities/navigation-menu.entity';
 import { Page } from './entities/page.entity';
 import { ArticleService } from './services/article.service';
 import { BannerService } from './services/banner.service';
+import { NavigationMenuService } from './services/navigation-menu.service';
 import { PageService } from './services/page.service';
 import { CmsChannelAssignmentPolicy } from './services/cms-channel-assignment.policy';
 import { CmsAdminResolver } from './api/cms-admin.resolver';
@@ -15,8 +17,8 @@ import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
 @VendurePlugin({
     compatibility: '^3.0.0',
     imports: [PluginCommonModule],
-    entities: [Article, Banner, Page],
-    providers: [ArticleService, BannerService, PageService, CmsChannelAssignmentPolicy],
+    entities: [Article, Banner, Page, NavigationMenu],
+    providers: [ArticleService, BannerService, PageService, NavigationMenuService, CmsChannelAssignmentPolicy],
     adminApiExtensions: {
         schema: adminApiExtensions,
         resolvers: [CmsAdminResolver],

@@ -60,6 +60,8 @@
 - `GrantReaderService` — implemented
 - Capacity Intelligence System (CI-001 to CI-006) — implemented
 - Tenant role reconciliation tooling (`tenant:roles:check` / `tenant:roles:repair`) — added
+- Dunning flow (RFC-001 §4.2) — scheduled retry + auto-cancellation task implemented
+- NavigationMenu entity in CMS — entity, service, migration applied
 - E2E suite: 44 tests passing
 
 ### Still pending before calling Juspay production-ready
@@ -83,13 +85,12 @@ PHASE 2 — SUBSCRIPTION BILLING & CAPACITY POLICY
 [x] Subscription capacity-grant integration
 [x] Juspay Steps 0–6 implementation (Dashboard, secret hardening, e2e)
 
+[x] NavigationMenu entity in CMS
 [ ] Juspay provider-contract verification (live sandbox)
 [ ] Production credential rollout and fail-closed verification
-[ ] E2e coverage gaps (sandbox round-trip, mandate lifecycle, dunning)
+[ ] E2e coverage gaps (sandbox round-trip, mandate lifecycle)
 
 [ ] Tenant onboarding flow in storefront
-[ ] NavigationMenu entity in CMS
-[ ] Banner BullMQ scheduling
 [ ] Custom-domain routing via Caddy
 ```
 

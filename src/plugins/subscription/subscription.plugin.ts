@@ -23,6 +23,7 @@ import { JuspayBillingService } from './services/juspay-billing.service';
 import { JuspayEncryptionService } from './services/juspay-encryption.service';
 import { JuspaySdk } from './juspay/juspay-sdk';
 import { subscriptionRenewalTask } from './jobs/subscription-renewal.task';
+import { subscriptionDunningTask } from './jobs/subscription-dunning.task';
 import { PluginInitOptions } from './types';
 
 @VendurePlugin({
@@ -98,6 +99,12 @@ import { PluginInitOptions } from './types';
             config.schedulerOptions.tasks = [
                 ...(config.schedulerOptions.tasks ?? []),
                 subscriptionRenewalTask,
+            ];
+        }
+        if (!existingIds.has(subscriptionDunningTask.id)) {
+            config.schedulerOptions.tasks = [
+                ...(config.schedulerOptions.tasks ?? []),
+                subscriptionDunningTask,
             ];
         }
         return config;

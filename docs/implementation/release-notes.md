@@ -1,5 +1,20 @@
 # Release Notes
 
+## v1.16 — 2026-08-31
+
+### New
+
+- **NavigationMenu entity in CMS** — `NavigationMenu` entity with JSONB items array, one menu per channel (unique channelId), `NavigationMenuService` with full CRUD, registered in `CmsPlugin`. Migration `1788162583347` generated via Vendure CLI and applied.
+- **Dunning flow (RFC-001 §4.2)** — `subscription-dunning` scheduled task: discovers `past_due` subscriptions, re-enqueues renewal attempts per retry interval (`DUNNING_RETRY_INTERVAL_DAYS`, default 3), auto-cancels after max retries (`DUNNING_MAX_RETRIES`, default 4). `OrganizationSubscription` gains `dunningRetryCount` and `lastDunningAttemptAt` columns.
+- **Phase 2 remaining work** — Banner BullMQ scheduling confirmed complete (BUG-005/CMS-002). NavigationMenu and dunning flow now complete. Remaining: tenant onboarding flow in storefront, custom domain routing via Caddy.
+
+### Tests / Verification
+
+- TypeScript compilation clean; production build clean.
+- Migration applied; navigation_menu table and dunning columns verified against PostgreSQL.
+
+---
+
 ## v1.15 — 2026-08-31
 
 ### New

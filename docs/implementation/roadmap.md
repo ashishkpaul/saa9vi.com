@@ -71,9 +71,10 @@
 
 ### Remaining Phase 2 product/platform work
 
+- [x] `NavigationMenu` entity in CMS — entity, service, migration generated/applied
+- [x] Banner BullMQ scheduling (CMS-002) — banner-activator task registered (BUG-005)
+- [x] Dunning flow — scheduled task with retry schedule + auto-cancellation (RFC-001 §4.2)
 - [ ] Tenant onboarding flow in storefront
-- [ ] `NavigationMenu` entity in CMS
-- [ ] Banner BullMQ scheduling (CMS-002)
 - [ ] Custom domain routing via Caddy
 
 ---
