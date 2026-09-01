@@ -840,7 +840,7 @@ Every entity proposed above references one or more Phase 1 entities (from `platf
 
 ## Appendix C: Phase 3 Marketplace Integration Points for Subscription Tenants
 
-The Phase 3 marketplace (ADR-014) intersects with Phase 2 subscription billing in three specific ways. These are not Phase 2 deliverables, but the Phase 2 schema must not block them.
+The Phase 3 marketplace (ADR-021) intersects with Phase 2 subscription billing in three specific ways. These are not Phase 2 deliverables, but the Phase 2 schema must not block them.
 
 ### C-1: Subscription Plan as a Marketplace-Discoverable Product
 
@@ -852,7 +852,7 @@ A `SubscriptionPlan` with `isPublic = true` should be indexable in the `saa9vi_m
 
 When a student discovers a subscription plan via the marketplace and checks out, the resulting `SubscriptionEnrollment` must carry `orderSource: 'marketplace'` for Stream 2 commission attribution.
 
-**Phase 2 schema requirement:** `SubscriptionEnrollment.orderSource: 'marketplace' | 'direct' | 'referral' | null` (nullable, set at enrollment creation from session referrer). This mirrors the `Order.customFields.orderSource` field (ADR-014).
+**Phase 2 schema requirement:** `SubscriptionEnrollment.orderSource: 'marketplace' | 'direct' | 'referral' | null` (nullable, set at enrollment creation from session referrer). This mirrors the `Order.customFields.orderSource` field (ADR-021). Note: the classification mechanism (who stamps `orderSource`) is an open design question in ADR-021 — the storefront must pass a raw `referrerCode`/`utm_source` and Vendure-side logic must classify, per INV-008.
 
 ### C-3: Review Aggregation on Subscription Plans
 

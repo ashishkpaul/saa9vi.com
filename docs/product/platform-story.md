@@ -97,6 +97,8 @@ The marketplace is a **discovery layer only**. It does not transact. The platfor
 
 **CommissionLedger $0-row pattern:** A commission row is written for every `orderSource = 'marketplace'` order regardless of the current `MARKETPLACE_COMMISSION_PERCENT` rate. When the rate is 0%, the row is written with `amountInPaise: 0` to preserve complete GMV history.
 
+> **ⓘ Note:** `orderSource` is stamped by Vendure-side logic from a raw `referrerCode`/`utm_source` passed by the storefront — the storefront never classifies orders itself (INV-008; see ADR-021 Open Design Questions).
+
 ---
 
 ## Billing Lifecycle

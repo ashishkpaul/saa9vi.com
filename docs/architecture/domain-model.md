@@ -450,3 +450,5 @@ Pending → Provisioning → Active → Completed → Archived
 - `amountInPaise: 0` when `MARKETPLACE_COMMISSION_PERCENT` is 0%
 - Rows never updated, never deleted
 - No rows for `orderSource = 'direct'` or `'referral'`
+
+> **ⓘ Attribution dependency:** Commission rows depend on `Order.customFields.orderSource` being stamped correctly at checkout. The classification mechanism is an open design question in ADR-021: the storefront passes a raw `referrerCode`/`utm_source`; Vendure-side `OrderProcess` logic classifies (INV-008). Must be settled before Phase 3 implementation.

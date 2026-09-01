@@ -1,5 +1,17 @@
 As the lead architect for this project, would you agree with this story and the corresponding ADR?
 
+
+> **✅ Resolution note (post-review sync):** All items in this assessment have since been addressed in `docs/architecture/platform-adr.md`:
+>
+> | Item | Status |
+> |---|---|
+> | 1. BBB migration framing ("interim, not incomplete") | ✅ Fixed — ADR-002 now states primary join path migrated; `BbbEnrollment` scoped to trial-conversion audit trail, Phase 1.5 cleanup pending. INV-003 updated to match. |
+> | 2. PILOS config surface claim | ✅ Resolved by *building* the surface — `cameraRatio`, `micRatio`, `videoWeight`, `micWeight`, `listenerWeight` were added to `BigBlueButtonPluginOptions` and wired to `BBB_CAMERA_RATIO`/etc. env vars in `vendure-config.ts`, making the ADR's "operator-configurable" claim true. See `roadmap.md` Phase 1.5 completed list. |
+> | 3. Grace-period race condition | ✅ Fixed — ADR-026 rationale explicitly documents the delayed-BullMQ-job window as an accepted business tolerance. |
+> | 4. `simulateBbbWebhook` not implemented | ⚠️ Still open (distinct from BUG-020) — BUG-020 only fixed the *reference*: CausalMapper now returns `isPending: true` for the `BbbWebhookEvent` step so LoadOrchestrator skips it cleanly. The `simulateBbbWebhook` resolver itself still does not exist in `BbbAdminResolver` (confirmed by the pending-skip comment in `causal-mapper.ts`); both entries are simultaneously true — a naming/reference fix and the unimplemented mutation. |
+> | 5. Commission attribution gap | ✅ Fixed — ADR-021 now carries an "Open Design Questions" block (storefront passes `referrerCode`/`utm_source`; Vendure classifies per INV-008). Cross-referenced from RFC-001 Appendix C-2, `domain-model.md` (DL-030), and `platform-story.md`. |
+> | Structural: LoadSimulationPlugin on Shop API | ✅ Fixed — BUG-019: `runLoadTest` moved to Admin API with `@Allow(Permission.SuperAdmin)` (verified in `load-simulation.resolver.ts`; `plugin-map.md` lists `LoadSimulationAdminResolver` under Admin API SuperAdmin). |
+
 > I've read both documents thoroughly and reviewed the source code. Here's my honest assessment:
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -48,7 +48,7 @@ Seller (Vendure core — Phase 3)
 
 **Rule:** All access to paid content — live sessions, recorded courses, workshops, coaching packages — is gated through a single `Entitlement` entity with a uniform `hasAccess(ctx, customerId, type, resourceId)` interface.
 
-**Current status:** `BbbEntitlement` entity and `BbbEntitlementService` are live. `BbbEnrollment` remains as legacy room-access path.
+**Current status:** `BbbEntitlement` entity and `BbbEntitlementService` are live. The primary room-access path (`joinRoom()` → `BbbEntitlementService.hasAccess()`) is migrated (ADR-002). `BbbEnrollment` is retained only for the trial-conversion audit trail (`convertTrialToEnrollment`), pending Phase 1.5 cleanup.
 
 **Rejection criterion:** Any new entity named `*Enrollment` or `*Access` that is not `BbbEnrollment` backward-compatibility is rejected.
 

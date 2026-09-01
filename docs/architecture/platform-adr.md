@@ -31,18 +31,20 @@
 
 **Status:** Active
 
-**Decision:** `BbbEnrollment` is an interim access mechanism. `BbbEntitlement` is the target access primitive.
+**Decision:** `BbbEnrollment` is an interim access mechanism. `BbbEntitlement` is the target access primitive. The primary join path (`joinRoom()`) has been migrated to use `BbbEntitlementService.hasAccess()`. `BbbEnrollment` is retained for the trial-conversion audit trail (`convertTrialToEnrollment` still creates `BbbEnrollment` rows via `trial_conversion` source) pending Phase 1.5 cleanup.
 
-**Rationale:** Generalizing now prevents 5 separate access tables in 18 months.
+**Rationale:** Generalizing now prevents 5 separate access tables in 18 months. The migration is complete for the primary room-access path; `BbbEnrollment` cleanup is deferred to avoid breaking the trial-conversion audit trail.
 
 **Alternatives Rejected:**
 
 - Keep `BbbEnrollment` forever (accumulates tech debt per new product type)
+- Migrating trial-conversion path in Phase 1 (breaks audit trail for existing trial conversions)
 
 **Consequences:**
 
 - `BbbEntitlement` supports `bbb_session` and `bbb_room` types
-- `BbbEnrollment` remains as legacy room-access path
+- `BbbEnrollment` remains as legacy room-access path for trial conversions only
+- `convertTrialToEnrollment` still writes `BbbEnrollment` rows (Phase 1.5 cleanup pending)
 - See INV-003 in `docs/architecture/invariants.md`
 
 ---
@@ -332,6 +334,10 @@
 
 - Single-stream SaaS only (leaves growth revenue on table)
 - Commission on all traffic (penalises academies for existing students, risks churn)
+
+**Open Design Questions:**
+
+- **Stream 2 commission attribution:** `Order.customFields.orderSource = 'marketplace'` must be set at checkout for commission attribution. The current spec leaves the classification mechanism undefined. The storefront **must not** classify orders as marketplace-sourced (violates INV-008 — business logic belongs in Vendure, not the storefront). The correct design: the storefront passes a `referrerCode` or `utm_source` parameter to the checkout mutation, and Vendure-side logic classifies the order. This design must be settled before Phase 3 implementation begins — see RFC-001 Appendix C-2 for the subscription checkout equivalent.
 
 ---
 
@@ -644,3 +650,5 @@ Tenant Channel (test-academy-f9hmus)
 
 - Using `assignToCurrentChannel` globally for CMS (leaks tenant content to default channel — the BUG-031 root cause).
 - Removing default-channel content entirely (would break platform CMS).
+
+> **ⓘ Platform-CMS vs. Academy-CMS split:** The channel ownership model creates a natural seam between Platform CMS (SuperAdmin-scoped, default channel) and Academy CMS (Tenant-scoped, tenant channel). This seam opens the door to swapping in an external CMS (e.g., WordPress, Strapi, Contentful) for **SuperAdmin-scoped content only** — the default channel's content is platform-controlled and doesn't need multi-tenant isolation. The door remains **closed for tenant-scoped content** because Academy CMS entities are tightly coupled to Vendure's channel-scoped permission model, and introducing an external CMS there would break the channel-isolation invariants (INV-001, INV-003) that tenant content depends on.
