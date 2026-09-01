@@ -43,11 +43,11 @@ Initial audit finding revised after direct PostgreSQL inspection: the three tabl
 
 **Resolution (Gate 1.1):** dropped the three empty out-of-band tables → generated `1788265440266-MarketplaceAdEntities` via Vendure CLI (covers exactly the 3 tables + 3 indexes, nothing unrelated) → inspected the generated SQL → applied via `vendure migrate -r` → verified tables, indexes (`channelId` btree on campaign, **UNIQUE** `channelId` on wallet, `campaignId` btree on ledger), PKs, and the `migrations` bookkeeping row. Schema is now fully traceable.
 
-### F3 — BUG-023 verified in code, contract still incomplete
-`channelToken`/`academySlug` are correctly resolved at index time (marketplace-indexer.service.ts:141–155). However the document lacks `customDomain` — the storefront cannot complete the redirect contract (academySlug + channelToken + customDomain) from the ES document alone. **Action: add `customDomain` (from `TenantProfile`) to both document types.**
+### F3 — BUG-023 redirect contract: resolved
+`channelToken` and `academySlug` were already correctly resolved at index time. Gate 1.2 added `customDomain` from the authoritative `TenantProfile` to both marketplace document types and ES mappings. The marketplace projection now contains the complete redirect contract. Status: ✅ Resolved.
 
-### F4 — `subjectTags` is plumbed but never populated
-Indexer writes `subjectTags: []` unconditionally; the search resolver filters on it. Any `subjectTags` filter today returns nothing. **Action: populate from session/academy taxonomy (Phase 3A, alongside `MarketplaceCategoryIndex`).**
+### F4 — subjectTags: resolved
+The resolver was previously filtering on `subjectTags` while the indexer emitted `[]`. Gate 1.3 established `BbbScheduledSession.subjectTags` as the authoritative source (tenant-controlled, via `CreateBbbScheduledSessionInput.subjectTags` and governed migration `1788266256055`), and projects real tags into the marketplace session document. `MarketplaceCategory` remains intentionally deferred until category browsing requires a first-class taxonomy. Status: ✅ Resolved.
 
 ### F5 — Event coverage fails the projection-completeness criterion
 The acceptance criterion — *every field that can affect marketplace visibility, routing, filtering, or ranking has a deterministic projection update path* — is currently met only for instructor CRUD and ProductVariant changes. Missing: session published/cancelled/finished, review aggregate changes, academy profile (name/domain) changes, campaign start/stop. **Action: extend `MarketplaceEventListener`; write the field→event matrix as part of the canonical document contract.**
@@ -83,3 +83,28 @@ PHASE 3 RELEASE GATE  — exit criteria in roadmap.md
 ```
 
 **Reference only (not a dependency):** Vendure's example `multivendor-plugin` — consulted for seller/channel-assignment patterns; **not installed**, per ADR-019 (no cross-vendor carts; marketplace is discovery-only).
+
+---
+
+## Gate 1.4 — Canonical field→event matrix
+
+The contract: **any mutation that changes marketplace eligibility, routing, filtering, or ranking produces a deterministic projection update.** Triggers are state transitions, not specific internal event-class names. All session paths funnel through the guarded `indexSession()` (F7 rule); the Index behavior column distinguishes REINDEX / REMOVE / NO-OP.
+
+| Marketplace field | Authoritative source | Trigger (state transition) | Index behavior | Implemented via |
+|---|---|---|---|---|
+| `title`, `startTime/endTime`, `subjectTags` | `BbbScheduledSession` | session updated (`updateBbbScheduledSession`) | REINDEX | `SessionUpdatedEvent` → `indexSession()` |
+| `visibility` | `BbbScheduledSession` | PUBLIC↔PRIVATE | REINDEX / REMOVE | `SessionUpdatedEvent` → guarded `indexSession()` |
+| `status` | `BbbScheduledSession` | SCHEDULED→LIVE | REINDEX | `SessionStartedEvent` → `indexSession()` |
+| `status` | `BbbScheduledSession` | →CANCELLED / →FINISHED | REMOVE | `SessionCancelledEvent` / finish paths → guarded `indexSession()` |
+| session created | `BbbScheduledSession` | — | REINDEX (if eligible) | `SessionCreatedEvent` → `indexSession()` |
+| `price`, `stock` | `ProductVariant` | variant created/updated/deleted | REINDEX | `ProductVariantEvent` → `indexSession()` (pre-existing) |
+| academy `businessName`, `customDomain`, logo | `TenantProfile` | profile updated | REINDEX (bulk, whole channel) | `TenantProfileUpdatedEvent` → `handleAcademyProfileChange()` |
+| academy slug | `BbbOrganization` | organization updated | REINDEX (channel) | ⚠️ No event exists yet — add `BbbOrganizationUpdatedEvent` when org-edit API lands |
+| instructor name/bio/photo/tags | `InstructorProfile` | created / updated | REINDEX | `InstructorProfileCreated/UpdatedEvent` (pre-existing) |
+| Bayesian rating | `ProductReview` aggregate | review approved / rejected / hidden | REINDEX (affected sessions only) | `ReviewApproved/Rejected/HiddenEvent` → `handleReviewAggregateChange()` — marketplace consumes the *derived value*, not raw reviews |
+| `isSponsored`, `sponsorBoost` | `MarketplaceAdCampaign` | campaign activated / paused / exhausted / expired / changed | REINDEX (target session only) | ⚠️ Campaign mutation surface not built (Phase 3C) — when implemented, campaign mutations MUST enqueue `addIndexSessionJob(targetSessionId)`; no full-marketplace reindex |
+
+**Campaign coupling rule:** ad state is derived search metadata, not session ownership. Campaign changes reindex only their `targetSessionId` — advertising stays isolated from session lifecycle.
+
+**Review coupling rule:** never subscribe to raw review lifecycle beyond aggregate-affecting transitions; when `RankingMaterializedView` lands (Gate 5), this trigger becomes a ranking-change event.
+

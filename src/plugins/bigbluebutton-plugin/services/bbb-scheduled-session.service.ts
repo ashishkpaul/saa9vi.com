@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { EntityNotFoundError, ForbiddenError } from "@vendure/core";
+import { EntityNotFoundError, EventBus, ForbiddenError } from "@vendure/core";
 import {
   ID,
   Logger,
@@ -14,6 +14,12 @@ import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbOrganizationMember } from "../entities/bbb-organization-member.entity";
 import { Customer, Product, ProductVariant } from "@vendure/core";
 import { BbbChannelAccessService } from "./bbb-channel-access.service";
+import {
+  SessionCancelledEvent,
+  SessionCreatedEvent,
+  SessionStartedEvent,
+  SessionUpdatedEvent,
+} from "../events/bbb-events";
 
 const loggerCtx = "BbbScheduledSessionService";
 
@@ -25,6 +31,7 @@ export class BbbScheduledSessionService {
     private readonly meetingService: BbbMeetingService,
     private readonly memberService: BbbMemberService,
     private readonly channelAccess: BbbChannelAccessService,
+    private readonly eventBus: EventBus,
   ) {}
 
   // ─── Queries ──────────────────────────────────────────────────────────────
@@ -184,6 +191,7 @@ export class BbbScheduledSessionService {
       `Scheduled session ${saved.id} created for org ${org.id} channel ${channelId ?? "none"}: "${input.title}"`,
       loggerCtx,
     );
+    this.eventBus.publish(new SessionCreatedEvent(String(saved.id), saved.channelId ?? null));
 
     return saved;
   }
@@ -199,6 +207,42 @@ export class BbbScheduledSessionService {
       .save(session);
 
     Logger.info(`Scheduled session ${id} cancelled`, loggerCtx);
+    this.eventBus.publish(new SessionCancelledEvent(String(saved.id), saved.channelId ?? null));
+    return saved;
+  }
+
+  /**
+   * Update editable session fields (Gate 1.4 / F5). Publishes
+   * SessionUpdatedEvent so the marketplace projection can reindex or
+   * remove the document (eligibility rule owned by indexSession()).
+   */
+  async update(
+    ctx: RequestContext,
+    id: ID,
+    input: {
+      title?: string;
+      startTime?: string;
+      endTime?: string;
+      subjectTags?: string[];
+      visibility?: string;
+    },
+  ): Promise<BbbScheduledSession> {
+    await this.channelAccess.assertSessionAccess(ctx, id);
+    const session = await this.findById(ctx, id);
+    if (!session) throw new EntityNotFoundError("BbbScheduledSession", id);
+
+    if (input.title !== undefined) session.title = input.title;
+    if (input.startTime !== undefined) session.startTime = new Date(input.startTime);
+    if (input.endTime !== undefined) session.endTime = new Date(input.endTime);
+    if (input.subjectTags !== undefined) session.subjectTags = input.subjectTags;
+    if (input.visibility !== undefined) session.visibility = input.visibility;
+
+    const saved = await this.connection
+      .getRepository(ctx, BbbScheduledSession)
+      .save(session);
+
+    Logger.info(`Scheduled session ${id} updated`, loggerCtx);
+    this.eventBus.publish(new SessionUpdatedEvent(String(saved.id), saved.channelId ?? null));
     return saved;
   }
 
@@ -273,6 +317,7 @@ export class BbbScheduledSessionService {
       `Session ${sessionId} started → meeting ${meeting.id} provisioned`,
       loggerCtx,
     );
+    this.eventBus.publish(new SessionStartedEvent(String(saved.id), saved.channelId ?? null));
 
     return saved;
   }

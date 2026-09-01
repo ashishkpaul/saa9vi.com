@@ -139,6 +139,14 @@ interface CreateBbbScheduledSessionInput {
   subjectTags?: string[];
 }
 
+interface UpdateBbbScheduledSessionInput {
+  title?: string;
+  startTime?: string;
+  endTime?: string;
+  subjectTags?: string[];
+  visibility?: string;
+}
+
 @Resolver()
 export class BbbAdminResolver {
   constructor(
@@ -960,6 +968,17 @@ export class BbbAdminResolver {
     @Args("input") input: CreateBbbScheduledSessionInput,
   ) {
     return this.scheduledSessionService.create(ctx, input);
+  }
+
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
+  @Transaction()
+  @Mutation()
+  updateBbbScheduledSession(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+    @Args("input") input: UpdateBbbScheduledSessionInput,
+  ) {
+    return this.scheduledSessionService.update(ctx, id, input);
   }
 
   @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)

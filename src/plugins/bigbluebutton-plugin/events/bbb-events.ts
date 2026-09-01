@@ -2,6 +2,39 @@ import { RequestContext, VendureEvent } from "@vendure/core";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 
+/**
+ * Session lifecycle events (Gate 1.4 / F5 projection completeness).
+ *
+ * These are state-transition signals, not mutation notifications: the
+ * marketplace projection contract (phase3-audit.md field→event matrix)
+ * cares about *eligibility transitions* (PUBLIC/PRIVATE, SCHEDULED/LIVE/
+ * FINISHED/CANCELLED), and every consumer funnels through the guarded
+ * `MarketplaceIndexerService.indexSession()` which owns the eligibility rule.
+ */
+export class SessionCreatedEvent extends VendureEvent {
+  constructor(public readonly sessionId: string, public readonly channelId: string | null) {
+    super();
+  }
+}
+
+export class SessionUpdatedEvent extends VendureEvent {
+  constructor(public readonly sessionId: string, public readonly channelId: string | null) {
+    super();
+  }
+}
+
+export class SessionCancelledEvent extends VendureEvent {
+  constructor(public readonly sessionId: string, public readonly channelId: string | null) {
+    super();
+  }
+}
+
+export class SessionStartedEvent extends VendureEvent {
+  constructor(public readonly sessionId: string, public readonly channelId: string | null) {
+    super();
+  }
+}
+
 export class MeetingProvisionedEvent extends VendureEvent {
   constructor(
     public readonly meetingId: string,

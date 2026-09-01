@@ -313,6 +313,10 @@ export const adminApiExtensions = gql`
     createBbbScheduledSession(
       input: CreateBbbScheduledSessionInput!
     ): BbbScheduledSession!
+    updateBbbScheduledSession(
+      id: ID!
+      input: UpdateBbbScheduledSessionInput!
+    ): BbbScheduledSession!
     cancelBbbScheduledSession(id: ID!): BbbScheduledSession!
     updateBbbTrialRegistrationStatus(id: ID!, status: String!): BbbTrialRegistration!
     addBbbMember(input: AddBbbMemberInput!): BbbOrganizationMember!
@@ -454,6 +458,14 @@ export const adminApiExtensions = gql`
     endTime: String!
     trainerId: ID!
     subjectTags: [String!]
+  }
+
+  input UpdateBbbScheduledSessionInput {
+    title: String
+    startTime: String
+    endTime: String
+    subjectTags: [String!]
+    visibility: String
   }
 
   input CreateBbbProductAccessInput {

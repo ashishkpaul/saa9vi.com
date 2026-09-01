@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { RequestContext, TransactionalConnection, ChannelService } from '@vendure/core';
+import { EventBus, RequestContext, TransactionalConnection, ChannelService } from '@vendure/core';
 import { ID } from '@vendure/common/lib/shared-types';
 import { TenantProfile } from '../entities/tenant-profile.entity';
 import { DomainChannelResolverService } from './domain-channel-resolver.service';
+import { TenantProfileUpdatedEvent } from '../events/tenant-events';
 
 @Injectable()
 export class TenantProfileService {
@@ -10,6 +11,7 @@ export class TenantProfileService {
     private readonly connection: TransactionalConnection,
     private readonly channelService: ChannelService,
     private readonly domainResolver: DomainChannelResolverService,
+    private readonly eventBus: EventBus,
   ) {}
 
   async findByChannelId(ctx: RequestContext, channelId: ID): Promise<TenantProfile | null> {
@@ -63,6 +65,7 @@ export class TenantProfileService {
   async update(ctx: RequestContext, channelId: ID, input: Partial<TenantProfile>): Promise<TenantProfile> {
     const profile = await this.findByChannelIdOrThrow(ctx, channelId);
     const oldDomain = profile.customDomain;
+    const updatedFields = Object.keys(input);
     Object.assign(profile, input);
     const saved = await this.connection.getRepository(ctx, TenantProfile).save(profile);
 
@@ -79,6 +82,12 @@ export class TenantProfileService {
         }
       }
     }
+
+    // Gate 1.4 (F5): notify marketplace consumers so every marketplace
+    // document belonging to this channel can be bulk-invalidated/reindexed.
+    this.eventBus.publish(
+      new TenantProfileUpdatedEvent(String(saved.id), String(channelId), updatedFields),
+    );
 
     return saved;
   }
