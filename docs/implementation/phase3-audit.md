@@ -18,11 +18,11 @@
 | `MarketplaceSessionDocument` / `MarketplaceInstructorDocument` contracts | ✅ typed interfaces | n/a | ❌ | ☐ | **Gaps found** (below) — **codify + fix** |
 | BUG-023 redirect fields | ✅ `channelToken` resolved from `Channel.token` (not raw channelId); `academySlug` from `BbbOrganization.slug` | n/a | ❌ | ✅ release note | **Verified in code — correct. But `customDomain` is absent from the document** (redirect contract incomplete) |
 | `subjectTags` | ✅ field exists in schema/resolver | n/a | ❌ | ☐ | **Hardcoded `[]` at index time** — nothing populates it. **Implement** |
-| `MarketplaceAdCampaign` entity | ✅ registered in plugin `entities[]` | ❌ **no migration** | ❌ | ✅ | **Latent defect** — `synchronize: false` (vendure-config.ts:126), table does not exist |
-| `AdWallet` entity | ✅ registered | ❌ **no migration** | ❌ | ✅ | **Latent defect** — same |
-| `AdSpendLedger` entity | ✅ registered | ❌ **no migration** | ❌ | ✅ | **Latent defect** — same |
+| `MarketplaceAdCampaign` entity | ✅ registered in plugin `entities[]` | ✅ migration `1788265440266` | ❌ | ✅ | ✅ Resolved (Gate 1.1) — schema verified against entity definition |
+| `AdWallet` entity | ✅ registered | ✅ migration `1788265440266` (UNIQUE channelId) | ❌ | ✅ | ✅ Resolved (Gate 1.1) |
+| `AdSpendLedger` entity | ✅ registered | ✅ migration `1788265440266` | ❌ | ✅ | ✅ Resolved (Gate 1.1) — append-only: no update/delete path in service; **service-level test still pending** |
 | `AdWalletLedger` entity | ❌ does not exist | ❌ | ❌ | ☐ plugin-map listed it as owned | **Doc drift corrected** in plugin-map — planned Phase 3C |
-| `MarketplaceAdService` (campaign lookup, wallet, spend) | ✅ wired into indexer (sponsored lookup per session) | depends on missing tables | ❌ | ✅ | **Dead code until migration lands** — sponsorship lookup fails per-session (caught + logged), silently disabling sponsored ranking |
+| `MarketplaceAdService` (campaign lookup, wallet, spend) | ✅ wired into indexer (sponsored lookup per session) | ✅ tables migrated (Gate 1.1) | ❌ | ✅ | Schema ready; feature wiring + runtime verification (indexSession → adService → ES) pending Gate 1/4 |
 | `Order.customFields.orderSource` | ❌ zero hits in code | ❌ | ❌ | ✅ ADR-021 | **Unimplemented** — Phase 3B, after attribution ADR |
 | `CommissionLedger` | ❌ no entity | ❌ | ❌ | ✅ DL-030 | **Unimplemented** — Phase 3B, blocked on attribution ADR |
 | `MarketplaceAcademyPage` | ❌ | — | — | ☐ | Unimplemented — Phase 3A |
@@ -36,8 +36,10 @@
 ### F1 — Both status labels were wrong
 `roadmap.md` "scaffold complete" understates the projection layer (search resolver, ranking, sponsorship are real). `plugin-map.md` "production-ready" overstates it (no tests, no event completeness, no DB tables for ad entities). **Accurate state:** projection layer implemented and untested; business layer (attribution/commission) absent; ad layer code-complete but unmigrated.
 
-### F2 — Latent runtime defect: ad entities have no tables
-`synchronize: false` and no migration in `src/migrations/` covers `marketplace_ad_campaign`, `ad_wallet`, `ad_spend_ledger`. `MarketplaceIndexerService.indexSession()` calls `adService.findActiveCampaignForSession()` on **every session index** — once ES indexing runs against a real DB, this path throws per-session (caught + logged today, silently disabling sponsorship) or fails when the ad service first queries. **Closure: generate the migration via Vendure CLI in Phase 3A (gate 1.1), before any advertising feature work.**
+### F2 — Ad-entity schema: resolved via governed migration (was: untraceable out-of-band DDL)
+Initial audit finding revised after direct PostgreSQL inspection: the three tables **did exist** in the dev database (empty, 0 rows) with schemas matching the entity definitions exactly — but no migration file covered them, meaning the DDL was created out-of-band (most likely a dev run before `synchronize: false` was set). That is a `.clinerules` §7 governance violation (schema not traceable to CLI migration), not a runtime defect. The `vendure migrate -g` command reported "No changes" because the DB already matched — the same pattern as the FEAT-002 case.
+
+**Resolution (Gate 1.1):** dropped the three empty out-of-band tables → generated `1788265440266-MarketplaceAdEntities` via Vendure CLI (covers exactly the 3 tables + 3 indexes, nothing unrelated) → inspected the generated SQL → applied via `vendure migrate -r` → verified tables, indexes (`channelId` btree on campaign, **UNIQUE** `channelId` on wallet, `campaignId` btree on ledger), PKs, and the `migrations` bookkeeping row. Schema is now fully traceable.
 
 ### F3 — BUG-023 verified in code, contract still incomplete
 `channelToken`/`academySlug` are correctly resolved at index time (marketplace-indexer.service.ts:141–155). However the document lacks `customDomain` — the storefront cannot complete the redirect contract (academySlug + channelToken + customDomain) from the ES document alone. **Action: add `customDomain` (from `TenantProfile`) to both document types.**

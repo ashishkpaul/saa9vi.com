@@ -191,7 +191,7 @@ None (injects TenantPlugin services for org verification).
 | Property | Value |
 |---|---|
 | **Directory** | `src/plugins/marketplace/` |
-| **Status** | Projection layer implemented (e2e coverage pending). Ad entities registered but **tables not yet migrated** — `MarketplaceAdService` unusable until Phase 3A migration lands. See `docs/implementation/phase3-audit.md`. |
+| **Status** | Projection layer implemented (e2e coverage pending). Ad-entity tables migrated (Gate 1.1: `1788265440266-MarketplaceAdEntities`); advertising feature layer not yet wired. See `docs/implementation/phase3-audit.md`. |
 | **Purpose** | Cross-channel Elasticsearch discovery layer for marketplace. |
 
 ### Owns

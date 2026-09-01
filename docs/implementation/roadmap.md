@@ -81,11 +81,11 @@
 
 ## Phase 3 — Marketplace & Retention
 
-> **Status framing (verified against code 2026-08):** the *projection layer* of `MarketplaceIndexerPlugin` is implemented (ES indices, BullMQ queue, event listener, public `marketplaceSearch` with bayesian + sponsored function-score). The *business layer* (attribution, commission) and *aggregation surfaces* (academy page, category taxonomy, ranking view) are unimplemented. Three ad entities exist in code but **have no database tables** (no migration; `synchronize: false`). See `docs/implementation/phase3-audit.md` for the verified capability table.
+> **Status framing (verified against code 2026-08):** the *projection layer* of `MarketplaceIndexerPlugin` is implemented (ES indices, BullMQ queue, event listener, public `marketplaceSearch` with bayesian + sponsored function-score). The *business layer* (attribution, commission) and *aggregation surfaces* (academy page, category taxonomy, ranking view) are unimplemented. Ad-entity tables are migrated (Gate 1.1 ✅) but the advertising feature layer is unwired. See `docs/implementation/phase3-audit.md` for the verified capability table.
 
 ### Phase 3A — Discovery correctness (current gate)
 
-- [ ] **Latent defect closure:** generate + apply migration for `marketplace_ad_campaign`, `ad_wallet`, `ad_spend_ledger` (entities registered, tables missing — `MarketplaceAdService` is dead code until then). Vendure CLI migration only.
+- [x] **Latent defect closure:** migration `1788265440266-MarketplaceAdEntities` generated via Vendure CLI, applied, and PostgreSQL-verified (`marketplace_ad_campaign`, `ad_wallet`, `ad_spend_ledger` — schemas match entity definitions; tables previously existed out-of-band, see `phase3-audit.md` F2). AdSpendLedger immutability service-level test still pending.
 - [x] `MarketplaceIndexerPlugin` projection infrastructure — ES indices, BullMQ queue, event listener, public search resolver *(code-verified; e2e coverage pending)*
 - [ ] Canonical marketplace document contract — codified `MarketplaceSessionDocument` / `MarketplaceInstructorDocument`; gaps: `customDomain` missing from redirect fields, `subjectTags` hardcoded `[]`
 - [ ] Projection completeness: **every field that can affect marketplace visibility, routing, filtering, or ranking has a deterministic projection update path** (session lifecycle events, review aggregates, academy profile changes, sponsored-state changes)
