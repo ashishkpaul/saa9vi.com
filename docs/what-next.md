@@ -96,7 +96,26 @@ PHASE 2 — SUBSCRIPTION BILLING & CAPACITY POLICY
 
 ## Phase 3 — Marketplace & Retention
 
-Planned work remains the marketplace read projection/search, commission ledger, advertising stream, retention/analytics and related capabilities documented in `docs/implementation/roadmap.md`.
+Execution queue (verified state in `docs/implementation/phase3-audit.md`; detailed checklist in `docs/implementation/roadmap.md`):
+
+**Phase 3A — Discovery correctness**
+1. Latent defect closure: generate + apply the missing ad-entity migration (`marketplace_ad_campaign`, `ad_wallet`, `ad_spend_ledger` exist in code, not in DB) — no advertising features in this gate.
+2. Codify the canonical marketplace document contract; close the `customDomain`/`subjectTags` gaps found in the audit.
+3. Close projection event-coverage gaps: every field affecting marketplace visibility, routing, filtering, or ranking must have a deterministic projection update path.
+4. E2E suite: multi-channel indexing, channel-free `marketplaceSearch`, sponsored/bayesian ordering, tenant isolation.
+5. `MarketplaceAcademyPage`, `MarketplaceCategoryIndex`, `RankingMaterializedView`.
+
+**Phase 3B — Attribution & Commission**
+6. **Attribution ADR first** — settle the contract (resource, validity, navigation persistence, precedence, replay, multi-line orders) before any code. Storefront passes a signed referrer signal; Vendure classifies server-side (INV-008).
+7. Implement `Order.customFields.orderSource` (server-stamped) and `CommissionLedger` $0-row pattern (DL-030, append-only).
+8. Commission reconciliation/admin reporting.
+
+**Phase 3C — Advertising (Stream 3)**
+9. Wire `MarketplaceAdService` end-to-end on top of the now-existing tables: campaign lifecycle → wallet debit → `AdSpendLedger` (INV-010).
+10. `AdWalletLedger` entity + append-only pattern; configurable bounded bid-boost; self-serve campaign dashboard.
+
+**Phase 3D — Engagement & Retention**
+11. Review → ranking projection pipeline; instructor/course search refinement; attendance analytics; certificates; CMS event indexing.
 
 ## Phase 4 — Scale & Premium
 

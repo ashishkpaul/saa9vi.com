@@ -81,39 +81,54 @@
 
 ## Phase 3 — Marketplace & Retention
 
-### Prerequisites
+> **Status framing (verified against code 2026-08):** the *projection layer* of `MarketplaceIndexerPlugin` is implemented (ES indices, BullMQ queue, event listener, public `marketplaceSearch` with bayesian + sponsored function-score). The *business layer* (attribution, commission) and *aggregation surfaces* (academy page, category taxonomy, ranking view) are unimplemented. Three ad entities exist in code but **have no database tables** (no migration; `synchronize: false`). See `docs/implementation/phase3-audit.md` for the verified capability table.
 
-- [ ] **Task 16**: `CommissionLedger` $0-row pattern — entity, service, listener, `MARKETPLACE_COMMISSION_PERCENT` env var
+### Phase 3A — Discovery correctness (current gate)
 
-### Discovery Layer
+- [ ] **Latent defect closure:** generate + apply migration for `marketplace_ad_campaign`, `ad_wallet`, `ad_spend_ledger` (entities registered, tables missing — `MarketplaceAdService` is dead code until then). Vendure CLI migration only.
+- [x] `MarketplaceIndexerPlugin` projection infrastructure — ES indices, BullMQ queue, event listener, public search resolver *(code-verified; e2e coverage pending)*
+- [ ] Canonical marketplace document contract — codified `MarketplaceSessionDocument` / `MarketplaceInstructorDocument`; gaps: `customDomain` missing from redirect fields, `subjectTags` hardcoded `[]`
+- [ ] Projection completeness: **every field that can affect marketplace visibility, routing, filtering, or ranking has a deterministic projection update path** (session lifecycle events, review aggregates, academy profile changes, sponsored-state changes)
+- [ ] E2E suite: multi-channel indexing + channel-free `marketplaceSearch` + sponsored/bayesian ordering + tenant isolation
+- [ ] `MarketplaceAcademyPage` — aggregated view (projection only — never a second tenant-profile DB)
+- [ ] `MarketplaceCategoryIndex` — subject taxonomy as data (`MarketplaceCategory` entity), not hardcoded in resolver
+- [ ] `RankingMaterializedView` (Postgres) — ranking inputs computed in PG, consumed by ES documents
 
-- [ ] `MarketplaceIndexerPlugin` — event-driven BullMQ jobs (scaffold complete)
-- [ ] `MarketplaceSearchResolver` (Shop API, no channel context)
-- [ ] `MarketplaceAcademyPage` — aggregated view
-- [ ] `MarketplaceCategoryIndex` — subject taxonomy
-- [ ] `RankingMaterializedView` (Postgres)
+### Phase 3B — Attribution & Commission
 
-### Attribution & Commission
+- [ ] **Attribution ADR first** (blocks everything below): define the marketplace attribution contract per ADR-021 Open Design Questions — resource referred to (session/academy/result), validity window, navigation persistence (marketplace → academy → different session), precedence vs existing direct/referral attribution, order vs order-line attachment, replay prevention, verification without exposing signing secrets to Next.js, multi-line order handling. Concrete token payload chosen *after* these answers.
+- [ ] `Order.customFields.orderSource` — `'marketplace' | 'direct' | 'referral'`, stamped **server-side** by Vendure from a signed referrer signal (INV-008; storefront never classifies)
+- [ ] **Task 16**: `CommissionLedger` $0-row pattern — entity, service, listener, `MARKETPLACE_COMMISSION_PERCENT` env var, append-only (INV-002/DL-030)
+- [ ] Commission reconciliation/admin reporting
 
-- [ ] `Order.customFields.orderSource` — `'marketplace' | 'direct' | 'referral'`
-- [ ] `CommissionLedger` — append-only commission records
+### Phase 3C — Advertising (Stream 3)
 
-### Advertising (Stream 3)
-
-- [ ] `MarketplaceAdCampaign` + `AdSpendLedger` entities
-- [ ] `AdWallet` + `AdWalletLedger` — prepaid wallet per academy
+- [x] `MarketplaceAdCampaign` + `AdSpendLedger` + `AdWallet` entities *(code exists; blocked on Phase 3A migration)*
+- [ ] `AdWalletLedger` — append-only wallet transactions (entity does not exist yet; plugin-map previously listed it as owned — corrected)
+- [ ] Wire `MarketplaceAdService` end-to-end: campaign lifecycle → wallet debit → `AdSpendLedger` (INV-010: ledger is truth, `spentInPaise` is cache)
 - [ ] `Banner.scope: 'tenant' | 'marketplace'` discriminator
-- [ ] Elasticsearch bid-boost for sponsored sessions
+- [ ] Configurable, bounded sponsored bid-boost (replace hardcoded `weight: 3.0` in search resolver)
 - [ ] Self-serve campaign dashboard
 
-### Engagement & Retention
+### Phase 3D — Engagement & Retention
 
-- [ ] Review entity with composite ranking materialised view
-- [ ] Elasticsearch instructor/course search
+- [ ] Review → ranking projection pipeline (review approved → aggregate recalculated → marketplace index updated)
+- [ ] Elasticsearch instructor/course search refinement
 - [ ] Attendance analytics dashboard
 - [ ] Certificate generation on `Entitlement` completion
 - [ ] `bbbSession` CMS section type (CMS-004)
 - [ ] `ArticleEvent` / `PageEvent` → Elasticsearch indexer
+
+### Phase 3 Exit Criteria
+
+- [ ] Marketplace discovery is cross-channel but read-only (INV-009)
+- [ ] Every marketplace result resolves to the correct academy storefront (redirect contract verified in e2e, not just release notes)
+- [ ] Marketplace orders are server-classified (INV-008)
+- [ ] Every marketplace order creates an immutable commission fact (DL-030)
+- [ ] Advertising spend is ledger-backed (INV-010)
+- [ ] Sponsored ranking cannot corrupt organic ranking (ADR-022)
+- [ ] Review changes propagate into ranking deterministically
+- [ ] Tenant isolation e2e passes
 
 ---
 

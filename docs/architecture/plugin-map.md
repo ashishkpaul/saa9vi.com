@@ -191,7 +191,7 @@ None (injects TenantPlugin services for org verification).
 | Property | Value |
 |---|---|
 | **Directory** | `src/plugins/marketplace/` |
-| **Status** | Production-ready projection layer |
+| **Status** | Projection layer implemented (e2e coverage pending). Ad entities registered but **tables not yet migrated** — `MarketplaceAdService` unusable until Phase 3A migration lands. See `docs/implementation/phase3-audit.md`. |
 | **Purpose** | Cross-channel Elasticsearch discovery layer for marketplace. |
 
 ### Owns
@@ -201,7 +201,7 @@ None (injects TenantPlugin services for org verification).
 | MarketplaceAdCampaign | `marketplace_ad_campaign` | Sponsored listing campaigns |
 | AdSpendLedger | `ad_spend_ledger` | Append-only ad spend records |
 | AdWallet | `ad_wallet` | Prepaid ad wallet per tenant |
-| AdWalletLedger | `ad_wallet_ledger` | Append-only wallet transactions |
+| AdWalletLedger | `ad_wallet_ledger` | Append-only wallet transactions — **not yet implemented** (planned Phase 3C) |
 
 ### Publishes
 

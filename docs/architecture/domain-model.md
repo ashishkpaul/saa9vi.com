@@ -441,7 +441,7 @@ Pending → Provisioning → Active → Completed → Archived
 
 | Property | Value |
 |---|---|
-| **Plugin** | MarketplacePlugin (Phase 3) |
+| **Plugin** | MarketplaceIndexerPlugin (`src/plugins/marketplace`) — *corrected from "MarketplacePlugin (Phase 3)", which does not exist; the bounded context is the existing marketplace plugin* |
 | **Table** | `commission_ledger` |
 | **Purpose** | Append-only ledger for marketplace commission. |
 
