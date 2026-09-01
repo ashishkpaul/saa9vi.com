@@ -1,4 +1,4 @@
-k#!/bin/bash
+#!/bin/bash
 
 # Configuration
 SRC_DIR="./src"
@@ -8,7 +8,6 @@ ES9_CONFIG_DIR="$SRC_DIR/es9-config"
 CONFIG_DIR="$SRC_DIR/config"
 PLATFORM_DIR="$SRC_DIR/platform"
 SCRIPTS_DIR="./scripts"
-# OUTPUT_BASE_DIR="$HOME/Documents/vendure/plugins"
 OUTPUT_BASE_DIR="/mnt/256G/projects/vendure/edu/saanvi.com"
 
 # Prompt user for .md file exclusion
@@ -46,8 +45,14 @@ is_excluded() {
     # Exclude generated TypeScript files in any plugin root
     [[ "$file" == ./src/plugins/*/generated-*-types.ts ]] && return 0
 
-    # Exclude e2e test directory under tenant-plugin
-    [[ "$file" == ./src/plugins/tenant-plugin/e2e/* ]] && return 0
+    # ----- NEW: Exclude any gql directory (e.g. ./src/plugins/*/gql/) -----
+    [[ "$file" == *"/gql/"* ]] && return 0
+
+    # ----- NEW: Exclude any e2e directory (e.g. ./src/plugins/*/e2e/) -----
+    [[ "$file" == *"/e2e/"* ]] && return 0
+
+    # (Optional) Explicitly exclude the specific file – already covered by /gql/
+    [[ "$file" == "./src/plugins/reviews/ui/gql/gql.ts" ]] && return 0
 
     return 1
 }
@@ -183,8 +188,6 @@ else
     echo "  Warning: $SCRIPTS_DIR not found, skipping."
 fi
 
-echo "All exports completed."
-
 # ---------------------------
 # Export customer-deletion folder specifically
 # ---------------------------
@@ -202,3 +205,5 @@ if [ -d "$PLATFORM_DIR/customer-deletion" ]; then
 else
     echo "  Warning: $PLATFORM_DIR/customer-deletion not found, skipping."
 fi
+
+echo "All exports completed."
