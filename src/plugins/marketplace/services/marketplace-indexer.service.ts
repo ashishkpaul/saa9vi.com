@@ -19,6 +19,7 @@ export interface MarketplaceSessionDocument {
   priceInPaise: number;
   academyName: string;
   academySlug: string;
+  customDomain: string | null;
   instructorName: string | null;
   subjectTags: string[];
   bayesianRating: number;
@@ -38,6 +39,7 @@ export interface MarketplaceInstructorDocument {
   reviewRating: number | null;
   academyName: string;
   academySlug: string;
+  customDomain: string | null;
 }
 
 @Injectable()
@@ -82,6 +84,7 @@ export class MarketplaceIndexerService {
             priceInPaise: { type: 'integer' },
             academyName: { type: 'text', fields: { keyword: { type: 'keyword' } } },
             academySlug: { type: 'keyword' },
+            customDomain: { type: 'keyword' },
             instructorName: { type: 'text' },
             subjectTags: { type: 'keyword' },
             bayesianRating: { type: 'float' },
@@ -112,6 +115,7 @@ export class MarketplaceIndexerService {
             reviewRating: { type: 'float' },
             academyName: { type: 'text', fields: { keyword: { type: 'keyword' } } },
             academySlug: { type: 'keyword' },
+            customDomain: { type: 'keyword' },
           },
         },
       });
@@ -131,6 +135,17 @@ export class MarketplaceIndexerService {
 
     if (!session) {
       this.logger.warn(`Cannot index session ${sessionId}: not found`);
+      return;
+    }
+
+    // ─── F7 (Gate 1.2): only publicly visible, live-cycle sessions belong in
+    // the marketplace index. FINISHED/CANCELLED/PRIVATE sessions are removed
+    // from the index if previously published. ────────────────────────────────
+    const publiclyVisible =
+      session.visibility === 'PUBLIC' &&
+      (session.status === 'SCHEDULED' || session.status === 'LIVE');
+    if (!publiclyVisible) {
+      await this.deleteSession(String(session.id));
       return;
     }
 
@@ -204,8 +219,9 @@ export class MarketplaceIndexerService {
       priceInPaise,
       academyName: tenantProfile?.businessName ?? '',
       academySlug,
+      customDomain: tenantProfile?.customDomain ?? null,
       instructorName: session.trainer ? String(session.trainer.id) : null,
-      subjectTags: [],
+      subjectTags: session.subjectTags ?? [],
       bayesianRating,
       isSponsored,
       sponsorBoost,
@@ -267,6 +283,7 @@ export class MarketplaceIndexerService {
       reviewRating: null,
       academyName: tenantProfile?.businessName ?? '',
       academySlug,
+      customDomain: tenantProfile?.customDomain ?? null,
     };
 
     await this.client.index({

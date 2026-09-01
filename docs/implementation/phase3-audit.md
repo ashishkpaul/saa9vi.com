@@ -15,9 +15,11 @@
 | Event listener coverage | ✅ but **only 3 event types**: `InstructorProfileCreatedEvent`, `InstructorProfileUpdatedEvent`, `ProductVariantEvent` | n/a | ❌ | ☐ | **Gap** — no session lifecycle (published/cancelled/finished), review-aggregate, academy-profile, or sponsored-state events. **Implement** |
 | `MarketplaceSearchResolver` (public Shop API, `@Allow(Permission.Public)`) | ✅ full-text + `subjectTags` terms filter + `function_score` (bayesian log1p × sponsored `weight: 3.0`) | n/a | ❌ | ☐ roadmap said pending | Implemented — **add e2e, make boost configurable** |
 | `BayesianRatingService` | ✅ reads `ProductReview` aggregate per variant | n/a | ❌ | ✅ | Implemented, untested — **verify** |
-| `MarketplaceSessionDocument` / `MarketplaceInstructorDocument` contracts | ✅ typed interfaces | n/a | ❌ | ☐ | **Gaps found** (below) — **codify + fix** |
-| BUG-023 redirect fields | ✅ `channelToken` resolved from `Channel.token` (not raw channelId); `academySlug` from `BbbOrganization.slug` | n/a | ❌ | ✅ release note | **Verified in code — correct. But `customDomain` is absent from the document** (redirect contract incomplete) |
-| `subjectTags` | ✅ field exists in schema/resolver | n/a | ❌ | ☐ | **Hardcoded `[]` at index time** — nothing populates it. **Implement** |
+| `MarketplaceSessionDocument` / `MarketplaceInstructorDocument` contracts | ✅ typed interfaces + `customDomain` | n/a | ❌ | ☐ | Codified in code; canonical field→event matrix still pending (Gate 1.4) |
+| Session visibility/status filter (new finding **F7**) | ✅ `indexSession()` now removes non-public / FINISHED / CANCELLED sessions from the index | n/a | ❌ | ☐ | ✅ **Gate 1.2 fix** — previously *all* sessions with a `productVariantId` were indexed regardless of `visibility`/`status` (public-index leak risk). Event-listener side still pending (Gate 1.4) |
+| BUG-023 redirect fields | ✅ `channelToken` resolved from `Channel.token` (not raw channelId); `academySlug` from `BbbOrganization.slug` | n/a | ❌ | ✅ release note | ✅ **Gate 1.2 complete** — `customDomain` now projected from `TenantProfile` into both documents + ES mappings (authored 2026-09-01) |
+| `subjectTags` (sessions) | ✅ new `BbbScheduledSession.subjectTags` column (simple-array) + create-API wiring (`CreateBbbScheduledSessionInput.subjectTags`) | ✅ migration `1788266256055-SessionSubjectTags` | ❌ | ☐ | ✅ **Gate 1.3 complete (source established)** — authoritative source is the session's own tenant-controlled tags; `MarketplaceCategory` entity **deferred** until category-browsing UI exists, to avoid a second taxonomy truth |
+| `subjectTags` (instructors) | ✅ populated from `InstructorProfile.expertiseAreas` (pre-existing) | n/a | ❌ | ✅ | OK — no change needed |
 | `MarketplaceAdCampaign` entity | ✅ registered in plugin `entities[]` | ✅ migration `1788265440266` | ❌ | ✅ | ✅ Resolved (Gate 1.1) — schema verified against entity definition |
 | `AdWallet` entity | ✅ registered | ✅ migration `1788265440266` (UNIQUE channelId) | ❌ | ✅ | ✅ Resolved (Gate 1.1) |
 | `AdSpendLedger` entity | ✅ registered | ✅ migration `1788265440266` | ❌ | ✅ | ✅ Resolved (Gate 1.1) — append-only: no update/delete path in service; **service-level test still pending** |
@@ -49,6 +51,9 @@ Indexer writes `subjectTags: []` unconditionally; the search resolver filters on
 
 ### F5 — Event coverage fails the projection-completeness criterion
 The acceptance criterion — *every field that can affect marketplace visibility, routing, filtering, or ranking has a deterministic projection update path* — is currently met only for instructor CRUD and ProductVariant changes. Missing: session published/cancelled/finished, review aggregate changes, academy profile (name/domain) changes, campaign start/stop. **Action: extend `MarketplaceEventListener`; write the field→event matrix as part of the canonical document contract.**
+
+### F7 — Public-index leak: sessions indexed regardless of visibility/status
+`indexSession()` and `fullReindex()` originally indexed **every** session with a `productVariantId` — including `PRIVATE` visibility and `FINISHED`/`CANCELLED` sessions — so ended or private sessions could remain searchable in the public marketplace. **Resolved in Gate 1.2:** `indexSession()` now gates on `visibility === 'PUBLIC' && status IN ('SCHEDULED','LIVE')` and removes non-conforming documents from the index. Note: the event-listener path must preserve this guarantee when extended (Gate 1.4) — every mutation path funnels through `indexSession()`, which now owns the rule.
 
 ### F6 — Plugin ownership corrected
 `domain-model.md` attributed `CommissionLedger` to a non-existent `MarketplacePlugin`. Corrected to `MarketplaceIndexerPlugin` (`src/plugins/marketplace`). No new plugin will be created — the existing bounded context stands.

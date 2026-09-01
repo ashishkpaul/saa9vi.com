@@ -87,8 +87,9 @@
 
 - [x] **Latent defect closure:** migration `1788265440266-MarketplaceAdEntities` generated via Vendure CLI, applied, and PostgreSQL-verified (`marketplace_ad_campaign`, `ad_wallet`, `ad_spend_ledger` — schemas match entity definitions; tables previously existed out-of-band, see `phase3-audit.md` F2). AdSpendLedger immutability service-level test still pending.
 - [x] `MarketplaceIndexerPlugin` projection infrastructure — ES indices, BullMQ queue, event listener, public search resolver *(code-verified; e2e coverage pending)*
-- [ ] Canonical marketplace document contract — codified `MarketplaceSessionDocument` / `MarketplaceInstructorDocument`; gaps: `customDomain` missing from redirect fields, `subjectTags` hardcoded `[]`
-- [ ] Projection completeness: **every field that can affect marketplace visibility, routing, filtering, or ranking has a deterministic projection update path** (session lifecycle events, review aggregates, academy profile changes, sponsored-state changes)
+- [x] Canonical marketplace document contract — `customDomain` added to both documents + ES mappings (F3/Gate 1.2); session `subjectTags` sourced from new `BbbScheduledSession.subjectTags` column via migration `1788266256055` (F4/Gate 1.3); instructor tags from `expertiseAreas`. `MarketplaceCategory` entity deferred until category-browsing UI exists. Field→event matrix still pending (Gate 1.4)
+- [x] **Public-index leak fix (F7):** `indexSession()` gates on `visibility === 'PUBLIC'` + `status IN ('SCHEDULED','LIVE')`, removing non-conforming documents
+- [ ] Projection completeness: **every field that can affect marketplace visibility, routing, filtering, or ranking has a deterministic projection update path** (session lifecycle events, review aggregates, academy profile changes, sponsored-state changes) — Gate 1.4
 - [ ] E2E suite: multi-channel indexing + channel-free `marketplaceSearch` + sponsored/bayesian ordering + tenant isolation
 - [ ] `MarketplaceAcademyPage` — aggregated view (projection only — never a second tenant-profile DB)
 - [ ] `MarketplaceCategoryIndex` — subject taxonomy as data (`MarketplaceCategory` entity), not hardcoded in resolver

@@ -96,6 +96,7 @@ export class BbbScheduledSessionService {
       endTime: string;
       trainerId: ID;
       productVariantId?: string;
+      subjectTags?: string[];
     },
   ): Promise<BbbScheduledSession> {
     await this.channelAccess.assertOrganizationAccess(ctx, input.organizationId);
@@ -136,6 +137,7 @@ export class BbbScheduledSessionService {
       activeMeeting: null,
       channelId: channelId ?? null,
       productVariantId: input.productVariantId ?? null,
+      subjectTags: input.subjectTags ?? null,
     });
 
     const saved = await this.connection

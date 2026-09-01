@@ -76,6 +76,16 @@ export class BbbScheduledSession extends VendureEntity {
   @Column({ type: "varchar", nullable: true })
   slug: string | null;
 
+  /**
+   * Subject tags for marketplace discovery (F4 / Gate 1.3).
+   * Tenant-controlled at session creation/edit. Simple-array: comma-joined
+   * in PG. Authoritative source for MarketplaceSessionDocument.subjectTags —
+   * the marketplace category taxonomy (if later introduced) must derive
+   * from this, never become a second source of truth.
+   */
+  @Column({ type: "simple-array", nullable: true })
+  subjectTags: string[] | null;
+
   @Column({ type: "varchar", nullable: true })
   productVariantId: string | null;
 }

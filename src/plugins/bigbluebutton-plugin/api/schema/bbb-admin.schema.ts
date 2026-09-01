@@ -211,7 +211,9 @@ export const adminApiExtensions = gql`
     isTrial: Boolean!
     visibility: String!
     maxAttendees: Int
+    subjectTags: [String!]
   }
+
 
   type BbbServerList {
     items: [BbbServer!]!
@@ -451,6 +453,7 @@ export const adminApiExtensions = gql`
     startTime: String!
     endTime: String!
     trainerId: ID!
+    subjectTags: [String!]
   }
 
   input CreateBbbProductAccessInput {
