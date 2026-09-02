@@ -46,8 +46,10 @@ export interface MarketplaceInstructorDocument {
 export class MarketplaceIndexerService {
   private readonly logger = new Logger(MarketplaceIndexerService.name);
   private readonly client: Client;
-  private readonly sessionsIndex = 'saa9vi_marketplace_sessions';
-  private readonly instructorsIndex = 'saa9vi_marketplace_instructors';
+  // Index names are env-overridable so the marketplace e2e suite can run
+  // against isolated test indices instead of the live platform projections.
+  private readonly sessionsIndex = process.env.MARKETPLACE_SESSIONS_INDEX || 'saa9vi_marketplace_sessions';
+  private readonly instructorsIndex = process.env.MARKETPLACE_INSTRUCTORS_INDEX || 'saa9vi_marketplace_instructors';
 
   constructor(
     private readonly connection: TransactionalConnection,

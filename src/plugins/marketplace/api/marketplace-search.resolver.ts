@@ -67,7 +67,7 @@ export class MarketplaceSearchResolver {
     }
 
     const result = await this.client.search({
-      index: 'saa9vi_marketplace_sessions',
+      index: process.env.MARKETPLACE_SESSIONS_INDEX || 'saa9vi_marketplace_sessions',
       from: skip,
       size: take,
       query: {
@@ -105,7 +105,7 @@ export class MarketplaceSearchResolver {
     }
 
     const result = await this.client.search({
-      index: 'saa9vi_marketplace_instructors',
+      index: process.env.MARKETPLACE_INSTRUCTORS_INDEX || 'saa9vi_marketplace_instructors',
       from: skip,
       size: take,
       query: { bool: { must } },
