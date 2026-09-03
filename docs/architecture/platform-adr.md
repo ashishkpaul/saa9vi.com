@@ -337,10 +337,103 @@
 
 **Open Design Questions:**
 
-- **Stream 2 commission attribution:** `Order.customFields.orderSource = 'marketplace'` must be set at checkout for commission attribution. The current spec leaves the classification mechanism undefined. The storefront **must not** classify orders as marketplace-sourced (violates INV-008 — business logic belongs in Vendure, not the storefront). The correct design: the storefront passes a `referrerCode` or `utm_source` parameter to the checkout mutation, and Vendure-side logic classifies the order. This design must be settled before Phase 3 implementation begins — see RFC-001 Appendix C-2 for the subscription checkout equivalent.
+- **Stream 2 commission attribution:** `Order.customFields.orderSource = 'marketplace'` must be set at checkout for commission attribution. **Resolved by the ADR-021 addendum below (Marketplace Attribution Contract).** The storefront passes an opaque, signed `marketplaceRef`; Vendure-side logic verifies and classifies the order. The storefront never stamps `orderSource` directly (INV-008). See RFC-001 Appendix C-2 for the subscription checkout equivalent.
 
 ---
 
+## ADR-021 Addendum — Marketplace Attribution Contract
+
+**Status:** Active (Phase 3B design baseline — settles the classification contract before `CommissionLedger` is implemented)
+
+**Context:** This addendum resolves the ADR-021 Open Design Question for Stream 2. It fixes *who* decides an order is marketplace-originated and *how*, before any schema or service is built. The controlling invariants are **INV-008** (business logic in Vendure) and **INV-009** (marketplace is a read projection; authoritative data is in channel-scoped Postgres).
+
+**The locked flow:**
+
+```text
+Marketplace search result
+        ↓
+user clicks academy/session
+        ↓
+signed marketplace attribution reference (marketplaceRef)
+        ↓
+Next.js storefront (carries, never interprets)
+        ↓
+checkout request (shop API)
+        ↓
+Vendure server verifies + resolves reference
+        ↓
+orderSource = marketplace   (server-side)
+        ↓
+Order.customFields.orderSource
+        ↓
+CommissionLedger (Stream 2)
+```
+
+**Non-negotiable invariant:**
+
+```text
+CLIENT  marketplaceRef ─────────────┐
+                                    ↓
+                            Vendure server ── verify + resolve ──► orderSource = marketplace
+```
+
+The client carries a signed reference but **cannot** choose `orderSource = 'marketplace'`. Any schema/service path that classifies an order from an unsigned, client-supplied `orderSource` string is rejected (INV-008).
+
+### Decision 1 — What is attributed?
+- Attribution is bound to the **specific marketplace result the user clicked** — for the commerce MVP this is a **`BbbScheduledSession`** (its `productVariantId`), and equivalently a `SubscriptionPlan` for RFC-001 C-2.
+- The `marketplaceRef` encodes a **`resourceType` + `resourceId`** (e.g. `session:<id>` or `plan:<id>`), so `orderSource='marketplace'` is scoped to the purchased resource's source claim.
+- Academy-level attribution is a **derived fallback** (resolve resource → channel → academy), never a separate first-class attribution target. This keeps a single source of truth.
+
+### Decision 2 — Validity
+- The reference has an **explicit TTL** (baseline: **30 minutes** from issue). A reference older than the TTL is rejected as expired.
+- Expired-reference checkout falls back to `orderSource = 'direct'` (no marketplace commission) rather than failing the order — a stale attribution must never block a legitimate purchase.
+
+### Decision 3 — Navigation persistence
+- Attribution **survives marketplace → academy → session/product → checkout**, because the reference is carried in client state and re-attached to the checkout mutation, not tied to a single redirect hop.
+- A single "active" reference is retained per navigation session. Navigating deeper within the same marketplace visit does **not** rotate the reference (the original click is the source).
+- Only an explicit fresh marketplace click replaces the active reference.
+
+### Decision 4 — Precedence
+- Precedence is explicit and deterministic, evaluated **server-side**:
+  1. A **valid, unexpired `marketplaceRef`** → `orderSource = 'marketplace'`.
+  2. Else a generic signed/`utm_source` referral → `orderSource = 'referral'` (if that mechanism exists).
+  3. Else (no token / expired token / direct entry) → `orderSource = 'direct'`.
+- The storefront never resolves precedence. It forwards any reference it carries plus a raw `referrerCode`/`utm_source` if present; Vendure applies the single rule above.
+
+### Decision 5 — Scope: Order vs OrderLine
+- `orderSource` is stamped at **Order scope** (`Order.customFields.orderSource`). It is the one field used for commission eligibility in the commerce MVP.
+- Marketplace attribution is **not** extended to individual `OrderLine`s in this addendum. Per **ADR-019**, Saa9vi has no cross-vendor marketplace cart, so an order's lines all originate from the same channel/academy. Order-level classification is therefore sufficient and avoids per-line attribution complexity.
+- **Deferral note:** if a future product allows mixed-source lines, a `OrderLine.customFields.sourceRef` (per-line reference) may be added. That is explicitly out of scope for Phase 3B and must not be pre-built speculatively.
+
+### Decision 6 — Replay prevention
+- The reference is **single-use per (resource, customer, reference)** for commission purposes. Once a valid `marketplaceRef` has been consumed by a successful marketplace order, **reuse of the same reference for a second order classifies it as `orderSource = 'direct'`** (no commission), recorded as a duplicate/replay event rather than silently granting a second attribution.
+- The replay guard is keyed on the reference **nonce/id**, not on the customer, so a node re-sending the same checkout mutation in a retried request does not create a second marketplace order.
+- **Interplay with retries:** a retried checkout that carries the same reference and resolves to the *same* order is idempotent (safe); a retried checkout that resolves to a *new* order with an already-consumed reference is reclassified to `direct`. This matches the project's webhook-idempotency discipline (`JuspayProcessedEvent`, BBB proposal-variant idempotency).
+
+### Decision 7 — Verification without exposing the signing secret
+- `marketplaceRef` is an **HMAC-signed token** issued by a Vendure-owned signing service. The signing secret (e.g. a `MARKETPLACE_REF_SIGNING_SECRET` env var) is known **only to Vendure** — never to the Next.js storefront, browser, or any external party.
+- The storefront merely **carries** the opaque token as an HTTP/query payload; it cannot mint or modify it (it does not hold the secret), so it cannot forge `orderSource = 'marketplace'`.
+- Vendure verifies the token server-side (HMAC + TTL + nonce) before resolving `resourceType:resourceId` and stamping the order.
+- **Alternatives rejected:** exposing the secret to Next.js (lets the storefront forge classifications); trusting a plaintext `orderSource` / `referrerCode` value from the browser (INV-008 violation — client controls business classification).
+
+### Decision 8 — Multi-line orders
+- An order that contains a marketplace-derived session line plus other lines is still **classified at order level**: if the verified `marketplaceRef` points at the session that is actually on the order, the order is `orderSource = 'marketplace'`.
+- Commission applies to the **entire order** gross in the commerce MVP (no per-line split), because under ADR-019 all lines share a single channel/academy.
+- **Edge:** if the referenced resource is *not* present on the final order (e.g. user clicked session A, added session B, purchased session B only), the reference is **ignored — `orderSource = 'direct'`**. The reference only attributes commerce tied to the actual clicked resource; it is never a blanket marketplace tag for an unrelated cart.
+
+## Schema & API consequences
+- `Order.customFields` must add **`orderSource`** (`'marketplace' | 'referral' | 'direct'`, default `'direct'`, non-null). Stamped server-side only.
+- A Vendure-owned signer service issues/validates `marketplaceRef`; the Next.js storefront reads the token from the marketplace API response and forwards it to checkout. No new storefront business logic.
+- `CommissionLedger` (Task 16, DL-030) consumes only orders where the *server-verified* `orderSource = 'marketplace'`. It must never read a client-passed `orderSource` value.
+
+## Rejection criteria (any one fails this addendum)
+- A client can cause `orderSource = 'marketplace'` by supplying an arbitrary unsigned string.
+- Vendure trusts the browser's `orderSource` or `referrerCode` for commission classification without server-side verification.
+- The HMAC signing secret is shared with the storefront/browser.
+- Referencing a resource absent from the final order still produces a marketplace commission.
+- `CommissionLedger` is written before this contract is implemented and enforced.
+
+---
 ## ADR-022: Sponsored Listings Use Elasticsearch Function-Score Bid-Boost (DL-022)
 
 **Status:** Active
