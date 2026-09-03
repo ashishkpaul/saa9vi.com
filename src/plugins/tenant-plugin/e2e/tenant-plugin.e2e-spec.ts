@@ -1433,6 +1433,30 @@ describe('TenantPlugin', () => {
       expect(role).toBeNull();
     });
 
+    it('tenant A read-admin gets null for the SuperAdmin role by id', async () => {
+      // Discover the SuperAdmin role id via the plural roles() query AS
+      // SuperAdmin — its list branch has no exclusion (the INV-016 exclusion
+      // applies only to the tenant branch), so __super_admin_role__ is visible
+      // here without a raw repository lookup, and there's no circularity since
+      // the queried branch differs from the one under test.
+      adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
+      await adminClient.asSuperAdmin();
+
+      const { roles } = await adminClient.query(ROLES);
+      const superAdminRole = roles.items.find(
+        (r: any) => r.code === '__super_admin_role__',
+      );
+      expect(superAdminRole).toBeTruthy();
+
+      // Switch to tenant A read-admin: the singular role(id) must NOT expose
+      // the global SuperAdmin role (INV-016 — mirror of the plural roles guard).
+      adminClient.setChannelToken(tenantAChannelToken);
+      await adminClient.asUserWithCredentials(readAdminEmail, readAdminPassword);
+
+      const { role } = await adminClient.query(ROLE, { id: superAdminRole.id });
+      expect(role).toBeNull();
+    });
+
     it('SuperAdmin can fetch a tenant administrator by id directly', async () => {
       // Get the list to find a tenant admin id.
       adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
