@@ -68,6 +68,7 @@ None.
 | BbbScheduledSession | `bbb_scheduled_session` | No (scoped via organization) |
 | BbbMeeting | `bbb_meeting` | No |
 | BbbOrganizationMembership | `bbb_organization_membership` | No (DL-017) |
+| BbbOrganizationMember | `bbb_organization_member` | No (scoped via organization; distinct from Membership) |
 | BbbEntitlement | `bbb_entitlement` | No (DL-011) |
 | BbbEnrollment | `bbb_enrollment` | No (legacy) |
 | BbbCapacityGrant | `bbb_capacity_grant` | No |
@@ -78,6 +79,7 @@ None.
 | BbbProductAccess | `bbb_product_access` | No |
 | BbbInstructorAssignment | `bbb_instructor_assignment` | No (scoped via organization) |
 | BbbServer | `bbb_server` | No |
+| BbbPlatformCapacityPolicy | `bbb_platform_capacity_policy` | No |
 
 ### Publishes
 
@@ -143,6 +145,7 @@ None (injects TenantPlugin services for org verification).
 | Article | `article` | Yes |
 | Page | `page` | Yes |
 | Banner | `banner` | Yes |
+| NavigationMenu | `navigation_menu` | Yes (one per channel, unique channelId) |
 
 ### API Surfaces
 
@@ -171,11 +174,11 @@ None (injects TenantPlugin services for org verification).
 
 | Entity | Table | ChannelAware |
 |---|---|---|
-| ProductReview | `product_review` | No (BUG-017) |
-| ReviewRequest | `review_request` | No |
-| ReviewReport | `review_report` | No |
-| ReviewReward | `review_reward` | No |
-| ReviewVote | `review_vote` | No |
+| ProductReview | `product_review` | Yes (BUG-017 fixed — `channels[]` + scalar `channelId`) |
+| ReviewRequest | `review_request` | Yes |
+| ReviewReport | `review_report` | Yes |
+| ReviewReward | `review_reward` | Yes |
+| ReviewVote | `review_vote` | Yes |
 
 ### API Surfaces
 
@@ -191,7 +194,7 @@ None (injects TenantPlugin services for org verification).
 | Property | Value |
 |---|---|
 | **Directory** | `src/plugins/marketplace/` |
-| **Status** | Projection layer implemented (e2e coverage pending). Ad-entity tables migrated (Gate 1.1: `1788265440266-MarketplaceAdEntities`); advertising feature layer not yet wired. See `docs/implementation/phase3-audit.md`. |
+| **Status** | Projection layer implemented; Gate 1 discovery E2E passing (7/7, commit `2e74020`). Ad-entity tables migrated (Gate 1.1: `1788265440266-MarketplaceAdEntities`); advertising feature layer not yet wired. **Phase 3 not complete** — attribution/commission (3B), advertising (3C), retention (3D) remain. See `docs/implementation/phase3-audit.md`. |
 | **Purpose** | Cross-channel Elasticsearch discovery layer for marketplace. |
 
 ### Owns
@@ -213,6 +216,14 @@ None.
 |---|---|
 | `InstructorProfileCreatedEvent` | TenantPlugin |
 | `InstructorProfileUpdatedEvent` | TenantPlugin |
+| `TenantProfileUpdatedEvent` | TenantPlugin |
+| `SessionCreatedEvent` | BigBlueButtonPlugin |
+| `SessionUpdatedEvent` | BigBlueButtonPlugin |
+| `SessionStartedEvent` | BigBlueButtonPlugin |
+| `SessionCancelledEvent` | BigBlueButtonPlugin |
+| `ReviewApprovedEvent` | ReviewsPlugin |
+| `ReviewRejectedEvent` | ReviewsPlugin |
+| `ReviewHiddenEvent` | ReviewsPlugin |
 | `ProductVariantEvent` | Vendure core |
 
 ### API Surfaces
@@ -270,5 +281,88 @@ None. Dashboard extension only (`login.logo`, `login.beforeForm`, `login.afterFo
 | Property | Value |
 |---|---|
 | **Directory** | `src/plugins/customer-suspension/` |
-| **Status** | Unknown |
-| **Purpose** | Customer suspension management. |
+| **Status** | Beta — platform-wide + channel-scoped suspension implemented. |
+| **Purpose** | Customer suspension management (INV-014): platform-wide (SuperAdmin) and per-channel (academy admin) suspension, enforced at checkout via a custom order process. |
+
+### Owns
+
+| Entity | Table | ChannelAware |
+|---|---|---|
+| CustomerChannelStatus | `customer_channel_status` | No (scalar `channelId`, unique per `customerId`+`channelId`) |
+| CustomerStatusChangeLog | `customer_status_change_log` | No (append-only audit, optional `channelId`) |
+
+### Publishes
+
+None.
+
+### Consumes
+
+None (extends `orderOptions.process` with `customerStatusOrderProcess` to block suspended-customer checkouts).
+
+### API Surfaces
+
+| Resolver | Scope | Purpose |
+|---|---|---|
+| `CustomerSuspensionAdminResolver` | Admin API (SuperAdmin; tenant admins for channel-scoped) | `suspendCustomer`, `reinstateCustomer`, `suspendCustomerInChannel`, `reinstateCustomerInChannel`, `customerStatusChangeLogs`, `customerChannelStatus`, `customerChannelStatuses` |
+
+---
+
+## SubscriptionPlugin
+
+| Property | Value |
+|---|---|
+| **Directory** | `src/plugins/subscription/` |
+| **Status** | Phase 2 — recurring billing & dunning. Billing provider = Juspay. See RFC-001 / ADR-037. |
+| **Purpose** | Subscription billing bounded context — plans, organization subscriptions, Juspay recurring payments, webhooks, dunning FSM, renewal reconciliation. |
+
+### Owns
+
+| Entity | Table | ChannelAware |
+|---|---|---|
+| SubscriptionPlan | `subscription_plan` | Yes |
+| OrganizationSubscription | `organization_subscription` | Yes (= Channel/tenant) |
+| JuspayPaymentAttempt | `juspay_payment_attempt` | No (scalar `channelId`; CLAIM→CHARGE→FINALIZE CAS) |
+| JuspaySubscriptionMandate | `juspay_subscription_mandate` | No |
+| JuspayWebhookEvent | `juspay_webhook_event` | No |
+| JuspayWebhookEndpoint | `juspay_webhook_endpoint` | No (unique `token` + `channelId`, per-tenant secret) |
+| RenewalPaymentReconciliationRequired | `juspay_payment_reconciliation_required` | No (scalar `channelId`; status PENDING/RESOLVED) |
+
+### Publishes
+
+(`subscription.events.ts` — renewal / dunning / reconciliation lifecycle events consumed by the plugin's own jobs and listeners.)
+
+### Consumes
+
+| Event / Input | Source |
+|---|---|
+| Juspay webhooks | `POST /payments/juspay/webhook/:token` (`JuspayWebhookController`, fail-closed Basic Auth + HMAC, AES-256-GCM secret) |
+| Scheduled tasks | `subscriptionRenewalTask` (every 10 min), `subscriptionDunningTask` |
+
+### Consumes — Scheduled Tasks
+
+| Task | Schedule | Purpose |
+|---|---|---|
+| `subscriptionRenewalTask` | Every 10 min | Discover subscriptions needing period advance / charge |
+| `subscriptionDunningTask` | Every 10 min | Dunning FSM retry + grace-expiry → cancel |
+
+### API Surfaces
+
+| Resolver | Scope | Purpose |
+|---|---|---|
+| `SubscriptionAdminResolver` | Admin API | `subscriptionPlans`, `organizationSubscriptions`, `juspayMandates`, `juspayPaymentAttempts`, `reconciliationIncidents`, `createSubscriptionPlan`, `updateSubscriptionPlan`, `subscribeToPlan` |
+
+### Key Services
+
+| Service | Purpose |
+|---|---|
+| `JuspayBillingService` | Recurring charge orchestration (CLaim/charge/reconcile; provider contract ADR-037) |
+| `JuspayPaymentAttemptService` | CLAIM→CHARGE→FINALIZE optimistic-locking payment-attempt ledger |
+| `JuspayWebhookAuthService` | Fail-closed webhook auth (Basic + HMAC signature) |
+| `JuspayWebhookQueueService` | Persist-then-process webhook queue (INV-004) |
+| `JuspayWebhookProcessorService` | Webhook dispatch / reconciliation |
+| `JuspayEncryptionService` | AES-256-GCM secret-at-rest (fail-closed in production) |
+| `JuspayWebhookEndpointService` | Per-tenant webhook endpoints + secrets |
+| `SubscriptionService` / `SubscriptionRenewalService` | Plan/enrollment lifecycle, renewal discovery & period advance |
+| `JuspaySdk` (`juspay-sdk.ts`) | Juspay HTTP client |
+
+> ⚠️ **ADR-037 note:** Recurring-billing provider contract is verified against docs/code; live provider-contract verification + production credential rollout remain pending.
