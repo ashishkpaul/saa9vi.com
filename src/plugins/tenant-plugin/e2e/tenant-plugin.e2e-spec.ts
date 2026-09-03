@@ -1152,11 +1152,16 @@ describe('TenantPlugin', () => {
       const { roles } = await adminClient.query(ROLES);
 
       // Tenant A sees its own tenant-admin role (and any default roles
-      // assigned to its channel), but NOT tenant B's role.
+      // assigned to its channel), but NOT tenant B's role, and NOT the
+      // global SuperAdmin role.
       const tenantBRole = roles.items.find((r: any) =>
         r.description?.includes('Sharma Academy'),
       );
       expect(tenantBRole).toBeUndefined();
+      const superAdminRole = roles.items.find((r: any) =>
+        r.code === '__super_admin_role__',
+      );
+      expect(superAdminRole).toBeUndefined();
     });
   });
 

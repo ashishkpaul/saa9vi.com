@@ -156,12 +156,16 @@ export class TenantAdminResolver {
     }
 
     // Tenant admin: only roles whose channels[] includes the active channel.
+    // INV-016 (sibling of the administrators fix): Vendure's SuperAdmin role
+    // carries ALL channels, so it matches the channel filter. A tenant
+    // read-admin must never see the global SuperAdmin role.
     const channelId = ctx.channelId as string;
     const qb = this.connection
       .getRepository(ctx, Role)
       .createQueryBuilder('role')
       .leftJoinAndSelect('role.channels', 'channel')
       .where('channel.id = :channelId', { channelId })
+      .andWhere('role.code != :superAdminRoleCode', { superAdminRoleCode: SUPER_ADMIN_ROLE_CODE })
       .orderBy('role.createdAt', 'ASC');
 
     const [items, totalItems] = await qb
@@ -197,6 +201,7 @@ export class TenantAdminResolver {
     }
 
     // Tenant admin: only if the role's channels[] includes the active channel.
+    // INV-016: never expose the global SuperAdmin role to tenant admins.
     const channelId = ctx.channelId as string;
     return this.connection
       .getRepository(ctx, Role)
@@ -204,6 +209,7 @@ export class TenantAdminResolver {
       .leftJoinAndSelect('role.channels', 'channel')
       .where('role.id = :id', { id: args.id })
       .andWhere('channel.id = :channelId', { channelId })
+      .andWhere('role.code != :superAdminRoleCode', { superAdminRoleCode: SUPER_ADMIN_ROLE_CODE })
       .getOne()
       .then((r) => r ?? undefined);
   }
