@@ -25,8 +25,8 @@
 | `AdSpendLedger` entity | ✅ registered | ✅ migration `1788265440266` | ❌ | ✅ | ✅ Resolved (Gate 1.1) — append-only: no update/delete path in service; **service-level test still pending** |
 | `AdWalletLedger` entity | ❌ does not exist | ❌ | ❌ | ☐ plugin-map listed it as owned | **Doc drift corrected** in plugin-map — planned Phase 3C |
 | `MarketplaceAdService` (campaign lookup, wallet, spend) | ✅ wired into indexer (sponsored lookup per session) | ✅ tables migrated (Gate 1.1) | ❌ | ✅ | Schema ready; feature wiring + runtime verification (indexSession → adService → ES) pending Gate 1/4 |
-| `Order.customFields.orderSource` | ❌ zero hits in code | ❌ | ❌ | ✅ ADR-021 | **Unimplemented** — Phase 3B, after attribution ADR |
-| `CommissionLedger` | ❌ no entity | ❌ | ❌ | ✅ DL-030 | **Unimplemented** — Phase 3B, blocked on attribution ADR |
+| `Order.customFields.orderSource` | ❌ zero hits in code | ❌ | ❌ | ✅ ADR-021 | **Unimplemented** — 3B.2; attribution ADR + service shipped (`750da49`); awaits resolver + governed migration |
+| `CommissionLedger` | entity + immutable subscriber (`584530b`, unique `(marketplaceRef, orderId)` composite index) | ❌ | ❌ | ✅ DL-030 | Entity+subscriber shipped (`584530b`); service/listener + governed migration + e2e pending (3B.3-4) |
 | `MarketplaceAcademyPage` | ❌ | — | — | ☐ | Unimplemented — Phase 3A |
 | `MarketplaceCategoryIndex` / taxonomy entity | ❌ | — | — | ☐ | Unimplemented — Phase 3A |
 | `RankingMaterializedView` | ❌ | — | — | ☐ | Unimplemented — Phase 3A/3D |

@@ -97,9 +97,9 @@
 
 ### Phase 3B — Attribution & Commission
 
-- [ ] **Attribution ADR first** (blocks everything below): define the marketplace attribution contract per ADR-021 Open Design Questions — resource referred to (session/academy/result), validity window, navigation persistence (marketplace → academy → different session), precedence vs existing direct/referral attribution, order vs order-line attachment, replay prevention, verification without exposing signing secrets to Next.js, multi-line order handling. Concrete token payload chosen *after* these answers.
+- [x] **Attribution ADR + signed `marketplaceRef` mechanism** - shipped (`750da49`); resolver/listener/migration/e2e remain. — resource referred to (session/academy/result), validity window, navigation persistence (marketplace → academy → different session), precedence vs existing direct/referral attribution, order vs order-line attachment, replay prevention, verification without exposing signing secrets to Next.js; contract settled in ADR-021 addendum.
 - [ ] `Order.customFields.orderSource` — `'marketplace' | 'direct' | 'referral'`, stamped **server-side** by Vendure from a signed referrer signal (INV-008; storefront never classifies)
-- [ ] **Task 16**: `CommissionLedger` $0-row pattern — entity, service, listener, `MARKETPLACE_COMMISSION_PERCENT` env var, append-only (INV-002/DL-030)
+- [ ] **Task 16**: `CommissionLedger` $0-row pattern — entity, service, listener, `MARKETPLACE_COMMISSION_PERCENT` env var, append-only; entity+subscriber shipped (`584530b`); service/listener/migration/e2e pending (INV-002/DL-030)
 - [ ] Commission reconciliation/admin reporting
 
 ### Phase 3C — Advertising (Stream 3)

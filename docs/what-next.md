@@ -107,8 +107,8 @@ Execution queue (verified state in `docs/implementation/phase3-audit.md`; detail
 - [ ] **5.** `MarketplaceAcademyPage`, `MarketplaceCategoryIndex`, `RankingMaterializedView` — **deferred** (not 3A gates; tracked in roadmap Phase 3A follow-on items once the discovery contract stabilizes).
 
 **Phase 3B — Attribution & Commission** (next active gate; design baseline committed asthe ADR-021 addendum)
-- [ ] **6.** Attribution ADR — ✅ **done**: contract settled in ADR-021 (resource, validity 30-min TTL, navigation persistence, precedence, replay, multi-line orders, order-vs-line scope, HMAC verification without secret exposure). Next: implement the signed `marketplaceRef` mechanism (`MARKETPLACE_REF_SIGNING_SECRET`; issue/verify service).
-- [ ] **7.** Implement `Order.customFields.orderSource` (server-stamped; governed migration)and  `CommissionLedger` $0-row pattern (DL-030, append-only).
+- [x] **6.** Attribution ADR — ✅ **done**: contract settled in ADR-021 (resource, validity 30-min TTL, navigation persistence, precedence, replay, multi-line orders, order-vs-line scope, HMAC verification without secret exposure). Next: implement the signed `marketplaceRef` mechanism (`MARKETPLACE_REF_SIGNING_SECRET`; issue/verify service shipped (`750da49`).
+- [ ] **7.** `Order.customFields.orderSource` (server-stamped; governed migration)and `CommissionLedger` $0-row pattern (DL-030): **partial** — entity + immutable subscriber shipped (`584530b`, unique `(marketplaceRef, orderId)` composite index); `orderSource` custom-field + `CommissionLedgerService`/listener + governed migration + e2e pending.
 - [ ] **8.** Commission reconciliation/admin reporting.
 
 **Phase 3C — Advertising (Stream 3)**

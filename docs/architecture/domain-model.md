@@ -451,4 +451,4 @@ Pending → Provisioning → Active → Completed → Archived
 - Rows never updated, never deleted
 - No rows for `orderSource = 'direct'` or `'referral'`
 
-> **ⓘ Attribution dependency:** Commission rows depend on `Order.customFields.orderSource` being stamped correctly at checkout. The classification mechanism is an open design question in ADR-021: the storefront passes a raw `referrerCode`/`utm_source`; Vendure-side `OrderProcess` logic classifies (INV-008). Must be settled before Phase 3 implementation.
+> **ⓘ Attribution dependency:** Commission rows depend on `Order.customFields.orderSource` being stamped correctly at checkout. The classification mechanism is settled in the ADR-021 addendum: the storefront passes a raw `referrerCode`/`utm_source`; Vendure-side `OrderProcess` logic classifies (INV-008). MarketplaceAttributionService shipped (`750da49`, issue/verify: HMAC + TTL + channel); CommissionLedger entity+sub shipped (`584530b`); Phase 3B ongoing.
