@@ -98,17 +98,18 @@ PHASE 2 — SUBSCRIPTION BILLING & CAPACITY POLICY
 
 Execution queue (verified state in `docs/implementation/phase3-audit.md`; detailed checklist in `docs/implementation/roadmap.md`):
 
-**Phase 3A — Discovery correctness**
-1. Latent defect closure: generate + apply the missing ad-entity migration (`marketplace_ad_campaign`, `ad_wallet`, `ad_spend_ledger` exist in code, not in DB) — no advertising features in this gate.
-2. Codify the canonical marketplace document contract; close the `customDomain`/`subjectTags` gaps found in the audit.
-3. Close projection event-coverage gaps: every field affecting marketplace visibility, routing, filtering, or ranking must have a deterministic projection update path.
-4. E2E suite: multi-channel indexing, channel-free `marketplaceSearch`, sponsored/bayesian ordering, tenant isolation.
-5. `MarketplaceAcademyPage`, `MarketplaceCategoryIndex`, `RankingMaterializedView`.
+**Phase 3A — Discovery correctness ✅ COMPLETE** — all gates closed on `main`; verified in `docs/implementation/phase3-audit.md` and `roadmap.md`.
+- [x] **1.** Latent defect closure — ad-entity schema provenance / governed migration (`marketplace_ad_campaign`, `ad_wallet`, `ad_spend_ledger`) now in DB via Vendure CLI (Gate 1.1.
+- [x] **2.** Canonical marketplace document contract codified; `customDomain` redirect projection closed (F3) and `subjectTags` authoritative source + projection closed (F4.
+- [x] **3.** Projection event-coverage completed (F5): every field affecting marketplace visibility, routing, filtering, or ranking has a deterministic projection update path. Organization-slag and campaign-lifecycle surfaces explicitly deferred.
 
-**Phase 3B — Attribution & Commission**
-6. **Attribution ADR first** — settle the contract (resource, validity, navigation persistence, precedence, replay, multi-line orders) before any code. Storefront passes a signed referrer signal; Vendure classifies server-side (INV-008).
-7. Implement `Order.customFields.orderSource` (server-stamped) and `CommissionLedger` $0-row pattern (DL-030, append-only).
-8. Commission reconciliation/admin reporting.
+- [x] **4.** E2E suite — infrastructure-gated marketplace E2E **7/7** (real PG+Redis+ES; multi-channel indexing, channel-free `marketplaceSearch`, sponsored/bayesian ordering, F7 removal transitions, tenant isolation).
+- [ ] **5.** `MarketplaceAcademyPage`, `MarketplaceCategoryIndex`, `RankingMaterializedView` — **deferred** (not 3A gates; tracked in roadmap Phase 3A follow-on items once the discovery contract stabilizes).
+
+**Phase 3B — Attribution & Commission** (next active gate; design baseline committed asthe ADR-021 addendum)
+- [ ] **6.** Attribution ADR — ✅ **done**: contract settled in ADR-021 (resource, validity 30-min TTL, navigation persistence, precedence, replay, multi-line orders, order-vs-line scope, HMAC verification without secret exposure). Next: implement the signed `marketplaceRef` mechanism (`MARKETPLACE_REF_SIGNING_SECRET`; issue/verify service).
+- [ ] **7.** Implement `Order.customFields.orderSource` (server-stamped; governed migration)and  `CommissionLedger` $0-row pattern (DL-030, append-only).
+- [ ] **8.** Commission reconciliation/admin reporting.
 
 **Phase 3C — Advertising (Stream 3)**
 9. Wire `MarketplaceAdService` end-to-end on top of the now-existing tables: campaign lifecycle → wallet debit → `AdSpendLedger` (INV-010).
