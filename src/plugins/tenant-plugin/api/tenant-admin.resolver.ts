@@ -8,6 +8,7 @@ import {
   Transaction,
   TransactionalConnection,
 } from '@vendure/core';
+import { SUPER_ADMIN_ROLE_CODE } from '@vendure/common/lib/shared-constants';
 import { TenantProfileService } from '../services/tenant-profile.service';
 import { InstructorProfileService } from '../services/instructor-profile.service';
 import { MediaResourceService } from '../services/media-resource.service';
@@ -65,6 +66,10 @@ export class TenantAdminResolver {
       .leftJoinAndSelect('role.channels', 'roleChannel')
       .leftJoin('role.channels', 'channel')
       .where('channel.id = :channelId', { channelId })
+      // INV-016: Vendure's SuperAdmin role carries ALL channels in
+      // role.channels, so it matches the channel filter above. A tenant
+      // read-admin must never see the global SuperAdmin account.
+      .andWhere('role.code != :superAdminRoleCode', { superAdminRoleCode: SUPER_ADMIN_ROLE_CODE })
       .orderBy('administrator.createdAt', 'ASC');
 
     const [items, totalItems] = await qb
@@ -112,6 +117,9 @@ export class TenantAdminResolver {
       .leftJoin('role.channels', 'channel')
       .where('administrator.id = :id', { id: args.id })
       .andWhere('channel.id = :channelId', { channelId })
+      // INV-016: never expose the global SuperAdmin account to tenant admins
+      // (SuperAdmin role carries ALL channels, so it matches the filter above).
+      .andWhere('role.code != :superAdminRoleCode', { superAdminRoleCode: SUPER_ADMIN_ROLE_CODE })
       .getOne()
       .then((a) => a ?? undefined);
   }

@@ -397,6 +397,15 @@ describe('TenantPlugin', () => {
   const { server, adminClient, shopClient } = createTestEnvironment(
     mergeConfig(testConfig, {
       apiOptions: { port: 3070 },
+      authOptions: {
+        // BUG-033 root-cause fix: registerNewTenant creates admins with
+        // user.verified=false (tenant-registration.service.ts), and testConfig
+        // defaults authOptions.requireVerification=true, so tenant-channel
+        // logins return a null CurrentUser ("Cannot return null for
+        // non-nullable field CurrentUser.id"). Verification itself is covered
+        // by unit tests; this suite needs authenticated tenant admins.
+        requireVerification: false,
+      },
       dbConnectionOptions: {
         type: 'postgres',
         host: process.env.DB_HOST ?? 'localhost',

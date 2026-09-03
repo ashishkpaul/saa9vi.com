@@ -21,7 +21,7 @@
 
 ## Phase 1.5 — Trust Engine & Discovery
 
-**Status:** Complete (2026-08-23). All remaining blockers resolved except the explicitly deferred Flow A e2e harness issue.
+**Status:** Complete (2026-08-23). The BUG-033 root cause (e2e `requireVerification` default) is fixed, unblocking the customer-deletion login path; the customer-deletion suit now surfaces separate Flow A/B fixture issues (see below).
 
 ### Completed
 
@@ -38,7 +38,7 @@
 - [x] **FEAT-002 schema migration** — verified already applied (`sourceType` + `isUnbounded` confirmed in DB)
 - [x] **Next.js public instructor/CMS pages** — CMS page route (`/[locale]/page/[slug]`) added; instructor page already existed
 - [x] **Email verification for tenant admins** — `verifyTenantAdmin` Shop API mutation + unverified admin creation
-- [x] **End-to-end customer deletion test** — covers Flow A + Flow B across BBB/Tenant/Reviews. **2 Flow A tests remain blocked** by a test-harness auth issue; production paths are correct + TypeScript-verified.
+- [x] **End-to-end customer deletion test** — covers Flow A + Flow B across BBB/Tenant/Reviews. **Login-handler blocker (BUG-033) resolved** (`requireVerification:false`); `leaveAcademy` mutate+Flow B login now execute. 2 further Flow A/B issues surfaced that need separate fixes: (1) Flow B fixture seeds `BbbEnrollment.roomId`/`BbbTrialRegistration.scheduledSessionId` with non-numeric ids into integer FK columns; (2) Flow A "BBB entitlements deactivated" assertion fails. Production paths are TypeScript-verified.
 - [x] **Load estimation ratios tuning** — PILOS ratios configurable via `BigBlueButtonPluginOptions` + env vars
 
 ---
@@ -90,7 +90,7 @@
 - [x] Canonical marketplace document contract — `customDomain` added to both documents + ES mappings (F3/Gate 1.2); session `subjectTags` sourced from new `BbbScheduledSession.subjectTags` column via migration `1788266256055` (F4/Gate 1.3); instructor tags from `expertiseAreas`. `MarketplaceCategory` entity deferred until category-browsing UI exists. Field→event matrix still pending (Gate 1.4)
 - [x] **Public-index leak fix (F7):** `indexSession()` gates on `visibility === 'PUBLIC'` + `status IN ('SCHEDULED','LIVE')`, removing non-conforming documents
 - [x] Projection completeness (Gate 1.4): field→event matrix codified in `phase3-audit.md`; session lifecycle events added (`SessionCreated/Updated/Started/CancelledEvent`) + `updateBbbScheduledSession` mutation; `TenantProfileUpdatedEvent` published on academy profile update → bulk channel reindex; review aggregate transitions (approved/rejected/hidden) → affected-session reindex. ⚠️ Two matrix rows remain open: `BbbOrganizationUpdatedEvent` (org-edit API doesn't exist) and campaign-lifecycle triggers (Phase 3C)
-- [ ] E2E suite (Gate 1.5, **infrastructure-gated**: `MARKETPLACE_E2E=true` fails unless PG + Redis + ES are all reachable — no silent fallback): multi-channel indexing + channel-free `marketplaceSearch` + F7 removal cases (PUBLIC→PRIVATE etc.) + sponsored/bayesian ordering + tenant isolation — **suite committed (`marketplace.e2e-spec.ts`, all layers written) but execution BLOCKED by BUG-033** (pre-existing tenant-channel e2e login failure, reproduced at `87ee596` baseline). Unblocks together with the Flow A harness issue.
+- [x] E2E suite (Gate 1.5, **infrastructure-gated**: `MARKETPLACE_E2E=true` fails unless PG + Redis + ES are all reachable — no silent fallback): multi-channel indexing + channel-free `marketplaceSearch` + F7 removal cases (PUBLIC→PRIVATE, SCHEDULED→CANCELLED) + sponsored/bayesian ordering + tenant isolation + **AdSpendLedger immutability (INV-010)**. **All 7 tests pass** (`commit 2e74020` + follow-up) — unblocked by the BUG-033 root-cause fix (`requireVerification:false` in the e2e harness; see `known-bugs.md`).
 - [ ] `MarketplaceAcademyPage` — aggregated view (projection only — never a second tenant-profile DB)
 - [ ] `MarketplaceCategoryIndex` — subject taxonomy as data (`MarketplaceCategory` entity), not hardcoded in resolver
 - [ ] `RankingMaterializedView` (Postgres) — ranking inputs computed in PG, consumed by ES documents
@@ -154,8 +154,8 @@
 **Storefront template contract Phase A — ESLint guardrail** (`nextjs-starter-vendure`)
 - [ ] §4a lint guardrail remains unimplemented. Land the mechanical channel-isolation checks before expanding storefront onboarding.
 
-**Blocked Flow A e2e tests**
-- [ ] 2 tests remain blocked by the isolated-e2e Shop API customer-session/channel-resolution harness issue. Production code is TypeScript-verified.
+**Customer-deletion e2e (Flow A/B)**
+- [ ] The BUG-033 login/auth blocker is fixed, so Flow A/B now execute. Remaining: (1) Flow B fixture persists non-numeric `roomId`/`scheduledSessionId` into integer FK columns; (2) Flow A "BBB entitlements deactivated" assertion. Production code is TypeScript-verified.
 
 **Development infrastructure verification**
 - [ ] Local PostgreSQL tunnel (`127.0.0.1:5435`) and Redis tunnel (`127.0.0.1:6385`) must be reachable before runtime verification. If either is unavailable, the application intentionally falls back to pg-mem / `DefaultJobQueuePlugin`; that fallback is suitable for development diagnostics, not production verification.

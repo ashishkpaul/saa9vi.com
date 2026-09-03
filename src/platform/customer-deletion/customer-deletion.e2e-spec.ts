@@ -107,6 +107,13 @@ describe('CustomerDeletion (INV-013)', () => {
   const { server, adminClient, shopClient } = createTestEnvironment(
     mergeConfig(testConfig, {
       apiOptions: { port: 3071 },
+      authOptions: {
+        // BUG-033 root-cause fix (same as tenant-plugin e2e): shop-registered
+        // customers and tenant admins have verified=false, and testConfig
+        // defaults requireVerification=true, so sessions return a null
+        // CurrentUser in the isolated e2e environment.
+        requireVerification: false,
+      },
       dbConnectionOptions: {
         type: 'postgres',
         host: process.env.DB_HOST ?? 'localhost',
