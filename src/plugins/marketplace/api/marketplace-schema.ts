@@ -55,6 +55,24 @@ export const shopApiExtensions = gql`
     """
     marketplaceSearch(input: MarketplaceSearchInput!): MarketplaceSearchResult!
   }
+
+  type MarketplaceReferenceApplyResult {
+    ok: Boolean!
+    orderId: ID
+    code: String
+  }
+
+  extend type Mutation {
+    """
+    Attach a server-verified marketplace attribution reference to the active order..
+    The storefront only supplies the opaque marketplaceRef it received from the marketplace
+    discovery API。 Vendure resolves it(HMAC + TTL + channel binding) BEFORE storing,
+    so the client can never select orderSource (INV-008;; ADR-021 Decision  ̃7/8)..
+    orderSource is never accepted nor written here— it is classified later at the
+    order lifecycle boundary (3B.3)。
+    """
+    applyMarketplaceReference(ref: String!): MarketplaceReferenceApplyResult!
+  }
 `;
 
 export const adminApiExtensions = gql`

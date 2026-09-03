@@ -1,5 +1,5 @@
 import { OnApplicationBootstrap } from '@nestjs/common';
-import { PluginCommonModule, VendurePlugin } from '@vendure/core';
+import { PluginCommonModule, VendurePlugin, LanguageCode } from '@vendure/core';
 import { MarketplaceIndexerService } from './services/marketplace-indexer.service';
 import { MarketplaceSearchResolver } from './api/marketplace-search.resolver';
 import { MarketplaceAdminResolver } from './api/marketplace-admin.resolver';
@@ -8,6 +8,7 @@ import { MarketplaceIndexQueueService } from './services/marketplace-index-queue
 import { MarketplaceAdService } from './services/marketplace-ad.service';
 import { BayesianRatingService } from './services/bayesian-rating.service';
 import { MarketplaceAttributionService } from './services/marketplace-attribution.service';
+import { MarketplaceCommissionResolver } from './api/marketplace-commission.resolver';
 import { MarketplaceAdCampaign } from './entities/marketplace-ad-campaign.entity';
 import { AdSpendLedger } from './entities/ad-spend-ledger.entity';
 import { AdWallet } from './entities/ad-wallet.entity';
@@ -65,13 +66,40 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
   ],
   shopApiExtensions: {
     schema: shopApiExtensions,
-    resolvers: [MarketplaceSearchResolver],
+    resolvers: [MarketplaceSearchResolver, MarketplaceCommissionResolver],
   },
   adminApiExtensions: {
     schema: adminApiExtensions,
     resolvers: [MarketplaceAdminResolver],
   },
   configuration: (config) => {
+    // Order custom fields for Stream 2 commission attribution (ADR-021)。
+    // - orderSource: server-classified only (INV-008;; client never writes it..,
+    // - marketplaceRef: attached ONLY via the dedicated applyMarketplaceReference mutation..
+    //   Both are readonly:true so client GraphQL custom-field setters cannot write them;
+    //   plugin TypeScript (resolver/listener) may still set them programmatically.
+
+    config.customFields.Order ??= [];
+    if (!config.customFields.Order.some((f) => f.name === 'orderSource')) {
+    config.customFields.Order.push({
+      name: 'orderSource',
+      type: 'string',
+      nullable: true,
+      readonly: true,
+      label: [{ languageCode: LanguageCode.en, value: 'Order Source (server-classified)' }],
+      list: false,
+    });
+    }
+    if (!config.customFields.Order.some((f) => f.name === 'marketplaceRef')) {
+    config.customFields.Order.push({
+      name: 'marketplaceRef',
+      type: 'string',
+      nullable: true,
+      readonly: true,
+      label: [{ languageCode: LanguageCode.en, value: 'Marketplace Referral' }],
+      list: false,
+    });
+    }
     return config;
   },
 })
@@ -88,5 +116,11 @@ export class MarketplaceIndexerPlugin implements OnApplicationBootstrap {
       // Non-fatal: app starts even if ES is unreachable
       console.warn(`MarketplaceIndexerPlugin: Elasticsearch unavailable — ${err.message}`);
     }
+  }
+}
+declare module '@vendure/core' {
+  interface CustomOrderFields {
+    orderSource?: 'marketplace' | 'referral' | 'direct' | null;
+    marketplaceRef?: string | null;
   }
 }
