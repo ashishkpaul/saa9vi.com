@@ -73,9 +73,9 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
     resolvers: [MarketplaceAdminResolver],
   },
   configuration: (config) => {
-    // Order custom fields for Stream 2 commission attribution (ADR-021)。
-    // - orderSource: server-classified only (INV-008;; client never writes it..,
-    // - marketplaceRef: attached ONLY via the dedicated applyMarketplaceReference mutation..
+    // Order custom fields for Stream 2 commission attribution (ADR-021).
+    // - orderSource: server-classified only (INV-008); client never writes it.
+    // - marketplaceRef: attached ONLY via the dedicated applyMarketplaceReference mutation.
     //   Both are readonly:true so client GraphQL custom-field setters cannot write them;
     //   plugin TypeScript (resolver/listener) may still set them programmatically.
 

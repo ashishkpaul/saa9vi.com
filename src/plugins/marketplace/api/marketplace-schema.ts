@@ -64,12 +64,15 @@ export const shopApiExtensions = gql`
 
   extend type Mutation {
     """
-    Attach a server-verified marketplace attribution reference to the active order..
-    The storefront only supplies the opaque marketplaceRef it received from the marketplace
-    discovery API。 Vendure resolves it(HMAC + TTL + channel binding) BEFORE storing,
-    so the client can never select orderSource (INV-008;; ADR-021 Decision  ̃7/8)..
-    orderSource is never accepted nor written here— it is classified later at the
-    order lifecycle boundary (3B.3)。
+    Attach a server-verified marketplace attribution reference to the active order.
+    Discriminated result object (not a union):
+      ok = true  -> orderId present, code null
+      ok = false -> code present, orderId null
+    The storefront only supplies the opaque marketplaceRef it received from the
+    marketplace discovery API. Vendure resolves it (HMAC + TTL + channel binding)
+    BEFORE storing, so the client can never select orderSource (INV-008; ADR-021
+    Decisions 7 and 8). orderSource is never accepted nor written here; it is
+    classified later at the order lifecycle boundary (3B.3 listener).
     """
     applyMarketplaceReference(ref: String!): MarketplaceReferenceApplyResult!
   }
