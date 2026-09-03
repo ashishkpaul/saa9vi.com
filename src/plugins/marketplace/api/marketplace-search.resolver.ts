@@ -14,9 +14,10 @@ export class MarketplaceSearchResolver {
   ) {
     const node = process.env.ELASTICSEARCH_NODE || process.env.ELASTICSEARCH_URL || 'http://localhost:9200';
     const password = process.env.ELASTICSEARCH_PASSWORD;
+    const username = process.env.ELASTICSEARCH_USERNAME || 'elastic';
     this.client = new Client({
       node,
-      ...(password ? { auth: { username: 'elastic', password } } : {}),
+      ...(password ? { auth: { username, password } } : {}),
     });
   }
 

@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { TransactionalConnection } from '@vendure/core';
+import { ConfigService, TransactionalConnection } from '@vendure/core';
 import { ProductReview } from '../../reviews/entities/product-review.entity';
 
 const loggerCtx = 'BayesianRatingService';
@@ -24,6 +24,7 @@ export class BayesianRatingService {
 
   constructor(
     private readonly connection: TransactionalConnection,
+    private readonly configService: ConfigService,
   ) {}
 
   /**
@@ -67,10 +68,12 @@ export class BayesianRatingService {
    */
   async computeForVariant(variantId: string): Promise<number> {
     const { ProductVariant } = require('@vendure/core');
+    // variantId may be GraphQL-encoded (e.g. "T_5"); decode to the raw PK.
+    const decoded = this.configService.entityIdStrategy.decodeId(String(variantId));
     const variant = await this.connection.rawConnection
       .getRepository(ProductVariant)
       .findOne({
-        where: { id: variantId as any },
+        where: { id: (decoded === -1 ? variantId : decoded) as any },
         relations: ['product'],
       });
 

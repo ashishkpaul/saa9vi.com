@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import {
+  ConfigService,
   ID,
   RequestContext,
   TransactionalConnection,
@@ -39,7 +40,19 @@ export class BbbOrganizationService {
     private readonly channelService: ChannelService,
     private readonly channelAccess: BbbChannelAccessService,
     private readonly capacityPolicyService: BbbPlatformCapacityPolicyService,
+    private readonly configService: ConfigService,
   ) {}
+
+  /**
+   * Normalize a GraphQL-encoded id (e.g. "T_2" under the e2e
+   * TestingEntityIdStrategy) to the internal raw PK form so denormalized
+   * FK columns are always stored consistently with ctx.channelId.
+   * Identity under the production AutoIncrementIdStrategy.
+   */
+  private toInternalId(id: string): string {
+    const decoded = this.configService.entityIdStrategy.decodeId(id);
+    return decoded === -1 ? id : String(decoded);
+  }
 
   async findAll(
     ctx: RequestContext,
@@ -168,7 +181,7 @@ export class BbbOrganizationService {
       );
     }
     const org = new BbbOrganization({
-      channelId: input.channelId,
+      channelId: this.toInternalId(input.channelId),
       tenantProfileId: input.tenantProfileId,
       slug: input.slug,
       name: input.name,

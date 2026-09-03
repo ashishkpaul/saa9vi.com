@@ -37,11 +37,19 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
-import { mergeConfig, ProductVariant } from '@vendure/core';
+import {
+  DefaultLogger,
+  LogLevel,
+  mergeConfig,
+  ProductVariant,
+} from '@vendure/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { In } from 'typeorm';
 
 import { TenantPlugin } from '../../tenant-plugin/tenant-plugin.plugin';
 import { BigBlueButtonPlugin } from '../../bigbluebutton-plugin';
+import { SessionUpdatedEvent } from '../../bigbluebutton-plugin/events/bbb-events';
 import { CmsPlugin } from '../../cms/cms.plugin';
 import { ReviewsPlugin } from '../../reviews/reviews-plugin';
 import { MarketplaceIndexerPlugin } from '../marketplace-indexer.plugin';
@@ -51,6 +59,7 @@ import { AdSpendLedger } from '../entities/ad-spend-ledger.entity';
 import { BbbScheduledSession } from '../../bigbluebutton-plugin/entities/bbb-scheduled-session.entity';
 import { ReviewApprovedEvent } from '../../reviews/events/review.events';
 import { TransactionalConnection } from '@vendure/core';
+import { AdSpendLedgerImmutableSubscriber } from '../ad-spend-ledger-immutable.subscriber';
 
 // Schema-based isolation: creates e2e_marketplace with a clean slate per run
 // (same pattern as the tenant-plugin e2e suite).
@@ -195,6 +204,30 @@ const MY_ORGS = gql`
   }
 `;
 
+const CREATE_CUSTOMER = gql`
+  mutation CreateCustomer($input: CreateCustomerInput!) {
+    createCustomer(input: $input) {
+      ... on Customer {
+        id
+      }
+      ... on ErrorResult {
+        errorCode
+        message
+      }
+    }
+  }
+`;
+
+const ADD_MEMBER = gql`
+  mutation AddMember($input: AddBbbMemberInput!) {
+    addBbbMember(input: $input) {
+      id
+      customerId
+      role
+    }
+  }
+`;
+
 // ─── Async helpers ───────────────────────────────────────────────────────────
 
 async function waitFor<T>(
@@ -224,6 +257,17 @@ async function searchSessions(query: string, subjectTags?: string[]): Promise<an
 const { server, adminClient, shopClient } = createTestEnvironment(
   mergeConfig(testConfig, {
     apiOptions: { port: 3075 },
+    // Verbose logging: the projection pipeline runs in background jobs whose
+    // failures are otherwise invisible to the e2e assertions.
+    logger: new DefaultLogger({ level: LogLevel.Debug }),
+    authOptions: {
+      // BUG-033 fix: registerNewTenant creates admins verified=false (email
+      // verification flow), which cannot log in under testConfig's default
+      // requireVerification=true. Verification itself is exercised by the
+      // tenant-plugin suite; the marketplace suite needs authenticated
+      // tenant admins to exercise the projection pipeline.
+      requireVerification: false,
+    },
     dbConnectionOptions: {
       type: 'postgres',
       host: process.env.DB_HOST ?? '127.0.0.1',
@@ -233,6 +277,9 @@ const { server, adminClient, shopClient } = createTestEnvironment(
       password: process.env.DB_PASSWORD ?? '',
       schema: 'e2e_marketplace',
       synchronize: true,
+      // INV-010 append-only enforcement must be active in the e2e env
+      // for the ledger immutability test (layer F) to be meaningful.
+      subscribers: [AdSpendLedgerImmutableSubscriber],
     },
     plugins: [TenantPlugin, BigBlueButtonPlugin, CmsPlugin, ReviewsPlugin, MarketplaceIndexerPlugin],
   }),
@@ -310,13 +357,22 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
     });
     orgAId = orgA.createBbbOrganization.id;
 
+    // Sessions require a trainer: create a customer + org membership, then
+    // pass the customerId as trainerId (the service resolves either).
+    const trainerA = await adminClient.query(CREATE_CUSTOMER, {
+      input: { firstName: 'Ada', lastName: 'Trainer', emailAddress: `trainer-a-${Date.now()}@example.com` },
+    });
+    const memberA = await adminClient.query(ADD_MEMBER, {
+      input: { organizationId: orgAId, customerId: trainerA.createCustomer.id, role: 'org-admin' },
+    });
+
     const s1 = await adminClient.query(CREATE_SESSION, {
       input: {
         organizationId: orgAId,
         title: 'E2E Python Bootcamp A1',
         startTime: new Date(Date.now() + 86400_000).toISOString(),
         endTime: new Date(Date.now() + 90000_000).toISOString(),
-        trainerId: tenantA.adminId,
+        trainerId: memberA.addBbbMember.customerId,
         subjectTags: ['python'],
       },
     });
@@ -328,7 +384,7 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
         title: 'E2E NEET Crash Course A2',
         startTime: new Date(Date.now() + 86400_000).toISOString(),
         endTime: new Date(Date.now() + 90000_000).toISOString(),
-        trainerId: tenantA.adminId,
+        trainerId: memberA.addBbbMember.customerId,
         subjectTags: ['neet'],
       },
     });
@@ -342,17 +398,42 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
     });
     orgBId = orgB.createBbbOrganization.id;
 
+    const trainerB = await adminClient.query(CREATE_CUSTOMER, {
+      input: { firstName: 'Bob', lastName: 'Trainer', emailAddress: `trainer-b-${Date.now()}@example.com` },
+    });
+    const memberB = await adminClient.query(ADD_MEMBER, {
+      input: { organizationId: orgBId, customerId: trainerB.createCustomer.id, role: 'org-admin' },
+    });
+
     const s3 = await adminClient.query(CREATE_SESSION, {
       input: {
         organizationId: orgBId,
         title: 'E2E JEE Physics B1',
         startTime: new Date(Date.now() + 86400_000).toISOString(),
         endTime: new Date(Date.now() + 90000_000).toISOString(),
-        trainerId: tenantB.adminId,
+        trainerId: memberB.addBbbMember.customerId,
         subjectTags: ['jee'],
       },
     });
     sessionB1Id = s3.createBbbScheduledSession.id;
+
+    // Sessions default to visibility=PRIVATE (F7 safe-by-default). The
+    // marketplace projection only indexes PUBLIC sessions, so publish the
+    // fixtures directly at the entity level before the pipeline tests run.
+    const connection = server.app.get(TransactionalConnection);
+    const sessionRepo = connection.rawConnection.getRepository(BbbScheduledSession);
+    const toPk = (id: string) => parseInt(String(id).replace(/^T_/, ''), 10);
+    await sessionRepo.update(
+      { id: In([toPk(sessionA1Id), toPk(sessionA2Id), toPk(sessionB1Id)]) },
+      { visibility: 'PUBLIC' },
+    );
+    // Publish events for the visibility change so the projection indexes them
+    // through the same guarded path as any other update.
+    const { EventBus } = await import('@vendure/core');
+    const eventBus = server.app.get(EventBus);
+    for (const sid of [sessionA1Id, sessionA2Id, sessionB1Id]) {
+      eventBus.publish(new SessionUpdatedEvent(String(toPk(sid)), null));
+    }
   }, 180_000);
 
   afterAll(async () => {
@@ -461,10 +542,26 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
       //    reads the variant for price + rating).
       const connection = server.app.get(TransactionalConnection);
       const variantRepo = connection.rawConnection.getRepository(ProductVariant);
-      const variant = await variantRepo.findOne({ where: {}, relations: ['product'] });
+      let variant = await variantRepo.findOne({ where: {}, relations: ['product'] });
+      if (!variant) {
+        // Fixture seeding may not have produced catalog rows in this schema;
+        // create the minimal product + variant needed for rating linkage.
+        const { Product } = await import('@vendure/core');
+        const productRepo = connection.rawConnection.getRepository(Product);
+        const product = await productRepo.save(
+          productRepo.create({ name: 'E2E Rating Product', slug: `e2e-rating-${Date.now()}` } as any),
+        );
+        variant = (await variantRepo.save(
+          variantRepo.create({ product: product as any, name: 'E2E Rating Variant', sku: `E2E-RATING-${Date.now()}`, price: 100000 } as any),
+        )) as unknown as NonNullable<typeof variant>;
+      }
       expect(variant).toBeDefined();
       const sessionRepo = connection.rawConnection.getRepository(BbbScheduledSession);
-      const session = await sessionRepo.findOneOrFail({ where: { id: sessionA1Id as any } });
+      // sessionA1Id is the GraphQL-facing id (e.g. "T_1"); decode to the raw
+      // integer PK before querying the entity directly via TypeORM.
+      const session = await sessionRepo.findOneOrFail({
+        where: { id: parseInt(String(sessionA1Id).replace(/^T_/, ''), 10) as any },
+      });
       session.productVariantId = String(variant!.id);
       await sessionRepo.save(session);
 
@@ -485,8 +582,10 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
       const savedReview = await reviewRepo.save(
         reviewRepo.create({
           channelId: tenantA.channelId,
-          productId: String(variant!.productId),
-          productVariantId: String(variant!.id),
+          // ProductReview.product / productVariant are ManyToOne relations —
+          // the FKs must be set via the relation, not scalar id properties.
+          product: { id: variant!.productId } as any,
+          productVariant: { id: variant!.id } as any,
           summary: 'E2E review',
           body: 'Great session',
           rating: 5,

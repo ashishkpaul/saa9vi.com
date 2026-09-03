@@ -1,5 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import {
+  ConfigService,
+  Logger,
   ForbiddenError,
   ID,
   Permission,
@@ -46,7 +48,22 @@ import { BbbTrialRegistration } from "../entities/trial-registration.entity";
  */
 @Injectable()
 export class BbbChannelAccessService {
-  constructor(private readonly connection: TransactionalConnection) {}
+  constructor(
+    private readonly connection: TransactionalConnection,
+    private readonly configService: ConfigService,
+  ) {}
+
+  private static readonly loggerCtx = 'BbbChannelAccessService';
+
+  /**
+   * Normalize a GraphQL-facing id (e.g. "T_1" under the e2e
+   * TestingEntityIdStrategy) to the raw PK form for TypeORM lookups.
+   * Identity under the production AutoIncrementIdStrategy.
+   */
+  private toPk(id: ID): number | string {
+    const decoded = this.configService.entityIdStrategy.decodeId(String(id));
+    return decoded === -1 ? id : decoded;
+  }
 
   /**
    * Check if the active user has SuperAdmin privileges.
@@ -70,7 +87,7 @@ export class BbbChannelAccessService {
     const org = await this.connection
       .getRepository(ctx, BbbOrganization)
       .findOne({
-        where: { id: organizationId as string },
+        where: { id: this.toPk(organizationId) as any },
         relations: ["channels"],
       });
 
@@ -83,7 +100,7 @@ export class BbbChannelAccessService {
       (ch) => (ch.id as string) === channelId,
     );
 
-    if (!hasChannel && org.channelId !== channelId) {
+    if (!hasChannel && String(org.channelId) !== String(channelId)) {
       throw new ForbiddenError();
     }
 
@@ -104,7 +121,7 @@ export class BbbChannelAccessService {
     const room = await this.connection
       .getRepository(ctx, BbbRoom)
       .findOne({
-        where: { id: roomId as string },
+        where: { id: this.toPk(roomId) as any },
         relations: ["organization"],
       });
 
@@ -114,7 +131,7 @@ export class BbbChannelAccessService {
 
     // Resolve through organization
     if (room.organization) {
-      if (room.organization.channelId !== channelId) {
+      if (String(room.organization.channelId) !== String(channelId)) {
         throw new ForbiddenError();
       }
     } else {
@@ -124,7 +141,7 @@ export class BbbChannelAccessService {
         .findOne({
           where: { id: (room as any).organizationId as string },
         });
-      if (!org || org.channelId !== channelId) {
+      if (!org || String(org.channelId) !== String(channelId)) {
         throw new ForbiddenError();
       }
     }
@@ -146,7 +163,7 @@ export class BbbChannelAccessService {
     const meeting = await this.connection
       .getRepository(ctx, BbbMeeting)
       .findOne({
-        where: { id: meetingId as string },
+        where: { id: this.toPk(meetingId) as any },
         relations: ["organization"],
       });
 
@@ -164,7 +181,7 @@ export class BbbChannelAccessService {
         .findOne({
           where: { id: (meeting as any).organizationId as string },
         });
-      if (!org || org.channelId !== channelId) {
+      if (!org || String(org.channelId) !== String(channelId)) {
         throw new ForbiddenError();
       }
     }
@@ -186,7 +203,7 @@ export class BbbChannelAccessService {
     const session = await this.connection
       .getRepository(ctx, BbbScheduledSession)
       .findOne({
-        where: { id: sessionId as string },
+        where: { id: this.toPk(sessionId) as any },
         relations: ["organization"],
       });
 
@@ -194,12 +211,22 @@ export class BbbChannelAccessService {
       throw new ForbiddenError();
     }
 
-    // Check via denormalized channelId first, then organization
-    if (session.channelId && session.channelId !== channelId) {
+    // Check via denormalized channelId first, then organization.
+    // Coerce to string: ctx.channelId may arrive as number depending on
+    // strategy/context, and the denormalized columns store strings.
+    if (session.channelId && String(session.channelId) !== String(channelId)) {
+      Logger.warn(
+        `Session ${String(session.id)} channel mismatch: session.channelId=${session.channelId} ctx.channelId=${channelId}`,
+        BbbChannelAccessService.loggerCtx,
+      );
       throw new ForbiddenError();
     }
 
-    if (session.organization && session.organization.channelId !== channelId) {
+    if (session.organization && session.organization.channelId && String(session.organization.channelId) !== String(channelId)) {
+      Logger.warn(
+        `Session ${String(session.id)} org channel mismatch: org.channelId=${session.organization.channelId} ctx.channelId=${channelId}`,
+        BbbChannelAccessService.loggerCtx,
+      );
       throw new ForbiddenError();
     }
 
@@ -227,7 +254,7 @@ export class BbbChannelAccessService {
       throw new ForbiddenError();
     }
 
-    if (entitlement.channelId && entitlement.channelId !== channelId) {
+    if (entitlement.channelId && String(entitlement.channelId) !== String(channelId)) {
       throw new ForbiddenError();
     }
 
@@ -257,7 +284,7 @@ export class BbbChannelAccessService {
     }
 
     if (grant.organization) {
-      if (grant.organization.channelId !== channelId) {
+      if (String(grant.organization.channelId) !== String(channelId)) {
         throw new ForbiddenError();
       }
     } else {
@@ -266,7 +293,7 @@ export class BbbChannelAccessService {
         .findOne({
           where: { id: (grant as any).organizationId as string },
         });
-      if (!org || org.channelId !== channelId) {
+      if (!org || String(org.channelId) !== String(channelId)) {
         throw new ForbiddenError();
       }
     }
@@ -298,7 +325,7 @@ export class BbbChannelAccessService {
 
     const org = enrollment.room?.organization;
     if (org) {
-      if (org.channelId !== channelId) {
+      if (String(org.channelId) !== String(channelId)) {
         throw new ForbiddenError();
       }
     } else {
@@ -309,7 +336,7 @@ export class BbbChannelAccessService {
           where: { id: (enrollment as any).roomId as string },
           relations: ["organization"],
         });
-      if (!room?.organization || room.organization.channelId !== channelId) {
+      if (!room?.organization || String(room.organization.channelId) !== String(channelId)) {
         throw new ForbiddenError();
       }
     }
@@ -340,7 +367,7 @@ export class BbbChannelAccessService {
     }
 
     if (member.organization) {
-      if (member.organization.channelId !== channelId) {
+      if (String(member.organization.channelId) !== String(channelId)) {
         throw new ForbiddenError();
       }
     } else {
@@ -349,7 +376,7 @@ export class BbbChannelAccessService {
         .findOne({
           where: { id: (member as any).organizationId as string },
         });
-      if (!org || org.channelId !== channelId) {
+      if (!org || String(org.channelId) !== String(channelId)) {
         throw new ForbiddenError();
       }
     }
@@ -378,7 +405,7 @@ export class BbbChannelAccessService {
       throw new ForbiddenError();
     }
 
-    if (membership.channelId !== channelId) {
+    if (String(membership.channelId) !== String(channelId)) {
       throw new ForbiddenError();
     }
 
@@ -409,7 +436,7 @@ export class BbbChannelAccessService {
 
     const org = productAccess.room?.organization;
     if (org) {
-      if (org.channelId !== channelId) {
+      if (String(org.channelId) !== String(channelId)) {
         throw new ForbiddenError();
       }
     } else {
@@ -419,7 +446,7 @@ export class BbbChannelAccessService {
           where: { id: (productAccess as any).roomId as string },
           relations: ["organization"],
         });
-      if (!room?.organization || room.organization.channelId !== channelId) {
+      if (!room?.organization || String(room.organization.channelId) !== String(channelId)) {
         throw new ForbiddenError();
       }
     }
@@ -451,7 +478,7 @@ export class BbbChannelAccessService {
 
     const org = trial.scheduledSession?.organization;
     if (org) {
-      if (org.channelId !== channelId) {
+      if (String(org.channelId) !== String(channelId)) {
         throw new ForbiddenError();
       }
     } else {
@@ -463,7 +490,7 @@ export class BbbChannelAccessService {
         });
       if (
         !session?.organization ||
-        session.organization.channelId !== channelId
+        String(session.organization.channelId) !== String(channelId)
       ) {
         throw new ForbiddenError();
       }

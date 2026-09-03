@@ -4,6 +4,7 @@ export const shopApiExtensions = gql`
   type MarketplaceSession {
     id: ID!
     productVariantId: ID
+    channelId: String!
     channelToken: String!
     title: String!
     startTime: DateTime!
@@ -11,6 +12,7 @@ export const shopApiExtensions = gql`
     priceInPaise: Int!
     academyName: String!
     academySlug: String!
+    customDomain: String
     instructorName: String
     subjectTags: [String!]!
     bayesianRating: Float!

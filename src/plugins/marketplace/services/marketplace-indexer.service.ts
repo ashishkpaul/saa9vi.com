@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Client } from '@elastic/elasticsearch';
-import { Channel, TransactionalConnection } from '@vendure/core';
+import { Channel, ConfigService, TransactionalConnection } from '@vendure/core';
 import { BbbScheduledSession } from '../../bigbluebutton-plugin/entities/bbb-scheduled-session.entity';
 import { BbbOrganization } from '../../bigbluebutton-plugin/entities/bbb-organization.entity';
 import { TenantProfile } from '../../tenant-plugin/entities/tenant-profile.entity';
@@ -55,13 +55,36 @@ export class MarketplaceIndexerService {
     private readonly connection: TransactionalConnection,
     private readonly adService: MarketplaceAdService,
     private readonly bayesianService: BayesianRatingService,
+    private readonly configService: ConfigService,
   ) {
     const node = process.env.ELASTICSEARCH_NODE || process.env.ELASTICSEARCH_URL || 'http://localhost:9200';
     const password = process.env.ELASTICSEARCH_PASSWORD;
+    const username = process.env.ELASTICSEARCH_USERNAME || 'elastic';
     this.client = new Client({
       node,
-      ...(password ? { auth: { username: 'elastic', password } } : {}),
+      ...(password ? { auth: { username, password } } : {}),
     });
+  }
+
+  /**
+   * Decode a (possibly GraphQL-encoded, e.g. "T_1") entity id to the raw
+   * integer PK form used by TypeORM queries. Uses the configured
+   * entityIdStrategy so it adapts to both prod and e2e strategies.
+   */
+  private toPk(id: string | number | null | undefined): number | string | undefined {
+    if (id === null || id === undefined || id === '') return undefined;
+    const decoded = this.configService.entityIdStrategy.decodeId(String(id));
+    return decoded === -1 ? String(id) : decoded;
+  }
+
+  /**
+   * Encode a raw integer PK to the GraphQL-facing id form (e.g. "T_1" under
+   * the e2e TestingEntityIdStrategy; identity under production strategy).
+   * Marketplace documents MUST carry the GraphQL-facing form so the
+   * storefront can round-trip ids through tenant APIs unchanged.
+   */
+  private toPublicId(id: string | number): string {
+    return this.configService.entityIdStrategy.encodeId(id as any) ?? String(id);
   }
 
   async ensureIndicesExist(): Promise<void> {
@@ -131,7 +154,7 @@ export class MarketplaceIndexerService {
     const session = await this.connection.rawConnection
       .getRepository(BbbScheduledSession)
       .findOne({
-        where: { id: sessionId },
+        where: { id: this.toPk(sessionId) as any },
         relations: ['organization', 'trainer'],
       });
 
@@ -147,7 +170,7 @@ export class MarketplaceIndexerService {
       session.visibility === 'PUBLIC' &&
       (session.status === 'SCHEDULED' || session.status === 'LIVE');
     if (!publiclyVisible) {
-      await this.deleteSession(String(session.id));
+      await this.deleteSession(this.toPublicId(session.id));
       return;
     }
 
@@ -163,7 +186,7 @@ export class MarketplaceIndexerService {
     if (session.channelId) {
       const channel = await this.connection.rawConnection
         .getRepository(Channel)
-        .findOne({ where: { id: session.channelId as any } });
+        .findOne({ where: { id: this.toPk(session.channelId) as any } });
       if (channel) channelToken = channel.token;
       const org = await this.connection.rawConnection
         .getRepository(BbbOrganization)
@@ -178,7 +201,7 @@ export class MarketplaceIndexerService {
         const { ProductVariant } = require('@vendure/core');
         const variant = await this.connection.rawConnection
           .getRepository(ProductVariant)
-          .findOne({ where: { id: session.productVariantId as any } });
+          .findOne({ where: { id: this.toPk(session.productVariantId) as any } });
         if (variant) {
           priceInPaise = (variant as any).price ?? 0;
         }
@@ -211,7 +234,7 @@ export class MarketplaceIndexerService {
     }
 
     const doc: MarketplaceSessionDocument = {
-      id: String(session.id),
+      id: this.toPublicId(session.id),
       productVariantId: session.productVariantId,
       channelToken,
       channelId: session.channelId ?? '',
@@ -250,7 +273,7 @@ export class MarketplaceIndexerService {
   async indexInstructor(profileId: string): Promise<void> {
     const profile = await this.connection.rawConnection
       .getRepository(InstructorProfile)
-      .findOne({ where: { id: profileId } });
+      .findOne({ where: { id: this.toPk(profileId) as any } });
 
     if (!profile) {
       this.logger.warn(`Cannot index instructor ${profileId}: not found`);
@@ -266,7 +289,7 @@ export class MarketplaceIndexerService {
     let academySlug = '';
     const channel = await this.connection.rawConnection
       .getRepository(Channel)
-      .findOne({ where: { id: profile.channelId as any } });
+      .findOne({ where: { id: this.toPk(profile.channelId) as any } });
     if (channel) channelToken = channel.token;
     const org = await this.connection.rawConnection
       .getRepository(BbbOrganization)
@@ -274,7 +297,7 @@ export class MarketplaceIndexerService {
     if (org) academySlug = org.slug;
 
     const doc: MarketplaceInstructorDocument = {
-      id: String(profile.id),
+      id: this.toPublicId(profile.id),
       channelId: profile.channelId,
       channelToken,
       name: profile.fullName,

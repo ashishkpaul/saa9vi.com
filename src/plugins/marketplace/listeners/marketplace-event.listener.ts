@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
-import { EventBus, ProductVariant, TransactionalConnection } from '@vendure/core';
+import { ConfigService, EventBus, ProductVariant, TransactionalConnection } from '@vendure/core';
 import { In } from 'typeorm';
 import { MarketplaceIndexQueueService } from '../services/marketplace-index-queue.service';
 import {
@@ -45,6 +45,7 @@ export class MarketplaceEventListener implements OnApplicationBootstrap {
     private readonly eventBus: EventBus,
     private readonly indexQueue: MarketplaceIndexQueueService,
     private readonly connection: TransactionalConnection,
+    private readonly configService: ConfigService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -135,9 +136,12 @@ export class MarketplaceEventListener implements OnApplicationBootstrap {
    * variants, then reindex every session linked to any of them.
    */
   private async handleReviewAggregateChange(productId: string): Promise<void> {
+    // productId may be GraphQL-encoded (e.g. "T_1"); decode to the raw PK
+    // before querying the integer productId column on ProductVariant.
+    const decodedProductId = this.configService.entityIdStrategy.decodeId(String(productId));
     const variants = await this.connection.rawConnection
       .getRepository(ProductVariant)
-      .find({ where: { productId: productId as any }, select: ['id'] });
+      .find({ where: { productId: (decodedProductId === -1 ? productId : decodedProductId) as any }, select: ['id'] });
     if (!variants.length) return;
 
     const variantIds = variants.map((v) => String(v.id));
