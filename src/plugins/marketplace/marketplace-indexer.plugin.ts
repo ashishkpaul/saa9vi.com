@@ -7,6 +7,7 @@ import { MarketplaceEventListener } from './listeners/marketplace-event.listener
 import { MarketplaceIndexQueueService } from './services/marketplace-index-queue.service';
 import { MarketplaceAdService } from './services/marketplace-ad.service';
 import { BayesianRatingService } from './services/bayesian-rating.service';
+import { MarketplaceAttributionService } from './services/marketplace-attribution.service';
 import { MarketplaceAdCampaign } from './entities/marketplace-ad-campaign.entity';
 import { AdSpendLedger } from './entities/ad-spend-ledger.entity';
 import { AdWallet } from './entities/ad-wallet.entity';
@@ -60,6 +61,7 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
     MarketplaceIndexQueueService,
     MarketplaceAdService,
     BayesianRatingService,
+    MarketplaceAttributionService,
   ],
   shopApiExtensions: {
     schema: shopApiExtensions,
