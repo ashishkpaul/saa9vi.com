@@ -63,7 +63,9 @@ If granted, `requestProvisioning()` acquires a distributed lock, transitions the
 
 ### Review
 
-Five days after purchase, a review email fires. The student submits a review. `ReviewAntiFraudService` runs five checks (velocity, duplicate content, account age, rating pattern, unverified purchase). Score ≥ 50 auto-flags the review. When approved, `reviewAggregationService.recalculateForProduct()` updates `Product.customFields.reviewRating`.
+Five days after purchase, the review-request workflow prepares the notification intent. The student submits a review. `ReviewAntiFraudService` runs five checks (velocity, duplicate content, account age, rating pattern, unverified purchase). Score ≥ 50 auto-flags the review. When approved, `reviewAggregationService.recalculateForProduct()` updates `Product.customFields.reviewRating`.
+
+> **Implementation note:** review-email services currently prepare/log the notification intent; actual delivery depends on the pending `@vendure/email-plugin` integration.
 
 ---
 
@@ -97,7 +99,7 @@ The marketplace is a **discovery layer only**. It does not transact. The platfor
 
 **CommissionLedger $0-row pattern:** A commission row is written for every `orderSource = 'marketplace'` order regardless of the current `MARKETPLACE_COMMISSION_PERCENT` rate. When the rate is 0%, the row is written with `amountInPaise: 0` to preserve complete GMV history.
 
-> **ⓘ Note:** `orderSource` is stamped by Vendure-side logic from a raw `referrerCode`/`utm_source` passed by the storefront — the storefront never classifies orders itself (INV-008; see ADR-021 Open Design Questions).
+> **ⓘ Note:** `orderSource` is classified and stamped by Vendure-side logic from a signed opaque `marketplaceRef`. The server verifies the reference — HMAC signature, validity window, channel/resource relationship, and single-use replay constraint — before classification. The storefront never chooses `orderSource` directly (INV-008; ADR-021).
 
 ---
 

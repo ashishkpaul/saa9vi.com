@@ -102,9 +102,8 @@
 - `productVariantId = null` means internal/staff room (commerce bypass)
 
 **Capacity (current):**
-- `maxParticipants` defaults from `BbbOrganization.maxParticipantsPerMeeting` on creation (`input.maxParticipants ?? org.maxParticipantsPerMeeting`)
-- Currently a single mutable integer — no tiered policy layer exists yet
-- **Proposed:** `BbbPlatformCapacityPolicy` will govern this in Phase 2 (see ADR-031)
+- Effective capacity resolved from `BbbPlatformCapacityPolicy` via the organization's subscription plan (ADR-031, implemented)
+- `BbbOrganization.maxParticipantsPerMeeting` acts as a write-through policy cache
 - This is the BBB infrastructure limit — distinct from commercial stock
 
 ---
@@ -159,25 +158,25 @@
 
 ---
 
-## BbbPlatformCapacityPolicy ⚠️ Proposed — Not Yet Implemented
+## BbbPlatformCapacityPolicy ✅ Implemented
 
-> **Status:** Proposed. See ADR-031. This entity does not exist in the codebase yet. The current mechanism is `BbbOrganization.maxParticipantsPerMeeting` — a single mutable integer set via admin dashboard form, with `BbbRoom.maxParticipants` defaulting from it on creation.
+> **Status:** Implemented (Phase 2, per ADR-031; corrected 2026-09-04 — this section previously said "Proposed — Not Yet Implemented").
 
 | Property | Value |
 |---|---|
-| **Plugin** | BigBlueButtonPlugin (Phase 2 — proposed) |
-| **Table** | `bbb_platform_capacity_policy` (not yet created) |
-| **Purpose** | Platform-level BBB capacity limits controlled by Portal Admin. |
+| **Plugin** | BigBlueButtonPlugin |
+| **Table** | `bbb_platform_capacity_policy` |
+| **Purpose** | Platform-level BBB capacity policy controlled by Portal Admin and resolved from the organization's subscription plan. |
 
 **Fields:** `defaultRoomCapacity`, `maxRoomCapacity`, `maxConcurrentParticipants`, `subscriptionPlanId`
 
-**Lifecycle (proposed):**
-- Created by Portal Admin
-- Applied to rooms on creation (sets `BbbRoom.maxParticipants`)
-- Tenant can increase room capacity up to `maxRoomCapacity`
-- Tied to subscription plan in Phase 2
+**Lifecycle:**
+- Created or updated by Portal Admin through the platform capacity-policy API
+- Effective policy resolved from the organization's subscription plan
+- Applied when provisioning rooms (sets `BbbRoom.maxParticipants`)
+- `BbbOrganization.maxParticipantsPerMeeting` is synchronized as a write-through policy cache
 
-**Invariants (proposed):**
+**Invariants:**
 - `defaultRoomCapacity <= maxRoomCapacity`
 - `BbbOrganization.maxParticipantsPerMeeting` becomes a denormalized cache of the policy limit
 - `BbbRoom.maxParticipants` is the BBB infrastructure limit — distinct from `ProductVariant.stockLevel` (commercial) and `BbbScheduledSession.maxAttendees` (session enrollment)
@@ -426,7 +425,7 @@ Pending → Provisioning → Active → Completed → Archived
 |---|---|
 | **Plugin** | ReviewsPlugin |
 | **Table** | `product_review` |
-| **ChannelAware** | No (BUG-017 — pending remediation) |
+| **ChannelAware** | Yes (`channels[]` + `channelId`; BUG-017 remediated — corrected 2026-09-04) |
 | **Purpose** | Student review of a purchased session. |
 
 **Status:** `new` → `approved` | `rejected` | `flagged`

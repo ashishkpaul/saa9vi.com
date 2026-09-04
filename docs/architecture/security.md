@@ -24,9 +24,13 @@ This number was historically used for channel isolation and collided with the ra
 
 Canonical entry for rate limiting on public mutations. See SEC-003 for implementation. This is the correct number (SEC-004 was Channel Isolation).
 
-## SEC-006: Custom Domain TLS — ✅ Fixed
+## SEC-006: Custom Domain TLS / Routing — ⚠️ Partially implemented
 
-Caddy handles TLS termination and custom domain routing; `DomainChannelResolverService` maps custom domain → channel token via Redis.
+Application-side custom-domain resolution is implemented: `DomainChannelResolverService` maps a configured custom domain to the tenant channel token via Redis.
+
+Caddy is the selected TLS termination and custom-domain routing architecture (see ADR), but production Caddy routing/TLS deployment has not yet been verified — `roadmap.md` retains "Custom domain routing via Caddy" as open.
+
+**Status:** application mapping implemented; production Caddy/TLS verification pending.
 
 ## SEC-007: Administrator Visibility (INV-016) — ✅ Fixed
 

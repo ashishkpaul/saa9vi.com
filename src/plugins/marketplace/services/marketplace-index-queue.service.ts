@@ -36,9 +36,9 @@ export type MarketplaceIndexJobData =
  *
  * Previously, index writes were inline in event handlers. This queue
  * decouples event processing from ES writes, providing:
- * - Retry on ES failures (3 attempts with exponential backoff)
+ * - Retry on ES failures (3 attempts; retry/backoff behavior delegated to the job-queue strategy)
  * - No blocking of event handlers on ES latency
- * - Audit trail of failed index operations
+ * - Failed index operations are logged via the job-queue error handling
  */
 @Injectable()
 export class MarketplaceIndexQueueService implements OnModuleInit {

@@ -189,8 +189,12 @@ banner-activator scheduled task
 
 ## Marketplace Indexing
 
+> Corrected 2026-09-04 to match the implemented event→projection contract (see Gate 1.4 matrix in `phase3-audit.md`). All session projection paths pass through `MarketplaceIndexerService.indexSession()`, which is the sole arbiter of public eligibility: `visibility === PUBLIC` AND `status IN (SCHEDULED, LIVE)` — eligible sessions are indexed/updated; everything else is removed from the public index.
+
+**Instructor projection**
+
 ```
-InstructorProfileCreatedEvent / InstructorProfileUpdatedEvent
+InstructorProfileCreatedEvent
   │
   └─ MarketplaceEventListener
        └─ MarketplaceIndexQueueService.enqueue('index-instructor', profileId)
@@ -198,13 +202,59 @@ InstructorProfileCreatedEvent / InstructorProfileUpdatedEvent
                  └─ MarketplaceIndexerService.indexInstructor()
                       └─ Write to saa9vi_marketplace_instructors ES index
 
-ProductVariantEvent
+InstructorProfileUpdatedEvent
+  │
+  ├─ Reindex the instructor document (as above)
+  └─ Resolve BbbInstructorAssignment rows for that profile
+       └─ enqueue('index-session', sessionId) for each affected session
+            └─ Session docs embed instructorName — stale names are corrected here
+```
+
+**Session lifecycle projection**
+
+```
+SessionCreatedEvent / SessionUpdatedEvent / SessionStartedEvent / SessionCancelledEvent
   │
   └─ MarketplaceEventListener
-       └─ MarketplaceIndexQueueService.enqueue('index-session', variantId)
+       └─ addIndexSessionJob(sessionId)
             └─ BullMQ: marketplace-index
-                 └─ MarketplaceIndexerService.indexSession()
-                      └─ Write to saa9vi_marketplace_sessions ES index
+                 └─ MarketplaceIndexerService.indexSession(sessionId)
+```
+
+**Product variant projection**
+
+```
+ProductVariantEvent (create/update/delete)
+  │
+  └─ MarketplaceEventListener
+       ├─ Decode GraphQL variant IDs
+       ├─ Resolve BbbScheduledSession rows by productVariantId
+       └─ addIndexSessionJob(sessionId) for each affected session
+            └─ indexSession(sessionId)
+```
+
+**Product variant price projection**
+
+```
+ProductVariantPriceEvent (channel price create/update/delete)
+  │
+  └─ MarketplaceEventListener
+       ├─ Extract productVariantId from price entities
+       ├─ Resolve affected BbbScheduledSession rows
+       └─ addIndexSessionJob(sessionId)
+            └─ indexSession(sessionId)
+```
+
+> Vendure emits `ProductVariantPriceEvent` — not `ProductVariantEvent` — for channel price mutations, so this path is required; price-only changes otherwise leave stale `priceInPaise` in ES documents.
+
+**Academy / review projection**
+
+```
+TenantProfileUpdatedEvent
+  └─ handleAcademyProfileChange() → bulk channel reindex
+
+ReviewApprovedEvent / ReviewRejectedEvent / ReviewHiddenEvent
+  └─ Affected sessions → recompute Bayesian rating → indexSession()
 ```
 
 ---

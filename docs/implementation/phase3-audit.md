@@ -35,8 +35,11 @@
 
 ## Key findings
 
-### F1 — Both status labels were wrong
-`roadmap.md` "scaffold complete" understates the projection layer (search resolver, ranking, sponsorship are real). `plugin-map.md` "production-ready" overstates it (no tests, no event completeness, no DB tables for ad entities). **Accurate state:** projection layer implemented and untested; business layer (attribution/commission) absent; ad layer code-complete but unmigrated.
+### F1 — Initial status labels were wrong
+
+`roadmap.md` "scaffold complete" understated the projection layer, while `plugin-map.md` "production-ready" overstated overall readiness.
+
+**Current state:** the marketplace projection layer is implemented; Phase 3B attribution and commission are also implemented and e2e-verified. Phase 3C advertising remains partially implemented at the schema/indexer level but is not yet wired end-to-end. Phase 3A follow-on aggregation surfaces (`MarketplaceAcademyPage`, category taxonomy, ranking materialization) remain deferred.
 
 ### F2 — Ad-entity schema: resolved via governed migration (was: untraceable out-of-band DDL)
 Initial audit finding revised after direct PostgreSQL inspection: the three tables **did exist** in the dev database (empty, 0 rows) with schemas matching the entity definitions exactly — but no migration file covered them, meaning the DDL was created out-of-band (most likely a dev run before `synchronize: false` was set). That is a `.clinerules` §7 governance violation (schema not traceable to CLI migration), not a runtime defect. The `vendure migrate -g` command reported "No changes" because the DB already matched — the same pattern as the FEAT-002 case.
@@ -65,19 +68,22 @@ Gate 1.4 added deterministic projection triggers for session lifecycle (`Session
 ```text
 DOCUMENTATION TRUTH   ✅ done (this sync)
         ↓
-CODE/DB TRUTH         Gate 1.1 — ad-entity migration via Vendure CLI
+CODE/DB TRUTH         ✅ Gate 1.1 — ad-entity migration via Vendure CLI
         ↓
-DISCOVERY CONTRACT    Gate 1   — document contract, customDomain/subjectTags,
-                                 event completeness, e2e
+DISCOVERY CONTRACT    ✅ Gate 1 / Phase 3A — document contract,
+                                 event completeness (incl. ProductVariantEvent +
+                                 ProductVariantPriceEvent corrections), e2e
         ↓
-ATTRIBUTION CONTRACT  Gate 2   — ADR addendum to ADR-021 (8 open questions)
+ATTRIBUTION CONTRACT  ✅ Gate 2 / ADR-021 — signed marketplaceRef
         ↓
-COMMISSION            Gate 3   — orderSource custom field + CommissionLedger ($0-row)
+COMMISSION            ✅ Gate 3 / Phase 3B — orderSource custom field +
+                                 CommissionLedger ($0-row), e2e-verified
         ↓
-ADVERTISING           Gate 4   — wire MarketplaceAdService on existing tables
+ADVERTISING           ⏳ Gate 4 / Phase 3C — wire MarketplaceAdService
+                                 on existing tables
         ↓
-RETENTION             Gate 5   — review→ranking pipeline, academy page,
-                                 category taxonomy, ranking view
+RETENTION             ⏳ Gate 5 / Phase 3D — review→ranking pipeline,
+                                 academy page, category taxonomy, ranking view
         ↓
 PHASE 3 RELEASE GATE  — exit criteria in roadmap.md
 ```

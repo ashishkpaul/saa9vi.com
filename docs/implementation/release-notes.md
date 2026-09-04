@@ -10,6 +10,11 @@
   - Governed migration `1788497028332` — UNIQUE constraints on `marketplaceRef` (single-use arbiter) and `orderId` (one fact per order).
   - Strict `MARKETPLACE_COMMISSION_PERCENT` config validation at boot (regex + range, fail-closed).
   - `commission.e2e-spec.ts` — 6 cases pass: positive, $0-row, INV-008 forge, replay, no-ref, single-use ref.
+- **Marketplace projection correctness corrections (Gate 1.4):**
+  - `ProductVariantEvent` — replaced the former logging-only handler with deterministic affected-session resolution and canonical `indexSession()` projection updates (`1a7ebdf`).
+  - `ProductVariantPriceEvent` — added explicit handling for channel price create/update/delete events so marketplace prices cannot become stale when Vendure changes `ProductVariantPrice` rows (`6469090`).
+  - `instructorName` — corrected marketplace session projection to resolve the authoritative `InstructorProfile.fullName` through `BbbInstructorAssignment`, preferring the primary assignment, instead of projecting the numeric `BbbOrganizationMember.id` (`6469090`).
+  - `InstructorProfileUpdatedEvent` — now reindexes affected session documents when an embedded instructor name changes (`6469090`).
 
 ### Tests / Verification
 
@@ -169,7 +174,7 @@
 ### New
 
 - **Capacity Intelligence System** — `CapacityIntelligenceService`, `BbbCapacityAlertLog`, `BbbServer.capacity`, `poolCapacityDashboard`, `capacity-alert` job (CI-001 through CI-006)
-- **MarketplaceIndexerPlugin** — all Phase 3 gaps closed (sponsored listing bid-boost, Bayesian rating, price from ProductVariant, ProductVariantEvent subscription, BullMQ job queue, Product custom fields)
+- **MarketplaceIndexerPlugin projection foundation** — initial marketplace projection capabilities shipped: sponsored listing bid-boost, Bayesian rating, price from ProductVariant, `ProductVariantEvent` subscription, BullMQ job queue, Product custom fields. Later Phase 3 audits refined the projection contract (adding `ProductVariantPriceEvent` coverage, `instructorName` correction, and `InstructorProfileUpdatedEvent` session propagation — see v1.17); Phase 3C advertising and 3D retention remain pending.
 - **PlatformDashboardPlugin** — Saa9vi login branding layer with CSS override for Vendure core branding footer (ADR-016) *(legacy ADR-016 "Platform Dashboard Branding"; see collision note on canonical ADR-016 — the storefront — in `platform-adr.md`)*
 
 - **ADR-017 (Observability Architecture)** — correlation tracing, event causality validation, runtime invariant monitoring

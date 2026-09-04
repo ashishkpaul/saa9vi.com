@@ -1,6 +1,6 @@
 # What Next — Saa9vi Platform
 
-**Updated:** 2026-08-31
+**Updated:** 2026-09-04
 
 ---
 
@@ -105,7 +105,7 @@ Execution queue (verified state in `docs/implementation/phase3-audit.md`; detail
 - [x] **2.** Canonical marketplace document contract codified; `customDomain` redirect projection closed (F3) and `subjectTags` authoritative source + projection closed (F4.
 - [x] **3.** Projection event-coverage completed (F5): every field affecting marketplace visibility, routing, filtering, or ranking has a deterministic projection update path. Organization-slag and campaign-lifecycle surfaces explicitly deferred.
 
-- [x] **4.** E2E suite — infrastructure-gated marketplace E2E **7/7** (real PG+Redis+ES; multi-channel indexing, channel-free `marketplaceSearch`, sponsored/bayesian ordering, F7 removal transitions, tenant isolation).
+- [x] **4.** E2E suite — marketplace E2E implementation is complete and the suite contains **7 cases** covering multi-channel indexing, channel-free `marketplaceSearch`, sponsored/bayesian ordering, F7 removal transitions, and tenant isolation. **Production-infrastructure verification remains gated on a confirmed real PostgreSQL + Redis + Elasticsearch environment (see P0 above).**
 - [ ] **5.** `MarketplaceAcademyPage`, `MarketplaceCategoryIndex`, `RankingMaterializedView` — **deferred** (not 3A gates; tracked in roadmap Phase 3A follow-on items once the discovery contract stabilizes).
 
 **Phase 3B — Attribution & Commission** ✅ COMPLETE (2026-09-04)
