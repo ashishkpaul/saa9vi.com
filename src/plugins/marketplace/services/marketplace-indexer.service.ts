@@ -5,6 +5,7 @@ import { BbbScheduledSession } from '../../bigbluebutton-plugin/entities/bbb-sch
 import { BbbOrganization } from '../../bigbluebutton-plugin/entities/bbb-organization.entity';
 import { TenantProfile } from '../../tenant-plugin/entities/tenant-profile.entity';
 import { InstructorProfile } from '../../tenant-plugin/entities/instructor-profile.entity';
+import { BbbInstructorAssignment } from '../../bigbluebutton-plugin/entities/instructor-assignment.entity';
 import { MarketplaceAdService } from './marketplace-ad.service';
 import { BayesianRatingService } from './bayesian-rating.service';
 
@@ -245,7 +246,7 @@ export class MarketplaceIndexerService {
       academyName: tenantProfile?.businessName ?? '',
       academySlug,
       customDomain: tenantProfile?.customDomain ?? null,
-      instructorName: session.trainer ? String(session.trainer.id) : null,
+      instructorName: await this.resolveInstructorName(String(session.id)),
       subjectTags: session.subjectTags ?? [],
       bayesianRating,
       isSponsored,
@@ -265,6 +266,43 @@ export class MarketplaceIndexerService {
       await this.client.delete({ index: this.sessionsIndex, id });
     } catch (err: any) {
       if (err.statusCode !== 404) throw err;
+    }
+  }
+
+  /**
+   * Gate 1.4 (corrected 2026-09-04): resolve the instructor DISPLAY NAME for a
+   * session document. Previously populated with BbbOrganizationMember.id (a
+   * numeric PK), which violated the `instructorName: string` document contract
+   * and polluted the full-text search field. The authoritative session →
+   * instructor identity is BbbInstructorAssignment → InstructorProfile.fullName;
+   * prefer the 'primary' role, then lowest displayOrder. Returns null when no
+   * active assignment/profile exists.
+   */
+  private async resolveInstructorName(sessionId: string): Promise<string | null> {
+    try {
+      const assignmentRepo = this.connection.rawConnection.getRepository(BbbInstructorAssignment);
+      const profileRepo = this.connection.rawConnection.getRepository(InstructorProfile);
+
+      const assignments = await assignmentRepo.find({
+        where: { scheduledSessionId: sessionId },
+        order: { displayOrder: 'ASC' as const },
+      });
+      if (!assignments.length) return null;
+
+      const ordered = [...assignments].sort((a, b) => {
+        const roleA = a.role === 'primary' ? 0 : 1;
+        const roleB = b.role === 'primary' ? 0 : 1;
+        return roleA - roleB;
+      });
+
+      const profile = await profileRepo.findOne({
+        where: { id: ordered[0].instructorProfileId as any },
+        select: ['id', 'fullName', 'isActive'],
+      });
+      return profile && profile.isActive ? profile.fullName : null;
+    } catch (err: any) {
+      this.logger.warn(`Failed to resolve instructor name for session ${sessionId}: ${err.message}`);
+      return null;
     }
   }
 

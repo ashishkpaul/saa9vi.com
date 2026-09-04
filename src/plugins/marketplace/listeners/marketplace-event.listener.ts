@@ -59,7 +59,15 @@ export class MarketplaceEventListener implements OnApplicationBootstrap {
       this.indexQueue.addIndexInstructorJob(event.instructorProfileId).catch((err) => {
         this.logger.warn(`Failed to enqueue re-index job for instructor ${event.instructorProfileId}: ${(err as Error).message}`);
       });
+      // Session documents embed instructorName, so a name change also invalidates
+      // every session doc carrying this instructor's name (Gate 1.4 contract).
+      this.reindexSessionsForInstructor(event.instructorProfileId).catch((err) => {
+        this.logger.warn(`Failed to reindex sessions for instructor ${event.instructorProfileId}: ${(err as Error).message}`);
+      });
     });
+
+    // ─── Gate 1.4 (corrected 2026-09-04): ProductVariantPriceEvent coverage ─
+    this.subscribeToProductVariantPriceEvents();
 
     // ─── Gap 4: ProductVariantEvent subscription for session index updates ──
     this.subscribeToProductVariantEvents();
@@ -207,6 +215,77 @@ export class MarketplaceEventListener implements OnApplicationBootstrap {
 
     this.logger.log(
       `ProductVariantEvent: ${eventType} for ${variants.length} variant(s) — enqueued ${sessions.length} session reindex job(s)`,
+    );
+  }
+
+  /**
+   * Gate 1.4 (corrected 2026-09-04): Vendure emits ProductVariantPriceEvent —
+   * NOT ProductVariantEvent — for channel price create/update/delete
+   * (ProductVariantPriceService). Since MarketplaceSessionDocument.priceInPaise
+   * is derived from ProductVariant.price, price-only mutations must also
+   * reindex the affected sessions or the marketplace document keeps a stale
+   * price. Same canonical path: resolve variant → sessions → indexSession().
+   */
+  private subscribeToProductVariantPriceEvents(): void {
+    try {
+      const { ProductVariantPriceEvent } = require('@vendure/core');
+
+      this.eventBus.ofType(ProductVariantPriceEvent).subscribe((event: any) => {
+        this.handleProductVariantPriceEvent(event).catch((err: Error) => {
+          this.logger.warn(`Failed to handle ProductVariantPriceEvent: ${err.message}`);
+        });
+      });
+
+      this.logger.log('Subscribed to ProductVariantPriceEvent for marketplace price propagation');
+    } catch (err: any) {
+      this.logger.warn(`Could not subscribe to ProductVariantPriceEvent: ${err.message}. Price changes will not propagate to the marketplace index.`);
+    }
+  }
+
+  /**
+   * Session documents embed the instructor's display name; when a profile is
+   * updated, every session assigned to that instructor needs reindexing.
+   */
+  private async reindexSessionsForInstructor(instructorProfileId: string): Promise<void> {
+    const { BbbInstructorAssignment } = require('../../bigbluebutton-plugin/entities/instructor-assignment.entity');
+    const rawId = this.configService.entityIdStrategy.decodeId(String(instructorProfileId));
+    const profilePk = rawId === -1 ? String(instructorProfileId) : String(rawId);
+
+    const assignments = await this.connection.rawConnection
+      .getRepository(BbbInstructorAssignment)
+      .find({ where: { instructorProfileId: profilePk }, select: ['scheduledSessionId'] });
+
+    for (const assignment of assignments) {
+      await this.indexQueue.addIndexSessionJob(String(assignment.scheduledSessionId));
+    }
+    this.logger.log(`InstructorProfileUpdated: enqueued ${assignments.length} session reindex job(s) for instructor ${instructorProfileId}`);
+  }
+
+  private async handleProductVariantPriceEvent(event: any): Promise<void> {
+    // ProductVariantPriceEvent has: type ('created' | 'updated' | 'deleted'),
+    // entity (ProductVariantPrice[]). Each price carries a productVariantId.
+    const prices: any[] = event.entity ?? event.prices ?? [];
+    if (!prices.length) return;
+
+    const variantIds = new Set<string>();
+    for (const price of prices) {
+      const raw = String(price.productVariantId ?? '');
+      if (!raw) continue;
+      const decoded = this.configService.entityIdStrategy.decodeId(raw);
+      variantIds.add(decoded === -1 ? raw : String(decoded));
+    }
+    if (!variantIds.size) return;
+
+    const sessions = await this.connection.rawConnection
+      .getRepository(BbbScheduledSession)
+      .find({ where: { productVariantId: In([...variantIds]) as any }, select: ['id'] });
+
+    for (const session of sessions) {
+      await this.indexQueue.addIndexSessionJob(String(session.id));
+    }
+
+    this.logger.log(
+      `ProductVariantPriceEvent: ${event.type} for ${prices.length} price(s) across ${variantIds.size} variant(s) — enqueued ${sessions.length} session reindex job(s)`,
     );
   }
 }
