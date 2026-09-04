@@ -47,7 +47,7 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
  * - Sponsored listing bid-boost from MarketplaceAdCampaign entity ✅
  * - Bayesian rating from ReviewsPlugin aggregate ✅
  * - Price from ProductVariant.price ✅
- * - ProductVariantEvent subscription for session index updates ✅
+ * - ProductVariantEvent subscription for session index updates ✅ (corrected 2026-09-04: handler was a logging stub; now resolves affected sessions via productVariantId and funnels through the canonical indexSession() F7 gate)
  * - BullMQ job queue for async index writes ✅
  * - Product.customFields.bbbSessionId and instructorProfileId populated ✅
  */

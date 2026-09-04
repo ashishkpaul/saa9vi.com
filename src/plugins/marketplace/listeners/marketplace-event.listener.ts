@@ -184,16 +184,29 @@ export class MarketplaceEventListener implements OnApplicationBootstrap {
 
     const eventType: string = event.type;
 
-    for (const variant of variants) {
-      const variantId = String(variant.id);
+    // Variant ids may be GraphQL-encoded (e.g. "T_5"); decode to raw PKs before
+    // querying the integer productVariantId column on BbbScheduledSession.
+    const variantIds = variants.map((v) => {
+      const raw = String(v.id);
+      const decoded = this.configService.entityIdStrategy.decodeId(raw);
+      return decoded === -1 ? raw : String(decoded);
+    });
 
-      if (eventType === 'deleted') {
-        this.logger.log(`ProductVariant ${variantId} deleted — enqueuing session index check`);
-      }
+    // Canonical indexing path (Gate 1.4 / F7): every affected session goes
+    // through indexSession(), whose visibility/status gate decides REINDEX vs
+    // REMOVE. No second indexing path is introduced here. For 'deleted'
+    // variants, sessions still referencing the dangling productVariantId are
+    // re-checked the same way.
+    const sessions = await this.connection.rawConnection
+      .getRepository(BbbScheduledSession)
+      .find({ where: { productVariantId: In(variantIds) as any }, select: ['id'] });
 
-      // Enqueue a job to find and re-index any sessions linked to this variant
-      // The queue processor will query BbbScheduledSession by productVariantId
-      this.logger.log(`ProductVariantEvent: ${eventType} for variant ${variantId} — enqueuing session index check`);
+    for (const session of sessions) {
+      await this.indexQueue.addIndexSessionJob(String(session.id));
     }
+
+    this.logger.log(
+      `ProductVariantEvent: ${eventType} for ${variants.length} variant(s) — enqueued ${sessions.length} session reindex job(s)`,
+    );
   }
 }
