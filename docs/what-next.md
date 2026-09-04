@@ -31,9 +31,11 @@
 
 ---
 
-## Current State (v1.15 — 2026-08-31)
+## Current State (v1.17 — 2026-09-04)
 
 ### Verified complete
+
+- **Phase 3B — Attribution & Commission** — complete: `CommissionListener` (server-side classification, INV-008), `CommissionLedger` $0-row pattern (DL-030), governed migration with UNIQUE constraints, 6-case E2E passing.
 
 - TypeScript build succeeds (`npm run build`).
 - Vendure starts successfully on v3.6.5 (against fallback pg-mem/DefaultJobQueue — see precondition above).
@@ -106,9 +108,9 @@ Execution queue (verified state in `docs/implementation/phase3-audit.md`; detail
 - [x] **4.** E2E suite — infrastructure-gated marketplace E2E **7/7** (real PG+Redis+ES; multi-channel indexing, channel-free `marketplaceSearch`, sponsored/bayesian ordering, F7 removal transitions, tenant isolation).
 - [ ] **5.** `MarketplaceAcademyPage`, `MarketplaceCategoryIndex`, `RankingMaterializedView` — **deferred** (not 3A gates; tracked in roadmap Phase 3A follow-on items once the discovery contract stabilizes).
 
-**Phase 3B — Attribution & Commission** (next active gate; design baseline committed asthe ADR-021 addendum)
-- [x] **6.** Attribution ADR — ✅ **done**: contract settled in ADR-021 (resource, validity 30-min TTL, navigation persistence, precedence, replay, multi-line orders, order-vs-line scope, HMAC verification without secret exposure). Next: implement the signed `marketplaceRef` mechanism (`MARKETPLACE_REF_SIGNING_SECRET`; issue/verify service shipped (`750da49`).
-- [ ] **7.** `Order.customFields.orderSource` (server-stamped; governed migration)and `CommissionLedger` $0-row pattern (DL-030): **partial** — entity + immutable subscriber shipped (`584530b`, unique `(marketplaceRef, orderId)` composite index); `orderSource` custom-field + `CommissionLedgerService`/listener + governed migration + e2e pending.
+**Phase 3B — Attribution & Commission** ✅ COMPLETE (2026-09-04)
+- [x] **6.** Attribution ADR-021 — ✅ **done**: contract settled (resource, validity 30-min TTL, navigation persistence, precedence, replay, multi-line orders, order-vs-line scope, HMAC verification without secret exposure); signed `marketplaceRef` mechanism shipped (`750da49`).
+- [x] **7.** `Order.customFields.orderSource` + `CommissionLedger` $0-row pattern (DL-030) — ✅ **done**: server-stamped `orderSource` (INV-008), `CommissionLedger` entity/service/listener, governed migration with UNIQUE constraints, 6-case E2E passing.
 - [ ] **8.** Commission reconciliation/admin reporting.
 
 **Phase 3C — Advertising (Stream 3)**

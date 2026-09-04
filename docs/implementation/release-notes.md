@@ -1,5 +1,23 @@
 # Release Notes
 
+## v1.17 — 2026-09-04
+
+### New
+
+- **Commission classification + ledger (Phase 3B) — complete:**
+  - `CommissionListener` — server-side marketplace classification (ADR-021 Decision 5-8; INV-008): re-verifies HMAC/TTL/channel at placement, resource-in-order check (Decision 8), single-use replay via UNIQUE index (Decision 6), stamps `orderSource`, records `CommissionLedger` row. Uses `EntityHydrator` for safe Order save.
+  - `CommissionLedger` $0-row pattern (DL-030) — row written for EVERY marketplace order, even at 0% commission (`commissionAmountInPaise: 0`), so GMV history survives rate changes.
+  - Governed migration `1788497028332` — UNIQUE constraints on `marketplaceRef` (single-use arbiter) and `orderId` (one fact per order).
+  - Strict `MARKETPLACE_COMMISSION_PERCENT` config validation at boot (regex + range, fail-closed).
+  - `commission.e2e-spec.ts` — 6 cases pass: positive, $0-row, INV-008 forge, replay, no-ref, single-use ref.
+
+### Tests / Verification
+
+- TypeScript compilation clean; production build clean.
+- Commission E2E: `COMMISSION_E2E=true` → 6 passed (26.67s).
+
+---
+
 ## v1.16 — 2026-08-31
 
 ### New

@@ -194,7 +194,7 @@ None (injects TenantPlugin services for org verification).
 | Property | Value |
 |---|---|
 | **Directory** | `src/plugins/marketplace/` |
-| **Status** | Projection layer implemented; Gate 1 discovery E2E passing (7/7, commit `2e74020`). Ad-entity tables migrated (Gate 1.1: `1788265440266-MarketplaceAdEntities`); advertising feature layer not yet wired. **Phase 3 not complete** — attribution/commission (3B), advertising (3C), retention (3D) remain. See `docs/implementation/phase3-audit.md`. |
+| **Status** | Projection layer implemented; Gate 1 discovery E2E passing (7/7, commit `2e74020`). Ad-entity tables migrated (Gate 1.1: `1788265440266-MarketplaceAdEntities`); advertising feature layer not yet wired. **Gates 2–3 complete** — attribution (`d6926a9`, `683b2f7`) and commission ledger with atomic single-use replay (`f534872`), verified by 6/6 commission e2e (`1bcf5e2`). **Phase 3 not complete** — advertising (3C), retention (3D) remain. See `docs/implementation/phase3-audit.md`. |
 | **Purpose** | Cross-channel Elasticsearch discovery layer for marketplace. |
 
 ### Owns
