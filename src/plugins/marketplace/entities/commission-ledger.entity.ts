@@ -31,7 +31,7 @@ export class CommissionLedger extends VendureEntity {
   @Column()
   channelId: string;
 
-  @Index()
+  @Index({ unique: true })
   @Column()
   orderId: string;
 
@@ -44,16 +44,19 @@ export class CommissionLedger extends VendureEntity {
    * (the same ref re-submitted on a second order) can be detected and the
    * second order reclassified to `direct` (ADR-021 Decision 6).
    *
-   * The unique (marketplaceRef, orderId) index encodes two leaf guarantees:
-   *  - at most one commission row per marketplace order (idempotency on retried
-   *    checkouts resolving to the same order), and
-   *  - single-use consumption of a reference (Decision 6 replay guard), so a
-   *    reused ref cannot mint a second commission row.
+   * Uniqueness semantics (Decision 6 replay, corrected in 3B.3):
+   *  - UNIQUE (marketplaceRef): the ATOMIC single-use guard. One reference can
+   *    ever produce one commission row; a second order presenting the same ref
+   *    loses the insert race deterministically at the DB (no app-level race).
+   *  - UNIQUE (orderId): one commission fact per order.
+   *  - The composite (marketplaceRef, orderId) index below remains as the
+   *    same-order idempotency backstop for retried OrderPlacedEvents.
    *
    * Marketplace rows therefore always carry a non-null marketplaceRef in practice;
    * null remains possible only for a defensive non-marketplace row, which the
    * listener never writes.
    */
+  @Index({ unique: true })
   @Column({ type: 'varchar', nullable: true })
   marketplaceRef: string | null;
 

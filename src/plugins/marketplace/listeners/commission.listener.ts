@@ -46,38 +46,50 @@ export class CommissionListener implements OnApplicationBootstrap {
   private async handleOrderPlaced(event: OrderPlacedEvent): Promise<void> {
     const { ctx, order } = event;
     const ref: string | null = (order.customFields?.marketplaceRef as string | undefined) ?? null;
-    let marketplace = false;
-
+    let outcome: 'marketplace' | 'direct' = 'direct';
     if (ref) {
+      // HMAC channel binding uses ctx.channel.token — the SAME value the 3B.2
+      // resolver verified against when storing the ref. Never mix token/id here.
       const channelToken = ctx.channel?.token;
       const verified: MarketplaceAttributionRef | null = channelToken
         ? this.attributionService.resolveRef(ref, channelToken)
         : null;
       if (verified && this.resourceInOrder(order, verified)) {
-        const consumed = await this.ledgerService.isRefConsumedOnOtherOrder(ref, String(order.id));
-        if (!consumed) {
-          marketplace = true;
+        // Insert-first: the UNIQUE (marketplaceRef) index is the atomic
+        // Decision-6 arbiter (no app-level check-then-insert race).
+        const result = await this.ledgerService.recordMarketplaceOrder({
+          orderId: String(order.id),
+          channelId: String(ctx.channelId), // actual channel id for reconciliation/reporting (NOT the public token)
+          marketplaceRef: ref,
+          grossAmountInPaise: order.totalWithTax,
+          currency: order.currencyCode,
+        });
+        if (result === 'inserted') {
+          outcome = 'marketplace';
+        } else if (result === 'duplicate_order') {
+          // Retried OrderPlacedEvent for the same order: the earlier attempt
+          // already recorded the row and classified marketplace.
+          outcome = 'marketplace';
+        } else if (result === 'duplicate_ref') {
+          this.logger.warn(`Replay: marketplaceRef already consumed by another order (order ${String(order.id)}); classifying direct.`);
+          outcome = 'direct';
         } else {
-          this.logger.warn(`Replay detected for marketplaceRef on order ${String(order.id)}; classifying direct.`);
+          // Persistence failure: classification truth is 'marketplace', but the
+          // immutable financial fact is MISSING (RECONCILIATION-REQUIRED logged
+          // by the service). Recoverable via the tracked commission
+          // reconciliation/reporting task (Phase 3B.4/8).
+          this.logger.error(
+            `CommissionLedger row missing for classified marketplace order ${String(order.id)}; reconciliation required.`
+          );
+          outcome = 'marketplace';
         }
       }
     }
 
     // Server-side classification stamp (INV-008). Always settles the field.
     order.customFields = order.customFields ?? {};
-    order.customFields.orderSource = marketplace ? 'marketplace' : 'direct';
+    order.customFields.orderSource = outcome;
     await this.connection.getRepository(ctx, Order).save(order);
-
-    if (marketplace && ref) {
-      await this.ledgerService.recordMarketplaceOrder({
-        ctx,
-        orderId: String(order.id),
-        channelId: ctx.channel?.token ?? '',
-        marketplaceRef: ref,
-        grossAmountInPaise: order.totalWithTax,
-        currency: order.currencyCode,
-      });
-    }
   }
 
   /**

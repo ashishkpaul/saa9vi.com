@@ -1,11 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { RequestContext, TransactionalConnection } from '@vendure/core';
+import { TransactionalConnection } from '@vendure/core';
 import { CommissionLedger } from '../entities/commission-ledger.entity';
 
 const loggerCtx = 'CommissionLedgerService';
 
 export interface RecordMarketplaceOrderInput {
-  ctx: RequestContext;
   orderId: string;
   channelId: string;
   marketplaceRef: string;
@@ -13,25 +12,54 @@ export interface RecordMarketplaceOrderInput {
   currency: string;
 }
 
+export type RecordMarketplaceOrderResult =
+  | 'inserted'
+  | 'duplicate_ref'
+  | 'duplicate_order'
+  | 'error';
+
 /**
  * Writes CommissionLedger rows for server-classified marketplace orders.
  * INV-002/DL-030: append-only; rows are never updated or deleted here.
  * DL-030: a row is written for EVERY marketplace order, even at 0 percent
  * (commissionAmountInPaise = 0) so GMV history survives rate changes.
+ *
+ * Single-use is enforced ATOMICALLY by the UNIQUE (marketplaceRef) index:
+ * recordMarketplaceOrder() inserts FIRST and lets the DB arbitrate the
+ * Decision-6 replay race (two concurrent orders presenting the same ref
+ * cannot both win the insert). The composite (marketplaceRef, orderId)
+ * unique index remains only as same-order idempotency for retried events.
  */
 @Injectable()
 export class CommissionLedgerService {
   private readonly logger = new Logger(loggerCtx);
+  private readonly commissionPercent: number;
 
-  constructor(private readonly connection: TransactionalConnection) {}
+  constructor(private readonly connection: TransactionalConnection) {
+    // Fail-closed financial config: malformed percent aborts boot rather than
+    // silently mis-computing commission (parseInt('10garbage') === 10 is not acceptable).
+    const raw = process.env.MARKETPLACE_COMMISSION_PERCENT;
+    if (raw === undefined || raw.trim() === '') {
+      this.commissionPercent = 0;
+      return;
+    }
+    const trimmed = raw.trim();
+    if (!/^\d+$/.test(trimmed)) {
+      throw new Error(
+        `CommissionLedgerService: MARKETPLACE_COMMISSION_PERCENT must be an integer 0..100 (got '${raw}').`
+      );
+    }
+    const parsed = parseInt(trimmed, 10);
+    if (parsed > 100) {
+      throw new Error(
+        `CommissionLedgerService: MARKETPLACE_COMMISSION_PERCENT must be an integer 0..100 (got ${parsed}).`
+      );
+    }
+    this.commissionPercent = parsed;
+  }
 
   getCommissionPercent(): number {
-    const raw = process.env.MARKETPLACE_COMMISSION_PERCENT ?? '0';
-    const parsed = parseInt(raw, 10);
-    if (Number.isNaN(parsed) || parsed < 0) {
-      return 0;
-    }
-    return Math.min(parsed, 100);
+    return this.commissionPercent;
   }
 
   computeCommissionAmount(grossInPaise: number, percent: number): number {
@@ -39,19 +67,19 @@ export class CommissionLedgerService {
   }
 
   /**
-   * Decision 6 replay guard: the ref is single-use. Consumed means a row already
-   * exists for the same ref on a DIFFERENT order (a retried event for the SAME
-   * order is idempotent, not a replay).
+   * Atomic single-use arbiter (Decision 6). Insert-first; the UNIQUE
+   * (marketplaceRef) index decides. `duplicate_ref` = the ref was already
+   * consumed by a different order (true replay -> classify direct).
+   * `duplicate_order` = retried event for the same order (idempotent; the
+   * earlier attempt already classified marketplace). `error` = non-duplicate
+   * persistence failure; the caller MUST treat the missing ledger row as a
+   * reconciliation incident (observable via the error log; recoverable via the
+   * tracked commission reconciliation task) — the financial fact is missing
+   * even though the order was classified marketplace.
    */
-  async isRefConsumedOnOtherOrder(marketplaceRef: string, orderId: string): Promise<boolean> {
+  async recordMarketplaceOrder(input: RecordMarketplaceOrderInput): Promise<RecordMarketplaceOrderResult> {
     const repo = this.connection.rawConnection.getRepository(CommissionLedger);
-    const rows = await repo.find({ where: { marketplaceRef } });
-    return rows.some((r) => String(r.orderId) !== String(orderId));
-  }
-
-  async recordMarketplaceOrder(input: RecordMarketplaceOrderInput): Promise<void> {
-    const repo = this.connection.rawConnection.getRepository(CommissionLedger);
-    const percent = this.getCommissionPercent();
+    const percent = this.commissionPercent;
     const amount = this.computeCommissionAmount(input.grossAmountInPaise, percent);
     const row = repo.create({
       channelId: input.channelId,
@@ -68,14 +96,25 @@ export class CommissionLedgerService {
       this.logger.log(
         `CommissionLedger row recorded: order=${input.orderId} channel=${input.channelId} gross=${input.grossAmountInPaise} percent=${percent} amount=${amount}`
       );
+      return 'inserted';
     } catch (err: any) {
       if (err && err.code === '23505') {
-        // Unique (marketplaceRef, orderId) violated: retried event for the same
-        // order. Idempotent no-op (Decision 6 interplay with retries).
+        // Disambiguate which unique constraint lost: ref consumed by another
+        // order (replay) vs same-order retry.
+        const existing = await repo.find({ where: { marketplaceRef: input.marketplaceRef } });
+        const other = existing.some((r) => String(r.orderId) !== String(input.orderId));
+        if (other) {
+          this.logger.warn(`Replay: marketplaceRef already consumed by another order (incoming order ${input.orderId}).`);
+          return 'duplicate_ref';
+        }
         this.logger.warn(`CommissionLedger row already exists for order ${input.orderId}; idempotent no-op.`);
-        return;
+        return 'duplicate_order';
       }
-      this.logger.error(`Failed to record CommissionLedger row for order ${input.orderId}: ${err?.message}`, err?.stack);
+      this.logger.error(
+        `RECONCILIATION-REQUIRED: failed to persist CommissionLedger row for classified marketplace order ${input.orderId}: ${err?.message}`,
+        err?.stack
+      );
+      return 'error';
     }
   }
 }
