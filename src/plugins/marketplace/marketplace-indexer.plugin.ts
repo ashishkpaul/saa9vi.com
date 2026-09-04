@@ -8,6 +8,9 @@ import { MarketplaceIndexQueueService } from './services/marketplace-index-queue
 import { MarketplaceAdService } from './services/marketplace-ad.service';
 import { BayesianRatingService } from './services/bayesian-rating.service';
 import { MarketplaceAttributionService } from './services/marketplace-attribution.service';
+import { CommissionLedgerService } from './services/commission-ledger.service';
+import { CommissionListener } from './listeners/commission.listener';
+import { CommissionLedger } from './entities/commission-ledger.entity';
 import { MarketplaceCommissionResolver } from './api/marketplace-commission.resolver';
 import { MarketplaceAdCampaign } from './entities/marketplace-ad-campaign.entity';
 import { AdSpendLedger } from './entities/ad-spend-ledger.entity';
@@ -55,6 +58,7 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
     MarketplaceAdCampaign,
     AdSpendLedger,
     AdWallet,
+    CommissionLedger,
   ],
   providers: [
     MarketplaceIndexerService,
@@ -63,6 +67,8 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
     MarketplaceAdService,
     BayesianRatingService,
     MarketplaceAttributionService,
+    CommissionLedgerService,
+    CommissionListener,
   ],
   shopApiExtensions: {
     schema: shopApiExtensions,

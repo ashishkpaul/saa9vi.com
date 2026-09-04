@@ -30,6 +30,7 @@ import { MarketplaceIndexerPlugin } from "./plugins/marketplace";
 import { CustomerSuspensionPlugin } from './plugins/customer-suspension/customer-suspension.plugin';
 import { PlatformDashboardPlugin } from './plugins/platform-dashboard/platform-dashboard.plugin';
 import { AdSpendLedgerImmutableSubscriber } from './plugins/marketplace/ad-spend-ledger-immutable.subscriber';
+import { CommissionLedgerImmutableSubscriber } from './plugins/marketplace/commission-ledger-immutable.subscriber';
 import { SubscriptionPlugin } from './plugins/subscription/subscription.plugin';
 
 /**
@@ -129,7 +130,7 @@ apiOptions: {
     // INV-010 service-boundary enforcement: AdSpendLedger is append-only.
     // Vendure registers TypeORM subscribers only from this array, so the
     // plugin-owned subscriber is wired here rather than in plugin providers.
-    subscribers: [AdSpendLedgerImmutableSubscriber],
+    subscribers: [AdSpendLedgerImmutableSubscriber, CommissionLedgerImmutableSubscriber],
     logging: false,
     database: process.env.DB_NAME || "vendure",
     schema: process.env.DB_SCHEMA || "public",
