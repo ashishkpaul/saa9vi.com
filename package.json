@@ -27,7 +27,8 @@
     "test:e2e:watch": "vitest --config vitest.config.mts",
     "test:e2e:tenant": "vitest run --config vitest.config.mts src/plugins/tenant-plugin/e2e/tenant-plugin.e2e-spec.ts",
     "test:e2e:bbb-isolation": "vitest run --config vitest.config.mts src/plugins/bigbluebutton-plugin/__tests__/bbb-channel-isolation.e2e-spec.ts",
-    "test:e2e:marketplace": "MARKETPLACE_E2E=true vitest run --config vitest.config.mts src/plugins/marketplace/e2e/marketplace.e2e-spec.ts"
+    "test:e2e:marketplace": "MARKETPLACE_E2E=true vitest run --config vitest.config.mts src/plugins/marketplace/e2e/marketplace.e2e-spec.ts",
+    "test:e2e:commission": "COMMISSION_E2E=true vitest run --config vitest.config.mts src/plugins/marketplace/e2e/commission.e2e-spec.ts"
   },
   "dependencies": {
     "@elastic/elasticsearch": "^9.4.2",

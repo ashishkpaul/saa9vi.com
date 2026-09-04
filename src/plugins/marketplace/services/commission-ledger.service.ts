@@ -1,10 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { TransactionalConnection } from '@vendure/core';
+import { RequestContext, TransactionalConnection } from '@vendure/core';
 import { CommissionLedger } from '../entities/commission-ledger.entity';
 
 const loggerCtx = 'CommissionLedgerService';
 
 export interface RecordMarketplaceOrderInput {
+  ctx: RequestContext;
   orderId: string;
   channelId: string;
   marketplaceRef: string;
@@ -78,7 +79,11 @@ export class CommissionLedgerService {
    * even though the order was classified marketplace.
    */
   async recordMarketplaceOrder(input: RecordMarketplaceOrderInput): Promise<RecordMarketplaceOrderResult> {
-    const repo = this.connection.rawConnection.getRepository(CommissionLedger);
+    // Use the transactional connection (request-scoped) so that concurrent
+    // calls each get their own transaction. The UNIQUE (marketplaceRef) index
+    // then serializes concurrent inserts: exactly one wins, the other gets
+    // a 23505 which we detect as a replay (duplicate_ref).
+    const repo = this.connection.getRepository(input.ctx, CommissionLedger);
     const percent = this.commissionPercent;
     const amount = this.computeCommissionAmount(input.grossAmountInPaise, percent);
     const row = repo.create({

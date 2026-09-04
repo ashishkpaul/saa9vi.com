@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
-import { EventBus, Order, OrderPlacedEvent, TransactionalConnection } from '@vendure/core';
+import { EntityHydrator, EventBus, Order, OrderPlacedEvent, TransactionalConnection } from '@vendure/core';
 import { MarketplaceAttributionService, MarketplaceAttributionRef } from '../services/marketplace-attribution.service';
 import { CommissionLedgerService } from '../services/commission-ledger.service';
 
@@ -33,6 +33,7 @@ export class CommissionListener implements OnApplicationBootstrap {
     private readonly connection: TransactionalConnection,
     private readonly attributionService: MarketplaceAttributionService,
     private readonly ledgerService: CommissionLedgerService,
+    private readonly entityHydrator: EntityHydrator,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -58,10 +59,11 @@ export class CommissionListener implements OnApplicationBootstrap {
         // Insert-first: the UNIQUE (marketplaceRef) index is the atomic
         // Decision-6 arbiter (no app-level check-then-insert race).
         const result = await this.ledgerService.recordMarketplaceOrder({
+          ctx,
           orderId: String(order.id),
           channelId: String(ctx.channelId), // actual channel id for reconciliation/reporting (NOT the public token)
           marketplaceRef: ref,
-          grossAmountInPaise: order.totalWithTax,
+          grossAmountInPaise: order.total, // pre-tax gross (excludes tax)
           currency: order.currencyCode,
         });
         if (result === 'inserted') {
@@ -87,6 +89,9 @@ export class CommissionListener implements OnApplicationBootstrap {
     }
 
     // Server-side classification stamp (INV-008). Always settles the field.
+    // Hydrate Order.lines before save: Vendure's Order entity subscriber computes
+    // the derived `discounts` getter on save, which requires `lines` to be loaded.
+    await this.entityHydrator.hydrate(ctx, order, { relations: ['lines'] });
     order.customFields = order.customFields ?? {};
     order.customFields.orderSource = outcome;
     await this.connection.getRepository(ctx, Order).save(order);
