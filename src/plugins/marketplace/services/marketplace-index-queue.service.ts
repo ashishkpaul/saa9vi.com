@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { JobQueue, JobQueueService } from '@vendure/core';
+import { JobQueue, JobQueueService, RequestContext } from '@vendure/core';
 import { MarketplaceIndexerService } from './marketplace-indexer.service';
+import { MarketplaceBaselineService } from './marketplace-baseline.service';
 
 const loggerCtx = 'MarketplaceIndexQueueService';
 const QUEUE_NAME = 'marketplace-index';
@@ -48,6 +49,7 @@ export class MarketplaceIndexQueueService implements OnModuleInit {
   constructor(
     private readonly jobQueueService: JobQueueService,
     private readonly indexerService: MarketplaceIndexerService,
+    private readonly baselineService: MarketplaceBaselineService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -57,9 +59,13 @@ export class MarketplaceIndexQueueService implements OnModuleInit {
         const data = job.data;
         this.logger.log(`Processing index job: ${data.type}`);
 
+        // Create an internal context for service work outside the
+        // request/response cycle. Each job gets a fresh context.
+        const ctx = await this.baselineService.createInternalContext();
+
         switch (data.type) {
           case 'index-session':
-            await this.indexerService.indexSession(data.sessionId);
+            await this.indexerService.indexSession(data.sessionId, ctx);
             break;
           case 'delete-session':
             await this.indexerService.deleteSession(data.sessionId);

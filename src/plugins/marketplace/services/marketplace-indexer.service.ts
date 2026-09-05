@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Client } from '@elastic/elasticsearch';
-import { Channel, ConfigService, TransactionalConnection } from '@vendure/core';
+import { Channel, ConfigService, RequestContext, TransactionalConnection } from '@vendure/core';
 import { BbbScheduledSession } from '../../bigbluebutton-plugin/entities/bbb-scheduled-session.entity';
 import { BbbOrganization } from '../../bigbluebutton-plugin/entities/bbb-organization.entity';
 import { TenantProfile } from '../../tenant-plugin/entities/tenant-profile.entity';
@@ -8,6 +8,7 @@ import { InstructorProfile } from '../../tenant-plugin/entities/instructor-profi
 import { BbbInstructorAssignment } from '../../bigbluebutton-plugin/entities/instructor-assignment.entity';
 import { MarketplaceAdService } from './marketplace-ad.service';
 import { BayesianRatingService } from './bayesian-rating.service';
+import { MarketplaceBaselineService } from './marketplace-baseline.service';
 import { SponsoredBoostConfigService } from './sponsored-boost-config.service';
 
 export interface MarketplaceSessionDocument {
@@ -25,6 +26,7 @@ export interface MarketplaceSessionDocument {
   instructorName: string | null;
   subjectTags: string[];
   bayesianRating: number;
+  baselineVersion: number;
   isSponsored: boolean;
   sponsorBoost: number;
 }
@@ -57,6 +59,7 @@ export class MarketplaceIndexerService {
     private readonly connection: TransactionalConnection,
     private readonly adService: MarketplaceAdService,
     private readonly bayesianService: BayesianRatingService,
+    private readonly baselineService: MarketplaceBaselineService,
     private readonly configService: ConfigService,
     private readonly sponsorBoostConfig: SponsoredBoostConfigService,
   ) {
@@ -116,12 +119,31 @@ export class MarketplaceIndexerService {
             instructorName: { type: 'text' },
             subjectTags: { type: 'keyword' },
             bayesianRating: { type: 'float' },
+            baselineVersion: { type: 'integer' },
             isSponsored: { type: 'boolean' },
             sponsorBoost: { type: 'float' },
           },
         },
       });
       this.logger.log(`Created Elasticsearch index: ${this.sessionsIndex}`);
+    }
+  }
+
+  /**
+   * Ensure the sessions index has the baselineVersion mapping.
+   * For existing indices, this adds the field via PUT mapping.
+   * For new indices, ensureSessionsIndex() handles it at creation.
+   */
+  async ensureBaselineVersionMapping(): Promise<void> {
+    const exists = await this.client.indices.exists({ index: this.sessionsIndex });
+    if (exists) {
+      await this.client.indices.putMapping({
+        index: this.sessionsIndex,
+        properties: {
+          baselineVersion: { type: 'integer' },
+        },
+      });
+      this.logger.log(`Updated ES mapping: added baselineVersion to ${this.sessionsIndex}`);
     }
   }
 
@@ -153,7 +175,7 @@ export class MarketplaceIndexerService {
 
   // ─── Session Indexing ──────────────────────────────────────────────────────
 
-  async indexSession(sessionId: string): Promise<void> {
+  async indexSession(sessionId: string, ctx: RequestContext): Promise<void> {
     const session = await this.connection.rawConnection
       .getRepository(BbbScheduledSession)
       .findOne({
@@ -213,14 +235,20 @@ export class MarketplaceIndexerService {
       }
     }
 
+    // ─── 3D.1b: Resolve authoritative baseline snapshot ONCE ───────────────
+    // The baseline { G, V } is resolved once per indexSession() call and
+    // passed through to the Bayesian calculation. This guarantees the
+    // "single snapshot" invariant: one indexing operation uses one exact {G,V}.
+    // Baseline resolution failure rejects the job (no silent zero fallback).
+    const baseline = await this.baselineService.getCurrentBaseline(ctx);
+
     // ─── Gap 2: Bayesian rating from ReviewsPlugin aggregate ────────────────
     let bayesianRating = 0;
     if (session.productVariantId) {
-      try {
-        bayesianRating = await this.bayesianService.computeForVariant(session.productVariantId);
-      } catch (err: any) {
-        this.logger.warn(`Failed to compute Bayesian rating for variant ${session.productVariantId}: ${err.message}`);
-      }
+      bayesianRating = await this.bayesianService.computeForVariant(
+        session.productVariantId,
+        baseline,
+      );
     }
 
     // ─── Gap 1: Sponsored listing bid-boost from MarketplaceAdCampaign ──────
@@ -254,6 +282,7 @@ export class MarketplaceIndexerService {
       instructorName: await this.resolveInstructorName(String(session.id)),
       subjectTags: session.subjectTags ?? [],
       bayesianRating,
+      baselineVersion: baseline.baselineVersion,
       isSponsored,
       sponsorBoost,
     };
@@ -372,7 +401,7 @@ export class MarketplaceIndexerService {
 
   // ─── Full Reindex ──────────────────────────────────────────────────────────
 
-  async fullReindex(): Promise<void> {
+  async fullReindex(ctx: RequestContext): Promise<void> {
     await this.ensureIndicesExist();
 
     // Reindex all sessions with productVariantId
@@ -381,7 +410,7 @@ export class MarketplaceIndexerService {
       .find({ where: { productVariantId: { $ne: null } as any } });
 
     for (const session of sessions) {
-      await this.indexSession(String(session.id));
+      await this.indexSession(String(session.id), ctx);
     }
     this.logger.log(`Full reindex: ${sessions.length} sessions indexed`);
 

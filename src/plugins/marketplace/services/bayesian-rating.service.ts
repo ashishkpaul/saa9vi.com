@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService, TransactionalConnection } from '@vendure/core';
 import { ProductReview } from '../../reviews/entities/product-review.entity';
+import { BayesianBaseline } from './marketplace-baseline.service';
 
 const loggerCtx = 'BayesianRatingService';
 
@@ -10,9 +11,13 @@ const loggerCtx = 'BayesianRatingService';
  * Formula: (C * m + sum(ratings)) / (C + n)
  * Where:
  *   C = confidence (prior weight) — default 10
- *   m = global mean rating across all products — computed from ProductReview
+ *   m = global mean rating — from the authoritative frozen baseline (3D.1a/3D.1b)
  *   n = number of ratings for this product
  *   sum(ratings) = sum of all ratings for this product
+ *
+ * 3D.1b contract: the global prior G comes from the Settings Store baseline,
+ * NOT from a live query on ProductReview. The baseline snapshot is passed in
+ * by the caller to guarantee a single {G, V} snapshot per indexing operation.
  *
  * This prevents products with few reviews from ranking above
  * products with many reviews and a slightly lower average.
@@ -29,17 +34,13 @@ export class BayesianRatingService {
 
   /**
    * Compute Bayesian rating for a specific product.
+   * The baseline snapshot is passed in — NOT fetched live.
    */
-  async computeForProduct(productId: string): Promise<number> {
+  async computeForProduct(productId: string, baseline: BayesianBaseline): Promise<number> {
     const reviewRepo = this.connection.rawConnection.getRepository(ProductReview);
 
-    // Get global mean rating across all approved reviews
-    const globalResult = await reviewRepo
-      .createQueryBuilder('review')
-      .select('AVG(review.rating)', 'mean')
-      .where('review.state = :state', { state: 'approved' })
-      .getRawOne();
-    const globalMean = parseFloat(globalResult?.mean ?? '0') || 0;
+    // Use the authoritative frozen baseline — NOT a live global mean query
+    const globalMean = baseline.globalMean;
 
     if (globalMean === 0) return 0;
 
@@ -57,16 +58,16 @@ export class BayesianRatingService {
 
     if (n === 0) return 0;
 
-    // Bayesian average
+    // Bayesian average using the frozen baseline
     const bayesian = (this.confidence * globalMean + n * avg) / (this.confidence + n);
     return Math.round(bayesian * 100) / 100;
   }
 
   /**
    * Compute Bayesian rating for a product by its variant ID.
-   * Looks up the product from the variant.
+   * Looks up the product from the variant. The baseline snapshot is passed in.
    */
-  async computeForVariant(variantId: string): Promise<number> {
+  async computeForVariant(variantId: string, baseline: BayesianBaseline): Promise<number> {
     const { ProductVariant } = require('@vendure/core');
     // variantId may be GraphQL-encoded (e.g. "T_5"); decode to the raw PK.
     const decoded = this.configService.entityIdStrategy.decodeId(String(variantId));
@@ -78,6 +79,6 @@ export class BayesianRatingService {
       });
 
     if (!variant || !(variant as any).product) return 0;
-    return this.computeForProduct(String((variant as any).product.id));
+    return this.computeForProduct(String((variant as any).product.id), baseline);
   }
 }

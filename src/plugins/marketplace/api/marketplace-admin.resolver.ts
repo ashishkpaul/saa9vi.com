@@ -1,5 +1,5 @@
 import { Query, Resolver } from '@nestjs/graphql';
-import { Allow, Permission, Logger } from '@vendure/core';
+import { Allow, Ctx, Permission, Logger, RequestContext } from '@vendure/core';
 import { MarketplaceIndexerService } from '../services/marketplace-indexer.service';
 
 const loggerCtx = 'MarketplaceAdminResolver';
@@ -12,9 +12,9 @@ export class MarketplaceAdminResolver {
 
   @Query()
   @Allow(Permission.SuperAdmin)
-  async marketplaceFullReindex(): Promise<boolean> {
+  async marketplaceFullReindex(@Ctx() ctx: RequestContext): Promise<boolean> {
     try {
-      await this.indexerService.fullReindex();
+      await this.indexerService.fullReindex(ctx);
       return true;
     } catch (err: any) {
       Logger.error(`Marketplace full reindex failed: ${err.message}`, loggerCtx, err.stack);

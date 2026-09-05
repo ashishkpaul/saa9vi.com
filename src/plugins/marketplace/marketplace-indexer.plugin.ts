@@ -1,5 +1,6 @@
 import { OnApplicationBootstrap } from '@nestjs/common';
-import { PluginCommonModule, VendurePlugin, LanguageCode } from '@vendure/core';
+import { PluginCommonModule, VendurePlugin, LanguageCode, SettingsStoreScopes } from '@vendure/core';
+import { MarketplaceBaselineService } from './services/marketplace-baseline.service';
 import { MarketplaceIndexerService } from './services/marketplace-indexer.service';
 import { MarketplaceSearchResolver } from './api/marketplace-search.resolver';
 import { MarketplaceAdminResolver } from './api/marketplace-admin.resolver';
@@ -76,6 +77,7 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
     MarketplaceIndexQueueService,
     MarketplaceAdService,
     BayesianRatingService,
+    MarketplaceBaselineService,
     MarketplaceAttributionService,
     CommissionLedgerService,
     AdWalletService,
@@ -120,6 +122,26 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
       list: false,
     });
     }
+
+    // Register Settings Store fields for the Bayesian baseline (3D.1a/3D.1b).
+    config.settingsStoreFields ??= {};
+    if (!config.settingsStoreFields['marketplace']) {
+      config.settingsStoreFields['marketplace'] = [
+        {
+          name: 'bayesianGlobalMean',
+          scope: SettingsStoreScopes.global,
+        },
+        {
+          name: 'bayesianBaselineVersion',
+          scope: SettingsStoreScopes.global,
+        },
+        {
+          name: 'bayesianGlobalMeanComputedAt',
+          scope: SettingsStoreScopes.global,
+        },
+      ];
+    }
+
     return config;
   },
     dashboard: './dashboard/index.tsx',
@@ -133,6 +155,8 @@ export class MarketplaceIndexerPlugin implements OnApplicationBootstrap {
     // Ensure ES indices exist on startup (non-blocking)
     try {
       await this.indexerService.ensureIndicesExist();
+      // Ensure existing indices have the baselineVersion mapping (3D.1b)
+      await this.indexerService.ensureBaselineVersionMapping();
     } catch (err: any) {
       // Non-fatal: app starts even if ES is unreachable
       console.warn(`MarketplaceIndexerPlugin: Elasticsearch unavailable — ${err.message}`);
