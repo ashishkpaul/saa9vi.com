@@ -186,6 +186,7 @@ const MARKETPLACE_SEARCH = gql`
         customDomain
         subjectTags
         bayesianRating
+        baselineVersion
         isSponsored
       }
     }
@@ -308,6 +309,19 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
 
     const emailA = `mkt-a-${Date.now()}@example.com`;
     const emailB = `mkt-b-${Date.now()}@example.com`;
+
+    // 3D.1b Steps 1–4: seed the authoritative Bayesian baseline in the
+    // Settings Store. Indexing is fail-closed — without a baseline the job
+    // rejects — so the suite must establish one (this is what the Step 5
+    // scheduled refresh task will do in production).
+    const { SettingsStoreService, RequestContextService } = await import('@vendure/core');
+    const settingsStore = server.app.get(SettingsStoreService);
+    const seedCtx = await server.app.get(RequestContextService).create({ apiType: 'admin' });
+    // Settings Store requires JsonCompatible object values — primitives are
+    // rejected, so each field is stored as { v }.
+    await settingsStore.set(seedCtx, 'marketplace.bayesianGlobalMean', { v: 4.2 });
+    await settingsStore.set(seedCtx, 'marketplace.bayesianBaselineVersion', { v: 1 });
+    await settingsStore.set(seedCtx, 'marketplace.bayesianGlobalMeanComputedAt', { v: new Date().toISOString() });
 
     // Public mutations still require a channel token for routing (same as
     // the tenant-plugin e2e suite).
@@ -608,6 +622,9 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
       );
       const docAfter = after.find((s: any) => s.id === sessionA1Id)!;
       expect(docAfter.bayesianRating).toBeGreaterThan(ratingBefore);
+      // 3D.1b: every indexed document must carry the baselineVersion of the
+      // frozen {G,V} snapshot used for the Bayesian calculation.
+      expect(docAfter.baselineVersion).toBe(1);
     });
   });
 

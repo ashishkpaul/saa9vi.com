@@ -16,6 +16,8 @@ export const shopApiExtensions = gql`
     instructorName: String
     subjectTags: [String!]!
     bayesianRating: Float!
+    """3D.1b: baseline version of the frozen {G,V} snapshot used for this score."""
+    baselineVersion: Int
     isSponsored: Boolean!
   }
 

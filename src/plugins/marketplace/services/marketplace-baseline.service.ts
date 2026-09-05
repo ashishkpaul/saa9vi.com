@@ -1,12 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import {
   RequestContext,
   RequestContextService,
   SettingsStoreService,
   SettingsStoreScopes,
 } from '@vendure/core';
-
-const loggerCtx = 'MarketplaceBaselineService';
 
 const NAMESPACE = 'marketplace';
 
@@ -68,18 +66,33 @@ export class MarketplaceBaselineService {
   /**
    * Get the current authoritative baseline snapshot.
    * Path A reads this instead of computing G live from ProductReview.
+   *
+   * 3D.1b fail-closed rule: if no baseline has ever been established
+   * (scheduled refresh not yet run), this THROWS rather than returning a
+   * placeholder { G: 0, V: 0 } — a placeholder would produce a false
+   * "converged" ES document at version 0. indexSession() lets the throw
+   * propagate, so the job is rejected and retried until a baseline exists.
    */
   async getCurrentBaseline(ctx: RequestContext): Promise<BayesianBaseline> {
+    // Settings Store values must be JsonCompatible objects (primitives are
+    // rejected by the JsonCompatible<T> type), so each field is stored as { v }.
     const [mean, version, computedAt] = await Promise.all([
-      this.settingsStoreService.get<number>(ctx, `${NAMESPACE}.bayesianGlobalMean`),
-      this.settingsStoreService.get<number>(ctx, `${NAMESPACE}.bayesianBaselineVersion`),
-      this.settingsStoreService.get<string>(ctx, `${NAMESPACE}.bayesianGlobalMeanComputedAt`),
+      this.settingsStoreService.get<{ v: number }>(ctx, `${NAMESPACE}.bayesianGlobalMean`),
+      this.settingsStoreService.get<{ v: number }>(ctx, `${NAMESPACE}.bayesianBaselineVersion`),
+      this.settingsStoreService.get<{ v: string }>(ctx, `${NAMESPACE}.bayesianGlobalMeanComputedAt`),
     ]);
 
+    if (version == null || mean == null) {
+      throw new Error(
+        'Bayesian baseline has not been established: no globalMean/baselineVersion in Settings Store. ' +
+          'Run the baseline refresh task before marketplace indexing.',
+      );
+    }
+
     return {
-      globalMean: mean ?? 0,
-      baselineVersion: version ?? 0,
-      computedAt: computedAt ? new Date(computedAt) : new Date(0),
+      globalMean: mean.v,
+      baselineVersion: version.v,
+      computedAt: computedAt ? new Date(computedAt.v) : new Date(0),
     };
   }
 }
