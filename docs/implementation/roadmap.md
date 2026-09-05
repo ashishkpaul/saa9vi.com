@@ -130,7 +130,12 @@
 
 - [x] **Review → marketplace ranking propagation** — ReviewApproved/Rejected/Hidden → `MarketplaceEventListener.handleReviewAggregateChange()` → BullMQ session reindex → `BayesianRatingService.computeForVariant()` → `MarketplaceSessionDocument.bayesianRating` → ES `function_score`. Already implemented and E2E-verified (marketplace E2E suite).
 - [ ] **Ranking materialization** — `RankingMaterializedView` (Postgres) for ranking-history audit / stable snapshot / multi-signal ranking. **Not yet implemented; requires prior resolution of Bayesian scope (global vs channel-local prior) and invalidation semantics (does one review change invalidate all Bayesian scores via globalMean?).**
-- [ ] Bayesian scope & invalidation contract — decide: global prior across all approved reviews vs channel-local prior; and whether one review transition invalidates only the affected product or all products (because globalMean changes).
+- [ ] **3D.1a Bayesian Ranking Scope Decision** — resolve before any ranking persistence work. Four decision points:
+  1. **Prior population**: global platform-wide approved reviews vs channel-local
+  2. **Prior lifecycle**: live (recomputed on every review transition) vs periodically fixed baseline
+  3. **Review transition impact**: product-local only vs potentially all products (because globalMean changes)
+  4. **ES freshness guarantee**: immediate vs eventual (bounded by BullMQ indexing pipeline)
+- [ ] Bayesian scope & invalidation contract — formalize the decision from 3D.1a in ADR form.
 - [ ] Elasticsearch instructor/course search refinement
 - [ ] Attendance analytics dashboard
 - [ ] Certificate generation on `Entitlement` completion
