@@ -57,6 +57,11 @@ const sharedTypeExtensions = gql`
         CHECKOUT_PROMO
     }
 
+    enum BannerScope {
+        tenant
+        marketplace
+    }
+
     type Banner implements Node {
         id: ID!
         createdAt: DateTime!
@@ -69,6 +74,10 @@ const sharedTypeExtensions = gql`
         isActive: Boolean!
         startsAt: DateTime
         endsAt: DateTime
+        scope: BannerScope!
+        targetSubject: String
+        targetCity: String
+        campaignId: ID
         channels: [Channel!]!
     }
 
@@ -152,6 +161,11 @@ export const adminApiExtensions = gql`
         startsAt: DateTime
         endsAt: DateTime
         channelIds: [ID!]
+        \"\"\"FEAT-004: 'marketplace' requires SuperAdmin; tenants always get 'tenant'.\"\"\"
+        scope: BannerScope
+        targetSubject: String
+        targetCity: String
+        campaignId: ID
     }
 
     input UpdateBannerInput {
@@ -165,6 +179,11 @@ export const adminApiExtensions = gql`
         startsAt: DateTime
         endsAt: DateTime
         channelIds: [ID!]
+        \"\"\"FEAT-004: 'marketplace' requires SuperAdmin; scope flip by a tenant admin is forced to 'tenant'.\"\"\"
+        scope: BannerScope
+        targetSubject: String
+        targetCity: String
+        campaignId: ID
     }
 
     input CreatePageInput {

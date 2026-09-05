@@ -40,6 +40,13 @@ export interface CreateBannerInput {
     startsAt?: Date;
     endsAt?: Date;
     channelIds?: ID[];
+    /** FEAT-004 (3C.4): 'marketplace' scope requires SuperAdmin (tenant admins always get 'tenant'). */
+    scope?: 'tenant' | 'marketplace';
+    /** Marketplace-scope targeting (ignored for tenant banners). */
+    targetSubject?: string | null;
+    targetCity?: string | null;
+    /** FK → MarketplaceAdCampaign.id (spend-backed marketplace banner). */
+    campaignId?: string | null;
 }
 
 export interface UpdateBannerInput extends Partial<CreateBannerInput> {
@@ -81,6 +88,11 @@ export class BannerService {
      * the banner-activator ScheduledTask) instead of runtime date-range
      * comparisons — eliminates the need for date arithmetic on every
      * storefront page load (BUG-015 / CMS-002).
+     *
+     * FEAT-004 (3C.4): restricted to scope='tenant'. Existing behavior is
+     * unchanged — every banner created before 3C.4 carries the 'tenant'
+     * default, and marketplace-scope banners are served exclusively by
+     * MarketplaceBannerService.
      */
     async findActiveForPlacement(
         ctx: RequestContext,
@@ -95,6 +107,7 @@ export class BannerService {
             .leftJoinAndSelect('banner.image', 'image')
             .where('banner.placement = :placement', { placement })
             .andWhere('banner.isCurrentlyActive = true')
+            .andWhere('banner.scope = :scope', { scope: 'tenant' })
             .orderBy('banner.priority', 'ASC')
             .getMany();
 
@@ -103,7 +116,19 @@ export class BannerService {
 
     async create(ctx: RequestContext, input: CreateBannerInput): Promise<Banner> {
         Logger.verbose(`Creating Banner placement="${input.placement}" channel=${ctx.channelId}`, loggerCtx);
-        const banner = new Banner(input);
+        // FEAT-004 (3C.4): only SuperAdmin may create marketplace-scope banners;
+        // tenant admins always get 'tenant' regardless of what they pass.
+        const scope: 'tenant' | 'marketplace' =
+            input.scope === 'marketplace' && ctx.userHasPermissions([Permission.SuperAdmin])
+                ? 'marketplace'
+                : 'tenant';
+        const banner = new Banner({
+            ...input,
+            scope,
+            targetSubject: scope === 'marketplace' ? input.targetSubject ?? null : null,
+            targetCity: scope === 'marketplace' ? input.targetCity ?? null : null,
+            campaignId: scope === 'marketplace' ? input.campaignId ?? null : null,
+        });
         // ADR-036: assign by creator role (SuperAdmin → default, Tenant → tenant only).
         await this.cmsChannelAssignmentPolicy.assign(banner, ctx);
         const saved = await this.connection.getRepository(ctx, Banner).save(banner);
@@ -122,7 +147,25 @@ export class BannerService {
         const banner = await this.connection.getEntityOrThrow(ctx, Banner, input.id, {
             channelId: ctx.channelId,
         });
-        const updated = new Banner({ ...banner, ...input });
+        // FEAT-004 (3C.4): same SuperAdmin guard on scope changes. A scope flip
+        // requires SuperAdmin; targeting fields only apply to marketplace scope
+        // and are cleared when demoting to tenant.
+        const isSuperAdmin = ctx.userHasPermissions([Permission.SuperAdmin]);
+        let nextScope: 'tenant' | 'marketplace' = banner.scope ?? 'tenant';
+        if (input.scope !== undefined) {
+            nextScope = input.scope === 'marketplace' && isSuperAdmin ? 'marketplace' : 'tenant';
+        }
+        const updated = new Banner({
+            ...banner,
+            ...input,
+            scope: nextScope,
+            targetSubject:
+                nextScope === 'marketplace' ? (input.targetSubject ?? banner.targetSubject ?? null) : null,
+            targetCity:
+                nextScope === 'marketplace' ? (input.targetCity ?? banner.targetCity ?? null) : null,
+            campaignId:
+                nextScope === 'marketplace' ? (input.campaignId ?? banner.campaignId ?? null) : null,
+        });
         await this.connection.getRepository(ctx, Banner).save(updated);
 
         if (input.channelIds?.length && ctx.userHasPermissions([Permission.SuperAdmin])) {

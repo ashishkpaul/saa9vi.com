@@ -32,6 +32,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getSuperadminContext } from '@vendure/testing/lib/utils/get-superadmin-context';
 
 import { TenantPlugin } from '../../tenant-plugin/tenant-plugin.plugin';
+import { CmsPlugin } from '../../cms/cms.plugin';
 import { MarketplaceIndexerPlugin } from '../marketplace-indexer.plugin';
 import { SchemaPostgresInitializer } from '../../tenant-plugin/e2e/schema-postgres-initializer';
 import { AdWalletLedger } from '../entities/ad-wallet-ledger.entity';
@@ -41,6 +42,11 @@ import { AdWallet } from '../entities/ad-wallet.entity';
 import { MarketplaceAdCampaign } from '../entities/marketplace-ad-campaign.entity';
 import { AdSpendLedger } from '../entities/ad-spend-ledger.entity';
 import { MarketplaceAdService } from '../services/marketplace-ad.service';
+import { MarketplaceBannerService } from '../services/marketplace-banner.service';
+import { BannerService } from '../../cms/services/banner.service';
+import { Banner } from '../../cms/entities/banner.entity';
+import { BannerPlacement } from '../../cms/types';
+import { Asset } from '@vendure/core';
 import { TransactionalConnection } from '@vendure/core';
 
 registerInitializer('postgres', new SchemaPostgresInitializer());
@@ -73,7 +79,7 @@ const { server } = createTestEnvironment(
       // immutability test is meaningful only with the subscriber registered here.
       subscribers: [AdWalletLedgerImmutableSubscriber],
     },
-    plugins: [TenantPlugin, MarketplaceIndexerPlugin],
+    plugins: [TenantPlugin, CmsPlugin, MarketplaceIndexerPlugin],
   }),
 );
 
@@ -413,6 +419,177 @@ describe('AdWalletLedger (3C.1)', () => {
         .getRepository(ctx, AdWalletLedger)
         .count({ where: { reference: `atomic-${run}` } });
       expect(debitRows).toBe(0);
+    });
+  });
+
+  d('banner scope discriminator (3C.4)', () => {
+    it('isolates tenant vs marketplace surfaces and orders marketplace banners by wallet balance', async () => {
+      const ctx = await getSuperadminContext(server.app);
+      const bannerSvc = server.app.get(BannerService);
+      const mktBannerSvc = server.app.get(MarketplaceBannerService);
+      const conn = server.app.get(TransactionalConnection);
+      const run = Date.now();
+      const bannerRepo = conn.getRepository(ctx, Banner);
+      const assetRepo = conn.getRepository(ctx, Asset);
+      const { RequestContext, ChannelService, Permission } = await import('@vendure/core');
+
+      // A minimal Asset row (flat entity) to satisfy Banner.image FK.
+      const asset = (await assetRepo.save(
+        assetRepo.create({
+          type: 'IMAGE',
+          name: `test-asset-${run}`,
+          mimeType: 'image/png',
+          fileSize: 100,
+          width: 1,
+          height: 1,
+          source: `source/test-${run}.png`,
+          preview: `preview/test-${run}__preview.png`,
+        } as any),
+      )) as unknown as Asset;
+
+      const now = new Date();
+      const base = {
+        title: `banner-${run}`,
+        imageId: String(asset.id),
+        linkUrl: 'https://example.com',
+        placement: BannerPlacement.HOMEPAGE_HERO,
+        isActive: true,
+        isCurrentlyActive: true,
+      };
+
+      // -- Tenant-surface isolation ------------------------------------------
+      // Create via the service so cmsChannelAssignmentPolicy assigns channels
+      // (the tenant-surface query joins banner.channels on ctx.channelId).
+      const tenantBanner = (await bannerSvc.create(ctx, {
+        title: `tenant-${run}`,
+        imageId: String(asset.id),
+        placement: BannerPlacement.HOMEPAGE_HERO,
+        isActive: true,
+      })) as unknown as Banner;
+      // No explicit scope → default 'tenant' (pre-3C.4 behavior).
+      expect(tenantBanner.scope).toBe('tenant');
+
+      // SuperAdmin may explicitly create a marketplace banner. getSuperadminContext
+      // sets channelPermissions:[], so build a ctx that actually carries the
+      // SuperAdmin permission; the helper ctx below is used to prove the guard.
+      const channelService = server.app.get(ChannelService);
+      const defaultChannel = await channelService.getDefaultChannel();
+      const superAdminCtx = new RequestContext({
+        channel: defaultChannel,
+        apiType: 'admin',
+        isAuthorized: true,
+        authorizedAsOwnerOnly: false,
+        session: {
+          id: '',
+          token: '',
+          expires: new Date(),
+          cacheExpiry: 999999,
+          user: {
+            id: 'superadmin',
+            identifier: 'superadmin',
+            verified: true,
+            // UserChannelPermissions shape: channel id/token/code + permissions.
+            channelPermissions: [
+              {
+                id: String(defaultChannel.id),
+                token: defaultChannel.token,
+                code: defaultChannel.code,
+                permissions: [Permission.SuperAdmin],
+              },
+            ],
+          },
+        },
+      });
+      const mktBanner = (await bannerSvc.create(superAdminCtx, {
+        title: `mkt-${run}`,
+        imageId: String(asset.id),
+        placement: BannerPlacement.HOMEPAGE_HERO,
+        isActive: true,
+        scope: 'marketplace',
+        targetSubject: 'Piano',
+        targetCity: 'Mumbai',
+      })) as unknown as Banner;
+      expect(mktBanner.scope).toBe('marketplace');
+      expect(mktBanner.targetSubject).toBe('Piano');
+
+      // A ctx WITHOUT SuperAdmin attempting marketplace scope is demoted to tenant.
+      const demotedOnCreate = (await bannerSvc.create(ctx, {
+        title: `mkt-blocked-${run}`,
+        imageId: String(asset.id),
+        placement: BannerPlacement.HOMEPAGE_HERO,
+        isActive: true,
+        scope: 'marketplace',
+      })) as unknown as Banner;
+      expect(demotedOnCreate.scope).toBe('tenant');
+      expect(demotedOnCreate.campaignId).toBeNull();
+      // Simulate the banner-activator task for the repo-inserted rows below.
+      await bannerRepo.update({ id: mktBanner.id as any }, { isCurrentlyActive: true });
+      await bannerRepo.update({ id: tenantBanner.id as any }, { isCurrentlyActive: true });
+
+      // Tenant surface: returns the tenant banner, NEVER the marketplace one.
+      const tenantSurface = await bannerSvc.findActiveForPlacement(ctx, BannerPlacement.HOMEPAGE_HERO);
+      expect(tenantSurface.some((b) => b.id === tenantBanner.id)).toBe(true);
+      expect(tenantSurface.some((b) => b.id === mktBanner.id)).toBe(false);
+
+      // Marketplace surface: returns the marketplace banner, NEVER the tenant one.
+      const mktSurface = await mktBannerSvc.findActiveForPlacement(ctx, BannerPlacement.HOMEPAGE_HERO);
+      expect(mktSurface.some((b) => b.id === mktBanner.id)).toBe(true);
+      expect(mktSurface.some((b) => b.id === tenantBanner.id)).toBe(false);
+
+      // -- Marketplace ordering by campaign wallet balance --------------------
+      // Two marketplace banners backed by campaigns in channels with different
+      // wallet balances. Ordering uses the wallet cache (display heuristic);
+      // fund via ledger so the cache reflects ledger truth.
+      const walletSvc = server.app.get(AdWalletService);
+      const rich = `rich-${run}`;
+      const poor = `poor-${run}`;
+      await walletSvc.creditWallet(ctx, { channelId: rich, amountInPaise: 900000, type: 'topup', reference: `f-rich-${run}` });
+      await walletSvc.creditWallet(ctx, { channelId: poor, amountInPaise: 1000, type: 'topup', reference: `f-poor-${run}` });
+      const campaignRepo = conn.getRepository(ctx, MarketplaceAdCampaign);
+      const richCampaign = await campaignRepo.save(
+        campaignRepo.create({ channelId: rich, status: 'active', startsAt: now, endsAt: now }),
+      );
+      const poorCampaign = await campaignRepo.save(
+        campaignRepo.create({ channelId: poor, status: 'active', startsAt: now, endsAt: now }),
+      );
+      const richBanner = (await bannerRepo.save(
+        bannerRepo.create({
+          ...base,
+          title: `rich-${run}`,
+          scope: 'marketplace',
+          campaignId: String(richCampaign.id),
+        } as any),
+      )) as unknown as Banner;
+      const poorBanner = (await bannerRepo.save(
+        bannerRepo.create({
+          ...base,
+          title: `poor-${run}`,
+          scope: 'marketplace',
+          campaignId: String(poorCampaign.id),
+        } as any),
+      )) as unknown as Banner;
+      // Rich banner has LOWER priority (would sort first organically) to prove
+      // the wallet-balance ordering dominates for campaign-backed banners.
+      await bannerRepo.update({ id: richBanner.id as any }, { priority: 50 });
+      await bannerRepo.update({ id: poorBanner.id as any }, { priority: 0 });
+
+      const ordered = await mktBannerSvc.findActiveForPlacement(ctx, BannerPlacement.HOMEPAGE_HERO);
+      const richIdx = ordered.findIndex((b) => b.id === richBanner.id);
+      const poorIdx = ordered.findIndex((b) => b.id === poorBanner.id);
+      expect(richIdx).toBeGreaterThanOrEqual(0);
+      expect(poorIdx).toBeGreaterThanOrEqual(0);
+      expect(richIdx).toBeLessThan(poorIdx); // higher wallet balance wins the slot
+
+      // -- Scope-flip guard ----------------------------------------------------
+      // Demoting a marketplace banner to tenant clears its targeting fields.
+      const demoted = await bannerSvc.update(ctx, {
+        id: mktBanner.id,
+        scope: 'tenant',
+      });
+      expect(demoted.scope).toBe('tenant');
+      expect(demoted.targetSubject).toBeNull();
+      expect(demoted.targetCity).toBeNull();
+      expect(demoted.campaignId).toBeNull();
     });
   });
 });

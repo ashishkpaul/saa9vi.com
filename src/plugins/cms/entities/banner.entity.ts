@@ -47,6 +47,33 @@ export class Banner extends VendureEntity implements ChannelAware {
     @Column({ default: false })
     isCurrentlyActive: boolean;
 
+    /**
+     * Banner scope discriminator (ADR FEAT-004, Phase 3C.4).
+     *  - 'tenant'      → rendered inside an academy's own storefront channels
+     *                    (the pre-existing behavior; default so all rows created
+     *                    before 3C.4 remain tenant banners).
+     *  - 'marketplace' → rendered on the platform-wide marketplace surface.
+     *                    Targeting via targetSubject/targetCity; may reference
+     *                    a MarketplaceAdCampaign via campaignId (spend-backed).
+     * Tenant admins cannot create marketplace-scope banners (guarded in
+     * BannerService.create/update — SuperAdmin only).
+     */
+    @Index()
+    @Column({ type: 'varchar', default: 'tenant' })
+    scope: 'tenant' | 'marketplace';
+
+    /** Marketplace-scope targeting (nullable — tenant banners ignore these). */
+    @Column({ type: 'varchar', nullable: true })
+    targetSubject: string | null;
+
+    @Column({ type: 'varchar', nullable: true })
+    targetCity: string | null;
+
+    /** FK → MarketplaceAdCampaign.id (spend-backed marketplace banner; nullable). */
+    @Index()
+    @Column({ type: 'varchar', nullable: true })
+    campaignId: string | null;
+
     /** Scalar channelId for efficient direct queries (see DA-001) */
     @Index()
     @Column({ nullable: true })
