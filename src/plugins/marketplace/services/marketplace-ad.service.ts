@@ -204,8 +204,16 @@ export class MarketplaceAdService {
       }
 
       // ---- 4. Refresh the INV-010 cache from the ledger (recompute) --------
+      // Use the txn context's repo so the just-inserted spend row is visible
+      // (rawConnection would run outside the txn and return a stale 0).
       try {
-        const spent = await this.getTrueSpent(input.campaignId);
+        const spent = await this.connection
+          .getRepository(txnCtx, AdSpendLedger)
+          .createQueryBuilder('ledger')
+          .select('SUM(ledger.amountInPaise)', 'total')
+          .where('ledger.campaignId = :campaignId', { campaignId: input.campaignId })
+          .getRawOne()
+          .then((r) => parseInt(r?.total ?? '0', 10) || 0);
         await campaignRepo.update({ id: input.campaignId as any }, { spentInPaise: spent });
       } catch (err: any) {
         // Cache-only failure: the ledger rows are committed truth either way.
