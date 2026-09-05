@@ -16,13 +16,15 @@ Define the invalidation, convergence, failure-recovery, and observability contra
 
 ---
 
-## 2. Two invalidation paths
+## 2. Two Bayesian invalidation paths
 
-The system has exactly two paths that can change a marketplace ranking document. They are deliberately separate.
+The Bayesian ranking system has exactly **two paths that can invalidate the Bayesian ranking value** of an existing marketplace document. They are deliberately separate.
+
+Other marketplace events (session changes, price changes, instructor changes, advertising changes) can trigger document reindexing, but they do not constitute Bayesian invalidation paths — they update other fields of the ES document without affecting the Bayesian score's validity.
 
 ### Path A — Review-local invalidation
 
-A review state transition changes the affected product's Bayesian score. The prior `G` is frozen (3D.1a), so only the product whose reviews changed is affected.
+A review state transition changes the affected product's Bayesian score. The prior `G` is frozen between baseline refreshes (3D.1a), so only the product whose reviews changed is affected.
 
 ```
 ReviewApproved / ReviewRejected / ReviewHidden
@@ -34,14 +36,16 @@ resolve product → variants → sessions
 for each affected session: BullMQ addIndexSessionJob
         ↓
 worker: indexSession(sessionId)
-        ↓  (recomputes bayesianRating using frozen G, writes ES)
-ES document updated
+        ↓  (computes bayesianRating using authoritative baseline from Settings Store, writes ES)
+ES document updated with baselineVersion
 ```
 
 **Invariants:**
 - Only sessions linked to the affected product's variants are reindexed.
-- The global baseline `G` is NOT recomputed (it's frozen between scheduled refreshes).
-- Reindex is idempotent: re-running `indexSession()` with the same `G` produces the same document.
+- **Path A MUST NOT derive the global prior by querying the current approved-review population.** The existing `BayesianRatingService.computeForProduct()` historically computes `G` live from `ProductReview` — this behavior is incompatible with the frozen-baseline contract.
+- **Path A MUST resolve the authoritative baseline (value + baselineVersion) from the Settings Store and use that snapshot when computing the Bayesian score.**
+- **The baseline used for an ES write MUST be identifiable by baselineVersion.** Each indexed document records which baseline version it was computed against.
+- Reindex is idempotent: re-running `indexSession()` with the same baseline version produces the same document.
 - A replayed `ReviewApprovedEvent` for an already-approved review must not corrupt state (idempotent reindex).
 
 ### Path B — Global baseline invalidation
@@ -123,11 +127,13 @@ ES documents:          some at version 41, some at version 42
 
 If Elasticsearch is unreachable:
 - BullMQ jobs retry (existing retry strategy).
-- New review transitions still enqueue jobs (no event loss).
+- New review transitions still enqueue jobs (no event loss) — **provided the queue itself is available** (see below).
 - When ES recovers, jobs drain and ES converges to current baseline + review state.
 - The ≤30s / ≤10m SLAs are suspended during ES outage; convergence resumes when ES is reachable.
 
 **Invariant:** ES unavailability must not block event processing or baseline refresh. The queue absorbs the backlog.
+
+**Queue vs ES failure domains:** The guarantee above assumes the BullMQ/Redis queue is available. Queue unavailability is a **separate failure domain** from ES unavailability. If the queue is down, new jobs cannot be enqueued and events may be lost. This contract does not require an outbox pattern, but the distinction should be explicit: ES failure → queue absorbs; queue failure → separate durability question.
 
 ### 4.4 Baseline refresh during active Path A reindex
 
@@ -143,12 +149,12 @@ If a scheduled baseline refresh fires while Path A reindex jobs are still draini
 
 | Operation | Idempotent? | Mechanism |
 |---|---|---|
-| `indexSession()` | ✅ | Same inputs (session + frozen G) → same ES document. Re-running produces identical result. |
+| `indexSession()` | ✅ | Same inputs (session + baseline version) → same ES document. Re-running produces identical result. |
 | Baseline computation | ✅ | Same approved-review population → same `G`. |
-| Baseline version increment | ✅ | Version is derived from a monotonic counter; re-running the refresh computes the same next version. |
-| Global reindex | ✅ | Reindexing all sessions with the same `G` converges to the same state regardless of how many times it runs. |
+| Baseline version increment | ⚠️ with retry guard | A retry of the **same** baseline-refresh operation must not create another baseline version. See §7 — the refresh job must deduplicate (e.g., by intended generation/epoch) so that a crash between "persist version" and "enqueue reindex" does not produce V+2 on retry. |
+| Global reindex | ✅ | Reindexing all sessions with the same baseline version converges to the same state regardless of how many times it runs. |
 
-**Invariant:** Replayed events, retried jobs, and duplicate baseline refreshes must not corrupt ranking state.
+**Invariant:** Replayed events, retried jobs, and duplicate baseline refreshes must not corrupt ranking state. A baseline refresh that crashes after persisting a new version must retry against that same version, not create another one.
 
 ---
 
@@ -157,6 +163,8 @@ If a scheduled baseline refresh fires while Path A reindex jobs are still draini
 "Baseline changed" and "ES has converged to that baseline" are **two different states**. The ≤10m p95 global convergence target requires measuring the second.
 
 ### Convergence definition
+
+Convergence applies to the **authoritative set of currently eligible marketplace ranking documents** for the target index — i.e., documents that should be present per the F7 eligibility rules (PUBLIC visibility, SCHEDULED/LIVE status), not merely all documents that happen to exist in the index.
 
 For a given baseline version `V`:
 
@@ -187,6 +195,8 @@ converged(index) = ALL documents where baselineVersion IS NOT NULL
 2. **Path A before Path B (best effort):** Path A jobs enqueued before the baseline refresh should ideally drain before Path B starts. This is a best-effort optimization, not a hard guarantee — Path B corrects any staleness either way.
 
 3. **No concurrent baseline refreshes:** Only one baseline refresh job may run at a time. Vendure's ScheduledTask mechanism ensures single execution across multiple worker instances.
+
+4. **Baseline-version retry guard:** A crash between "persist new baseline version" and "enqueue global reindex" must retry against the **same** version, not create V+2. The refresh job must deduplicate by intended generation/epoch. This is what makes the baseline-version increment effectively idempotent (see §5 idempotency table).
 
 ---
 
