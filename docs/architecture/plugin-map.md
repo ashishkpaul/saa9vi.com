@@ -194,7 +194,7 @@ None (injects TenantPlugin services for org verification).
 | Property | Value |
 |---|---|
 | **Directory** | `src/plugins/marketplace/` |
-| **Status** | Projection layer implemented; Gate 1 discovery E2E passing (7/7, commit `2e74020`). Ad-entity tables migrated (Gate 1.1: `1788265440266-MarketplaceAdEntities`). **Gates 2–3 complete** — attribution (`d6926a9`, `683b2f7`) and commission ledger with atomic single-use replay (`f534872`), verified by 6/6 commission e2e (`1bcf5e2`). **Phase 3C advertising financial mechanics complete** (3C.1–3C.6): AdWalletLedger, wallet service boundary, campaign spend wiring, Banner.scope, bounded bid-boost, and 14/14 advertising E2E all implemented and verified. **3C.7a self-serve Admin API complete** (tenant-scoped campaign/wallet/spend resolvers over the proven financial services). **Phase 3 not complete** — 3C.7b self-serve dashboard UI and Phase 3D retention remain. See `docs/implementation/phase3-audit.md`. |
+| **Status** | Projection layer implemented; Gate 1 discovery E2E passing (7/7, commit `2e74020`). Ad-entity tables migrated (Gate 1.1: `1788265440266-MarketplaceAdEntities`). **Gates 2–3 complete** — attribution (`d6926a9`, `683b2f7`) and commission ledger with atomic single-use replay (`f534872`), verified by 6/6 commission e2e (`1bcf5e2`). **Phase 3C advertising COMPLETE** (3C.1–3C.7b): AdWalletLedger, wallet service boundary, campaign spend wiring, Banner.scope, bounded bid-boost, 14/14 advertising E2E, 3C.7a self-serve Admin API (tenant-scoped campaign/wallet/spend resolvers), and 3C.7b React dashboard (campaign list/detail, wallet, spend report — all consuming the Admin API). **Phase 3D retention remains.** See `docs/implementation/roadmap.md` for the full Phase 3C breakdown. |
 | **Purpose** | Cross-channel Elasticsearch discovery layer for marketplace. |
 
 ### Owns
@@ -240,6 +240,17 @@ None.
 |---|---|---|
 | `saa9vi_marketplace_sessions` | Sessions | Cross-channel session discovery |
 | `saa9vi_marketplace_instructors` | Instructors | Cross-channel instructor discovery |
+
+### Dashboard
+
+| Property | Value |
+|---|---|
+| **Entry** | `dashboard/index.tsx` (registered via `dashboard: './dashboard/index.tsx'` in plugin decorator) |
+| **Framework** | React `.tsx` via Vendure Dashboard v3 `defineDashboardExtension` |
+| **Nav section** | `marketplace` (MegaphoneIcon, order 200) |
+| **Routes** | `campaign-list`, `campaign-detail`, `wallet`, `spend-report` |
+| **Permissions** | All routes require `MarketplaceAdvertising` CRUD permissions |
+| **Data source** | Admin GraphQL API only — no direct entity access |
 
 ---
 
