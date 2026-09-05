@@ -1,12 +1,44 @@
 # 3D.1a — Bayesian Ranking Scope Decision
 
-> **Status:** Design decision required before any ranking persistence work
-> **Created:** 2026-09-05 · **Depends on:** Phase 3A/3B/3C complete (all verified)
-> **Blocks:** 3D.1b invalidation contract, `RankingMaterializedView` implementation
+> **Status:** Decision signed off (2026-09-05) · **Next gate:** 3D.1b Invalidation Contract (design-only)
 
 ---
 
-## 1. Current implementation (the baseline we are deciding about)
+## Final decision
+
+```
+Prior population:      GLOBAL — all approved reviews across all channels
+Prior lifecycle:       PERIODIC — recomputed on schedule
+Default interval:      DAILY (configurable; operational parameter, not semantic)
+Storage:               Vendure Settings Store (value + computedAt + baselineVersion)
+Review invalidation:   PRODUCT-LOCAL (Path A)
+Baseline invalidation: GLOBAL (Path B)
+ES consistency:        BOUNDED EVENTUAL
+```
+
+### Initial production targets (subject to measurement)
+
+| Class | Target |
+|---|---|
+| Product-local review propagation | ≤30s p95 |
+| Global baseline convergence | ≤10m p95 |
+
+These are **acceptance targets**, not yet proven production guarantees. They become empirically enforceable after 3D.1b is implemented and instrumentation is in place.
+
+### What remains deferred
+
+- `RankingMaterializedView` — not needed for this contract; deferred until ranking-history audit or multi-signal ranking requires it
+- `RankingChangedEvent` — not needed; existing review events trigger Path A, scheduled task triggers Path B
+
+---
+
+## ADR-020 nuance
+
+ADR-020 establishes the **platform-level Elasticsearch discovery projection**. The choice that the Bayesian statistical prior should also be platform-global is a **new ranking decision derived from that architecture**, not something ADR-020 itself specifies.
+
+The eventual ADR should say:
+
+> ADR-020 establishes the platform-level marketplace projection; 3D.1a deliberately extends that platform-level scope to the Bayesian prior to preserve cross-channel ranking comparability.
 
 `BayesianRatingService.computeForProduct()` in `src/plugins/marketplace/services/bayesian-rating-service.ts`:
 
