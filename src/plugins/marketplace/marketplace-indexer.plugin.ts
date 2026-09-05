@@ -46,8 +46,11 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
  * - `marketplaceSearch` query is public (no channel token required).
  *
  * Index writes are triggered by:
- * - `ProductVariantEvent` (Vendure EventBus) for session changes
  * - `InstructorProfileCreatedEvent` / `InstructorProfileUpdatedEvent` for instructor changes
+ * - `SessionCreatedEvent` / `SessionUpdatedEvent` / `SessionStartedEvent` / `SessionCancelledEvent` for session lifecycle
+ * - `ProductVariantEvent` / `ProductVariantPriceEvent` for session price changes
+ * - `TenantProfileUpdatedEvent` for academy profile changes (bulk channel reindex)
+ * - `ReviewApprovedEvent` / `ReviewRejectedEvent` / `ReviewHiddenEvent` for ranking changes
  *
  * Phase 3 additions (implemented):
  * - Sponsored listing bid-boost from MarketplaceAdCampaign entity ✅

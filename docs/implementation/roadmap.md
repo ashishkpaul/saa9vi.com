@@ -128,7 +128,9 @@
 
 ### Phase 3D — Engagement & Retention
 
-- [ ] Review → ranking projection pipeline (review approved → aggregate recalculated → marketplace index updated)
+- [x] **Review → marketplace ranking propagation** — ReviewApproved/Rejected/Hidden → `MarketplaceEventListener.handleReviewAggregateChange()` → BullMQ session reindex → `BayesianRatingService.computeForVariant()` → `MarketplaceSessionDocument.bayesianRating` → ES `function_score`. Already implemented and E2E-verified (marketplace E2E suite).
+- [ ] **Ranking materialization** — `RankingMaterializedView` (Postgres) for ranking-history audit / stable snapshot / multi-signal ranking. **Not yet implemented; requires prior resolution of Bayesian scope (global vs channel-local prior) and invalidation semantics (does one review change invalidate all Bayesian scores via globalMean?).**
+- [ ] Bayesian scope & invalidation contract — decide: global prior across all approved reviews vs channel-local prior; and whether one review transition invalidates only the affected product or all products (because globalMean changes).
 - [ ] Elasticsearch instructor/course search refinement
 - [ ] Attendance analytics dashboard
 - [ ] Certificate generation on `Entitlement` completion

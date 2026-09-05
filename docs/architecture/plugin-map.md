@@ -225,6 +225,7 @@ None.
 | `ReviewRejectedEvent` | ReviewsPlugin |
 | `ReviewHiddenEvent` | ReviewsPlugin |
 | `ProductVariantEvent` | Vendure core |
+| `ProductVariantPriceEvent` | Vendure core |
 
 ### API Surfaces
 

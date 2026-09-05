@@ -81,11 +81,17 @@ ATTRIBUTION CONTRACT  ✅ Gate 2 / ADR-021 — signed marketplaceRef
 COMMISSION            ✅ Gate 3 / Phase 3B — orderSource custom field +
                                  CommissionLedger ($0-row), e2e-verified
         ↓
-ADVERTISING           ⏳ Gate 4 / Phase 3C — wire MarketplaceAdService
-                                 on existing tables
+ADVERTISING           ✅ Gate 4 / Phase 3C — COMPLETE (3C.1–3C.7b):
+                                 wallet ledger, wallet service, campaign spend,
+                                 Banner.scope, bounded bid-boost, E2E, Admin API,
+                                 React dashboard
         ↓
-RETENTION             ⏳ Gate 5 / Phase 3D — review→ranking pipeline,
-                                 academy page, category taxonomy, ranking view
+RETENTION             ⚠️ Gate 5 / Phase 3D — review→ranking PROPAGATION complete
+                                 (review events → session reindex → Bayesian → ES).
+                                 Ranking MATERIALIZATION still pending:
+                                 RankingMaterializedView, academy page, category
+                                 taxonomy. Requires Bayesian scope + invalidation
+                                 contract decisions first.
         ↓
 PHASE 3 RELEASE GATE  — exit criteria in roadmap.md
 ```
@@ -116,5 +122,5 @@ The contract: **any mutation that changes marketplace eligibility, routing, filt
 
 **Campaign coupling rule:** ad state is derived search metadata, not session ownership. Campaign changes reindex only their `targetSessionId` — advertising stays isolated from session lifecycle.
 
-**Review coupling rule:** never subscribe to raw review lifecycle beyond aggregate-affecting transitions; when `RankingMaterializedView` lands (Gate 5), this trigger becomes a ranking-change event.
+**Review coupling rule:** never subscribe to raw review lifecycle beyond aggregate-affecting transitions. The marketplace currently subscribes to ReviewApproved/Rejected/Hidden and recomputes the Bayesian score at index time. When `RankingMaterializedView` lands (deferred — see roadmap Phase 3D), this trigger becomes a ranking-change event that persists to Postgres before ES reindex.
 

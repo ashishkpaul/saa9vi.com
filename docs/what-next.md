@@ -113,12 +113,14 @@ Execution queue (verified state in `docs/implementation/phase3-audit.md`; detail
 - [x] **7.** `Order.customFields.orderSource` + `CommissionLedger` $0-row pattern (DL-030) — ✅ **done**: server-stamped `orderSource` (INV-008), `CommissionLedger` entity/service/listener, governed migration with UNIQUE constraints, 6-case E2E passing.
 - [ ] **8.** Commission reconciliation/admin reporting.
 
-**Phase 3C — Advertising (Stream 3)**
-9. Wire `MarketplaceAdService` end-to-end on top of the now-existing tables: campaign lifecycle → wallet debit → `AdSpendLedger` (INV-010).
-10. `AdWalletLedger` entity + append-only pattern; configurable bounded bid-boost; self-serve campaign dashboard.
+**Phase 3C — Advertising (Stream 3)** ✅ COMPLETE (2026-09-05)
+- [x] **9.** Wire `MarketplaceAdService` end-to-end: campaign lifecycle → wallet debit → `AdSpendLedger` (INV-010).
+- [x] **10.** `AdWalletLedger` entity + append-only pattern; bounded bid-boost; self-serve campaign dashboard (React `.tsx`).
 
 **Phase 3D — Engagement & Retention**
-11. Review → ranking projection pipeline; instructor/course search refinement; attendance analytics; certificates; CMS event indexing.
+- [x] **11a.** Review → marketplace ranking propagation — already implemented (review events → session reindex → Bayesian score → ES).
+- [ ] **11b.** Ranking materialization — `RankingMaterializedView` deferred pending Bayesian scope + invalidation contract.
+- [ ] **11c.** Instructor/course search refinement; attendance analytics; certificates; CMS event indexing.
 
 ## Phase 4 — Scale & Premium
 
