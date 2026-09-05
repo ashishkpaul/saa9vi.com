@@ -122,6 +122,12 @@ export class AdWalletService {
    * the transaction, so concurrent debits are serialized against the same
    * balance — no double-spend race. A retried debit with the same
    * `reference` is a DB-arbitrated no-op (duplicate_ref).
+   *
+   * NOTE: do NOT nest this inside another withTransaction on the same ctx —
+   * Vendure's wrapper re-attempts startTransaction on the inherited runner
+   * and throws TransactionAlreadyStartedError. Callers that are already
+   * inside a transaction (e.g. recordCampaignSpend) must use
+   * debitWalletInTxn() instead so the two ledgers share one atomic boundary.
    */
   async debitWallet(ctx: RequestContext, input: DebitWalletInput): Promise<WalletMutationResult> {
     if (!Number.isInteger(input.amountInPaise) || input.amountInPaise <= 0) {
@@ -130,37 +136,52 @@ export class AdWalletService {
       );
     }
     return this.connection.withTransaction(ctx, async (txnCtx) => {
-      const walletRepo = this.connection.getRepository(txnCtx, AdWallet);
-      // Pessimistic write lock serializes concurrent debits for this wallet.
-      const wallet = await walletRepo.findOne({
-        where: { channelId: input.channelId },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!wallet) {
-        // No wallet ⇒ no funded balance ⇒ cannot debit.
-        this.logger.warn(`Debit refused: no ad wallet exists for channel ${input.channelId}.`);
-        return 'insufficient_funds';
-      }
-      const balance = await this.sumLedger(txnCtx, String(wallet.id));
-      if (balance < input.amountInPaise) {
-        this.logger.warn(
-          `Debit refused: ledger balance ${balance} < requested ${input.amountInPaise} (channel ${input.channelId}).`
-        );
-        return 'insufficient_funds';
-      }
-      const inserted = await this.insertLedgerRow(txnCtx, String(wallet.id), {
-        type: 'spend',
-        amountInPaise: -input.amountInPaise,
-        campaignId: input.campaignId ?? null,
-        orderId: null,
-        reference: input.reference ?? null,
-      });
-      if (inserted !== 'inserted') {
-        return inserted;
-      }
-      await this.refreshCache(txnCtx, String(wallet.id));
-      return 'inserted';
+      return this.debitWalletInTxn(txnCtx, input);
     });
+  }
+
+  /**
+   * Debit-core WITHOUT transaction wrapping: executes on whatever transaction
+   * the given ctx already carries. Used by debitWallet() and by multi-ledger
+   * callers (recordCampaignSpend) that must keep the wallet debit and their
+   * own writes in ONE atomic transaction.
+   */
+  async debitWalletInTxn(txnCtx: RequestContext, input: DebitWalletInput): Promise<WalletMutationResult> {
+    if (!Number.isInteger(input.amountInPaise) || input.amountInPaise <= 0) {
+      throw new Error(
+        `AdWalletService: debit amount must be a positive integer in paise (got ${input.amountInPaise}).`
+      );
+    }
+    const walletRepo = this.connection.getRepository(txnCtx, AdWallet);
+    // Pessimistic write lock serializes concurrent debits for this wallet.
+    const wallet = await walletRepo.findOne({
+      where: { channelId: input.channelId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!wallet) {
+      // No wallet ⇒ no funded balance ⇒ cannot debit.
+      this.logger.warn(`Debit refused: no ad wallet exists for channel ${input.channelId}.`);
+      return 'insufficient_funds';
+    }
+    const balance = await this.sumLedger(txnCtx, String(wallet.id));
+    if (balance < input.amountInPaise) {
+      this.logger.warn(
+        `Debit refused: ledger balance ${balance} < requested ${input.amountInPaise} (channel ${input.channelId}).`
+      );
+      return 'insufficient_funds';
+    }
+    const inserted = await this.insertLedgerRow(txnCtx, String(wallet.id), {
+      type: 'spend',
+      amountInPaise: -input.amountInPaise,
+      campaignId: input.campaignId ?? null,
+      orderId: null,
+      reference: input.reference ?? null,
+    });
+    if (inserted !== 'inserted') {
+      return inserted;
+    }
+    await this.refreshCache(txnCtx, String(wallet.id));
+    return 'inserted';
   }
 
   private async sumLedger(ctx: RequestContext, walletId: string): Promise<number> {
