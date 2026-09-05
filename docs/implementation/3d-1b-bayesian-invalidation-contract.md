@@ -1,6 +1,6 @@
 # 3D.1b — Bayesian Invalidation Contract
 
-> **Status:** Design-only — pending acceptance
+> **Status:** ✅ ACCEPTED (2026-09-05) — implementation may proceed
 > **Created:** 2026-09-05 · **Depends on:** 3D.1a signed off
 > **Blocks:** Implementation of baseline refresh, global reindex, ranking persistence
 
