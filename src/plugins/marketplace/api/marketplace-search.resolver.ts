@@ -76,7 +76,14 @@ export class MarketplaceSearchResolver {
           query: { bool: { must } },
           functions: [
             { field_value_factor: { field: 'bayesianRating', factor: 1.0, modifier: 'log1p' } },
-            { filter: { term: { isSponsored: true } }, weight: 3.0 },
+            // 3C.5 (bounded, configurable bid-boost): apply each sponsored doc's
+            // per-campaign sponsorBoost instead of the former flat hardcoded
+            // `weight: 3.0`. Non-sponsored docs carry sponsorBoost=1.0 (neutral),
+            // so organic ranking is untouched; sponsored docs are scaled by their
+            // boost, which the F7-gated indexer clamps into [SPONSORED_BOOST_MIN,
+            // SPONSORED_BOOST_MAX] at write time (see SponsoredBoostConfigService).
+            // `missing: 1.0` treats any legacy doc lacking the field as neutral.
+            { field_value_factor: { field: 'sponsorBoost', factor: 1.0, missing: 1.0 } },
           ],
           score_mode: 'multiply',
           boost_mode: 'multiply',

@@ -8,6 +8,7 @@ import { InstructorProfile } from '../../tenant-plugin/entities/instructor-profi
 import { BbbInstructorAssignment } from '../../bigbluebutton-plugin/entities/instructor-assignment.entity';
 import { MarketplaceAdService } from './marketplace-ad.service';
 import { BayesianRatingService } from './bayesian-rating.service';
+import { SponsoredBoostConfigService } from './sponsored-boost-config.service';
 
 export interface MarketplaceSessionDocument {
   id: string;
@@ -57,6 +58,7 @@ export class MarketplaceIndexerService {
     private readonly adService: MarketplaceAdService,
     private readonly bayesianService: BayesianRatingService,
     private readonly configService: ConfigService,
+    private readonly sponsorBoostConfig: SponsoredBoostConfigService,
   ) {
     const node = process.env.ELASTICSEARCH_NODE || process.env.ELASTICSEARCH_URL || 'http://localhost:9200';
     const password = process.env.ELASTICSEARCH_PASSWORD;
@@ -222,13 +224,16 @@ export class MarketplaceIndexerService {
     }
 
     // ─── Gap 1: Sponsored listing bid-boost from MarketplaceAdCampaign ──────
+    // Clamped into [SPONSORED_BOOST_MIN, SPONSORED_BOOST_MAX] so a campaign's
+    // raw boostWeight can never escape the bounded window (3C.5). Non-sponsored
+    // docs keep the neutral 1.0.
     let isSponsored = false;
     let sponsorBoost = 1.0;
     try {
       const campaign = await this.adService.findActiveCampaignForSession(String(session.id));
       if (campaign) {
         isSponsored = true;
-        sponsorBoost = campaign.boostWeight;
+        sponsorBoost = this.sponsorBoostConfig.clampBoost(campaign.boostWeight);
       }
     } catch (err: any) {
       this.logger.warn(`Failed to check ad campaign for session ${session.id}: ${err.message}`);
