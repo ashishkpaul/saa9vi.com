@@ -221,12 +221,6 @@ export const adminApiExtensions = gql`
     Requires MarketplaceAdvertising update permission.
     """
     pauseCampaign(id: ID!): Campaign!
-
-    """
-    Top up the wallet for the caller's channel.
-    Requires MarketplaceAdvertising create permission.
-    """
-    topUpWallet(amountInPaise: Int!, reference: String!): String!
   }
 `;
 

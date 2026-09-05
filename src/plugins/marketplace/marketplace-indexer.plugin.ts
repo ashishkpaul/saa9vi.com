@@ -119,6 +119,7 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
     }
     return config;
   },
+    dashboard: './dashboard/index.tsx',
 })
 export class MarketplaceIndexerPlugin implements OnApplicationBootstrap {
   constructor(

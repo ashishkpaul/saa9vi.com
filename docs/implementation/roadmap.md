@@ -126,7 +126,7 @@
 
 #### 3C.7b — Self-serve campaign dashboard
 
-- [ ] Dashboard UI consuming the Admin API (Angular `AdminUiExtension` pipeline needs build-out — no pipeline exists yet)
+- [x] **Dashboard UI consuming the Admin API (3C.7b)** — React `.tsx` dashboard registered via `defineDashboardExtension` (Vendure v3 dashboard). Routes: `campaign-list` (ListPage with `GetCampaigns` query, status badges, budget/spent columns, "New campaign" action), `campaign-detail` (create/edit form via `useDetailPage`, activate/pause mutations, stats sidebar), `wallet` (balance card + ledger table via `@tanstack/react-query` + `api.query`), `spend-report` (per-campaign spend table). Nav section "Marketplace" (MegaphoneIcon, order 200). All pages require `MarketplaceAdvertising` permissions and consume the Admin GraphQL API — no direct entity access. Wired into `MarketplaceIndexerPlugin` via `dashboard: './dashboard/index.tsx'`.
 
 ### Phase 3D — Engagement & Retention
 
