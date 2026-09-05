@@ -86,4 +86,147 @@ export const adminApiExtensions = gql`
     """
     marketplaceFullReindex: Boolean!
   }
+
+  # ── Advertising: self-serve campaign management (3C.7a) ──────────
+
+  enum CampaignType {
+    sponsored_listing
+    banner
+  }
+
+  enum CampaignStatus {
+    draft
+    active
+    paused
+    exhausted
+  }
+
+  enum WalletLedgerType {
+    topup
+    spend
+    refund
+  }
+
+  type Campaign {
+    id: ID!
+    channelId: String!
+    type: CampaignType!
+    status: CampaignStatus!
+    budgetInPaise: Int!
+    spentInPaise: Int!
+    targetSessionId: String
+    targetSubject: String
+    targetCity: String
+    startsAt: DateTime!
+    endsAt: DateTime!
+    boostWeight: Float!
+    createdAt: DateTime
+    updatedAt: DateTime
+  }
+
+  type WalletLedgerEntry {
+    id: ID!
+    walletId: String!
+    type: WalletLedgerType!
+    amountInPaise: Int!
+    occurredAt: DateTime!
+    campaignId: String
+    orderId: String
+    reference: String
+  }
+
+  type SpendLedgerEntry {
+    id: ID!
+    campaignId: String!
+    eventType: String!
+    amountInPaise: Int!
+    occurredAt: DateTime!
+    orderId: String
+  }
+
+  input CreateCampaignInput {
+    type: CampaignType!
+    budgetInPaise: Int!
+    targetSessionId: String
+    targetSubject: String
+    targetCity: String
+    startsAt: DateTime!
+    endsAt: DateTime!
+    boostWeight: Float
+  }
+
+  input UpdateCampaignInput {
+    budgetInPaise: Int
+    targetSessionId: String
+    targetSubject: String
+    targetCity: String
+    startsAt: DateTime
+    endsAt: DateTime
+    boostWeight: Float
+  }
+
+  extend type Query {
+    """
+    List campaigns for the caller's channel (SuperAdmin sees all).
+    Requires MarketplaceAdvertising read permission.
+    """
+    campaigns: [Campaign!]!
+
+    """
+    Get a single campaign by ID. Channel-scoped.
+    Requires MarketplaceAdvertising read permission.
+    """
+    campaign(id: ID!): Campaign
+
+    """
+    Get the wallet balance for the caller's channel.
+    Requires MarketplaceAdvertising read permission.
+    """
+    walletBalance: Int!
+
+    """
+    Get the wallet ledger for the caller's channel.
+    Requires MarketplaceAdvertising read permission.
+    """
+    walletLedger: [WalletLedgerEntry!]!
+
+    """
+    Get spend report for a campaign. Channel-scoped.
+    Requires MarketplaceAdvertising read permission.
+    """
+    spendReport(campaignId: ID!): [SpendLedgerEntry!]!
+  }
+
+  extend type Mutation {
+    """
+    Create a campaign for the caller's channel.
+    Requires MarketplaceAdvertising create permission.
+    """
+    createCampaign(input: CreateCampaignInput!): Campaign!
+
+    """
+    Update a campaign's mutable fields.
+    Requires MarketplaceAdvertising update permission.
+    """
+    updateCampaign(id: ID!, input: UpdateCampaignInput!): Campaign!
+
+    """
+    Activate a draft or paused campaign.
+    Requires MarketplaceAdvertising update permission.
+    """
+    activateCampaign(id: ID!): Campaign!
+
+    """
+    Pause an active campaign.
+    Requires MarketplaceAdvertising update permission.
+    """
+    pauseCampaign(id: ID!): Campaign!
+
+    """
+    Top up the wallet for the caller's channel.
+    Requires MarketplaceAdvertising create permission.
+    """
+    topUpWallet(amountInPaise: Int!, reference: String!): String!
+  }
 `;
+

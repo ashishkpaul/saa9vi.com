@@ -194,7 +194,7 @@ None (injects TenantPlugin services for org verification).
 | Property | Value |
 |---|---|
 | **Directory** | `src/plugins/marketplace/` |
-| **Status** | Projection layer implemented; Gate 1 discovery E2E passing (7/7, commit `2e74020`). Ad-entity tables migrated (Gate 1.1: `1788265440266-MarketplaceAdEntities`); advertising feature layer not yet wired. **Gates 2–3 complete** — attribution (`d6926a9`, `683b2f7`) and commission ledger with atomic single-use replay (`f534872`), verified by 6/6 commission e2e (`1bcf5e2`). **Phase 3 not complete** — advertising (3C), retention (3D) remain. See `docs/implementation/phase3-audit.md`. |
+| **Status** | Projection layer implemented; Gate 1 discovery E2E passing (7/7, commit `2e74020`). Ad-entity tables migrated (Gate 1.1: `1788265440266-MarketplaceAdEntities`). **Gates 2–3 complete** — attribution (`d6926a9`, `683b2f7`) and commission ledger with atomic single-use replay (`f534872`), verified by 6/6 commission e2e (`1bcf5e2`). **Phase 3C advertising financial mechanics complete** (3C.1–3C.6): AdWalletLedger, wallet service boundary, campaign spend wiring, Banner.scope, bounded bid-boost, and 14/14 advertising E2E all implemented and verified. **3C.7a self-serve Admin API complete** (tenant-scoped campaign/wallet/spend resolvers over the proven financial services). **Phase 3 not complete** — 3C.7b self-serve dashboard UI and Phase 3D retention remain. See `docs/implementation/phase3-audit.md`. |
 | **Purpose** | Cross-channel Elasticsearch discovery layer for marketplace. |
 
 ### Owns
@@ -204,7 +204,7 @@ None (injects TenantPlugin services for org verification).
 | MarketplaceAdCampaign | `marketplace_ad_campaign` | Sponsored listing campaigns |
 | AdSpendLedger | `ad_spend_ledger` | Append-only ad spend records |
 | AdWallet | `ad_wallet` | Prepaid ad wallet per tenant |
-| AdWalletLedger | `ad_wallet_ledger` | Append-only wallet transactions — **not yet implemented** (planned Phase 3C) |
+| AdWalletLedger | `ad_wallet_ledger` | Append-only wallet transactions (3C.1, immutable subscriber enforced) |
 
 ### Publishes
 
@@ -231,7 +231,8 @@ None.
 | Resolver | Scope | Purpose |
 |---|---|---|
 | `MarketplaceSearchResolver` | Shop API (Public) | `marketplaceSearch` |
-| `MarketplaceAdminResolver` | Admin API | Ad campaign management, full reindex |
+| `MarketplaceAdminResolver` | Admin API (SuperAdmin) | Full reindex |
+| `MarketplaceAdvertisingResolver` | Admin API (MarketplaceAdvertising) | Self-serve campaign management, wallet ledger, spend reports |
 
 ### Elasticsearch Indices
 

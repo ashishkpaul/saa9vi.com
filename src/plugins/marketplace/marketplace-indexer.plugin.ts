@@ -12,6 +12,7 @@ import { CommissionLedgerService } from './services/commission-ledger.service';
 import { AdWalletService } from './services/ad-wallet.service';
 import { MarketplaceBannerService } from './services/marketplace-banner.service';
 import { SponsoredBoostConfigService } from './services/sponsored-boost-config.service';
+import { MarketplaceAdvertisingService } from './services/marketplace-advertising.service';
 import { CommissionListener } from './listeners/commission.listener';
 import { CommissionLedger } from './entities/commission-ledger.entity';
 import { MarketplaceCommissionResolver } from './api/marketplace-commission.resolver';
@@ -19,6 +20,7 @@ import { MarketplaceAdCampaign } from './entities/marketplace-ad-campaign.entity
 import { AdSpendLedger } from './entities/ad-spend-ledger.entity';
 import { AdWallet } from './entities/ad-wallet.entity';
 import { AdWalletLedger } from './entities/ad-wallet-ledger.entity';
+import { MarketplaceAdvertisingResolver } from './api/marketplace-advertising.resolver';
 import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema';
 
 /**
@@ -77,6 +79,7 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
     MarketplaceBannerService,
     SponsoredBoostConfigService,
     CommissionListener,
+    MarketplaceAdvertisingService,
   ],
   shopApiExtensions: {
     schema: shopApiExtensions,
@@ -84,7 +87,7 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
   },
   adminApiExtensions: {
     schema: adminApiExtensions,
-    resolvers: [MarketplaceAdminResolver],
+    resolvers: [MarketplaceAdminResolver, MarketplaceAdvertisingResolver],
   },
   configuration: (config) => {
     // Order custom fields for Stream 2 commission attribution (ADR-021).

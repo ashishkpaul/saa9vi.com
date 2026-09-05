@@ -117,6 +117,17 @@
 - [x] **Full advertising E2E (3C.6)** — `advertising.e2e-spec.ts` (ADVERTISING_E2E=true, real Postgres, isolated `e2e_advertising` schema, both immutability subscribers registered): **14/14 pass, EXIT=0**. Coverage: wallet credit + ledger-derived balance, duplicate credit reference (idempotent no-op), campaign creation, valid spend (wallet debit + AdSpendLedger row + INV-010 cache refresh), ledger-not-cache authority, insufficient wallet (no spend row, no debit), duplicate spend reference (idempotent across both ledgers), AdWalletLedger append-only (UPDATE/DELETE rejected), AdSpendLedger INV-010 (UPDATE/DELETE rejected), cross-channel spend (tenant isolation), paused/expired campaign refusal, budget exceeded, zero/negative/invalid amount. Two bugs caught and fixed during verification: `beforeEach` cleanup used invalid `repo.delete({})` (switched to `.clear()` with child-first FK ordering), and `campaign.spentInPaise` cache refresh used `rawConnection` outside the transaction (stale 0) — fixed to use the txn context's repo so the just-inserted spend row is visible.
 - [ ] Self-serve campaign dashboard
 
+#### 3C.7a — Self-serve advertising Admin API
+
+- [x] **`MarketplaceAdvertisingService`** — channel-scoped boundary over the proven `AdWalletService` / `MarketplaceAdService` financial authorities: `createCampaign` (channel ownership, SuperAdmin scope guard, fail-closed boost clamp via `SponsoredBoostConfigService`), `updateCampaign` (status transitions with immutability-once-active, re-clamp boost), `activateCampaign`, `pauseCampaign`, `getCampaigns` (channel-filtered), `getCampaign` (channel ownership enforced), `getWalletBalance` (delegates to `AdWalletService.getBalance()` — ledger authority), `getWalletLedger` (wallet-scoped, channel ownership via wallet join), `getSpendReport` (INV-010 truth from `AdSpendLedger`), `topUpWallet` (idempotent insert-first topup with UNIQUE reference).
+- [x] **`MarketplaceAdvertisingResolver`** — tenant-scoped Admin API with `MarketplaceAdvertising` permission (authenticated channel context; no SuperAdmin gate — self-serve for academy managers): `campaigns`, `campaign`, `createCampaign`, `updateCampaign`, `activateCampaign`, `pauseCampaign`, `getWalletBalance`, `getWalletLedger`, `getSpendReport`, `topUpWallet`.
+- [x] **Schema extensions** (`marketplace-schema.ts`) — admin types: `MarketplaceAdvertisement`, `AdvertisedCampaign`, `AdvertisedWallet`, `AdvertisedWalletLedgerEntry`, `AdvertisedSpendReport` + inputs `CreateCampaignInput`, `UpdateCampaignInput`, `TopUpWalletInput` + `AdvertisedCampaignStatus` enum.
+- [x] **Plugin registration** — resolver + service added to `MarketplaceIndexerPlugin` providers/apiExt `adminApiExtensions.resolvers`.
+
+#### 3C.7b — Self-serve campaign dashboard
+
+- [ ] Dashboard UI consuming the Admin API (Angular `AdminUiExtension` pipeline needs build-out — no pipeline exists yet)
+
 ### Phase 3D — Engagement & Retention
 
 - [ ] Review → ranking projection pipeline (review approved → aggregate recalculated → marketplace index updated)
