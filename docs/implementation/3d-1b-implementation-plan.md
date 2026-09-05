@@ -111,6 +111,16 @@ Verified facts about the current codebase:
 - New: `src/plugins/marketplace/services/marketplace-baseline.service.ts`
 - Edit: `src/plugins/marketplace/marketplace-indexer.plugin.ts` (add provider)
 
+**Context strategy (required by Vendure 3.6 API):**
+
+Vendure's `SettingsStoreService` requires a `RequestContext` for `get()`, `getMany()`, `set()` and `setMany()`. The Settings Store supports global scope via `SettingsStoreScopes.global`. Each operation must use an explicit context:
+
+| Operation | Required context |
+|---|---|
+| Path A `getCurrentBaseline()` | Internal admin context created via `RequestContextService.create()` against the default channel |
+| Scheduled baseline refresh | `scheduledContext` provided by `ScheduledTask.execute()` (created against the default channel) |
+| Worker retry/job execution | Internal context created inside the worker/service, not an HTTP context |
+
 **Implementation:**
 ```ts
 // marketplace-baseline.service.ts
@@ -122,10 +132,26 @@ export interface BayesianBaseline {
 
 @Injectable()
 export class MarketplaceBaselineService {
-  constructor(private readonly settingsStoreService: SettingsStoreService) {}
+  constructor(
+    private readonly settingsStoreService: SettingsStoreService,
+    private readonly requestContextService: RequestContextService,
+  ) {}
 
-  async getCurrentBaseline(): Promise<BayesianBaseline> {
-    // Read from Settings Store
+  /**
+   * Create an internal admin context for service work outside the
+   * request/response cycle. Vendure's RequestContextService.create()
+   * is specifically intended for this purpose.
+   */
+  private async createInternalContext(): Promise<RequestContext> {
+    const defaultChannel = await this.channelService.getDefaultChannel();
+    return this.requestContextService.create({
+      apiType: 'admin',
+      channelOrToken: defaultChannel,
+    });
+  }
+
+  async getCurrentBaseline(ctx: RequestContext): Promise<BayesianBaseline> {
+    // Read from Settings Store using the supplied context
     // Keys: marketplace.bayesianGlobalMean, .baselineVersion, .computedAt
     // Fallback: if none exists, return { globalMean: 0, baselineVersion: 0, computedAt: null }
   }
@@ -167,19 +193,23 @@ baselineVersion: { type: 'integer' }
 
 **Implementation:**
 ```ts
-// Replace live AVG query with baseline service
-async computeForProduct(productId: string): Promise<{ score: number; baselineVersion: number }> {
-  const baseline = await this.baselineService.getCurrentBaseline();
+// The Bayesian service receives the baseline snapshot as a parameter
+// rather than fetching it independently. This guarantees the "single
+// snapshot" invariant: one indexing execution uses one exact {G, V}.
+async computeForProduct(
+  productId: string,
+  baseline: BayesianBaseline,  // snapshot passed in, not fetched here
+): Promise<number> {
   // ... product stats query unchanged ...
   // Use baseline.globalMean instead of live globalMean
   const bayesian = (this.confidence * baseline.globalMean + n * avg) / (this.confidence + n);
-  return { score: Math.round(bayesian * 100) / 100, baselineVersion: baseline.baselineVersion };
+  return Math.round(bayesian * 100) / 100;
 }
 ```
 
 **Contract satisfied:** Path A MUST NOT derive G from live ProductReview query. The existing live-AVG behavior is the specific thing being replaced.
 
-**Critical:** Keep the Bayesian formula unchanged. Only the source of `G` changes.
+**Critical:** Keep the Bayesian formula unchanged. Only the source of `G` changes. The baseline snapshot is passed in from the caller (indexSession), not fetched independently.
 
 ### Step 4 — indexSession() writes score + baselineVersion
 
@@ -189,20 +219,33 @@ async computeForProduct(productId: string): Promise<{ score: number; baselineVer
 **Implementation:**
 ```ts
 // In indexSession():
-const baseline = await this.baselineService.getCurrentBaseline();
+// Resolve baseline snapshot ONCE at the top of the operation
+const baseline = await this.baselineService.getCurrentBaseline(ctx);
+
 // ... resolve all other fields ...
 
-// Bayesian: resolve ONCE, use exact snapshot
-const { score: bayesianRating, baselineVersion } = await this.bayesianService.computeForProduct(productId);
+// Bayesian: use the exact snapshot resolved above
+const bayesianRating = await this.bayesianService.computeForProduct(productId, baseline);
 
 const doc: MarketplaceSessionDocument = {
   // ... existing fields ...
   bayesianRating,
-  baselineVersion,  // NEW
+  baselineVersion: baseline.baselineVersion,  // NEW — same snapshot
 };
 ```
 
-**Key discipline:** A single `indexSession()` execution resolves `{ G, baselineVersion }` ONCE, then calculates and writes using that exact snapshot. Do NOT independently read `G` and `baselineVersion` in separate operations where they could come from different baseline states.
+**Key discipline:** A single `indexSession()` execution resolves `{ G, baselineVersion }` ONCE at the top, passes that exact snapshot to the Bayesian calculation, and writes that same version to the document. The Bayesian service does NOT independently fetch the baseline.
+
+**Bayesian failure handling (required by authority/recovery model):**
+
+The current `indexSession()` catches Bayesian errors and silently sets `bayesianRating = 0`. Under 3D.1b, a missing/unavailable authoritative baseline cannot produce an apparently valid ES document with a fabricated zero score. The implementation must:
+
+```ts
+// baseline resolution failure → indexSession rejects → JobQueue retry
+// no new "converged" ES document is written
+```
+
+This is consistent with the existing queue's retry model: a rejected processing function is treated as a failed job.
 
 **Contract satisfied:** Same baseline version → same document. Every ES write records the baseline version it was computed against.
 
@@ -214,31 +257,56 @@ const doc: MarketplaceSessionDocument = {
 
 **Implementation:**
 ```ts
-async refreshBaseline(): Promise<BayesianBaseline> {
-  // 1. Compute candidate G from approved ProductReview
-  const globalMean = await this.computeGlobalMeanFromReviews();
+async refreshBaseline(ctx: RequestContext): Promise<BayesianBaseline> {
+  // 1. Read current version at START
+  const current = await this.getCurrentBaseline(ctx);
+  const intendedVersion = current.baselineVersion + 1;
 
-  // 2. Resolve current version with deduplication
-  const current = await this.getCurrentBaseline();
-  const nextVersion = current.baselineVersion + 1;
+  // 2. Compute candidate G from approved ProductReview
+  const globalMean = await this.computeGlobalMeanFromReviews(ctx);
 
-  // 3. Persist atomically: { value, computedAt, version }
-  await this.settingsStoreService.set({
+  // 3. Persist { value, computedAt, version: intendedVersion }
+  await this.settingsStoreService.set(ctx, {
     'marketplace.bayesianGlobalMean': globalMean,
-    'marketplace.bayesianBaselineVersion': nextVersion,
+    'marketplace.bayesianBaselineVersion': intendedVersion,
     'marketplace.bayesianGlobalMeanComputedAt': new Date().toISOString(),
   });
 
-  return { globalMean, baselineVersion: nextVersion, computedAt: new Date() };
+  return { globalMean, baselineVersion: intendedVersion, computedAt: new Date() };
 }
 ```
 
 **Retry-generation guard (CRITICAL):**
-- A crash between "persist version" and "enqueue reindex" must NOT create V+2 on retry.
-- **Implementation choice:** The refresh job resolves the current authoritative version at START, computes candidate, and only persists if the version hasn't advanced since it started (optimistic check).
-- Alternative (implementation choice): a unique generation token per scheduled execution.
 
-**Contract satisfied:** Retry of the same refresh operation does not create another baseline version.
+Vendure's `SettingsStoreService.set()` does NOT provide compare-and-swap. The guard must be implemented at the job level using version-checked retry semantics:
+
+```
+refresh job starts
+    ↓
+read current version V
+    ↓
+compute intendedVersion = V + 1
+    ↓
+persist { G, version: intendedVersion }  ← crash point A
+    ↓
+enqueue global reindex for intendedVersion  ← crash point B
+```
+
+**On retry, the job reads the current version V' and acts:**
+
+| V' value | Meaning | Retry action |
+|---|---|---|
+| V' < V | Impossible under single-execution guarantee | — |
+| V' == V | Persist never happened (crash before point A) | Re-persist V+1, then enqueue reindex |
+| V' == V + 1 | This job already persisted (crash after point A, before/at point B) | Just enqueue reindex for V+1 |
+| V' > V + 1 | Another scheduled refresh already advanced the baseline | Abort — the other refresh's reindex will converge all documents |
+
+**Why this is correct:**
+- Vendure's `ScheduledTask` guarantees single execution across instances (no concurrent refreshes).
+- The only way V' > V+1 is if a subsequent scheduled execution (different day) already ran — in which case that execution's reindex handles convergence.
+- The retry always resumes from authoritative state, never fabricating a new version.
+
+**Contract satisfied:** Retry of the same refresh operation does not create another baseline version. The version is derived from the authoritative current state, not from a local counter.
 
 ---
 
@@ -248,22 +316,26 @@ async refreshBaseline(): Promise<BayesianBaseline> {
 - New: `src/plugins/marketplace/jobs/bayesian-baseline-refresh.task.ts`
 - Edit: `src/plugins/marketplace/marketplace-indexer.plugin.ts` (register task)
 
-**Implementation:**
+**Implementation (Vendure 3.6 API):**
+
+Vendure's `ScheduledTaskConfig` requires `execute({ injector, scheduledContext, params })`, not `run(ctx)`. The `scheduledContext` is created internally against the default channel.
+
 ```ts
 export const bayesianBaselineRefreshTask = new ScheduledTask({
   id: 'marketplace-bayesian-baseline-refresh',
   description: 'Refresh global Bayesian baseline and trigger ranking convergence',
-  schedule: (ctx) => process.env.MARKETPLACE_BASELINE_INTERVAL || '0 2 * * *', // daily 2am
-  run: async (ctx) => {
+  schedule: process.env.MARKETPLACE_BASELINE_INTERVAL || '0 2 * * *', // daily 2am
+  execute: async ({ injector, scheduledContext }) => {
     // Enqueue refresh job (don't do heavy work in scheduler itself)
-    await baselineRefreshQueue.add('refresh-baseline', {}, { retries: 3 });
+    const baselineQueue = injector.get(BaselineRefreshQueueService);
+    await baselineQueue.add('refresh-baseline', {}, { retries: 3 });
   },
 });
 ```
 
-**Why not `@nestjs/schedule @Cron()`:** Vendure explicitly warns that Nest cron handlers execute on every application instance. The ScheduledTask mechanism ensures single execution across multiple worker instances.
+**Why not `@nestjs/schedule @Cron()`:** Vendure explicitly warns that Nest cron handlers execute on every application instance. The ScheduledTask mechanism ensures single execution across multiple worker instances via locking.
 
-**Contract satisfied:** No concurrent baseline refreshes.
+**Contract satisfied:** No concurrent baseline refreshes. Vendure's default scheduler acquires a lock before running a task.
 
 ---
 
@@ -341,30 +413,48 @@ async measureConvergence(targetVersion: number): Promise<{
 
 ## 9. Step 9 — E2E + failure-path verification
 
-| Test | Invariant verified |
-|---|---|
-| Review transition → ES document has correct baselineVersion | Path A frozen-G |
-| Two rapid review transitions → both converge to same baseline version | Path A idempotency |
-| Baseline refresh → new version, all ES documents converge | Path B global convergence |
-| Baseline refresh crash → retry resumes same version | Retry-generation guard |
-| ES down during review transition → queue absorbs, converges on recovery | ES failure isolation |
-| Baseline refresh + Path A interleaving → Path B corrects staleness | Path A/B interleaving |
-| Convergence measurement detects stale documents | Observability |
-| Partial reindex crash → recovery resumes from authoritative baseline | Recovery semantics |
+**E2E assertion strength requirement:** Tests must assert on `baselineVersion`, not merely on score changes. The existing marketplace E2E test proves that an approved review changes the Bayesian rating — for 3D.1b it must become stricter.
+
+| Test | Invariant verified | Required assertion |
+|---|---|---|
+| Review transition → ES document has correct baselineVersion | Path A frozen-G | `baselineVersion === expectedVersion` AND score changed |
+| Two rapid review transitions → both converge to same baseline version | Path A idempotency | Both documents have identical `baselineVersion` |
+| Baseline refresh → new version, all ES documents converge | Path B global convergence | All eligible docs reach `baselineVersion === newVersion` |
+| Baseline refresh crash → retry resumes same version | Retry-generation guard | Version advances by exactly 1, no V+2 |
+| ES down during review transition → queue absorbs, converges on recovery | ES failure isolation | Documents converge after ES recovery |
+| Baseline refresh + Path A interleaving → Path B corrects staleness | Path A/B interleaving | Final state: all docs at same `baselineVersion` |
+| Convergence measurement detects stale documents | Observability | `measureConvergence()` reports correct stale count |
+| Partial reindex crash → recovery resumes from authoritative baseline | Recovery semantics | Re-running reindex converges remaining docs |
+
+**Before review (existing test pattern, strengthened):**
+```
+document.baselineVersion = V
+review transition → index
+after: bayesianRating changed AND baselineVersion === V
+```
+
+The test must NOT infer correctness merely from `ratingAfter > ratingBefore`.
 
 
 ## 10. Migration / ES mapping strategy
 
-**Challenge:** Existing index `saa9vi_marketplace_sessions` lacks `baselineVersion`. Can't simply recreate in place (data loss).
+**Challenge:** Existing index `saa9vi_marketplace_sessions` lacks `baselineVersion`. The current `ensureSessionsIndex()` only adds mappings when the index doesn't exist — it does NOT contain an index-mapping update mechanism for an already-existing index. This gap must be addressed.
 
 **Options:**
 
 | Approach | Pros | Cons |
 |---|---|---|
-| A. Update mapping + reindex | Zero downtime, additive | Mixed-version during reindex (permitted by contract) |
+| A. Additive mapping update + reindex | Zero downtime, additive field | Mixed-version during reindex (permitted by contract) |
 | B. Reindex to new index + alias swap | Clean cutover | Brief dual-index, alias management |
 
-**Implementation choice:** Option A (update mapping, then trigger fullReindex). Mixed-version state during reindex is explicitly permitted by the 3D.1b convergence contract.
+**Implementation choice:** Option A. The additive mapping update uses Elasticsearch's PUT mapping API to add `baselineVersion` to the existing index without recreating it. After the mapping is updated, trigger `fullReindex()` to backfill the field on existing documents.
+
+**Required verification before approval (acceptance gate item):**
+- Verify the deployed index accepts the additive mapping change (no field conflicts)
+- Verify `fullReindex()` correctly backfills `baselineVersion` on all eligible documents
+- Mixed-version state during reindex is explicitly permitted by the 3D.1b convergence contract
+
+**Contract note:** Until the mapping update and backfill complete, existing documents will lack `baselineVersion`. The convergence measurement must handle this gracefully (treat missing `baselineVersion` as "unconverged").
 
 ---
 
@@ -402,10 +492,12 @@ async measureConvergence(targetVersion: number): Promise<{
 
 - [ ] This plan reviewed against accepted 3D.1b contract
 - [ ] Steps 1–4 confirmed as single implementation slice
-- [ ] ES mapping migration strategy approved (Option A: additive)
-- [ ] Baseline storage confirmed: Vendure Settings Store
-- [ ] Retry-generation guard mechanism selected
-- [ ] Test cases agreed (§9)
+- [ ] ES mapping migration strategy approved (Option A: additive), **with verification that the deployed index accepts the additive mapping change**
+- [ ] Baseline storage confirmed: Vendure Settings Store (global scope, RequestContext strategy defined per operation)
+- [ ] Retry-generation guard mechanism defined: version-checked retry (resume same version, never fabricate V+2)
+- [ ] Test cases agreed (§9) — **assertions strengthened to verify baselineVersion, not merely score changes**
+- [ ] Single-snapshot discipline: baseline resolved ONCE per indexSession, passed through (not fetched twice)
+- [ ] Bayesian failure handling: baseline resolution failure → job rejection (not silent zero)
 - [ ] No scope creep into RankingMaterializedView or formula changes
 
 ---
