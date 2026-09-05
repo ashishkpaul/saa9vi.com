@@ -47,9 +47,9 @@ The marketplace ES index is explicitly a **platform-level cross-channel discover
 | Combination | Invalidation scope |
 |---|---|
 | Global + Live | **Potentially all products** — every review transition changes `G`, which changes every Bayesian score |
-| Global + Periodic | **Product-local between baselines** — `G` is frozen between scheduled recomputes |
+| Global + Periodic | **Product-local between baselines; global at baseline refresh** — `G` is frozen between scheduled recomputes (review transitions affect only their own product), but the baseline refresh itself changes `G`, which can change every product's Bayesian score |
 | Channel-local + Live | **Products within the same channel** — a review changes only its own channel's prior |
-| Channel-local + Periodic | **Product-local between baselines** — most bounded option |
+| Channel-local + Periodic | **Product-local between baselines; channel-global at baseline refresh** — most bounded option |
 
 ### 2d. ES freshness SLA
 
@@ -113,11 +113,11 @@ The marketplace ES index is explicitly a **platform-level cross-channel discover
 |---|---|---|---|---|
 | Cross-channel comparability | ✅ strong | ✅ strong | ❌ weak | ❌ weak |
 | ADR-020 alignment (platform-level) | ✅ | ✅ | ❌ conflict | ❌ conflict |
-| Invalidation scope | ❌ unbounded | ✅ product-local | ⚠️ channel-local | ✅ product-local |
-| Current code correctness | ⚠️ ES can be stale | ✅ correct as-is | ❌ needs rewrite | ❌ needs rewrite |
-| Implementation complexity | ✅ none (current) | ⚠️ scheduled job + baseline store | ⚠️ channel resolution | ❌ most complex |
-| Cross-channel coupling | ❌ invisible coupling | ✅ none between baselines | ✅ none | ✅ none |
-| Operational observability | ⚠️ hard to debug | ✅ baseline is a known value | ⚠️ per-channel drift | ⚠️ per-channel drift |
+| Invalidation scope | ❌ unbounded continuous | ⚠️ product-local + periodic global | ⚠️ channel-local continuous | ⚠️ product-local + periodic channel-global |
+| Current code correctness | ⚠️ ES can be stale | ⚠️ needs baseline refresh path | ❌ needs rewrite | ❌ needs rewrite |
+| Implementation complexity | ✅ none (current) | ⚠️ scheduled job + baseline store + global reindex | ⚠️ channel resolution | ❌ most complex |
+| Cross-channel coupling | ❌ invisible continuous coupling | ⚠️ bounded periodic coupling (intentional) | ✅ none | ✅ none |
+| Operational observability | ⚠️ hard to debug | ✅ baseline is a known versioned value | ⚠️ per-channel drift | ⚠️ per-channel drift |
 
 ---
 
@@ -128,30 +128,58 @@ The marketplace ES index is explicitly a **platform-level cross-channel discover
 ### Rationale
 
 1. **Preserves platform-level ranking comparability** — a 4.8 means the same thing across the marketplace (ADR-020).
-2. **Makes current invalidation implementation correct** — `handleReviewAggregateChange()` reindexes only the affected product, which is exactly right when `G` is frozen between baselines.
-3. **Eliminates invisible cross-channel coupling** — a review in channel A does not silently change channel B's rankings.
-4. **Bounded operational complexity** — one scheduled BullMQ job recomputes `G` and stores it; no distributed invalidation logic needed.
-5. **ES freshness becomes a clear SLA** — "rankings reflect product-local review changes immediately, global baseline refreshes every N hours."
+2. **Converts continuous global invalidation to periodic global invalidation** — review transitions between baselines only affect their own product; the global prior `G` only shifts on the scheduled refresh.
+3. **Makes cross-channel coupling intentional, bounded, and observable** — channel A's reviews influence the global baseline, which affects channel B, but only at the scheduled refresh (not continuously). This is the intended consequence of a platform-level marketplace.
+4. **Bounded operational complexity** — one scheduled job recomputes `G`, one global reindex job converges ES to the new baseline version.
+5. **ES freshness becomes a clear two-tier SLA** — product-local changes propagate within seconds; global baseline convergence propagates within minutes.
 
 ### The contract
 
 ```
 Prior population:  Global — all approved reviews across all channels
-Prior lifecycle:   Periodic baseline — recomputed on schedule (e.g., daily)
-Prior storage:     A configuration value or singleton row, refreshed by scheduled job
-Invalidation:      Product-local — a review transition invalidates only the affected product's Bayesian score
-ES freshness:      Eventual — product-local changes propagate via BullMQ within seconds;
-                   global baseline changes propagate after next scheduled recomputation
+Prior lifecycle:   Periodic baseline — recomputed on schedule (default: daily)
+Prior storage:     Vendure Settings Store with metadata:
+                     - value (the global mean G)
+                     - computedAt (timestamp)
+                     - baselineVersion (epoch identifier)
+Invalidation:      TWO PATHS (see §6 — 3D.1b follow-up required):
+                     Path A (review-local): review transition → affected product → BullMQ → reindex
+                     Path B (baseline-global): scheduled refresh → new G → global reindex → ES convergence
+ES freshness:      Two-tier SLA:
+                     - Product-local ranking: ≤30s p95
+                     - Global baseline convergence: ≤10m p95
 ```
+
+### Vendure integration
+
+The baseline refresh maps cleanly to Vendure's existing primitives:
+
+```
+Vendure ScheduledTask (runs once across all instances)
+        ↓
+enqueue "refresh marketplace Bayesian baseline" job
+        ↓
+worker: compute G from approved ProductReview rows
+        ↓
+persist to SettingsStoreService (value + computedAt + baselineVersion)
+        ↓
+enqueue "global ranking reindex" job
+        ↓
+worker: reindex all affected marketplace sessions with new G
+```
+
+**Why not `@nestjs/schedule @Cron()`:** Vendure explicitly warns that Nest cron handlers execute on every application instance. The ScheduledTask mechanism is designed so scheduled work runs on workers and executes once even when multiple server/worker instances exist. Vendure also supports the "scheduled task → enqueue job" pattern for substantial work.
+
+**Why Settings Store over a custom singleton entity:** Vendure's Settings Store provides programmatic access through `SettingsStoreService`, global scoping, validation, permissions, and persistence without adding a custom entity/table. Storing metadata (value + computedAt + baselineVersion) makes the ranking state auditable and supports the convergence contract.
 
 ### What this defers
 
 - `RankingMaterializedView` — not needed for the prior decision. May be justified later for ranking-history audit or multi-signal ranking, but not for this contract.
-- `RankingChangedEvent` — not needed. The existing review events already trigger the correct invalidation.
+- `RankingChangedEvent` — not needed. The existing review events already trigger Path A invalidation; the scheduled task triggers Path B.
 
 ### What this enables
 
-- 3D.1b (invalidation contract) becomes a direct consequence of this decision, not a separate research item.
+- 3D.1b (invalidation contract) is a **required follow-up gate** — it must formalize both Path A and Path B, the baseline version/epoch model, and the convergence SLA.
 - Future multi-signal ranking (attendance, completion, recency) can layer on top of a stable, well-defined Bayesian prior.
 
 ---
@@ -161,9 +189,12 @@ ES freshness:      Eventual — product-local changes propagate via BullMQ withi
 Before finalizing, confirm:
 
 - [ ] **ADR-020** (platform-level marketplace) is still the intended model — global prior depends on this
-- [ ] **Baseline interval** — daily is sufficient; hourly only if review volume is high enough to shift `G` meaningfully within a day
-- [ ] **Baseline storage** — a `system_config` key or a dedicated singleton row (not a full materialized view)
-- [ ] **ES freshness SLA** — agree on the bounded-propagation target (e.g., "product-local ranking reflects review state within 30 seconds at p95")
+- [ ] **Baseline interval** — daily is the recommended default (configurable for later tuning); changing the interval does not change the meaning of the score, only how long the frozen prior drifts
+- [ ] **Baseline storage** — Vendure Settings Store preferred over a custom singleton entity; must store value + computedAt + baselineVersion (epoch) for auditability
+- [ ] **ES freshness SLA** — two-tier target agreed:
+  - Product-local ranking propagation: ≤30s p95
+  - Global baseline convergence: ≤10m p95
+- [ ] **3D.1b follow-up gate** — required: formalize Path A (review-local) and Path B (baseline-global) invalidation, the baseline version/epoch model, and the convergence SLA before any implementation
 
 ---
 
@@ -172,5 +203,27 @@ Before finalizing, confirm:
 - No entity, migration, or service code changes in this decision
 - No `RankingMaterializedView` — deferred until ranking-history audit or multi-signal ranking requires it
 - No changes to `ReviewAggregationService` (customer-facing `reviewRating` / `reviewCount` — separate concern)
+## 8. Convergence property (for 3D.1b)
+
+A baseline refresh creates a new baseline version. During async reindexing, ES may temporarily contain a mix of documents scored against G₁ and G₂. This is acceptable **only if the freshness SLA explicitly permits it**.
+
+The convergence contract:
+
+> A baseline refresh creates a new baseline version. Marketplace documents may temporarily contain the previous version during asynchronous reindexing, but all documents must converge to the new version within the global-ranking freshness SLA (≤10m p95).
+
+This gives a measurable convergence property rather than pretending ES is transactionally synchronized with Postgres.
+
+---
+
+## 9. Two-tier ES freshness SLA
+
+| Class | Propagation path | Target |
+|---|---|---|
+| **Product-local ranking** | Review transition → event → BullMQ → session reindex | ≤30s p95 |
+| **Global baseline convergence** | Scheduled refresh → new G → global reindex → ES convergence | ≤10m p95 |
+
+These are **illustrative targets**, not facts established by the current codebase. They must be validated against actual production throughput before being committed as an operational SLA.
+
+
 - No changes to sponsored-ranking logic (`sponsorBoost` is independent of Bayesian prior scope)
 
