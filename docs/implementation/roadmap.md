@@ -132,6 +132,7 @@
 - [ ] **Ranking materialization** — `RankingMaterializedView` (Postgres) for ranking-history audit / stable snapshot / multi-signal ranking. **Not yet implemented; requires prior resolution of Bayesian scope (global vs channel-local prior) and invalidation semantics (does one review change invalidate all Bayesian scores via globalMean?).**
 - [x] **3D.1a Bayesian Ranking Scope Decision** — signed off. Global prior, periodic baseline (daily default), Vendure Settings Store, two-path invalidation (product-local + global), two-tier ES freshness SLA.
 - [ ] **3D.1b Invalidation Contract** — design-only follow-up. Must formalize: Path A (review transition → affected product reindex), Path B (baseline version change → global reindex/convergence), failure/recovery semantics for BullMQ jobs and ES unavailability.
+- [ ] **Ranking materialization** — `RankingMaterializedView` (Postgres) for ranking-history audit / stable snapshot / multi-signal ranking. Deferred until ranking-history audit or multi-signal ranking requires it; not needed for the 3D.1a/3D.1b contract.
 - [ ] Elasticsearch instructor/course search refinement
 - [ ] Attendance analytics dashboard
 - [ ] Certificate generation on `Entitlement` completion
