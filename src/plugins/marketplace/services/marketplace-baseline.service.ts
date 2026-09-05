@@ -122,6 +122,17 @@ export class MarketplaceBaselineService {
   }
 
   /**
+   * Read the current authoritative baseline version without throwing when the
+   * baseline has never been established. Used by the refresh ScheduledTask to
+   * capture the claimedFromVersion at schedule time (so a retry can detect a
+   * newer refresh that advanced the baseline while this job was pending).
+   */
+  async getCurrentVersion(ctx: RequestContext): Promise<number | undefined> {
+    const state = await this.readRawState(ctx);
+    return state.version;
+  }
+
+  /**
    * 3D.1b Step 5 — compute the global mean rating over the APPROVED review
    * population. This live query is allowed ONLY inside the refresh operation
    * (Path B); the per-document indexing path (Path A) MUST consume the frozen

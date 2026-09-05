@@ -23,6 +23,8 @@ import { AdWallet } from './entities/ad-wallet.entity';
 import { AdWalletLedger } from './entities/ad-wallet-ledger.entity';
 import { MarketplaceAdvertisingResolver } from './api/marketplace-advertising.resolver';
 import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema';
+import { BaselineRefreshQueueService } from './services/baseline-refresh-queue.service';
+import { bayesianBaselineRefreshTask } from './jobs/bayesian-baseline-refresh.task';
 
 /**
  * MarketplaceIndexerPlugin — Phase 3.
@@ -85,6 +87,7 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
     SponsoredBoostConfigService,
     CommissionListener,
     MarketplaceAdvertisingService,
+    BaselineRefreshQueueService,
   ],
   shopApiExtensions: {
     schema: shopApiExtensions,
@@ -143,6 +146,18 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
           name: 'bayesianRefreshGeneration',
           scope: SettingsStoreScopes.global,
         },
+      ];
+    }
+
+    // Register the daily Bayesian baseline refresh ScheduledTask (3D.1b Step 6).
+    // Vendure's ScheduledTask locks execution across instances (single run).
+    const existingTaskIds = new Set(
+      (config.schedulerOptions.tasks ?? []).map((t) => t.id),
+    );
+    if (!existingTaskIds.has(bayesianBaselineRefreshTask.id)) {
+      config.schedulerOptions.tasks = [
+        ...(config.schedulerOptions.tasks ?? []),
+        bayesianBaselineRefreshTask,
       ];
     }
 
