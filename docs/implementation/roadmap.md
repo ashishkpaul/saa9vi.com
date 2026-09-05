@@ -108,7 +108,7 @@
 
 ### Phase 3C — Advertising (Stream 3)
 
-- [x] `MarketplaceAdCampaign` + `AdSpendLedger` + `AdWallet` entities *(code exists; blocked on Phase 3A migration)*
+- [x] `MarketplaceAdCampaign` + `AdSpendLedger` + `AdWallet` entities *(code + migration `1788265440266` applied; Phase 3A migration blocker resolved)*
 - [ ] `AdWalletLedger` — append-only wallet transactions (entity does not exist yet; plugin-map previously listed it as owned — corrected)
 - [ ] Wire `MarketplaceAdService` end-to-end: campaign lifecycle → wallet debit → `AdSpendLedger` (INV-010: ledger is truth, `spentInPaise` is cache)
 - [ ] `Banner.scope: 'tenant' | 'marketplace'` discriminator
