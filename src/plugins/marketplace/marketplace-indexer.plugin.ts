@@ -139,6 +139,10 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
           name: 'bayesianGlobalMeanComputedAt',
           scope: SettingsStoreScopes.global,
         },
+        {
+          name: 'bayesianRefreshGeneration',
+          scope: SettingsStoreScopes.global,
+        },
       ];
     }
 
