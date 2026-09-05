@@ -15,6 +15,7 @@ import { MarketplaceCommissionResolver } from './api/marketplace-commission.reso
 import { MarketplaceAdCampaign } from './entities/marketplace-ad-campaign.entity';
 import { AdSpendLedger } from './entities/ad-spend-ledger.entity';
 import { AdWallet } from './entities/ad-wallet.entity';
+import { AdWalletLedger } from './entities/ad-wallet-ledger.entity';
 import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema';
 
 /**
@@ -58,6 +59,7 @@ import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema'
     MarketplaceAdCampaign,
     AdSpendLedger,
     AdWallet,
+    AdWalletLedger,
     CommissionLedger,
   ],
   providers: [

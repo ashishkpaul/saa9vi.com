@@ -81,9 +81,9 @@
 
 ## Phase 3 — Marketplace & Retention
 
-> **Status framing (verified against code 2026-08):** the *projection layer* of `MarketplaceIndexerPlugin` is implemented (ES indices, BullMQ queue, event listener, public `marketplaceSearch` with bayesian + sponsored function-score). The *business layer* (attribution, commission) and *aggregation surfaces* (academy page, category taxonomy, ranking view) are unimplemented. Ad-entity tables are migrated (Gate 1.1 ✅) but the advertising feature layer is unwired. See `docs/implementation/phase3-audit.md` for the verified capability table.
+> **Status framing (verified against code 2026-09-05):** the *projection layer* of `MarketplaceIndexerPlugin` is implemented (ES indices, BullMQ queue, event listener, public `marketplaceSearch` with bayesian + sponsored function-score). Phase 3A discovery gates are complete; Phase 3B attribution + commission is implemented and E2E-verified (see Phase 3B below). Remaining: Phase 3C advertising (wallet ledger done; service wiring pending) and Phase 3D retention/aggregation surfaces. See `docs/implementation/phase3-audit.md` for the verified capability table.
 
-### Phase 3A — Discovery correctness (current gate)
+### Phase 3A — Discovery correctness (complete)
 
 - [x] **Latent defect closure:** migration `1788265440266-MarketplaceAdEntities` generated via Vendure CLI, applied, and PostgreSQL-verified (`marketplace_ad_campaign`, `ad_wallet`, `ad_spend_ledger` — schemas match entity definitions; tables previously existed out-of-band, see `phase3-audit.md` F2). AdSpendLedger immutability service-level test still pending.
 - [x] `MarketplaceIndexerPlugin` projection infrastructure — ES indices, BullMQ queue, event listener, public search resolver *(code-verified; e2e coverage pending)*
@@ -109,8 +109,9 @@
 ### Phase 3C — Advertising (Stream 3)
 
 - [x] `MarketplaceAdCampaign` + `AdSpendLedger` + `AdWallet` entities *(code + migration `1788265440266` applied; Phase 3A migration blocker resolved)*
-- [ ] `AdWalletLedger` — append-only wallet transactions (entity does not exist yet; plugin-map previously listed it as owned — corrected)
-- [ ] Wire `MarketplaceAdService` end-to-end: campaign lifecycle → wallet debit → `AdSpendLedger` (INV-010: ledger is truth, `spentInPaise` is cache)
+- [x] **`AdWalletLedger` (3C.1)** — immutable wallet-movement financial fact (ADR FEAT-003): `walletId`, `type` (`topup`/`spend`/`refund`), signed `amountInPaise` (positive=topup/refund, negative=spend), `occurredAt`, nullable `campaignId`/`orderId` attribution, nullable UNIQUE `reference` idempotency key (NULL rows exempt). Append-only enforced by `AdWalletLedgerImmutableSubscriber` (registered in `vendure-config.ts` `dbConnectionOptions.subscribers`). `AdWallet.balanceInPaise` is explicitly a derived cache — truth is `SUM(amountInPaise)` per wallet. Migration `1788582400033-AddAdWalletLedger` generated via Vendure CLI, applied, and PostgreSQL-verified (4 indexes incl. UNIQUE reference). E2E: `wallet-ledger.e2e-spec.ts` (WALLET_E2E=true) verifies insert / UPDATE-reject / DELETE-reject / duplicate-reference-reject / multiple-NULL-references. Campaign debit wiring intentionally NOT yet implemented (3C.2/3C.3).
+- [ ] `AdWalletLedger` service boundary (3C.2) — `creditWallet()` / `debitWallet()` / `getBalance()` with the ledger as authority
+- [ ] Wire `MarketplaceAdService` end-to-end (3C.3): campaign lifecycle → wallet balance → `AdWalletLedger` debit → `AdSpendLedger` (INV-010: ledger is truth, `spentInPaise` is cache)
 - [ ] `Banner.scope: 'tenant' | 'marketplace'` discriminator
 - [ ] Configurable, bounded sponsored bid-boost (replace hardcoded `weight: 3.0` in search resolver)
 - [ ] Self-serve campaign dashboard
