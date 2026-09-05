@@ -8,7 +8,7 @@ import {
 import { MarketplaceAdCampaign } from '../entities/marketplace-ad-campaign.entity';
 import { AdWalletLedger } from '../entities/ad-wallet-ledger.entity';
 import { AdSpendLedger } from '../entities/ad-spend-ledger.entity';
-import { AdWalletService, WalletMutationResult } from './ad-wallet.service';
+import { AdWalletService } from './ad-wallet.service';
 
 const loggerCtx = 'MarketplaceAdvertisingService';
 
@@ -251,28 +251,19 @@ export class MarketplaceAdvertisingService {
     });
   }
 
-  /**
-   * Top up the wallet for the caller's channel.
-   * NOTE: In production this should be backed by a payment flow (Juspay order).
-   * The `reference` should be the Juspay order id for idempotency.
-   */
-  async topUpWallet(
-    ctx: RequestContext,
-    amountInPaise: number,
-    reference: string,
-  ): Promise<WalletMutationResult> {
-    if (!Number.isInteger(amountInPaise) || amountInPaise <= 0) {
-      throw new BadRequestException('amountInPaise must be a positive integer');
-    }
-    if (!reference) {
-      throw new BadRequestException('reference is required for idempotency');
-    }
-    return this.walletService.creditWallet(ctx, {
-      channelId: String(ctx.channelId),
-      amountInPaise,
-      type: 'topup',
-      reference,
-    });
-  }
+  // ── Wallet top-up: payment-settlement boundary ─────────────────
+  //
+  // Wallet credit is NOT exposed through the self-serve Admin API.
+  // topUpWallet is a financial-origin operation: credit must be backed
+  // by a verified Juspay payment settlement, not by a permission-gated
+  // GraphQL mutation. The flow is:
+  //
+  //   Juspay payment → verified settlement → server-side decision
+  //     → AdWalletService.creditWallet() → AdWalletLedger
+  //
+  // Exposing creditWallet() behind MarketplaceAdvertising.Create would
+  // let any academy manager mint arbitrary balance with an unverified
+  // reference. creditWallet() remains available for the settlement flow
+  // to call directly.
 }
 

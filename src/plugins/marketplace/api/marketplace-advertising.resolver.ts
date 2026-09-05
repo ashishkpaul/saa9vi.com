@@ -101,21 +101,6 @@ export class MarketplaceAdvertisingResolver {
     return this.advertisingService.getWalletLedger(ctx);
   }
 
-  @Mutation()
-  @Allow(CreateCampaignPermission)
-  @Transaction()
-  async topUpWallet(
-    @Ctx() ctx: RequestContext,
-    @Args() args: { amountInPaise: number; reference: string },
-  ): Promise<string> {
-    const result = await this.advertisingService.topUpWallet(
-      ctx,
-      args.amountInPaise,
-      args.reference,
-    );
-    return result;
-  }
-
   // ── Spend report ───────────────────────────────────────────────
 
   @Query()
