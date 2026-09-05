@@ -140,13 +140,11 @@ export class MarketplaceBaselineService {
   /**
    * Create an internal admin context for service work outside the
    * request/response cycle. Vendure's RequestContextService.create()
-   * is specifically intended for this purpose.
+   * defaults to the default channel when channelOrToken is omitted.
    */
   private async createInternalContext(): Promise<RequestContext> {
-    const defaultChannel = await this.channelService.getDefaultChannel();
     return this.requestContextService.create({
       apiType: 'admin',
-      channelOrToken: defaultChannel,
     });
   }
 
@@ -255,58 +253,47 @@ This is consistent with the existing queue's retry model: a rejected processing 
 **Files:**
 - Edit: `src/plugins/marketplace/services/marketplace-baseline.service.ts`
 
-**Implementation:**
+**Durable refresh-generation identity:**
+
+The version-comparison approach alone cannot prove V+2 prevention: a retry cannot distinguish "my previous persist" from "a later refresh" using the version number alone. The guard needs a **durable operation identity** that survives a crash.
+
+**Baseline state stored in Settings Store:**
 ```ts
-async refreshBaseline(ctx: RequestContext): Promise<BayesianBaseline> {
-  // 1. Read current version at START
-  const current = await this.getCurrentBaseline(ctx);
-  const intendedVersion = current.baselineVersion + 1;
-
-  // 2. Compute candidate G from approved ProductReview
-  const globalMean = await this.computeGlobalMeanFromReviews(ctx);
-
-  // 3. Persist { value, computedAt, version: intendedVersion }
-  await this.settingsStoreService.set(ctx, {
-    'marketplace.bayesianGlobalMean': globalMean,
-    'marketplace.bayesianBaselineVersion': intendedVersion,
-    'marketplace.bayesianGlobalMeanComputedAt': new Date().toISOString(),
-  });
-
-  return { globalMean, baselineVersion: intendedVersion, computedAt: new Date() };
+interface BayesianBaselineState {
+  globalMean: number;
+  baselineVersion: number;
+  computedAt: string;
+  refreshGeneration: string;  // unique per scheduled execution
 }
 ```
 
-**Retry-generation guard (CRITICAL):**
-
-Vendure's `SettingsStoreService.set()` does NOT provide compare-and-swap. The guard must be implemented at the job level using version-checked retry semantics:
-
+**Refresh job flow:**
 ```
-refresh job starts
-    ↓
-read current version V
-    ↓
-compute intendedVersion = V + 1
-    ↓
-persist { G, version: intendedVersion }  ← crash point A
-    ↓
-enqueue global reindex for intendedVersion  ← crash point B
+scheduled execution
+      ↓
+generate durable refreshGeneration (UUID)
+      ↓
+refresh job(refreshGeneration)
+      ↓
+read baseline state
+      ↓
+if state.refreshGeneration === job.refreshGeneration:
+      resume same version (crash after persist, before reindex)
+      ↓
+else:
+      claim next version = state.baselineVersion + 1
+      persist { G, version: V+1, refreshGeneration: job.generation }
+      ↓
+enqueue global reindex(V+1)
 ```
-
-**On retry, the job reads the current version V' and acts:**
-
-| V' value | Meaning | Retry action |
-|---|---|---|
-| V' < V | Impossible under single-execution guarantee | — |
-| V' == V | Persist never happened (crash before point A) | Re-persist V+1, then enqueue reindex |
-| V' == V + 1 | This job already persisted (crash after point A, before/at point B) | Just enqueue reindex for V+1 |
-| V' > V + 1 | Another scheduled refresh already advanced the baseline | Abort — the other refresh's reindex will converge all documents |
 
 **Why this is correct:**
-- Vendure's `ScheduledTask` guarantees single execution across instances (no concurrent refreshes).
-- The only way V' > V+1 is if a subsequent scheduled execution (different day) already ran — in which case that execution's reindex handles convergence.
-- The retry always resumes from authoritative state, never fabricating a new version.
+- The `refreshGeneration` is generated once per scheduled execution and persists with the baseline.
+- On crash + retry: the job reads the baseline state, sees its own `refreshGeneration` already persisted, and resumes from that version (enqueues reindex) without creating a new version.
+- If a subsequent scheduled execution has already advanced the baseline (different generation), the retry aborts — the newer generation's reindex will converge all documents.
+- Single execution is guaranteed by Vendure's `ScheduledTask` (no concurrent refreshes).
 
-**Contract satisfied:** Retry of the same refresh operation does not create another baseline version. The version is derived from the authoritative current state, not from a local counter.
+**Contract satisfied:** A retry of the same refresh operation resumes the same baseline version. The version is derived from authoritative state plus a durable generation identity, not from a local counter.
 
 ---
 
@@ -343,6 +330,7 @@ export const bayesianBaselineRefreshTask = new ScheduledTask({
 
 **Files:**
 - Edit: `src/plugins/marketplace/services/marketplace-index-queue.service.ts`
+- Edit: `src/plugins/marketplace/services/marketplace-indexer.service.ts`
 
 **Implementation:**
 ```ts
@@ -366,23 +354,41 @@ async addGlobalReindexJob(baselineVersion: number): Promise<void> {
 }
 ```
 
-**Global reindex logic:**
+**Global reindex semantics (target-version snapshot):**
+
+The accepted 3D.1b contract describes Path B as: persist version → enqueue global reindex → reindex using the new G → converge to the new baselineVersion. The global reindex job must use the **exact baseline snapshot** associated with its target version, not whatever happens to be current at execution time.
+
 ```ts
 async globalReindex(targetVersion: number): Promise<void> {
+  // Resolve the authoritative baseline snapshot for THIS target version
+  const baseline = await this.baselineService.getCurrentBaseline(ctx);
+
+  // Guard: if baseline has advanced beyond our target, another refresh
+  // already superseded us. The newer refresh's reindex will converge.
+  if (baseline.baselineVersion !== targetVersion) {
+    this.logger.log(`Global reindex for V${targetVersion}: baseline already at V${baseline.baselineVersion}, aborting`);
+    return;
+  }
+
   // Load eligible sessions (F7: PUBLIC + SCHEDULED/LIVE, with productVariantId)
   const sessions = await this.connection.rawConnection
     .getRepository(BbbScheduledSession)
     .find({ where: { /* eligibility */ } });
 
   for (const session of sessions) {
-    await this.indexSession(String(session.id)); // uses current baseline
+    // Each indexSession() resolves the baseline snapshot once and writes
+    // that exact version. Since baseline is frozen during this window,
+    // all documents converge to targetVersion.
+    await this.indexSession(String(session.id));
   }
 }
 ```
 
+**Why target-version semantics:** The job is enqueued for a specific baseline version. If the baseline advances (another refresh) before the job runs, the job aborts — the newer refresh's reindex will converge all documents including those this job would have touched. This prevents the race where a job claims to target V but silently recalculates against V+1.
+
 **Important:** The global convergence worker must NOT equate "processed every PostgreSQL session" with "all currently eligible ES ranking documents have version V." The latter is the actual 3D.1b contract.
 
-**Contract satisfied:** Path B global invalidation converges ES to new baseline version.
+**Contract satisfied:** Path B global invalidation converges ES to the target baseline version, using the exact snapshot associated with that version.
 
 ---
 
@@ -492,9 +498,10 @@ The test must NOT infer correctness merely from `ratingAfter > ratingBefore`.
 
 - [ ] This plan reviewed against accepted 3D.1b contract
 - [ ] Steps 1–4 confirmed as single implementation slice
-- [ ] ES mapping migration strategy approved (Option A: additive), **with verification that the deployed index accepts the additive mapping change**
+- [ ] ES mapping migration strategy approved (Option A: additive), **with runtime verification that the deployed index accepts the additive mapping change**
 - [ ] Baseline storage confirmed: Vendure Settings Store (global scope, RequestContext strategy defined per operation)
-- [ ] Retry-generation guard mechanism defined: version-checked retry (resume same version, never fabricate V+2)
+- [ ] Retry-generation guard: **durable refresh-generation identity** (not version comparison alone) — same generation resumes same version, never fabricates V+2
+- [ ] Global reindex semantics: **target-version snapshot** (job uses exact baseline for its target version, aborts if baseline advanced)
 - [ ] Test cases agreed (§9) — **assertions strengthened to verify baselineVersion, not merely score changes**
 - [ ] Single-snapshot discipline: baseline resolved ONCE per indexSession, passed through (not fetched twice)
 - [ ] Bayesian failure handling: baseline resolution failure → job rejection (not silent zero)
