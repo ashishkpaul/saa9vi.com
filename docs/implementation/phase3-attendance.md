@@ -1,6 +1,6 @@
 # Phase 3D.3 — Attendance Analytics: Domain Design (3D.3a)
 
-Status: **DESIGN GATE — no entity created yet.** Implementation checkpoints (3D.3b–3D.3g) must conform to this document. Any deviation requires updating this doc first.
+Status: **3D.3a DESIGN + 3.3b IMPLEMENTATION COMPLETE.** 3D.3c (analytics service) and 3D.3d (Admin + Shop APIs) are also implemented. Remaining: 3D.3e (E2E), 3D.3f (dashboard), 3D.3g (docs). Implementation checkpoints must conform to this document. Any deviation requires updating this doc first.
 
 ## 1. Grounding in existing code
 
