@@ -4,6 +4,18 @@
 
 ## Unreleased
 
+### New
+
+- **Attendance analytics (Phase 3D.3) — complete:**
+  - Two-layer fact model: immutable `BbbWebhookEvent` raw events → derived/recomputable `SessionAttendance` PostgreSQL fact (`UNIQUE(scheduledSessionId, customerId, channelId)`).
+  - `SessionAttendanceService.recordMeetingEndedAttendance()` — v1 aggregation from MEETING_ENDED webhook attendee snapshot; idempotent via raw-event watermark (`lastProcessedWebhookEventId`); registered population sourced from `BbbEntitlement(type=bbb_session)`; unregistered attendees still get a row (evidence exists).
+  - `AttendanceAnalyticsService` — read-only query layer: per-student facts, per-session summary (registered/attended/noShow/attendanceRate/avgDuration/completionRate), channel-wide time-window summary.
+  - Admin API (`BbbManageSessionsPermission`, channel-scoped): `scheduledSessionAttendance`, `scheduledSessionAttendanceSummary`, `channelAttendanceSummary`.
+  - Shop self-view (`Permission.Authenticated`): `mySessionAttendance` — student's own record only.
+  - Dashboard: `Marketplace → Attendance` route with channel summary (30-day window).
+  - E2E: 4/4 pass on real PostgreSQL (PRESENT/NO_SHOW, idempotency, late-event recompute, channel-scoped summary).
+  - Channel fix: `BbScheduledSession` has no `channelId` — resolved via linked `BbOrganization` to preserve Channel=Tenant invariant.
+
 ### Changed (breaking)
 
 - **3D.2 — Shop API:** removed the dead `city` input from `MarketplaceSearchInput`. It was never consumed by the resolver and no location field exists anywhere in the data model. External storefronts must stop sending `city`; `schema-shop.graphql` and all plugin codegen types have been regenerated.

@@ -1,6 +1,6 @@
 # Phase 3D.3 — Attendance Analytics: Domain Design (3D.3a)
 
-Status: **3D.3a DESIGN + 3.3b IMPLEMENTATION COMPLETE.** 3D.3c (analytics service) and 3D.3d (Admin + Shop APIs) are also implemented. Remaining: 3D.3e (E2E), 3D.3f (dashboard), 3D.3g (docs). Implementation checkpoints must conform to this document. Any deviation requires updating this doc first.
+Status: **ALL CHECKPOINTS COMPLETE (3D.3a–3D.3g).** Implementation is finished and E2E-verified on real PostgreSQL. See `docs/implementation/release-notes.md` for the 3D.3 release entry.
 
 ## 1. Grounding in existing code
 

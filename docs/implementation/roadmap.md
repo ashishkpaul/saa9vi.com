@@ -180,7 +180,13 @@
   - Late event recomputes status with updated watermark
   - Admin channel-scoped summary aggregates
   - Fix: BbScheduledSession has no channelId — resolved via linked organization (Channel=Tenant invariant)
-- [ ] **3D.3f — attendance dashboard extension** (`@vendure/dashboard`, new Marketplace/Attendance route)
+- [x] **3D.3f — attendance dashboard extension** (`@vendure/dashboard`, new Marketplace/Attendance route)
+  - `attendance-overview.tsx` — Channel summary with 30-day window (sessions/registered/attended/noShow/rate)
+  - `attendance-session-detail.tsx` — Per-student table (status/duration/cycles/source)
+  - Registered under `Marketplace` nav section
+- [x] **3D.3g — documentation + release notes**
+  - `phase3-attendance.md` status → ALL CHECKPOINTS COMPLETE
+  - `release-notes.md` → 3D.3 entry added
 - [ ] Certificate generation on `Entitlement` completion
 - [ ] `bbbSession` CMS section type (CMS-004)
 - [ ] `ArticleEvent` / `PageEvent` → Elasticsearch indexer
