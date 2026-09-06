@@ -45,6 +45,15 @@ export interface MarketplaceInstructorDocument {
   academyName: string;
   academySlug: string;
   customDomain: string | null;
+  /**
+   * 3D.2 search-refinement aggregates, computed from the authoritative F7
+   * session population (PUBLIC + SCHEDULED/LIVE + startTime > now) joined via
+   * BbbInstructorAssignment. Let instructor search rank by real teaching
+   * activity. Zero/null = no upcoming marketplace activity (neutral).
+   */
+  upcomingSessionsCount: number;
+  minPriceInPaise: number | null;
+  nextSessionStart: string | null;
 }
 
 @Injectable()
@@ -97,6 +106,8 @@ export class MarketplaceIndexerService {
   async ensureIndicesExist(): Promise<void> {
     await this.ensureSessionsIndex();
     await this.ensureInstructorsIndex();
+    // 3D.2: widen pre-existing instructor indices with the refinement fields
+    await this.ensureSearchRefinementMapping();
   }
 
   private async ensureSessionsIndex(): Promise<void> {
@@ -167,10 +178,33 @@ export class MarketplaceIndexerService {
             academyName: { type: 'text', fields: { keyword: { type: 'keyword' } } },
             academySlug: { type: 'keyword' },
             customDomain: { type: 'keyword' },
+            upcomingSessionsCount: { type: 'integer' },
+            minPriceInPaise: { type: 'integer' },
+            nextSessionStart: { type: 'date' },
           },
         },
       });
       this.logger.log(`Created Elasticsearch index: ${this.instructorsIndex}`);
+    }
+  }
+
+  /**
+   * 3D.2: add the search-refinement aggregate fields to an EXISTING instructor
+   * index (ES mappings only ever widen, never rewrite). Mirrors the
+   * ensureBaselineVersionMapping() pattern used for the sessions index.
+   */
+  async ensureSearchRefinementMapping(): Promise<void> {
+    const exists = await this.client.indices.exists({ index: this.instructorsIndex });
+    if (exists) {
+      await this.client.indices.putMapping({
+        index: this.instructorsIndex,
+        properties: {
+          upcomingSessionsCount: { type: 'integer' },
+          minPriceInPaise: { type: 'integer' },
+          nextSessionStart: { type: 'date' },
+        },
+      });
+      this.logger.log(`Updated ES mapping: added search-refinement fields to ${this.instructorsIndex}`);
     }
   }
 
@@ -197,6 +231,7 @@ export class MarketplaceIndexerService {
       (session.status === 'SCHEDULED' || session.status === 'LIVE');
     if (!publiclyVisible) {
       await this.deleteSession(this.toPublicId(session.id));
+      await this.reindexInstructorsForSession(String(session.id));
       return;
     }
 
@@ -294,6 +329,10 @@ export class MarketplaceIndexerService {
       document: doc,
     });
     this.logger.log(`Indexed marketplace session: ${doc.id} (price=${priceInPaise}, rating=${bayesianRating}, sponsored=${isSponsored})`);
+
+    // 3D.2: the instructor projection depends on this session's marketplace
+    // state (upcoming count / min price / next start), so refresh it here.
+    await this.reindexInstructorsForSession(String(session.id));
   }
 
   async deleteSession(id: string): Promise<void> {
@@ -467,6 +506,82 @@ export class MarketplaceIndexerService {
 
   // ─── Instructor Indexing ───────────────────────────────────────────────────
 
+  /**
+   * 3D.2: compute search-refinement aggregates for one instructor from the
+   * authoritative F7 session population. Eligibility mirrors indexSession():
+   * PUBLIC + SCHEDULED/LIVE, with `startTime > now` for "upcoming". Price is
+   * the ProductVariant.price per session (same source as the session docs).
+   * Read-only on PostgreSQL; ES is never consulted here.
+   */
+  private async computeInstructorAggregates(profileId: string): Promise<{
+    upcomingSessionsCount: number;
+    minPriceInPaise: number | null;
+    nextSessionStart: string | null;
+  }> {
+    const empty = { upcomingSessionsCount: 0, minPriceInPaise: null, nextSessionStart: null };
+    try {
+      const assignmentRepo = this.connection.rawConnection.getRepository(BbbInstructorAssignment);
+      const sessionRepo = this.connection.rawConnection.getRepository(BbbScheduledSession);
+      const { ProductVariant } = require('@vendure/core');
+
+      const assignments = await assignmentRepo.find({ where: { instructorProfileId: profileId } });
+      if (!assignments.length) return empty;
+
+      const sessionIds = [...new Set(assignments.map((a) => String(a.scheduledSessionId)))];
+      const sessions = await sessionRepo
+        .createQueryBuilder('s')
+        .where('s.id IN (:...ids)', { ids: sessionIds })
+        .andWhere('s.visibility = :visibility', { visibility: 'PUBLIC' })
+        .andWhere('s.status IN (:...statuses)', { statuses: ['SCHEDULED', 'LIVE'] })
+        .andWhere('s.startTime > :now', { now: new Date() })
+        .orderBy('s.startTime', 'ASC')
+        .getMany();
+
+      if (!sessions.length) return empty;
+
+      let minPrice: number | null = null;
+      for (const session of sessions) {
+        if (!session.productVariantId) continue;
+        const variant = await this.connection.rawConnection
+          .getRepository(ProductVariant)
+          .findOne({ where: { id: this.toPk(String(session.productVariantId)) as any } });
+        const price = (variant as any)?.price;
+        if (typeof price === 'number' && (minPrice === null || price < minPrice)) {
+          minPrice = price;
+        }
+      }
+
+      return {
+        upcomingSessionsCount: sessions.length,
+        minPriceInPaise: minPrice,
+        nextSessionStart: sessions[0].startTime.toISOString(),
+      };
+    } catch (err: any) {
+      this.logger.warn(`Failed to compute instructor aggregates for ${profileId}: ${err.message}`);
+      return empty;
+    }
+  }
+
+  /**
+   * 3D.2: refresh the instructor documents whose aggregates depend on a
+   * session's marketplace state (visibility/status/time/price change). Called
+   * at the end of indexSession() so a session lifecycle transition keeps the
+   * instructor projection truthful. Safe: indexInstructor() never touches
+   * session documents, so no recursion.
+   */
+  private async reindexInstructorsForSession(sessionId: string): Promise<void> {
+    try {
+      const assignments = await this.connection.rawConnection
+        .getRepository(BbbInstructorAssignment)
+        .find({ where: { scheduledSessionId: sessionId } });
+      for (const a of assignments) {
+        await this.indexInstructor(String(a.instructorProfileId));
+      }
+    } catch (err: any) {
+      this.logger.warn(`Failed to refresh instructor aggregates for session ${sessionId}: ${err.message}`);
+    }
+  }
+
   async indexInstructor(profileId: string): Promise<void> {
     const profile = await this.connection.rawConnection
       .getRepository(InstructorProfile)
@@ -506,6 +621,7 @@ export class MarketplaceIndexerService {
       academyName: tenantProfile?.businessName ?? '',
       academySlug,
       customDomain: tenantProfile?.customDomain ?? null,
+      ...(await this.computeInstructorAggregates(String(profile.id))),
     };
 
     await this.client.index({

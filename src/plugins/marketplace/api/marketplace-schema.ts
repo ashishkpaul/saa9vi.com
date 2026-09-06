@@ -42,10 +42,21 @@ export const shopApiExtensions = gql`
     totalInstructors: Int!
   }
 
+  enum MarketplaceSessionSort {
+    RELEVANCE
+    PRICE_ASC
+    PRICE_DESC
+    SOONEST
+  }
+
   input MarketplaceSearchInput {
     query: String!
     subjectTags: [String!]
-    city: String
+    priceMin: Int
+    priceMax: Int
+    startFrom: String
+    startTo: String
+    sessionSort: MarketplaceSessionSort
     skip: Int
     take: Int
   }

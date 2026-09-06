@@ -140,7 +140,11 @@
 
 - [x] **3D.1b = COMPLETE** — all steps (1–9) implemented and verified: baseline contract (frozen G, Settings Store), refresh + retry-generation guard, ScheduledTask orchestration → BullMQ refresh queue, target-version global reindex with supersession abort + mid-run version-advance guard, read-only convergence oracle, and a 4/4 convergence/recovery E2E on real PostgreSQL + Redis/BullMQ + Elasticsearch. Scale note (Phase 4): `globalReindex` is sequential per-session — bounded concurrency / bulk ES indexing deferred.
 - [ ] **Ranking materialization** — `RankingMaterializedView` (Postgres) for ranking-history audit / stable snapshot / multi-signal ranking. Deferred until ranking-history audit or multi-signal ranking requires it; not needed for the 3D.1a/3D.1b contract.
-- [ ] Elasticsearch instructor/course search refinement
+- [x] 3D.2 — Elasticsearch instructor/course search refinement
+    - Removed dead `city` input; added `priceMin/priceMax/startFrom/startTo` range filters (filter context) and `MarketplaceSessionSort` (RELEVANCE, PRICE_ASC, PRICE_DESC, SOONEST) with `_score` tiebreak for field sorts.
+    - Fuzzy `multi_match` (fuzziness AUTO) for sessions and instructors — typo-tolerant matching.
+    - Instructor docs enriched with `upcomingSessionsCount`, `minPriceInPaise`, `nextSessionStart` (F7-eligible sessions via BbbInstructorAssignment); mapping ensured on existing instructor indices.
+    - Verified: `tsc --noEmit`, `npm run build`, marketplace unit suite, and full gated marketplace E2E (7/7) on real PostgreSQL + Redis + Elasticsearch.
 - [ ] Attendance analytics dashboard
 - [ ] Certificate generation on `Entitlement` completion
 - [ ] `bbbSession` CMS section type (CMS-004)

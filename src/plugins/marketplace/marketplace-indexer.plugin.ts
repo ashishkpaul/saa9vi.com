@@ -176,6 +176,8 @@ export class MarketplaceIndexerPlugin implements OnApplicationBootstrap {
       await this.indexerService.ensureIndicesExist();
       // Ensure existing indices have the baselineVersion mapping (3D.1b)
       await this.indexerService.ensureBaselineVersionMapping();
+      // Ensure existing instructor indices have search-refinement fields (3D.2)
+      await this.indexerService.ensureSearchRefinementMapping();
     } catch (err: any) {
       // Non-fatal: app starts even if ES is unreachable
       console.warn(`MarketplaceIndexerPlugin: Elasticsearch unavailable — ${err.message}`);
