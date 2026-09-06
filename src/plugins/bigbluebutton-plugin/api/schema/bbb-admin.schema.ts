@@ -604,11 +604,77 @@ export const adminApiExtensions = gql`
     maxConcurrentParticipants: Int!
   }
 
+  # ─── Attendance Analytics (3D.3d) ────────────────────────────────────────────
+
+  type SessionAttendanceAdmin {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    channelId: ID!
+    scheduledSessionId: ID!
+    meetingId: ID
+    customerId: ID!
+    "Vendure Customer display name (resolved from customer relation)"
+    customerName: String
+    "Vendure Customer email (resolved from customer relation)"
+    customerEmail: String
+    joinedAt: DateTime
+    leftAt: DateTime
+    totalDurationSeconds: Int!
+    cyclesCount: Int!
+    attendanceStatus: String!
+    source: String!
+    lastEventAt: DateTime
+    lastProcessedWebhookEventId: ID
+  }
+
+  type SessionAttendanceSummary {
+    sessionId: ID!
+    registered: Int!
+    attended: Int!
+    noShow: Int!
+    attendanceRate: Float!
+    averageDurationSeconds: Float!
+    completionRate: Float!
+  }
+
+  type ChannelAttendanceSummary {
+    from: DateTime!
+    to: DateTime!
+    totalSessions: Int!
+    totalRegistered: Int!
+    totalAttended: Int!
+    totalNoShow: Int!
+    attendanceRate: Float!
+    averageDurationSeconds: Float!
+    completionRate: Float!
+  }
+
   extend type Query {
     """
     All platform capacity policy rows (ADR-031). Portal infrastructure only.
     """
     platformCapacityPolicies: [BbbPlatformCapacityPolicy!]!
+
+    # ─── Attendance Analytics (3D.3d) ──────────────────────────────────────────
+
+    """
+    Per-student attendance facts for a scheduled session (Tenant Admin, channel-scoped).
+    Requires BbbManageSessionsPermission.
+    """
+    scheduledSessionAttendance(sessionId: ID!): [SessionAttendanceAdmin!]!
+
+    """
+    Attendance summary for a single session (Tenant Admin, channel-scoped).
+    Requires BbbManageSessionsPermission.
+    """
+    scheduledSessionAttendanceSummary(sessionId: ID!): SessionAttendanceSummary!
+
+    """
+    Channel-wide attendance summary for an operational reporting window.
+    Requires BbbManageSessionsPermission. Filters on lastEventAt (session end time).
+    """
+    channelAttendanceSummary(from: DateTime!, to: DateTime!): ChannelAttendanceSummary!
 
     """
     The effective capacity policy for a channel (plan-matched → default → fallback).

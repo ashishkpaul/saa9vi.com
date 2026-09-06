@@ -47,8 +47,10 @@ import {
 } from "../services/bbb-platform-capacity-policy.service";
 import { BbbPlatformCapacityPolicy } from "../entities/bbb-platform-capacity-policy.entity";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
+import { SessionAttendance } from "../entities/session-attendance.entity";
 
 import { Customer, EntityNotFoundError } from "@vendure/core";
+import { AttendanceAnalyticsService } from "../services/attendance-analytics.service";
 
 /** Shape returned to GraphQL with augmented customer info */
 interface MemberWithCustomer extends BbbOrganizationMember {
@@ -161,6 +163,7 @@ export class BbbAdminResolver {
     private readonly capacityIntelligenceService: CapacityIntelligenceService,
     private readonly capacityPolicyService: BbbPlatformCapacityPolicyService,
     private readonly connection: TransactionalConnection,
+    private readonly attendanceAnalytics: AttendanceAnalyticsService,
   ) {}
 
   // ─── Capacity Intelligence Dashboard (ADR v1.7 §6A CI-003) ────────────────
@@ -1064,5 +1067,35 @@ export class BbbAdminResolver {
   ): Promise<boolean> {
     await this.connection.getRepository(ctx, BbbPlatformCapacityPolicy).delete(id);
     return true;
+  }
+
+  // ─── Attendance Analytics (3D.3d) ──────────────────────────────────────────
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
+  async scheduledSessionAttendance(
+    @Ctx() ctx: RequestContext,
+    @Args("sessionId") sessionId: string,
+  ): Promise<SessionAttendance[]> {
+    return this.attendanceAnalytics.getSessionAttendance(ctx, sessionId);
+  }
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
+  async scheduledSessionAttendanceSummary(
+    @Ctx() ctx: RequestContext,
+    @Args("sessionId") sessionId: string,
+  ) {
+    return this.attendanceAnalytics.getSessionAttendanceSummary(ctx, sessionId);
+  }
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
+  async channelAttendanceSummary(
+    @Ctx() ctx: RequestContext,
+    @Args("from") from: Date,
+    @Args("to") to: Date,
+  ) {
+    return this.attendanceAnalytics.getChannelAttendanceSummary(ctx, from, to);
   }
 }

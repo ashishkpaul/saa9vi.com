@@ -127,15 +127,43 @@ export const shopApiExtensions = gql`
     message: String
   }
 
+  # ─── Attendance Self-View (3D.3d) ──────────────────────────────────────────
+
+  """
+  Student's own attendance record for a session.
+  Exposes only the calling student's own row — never other students' records.
+  """
+  type SessionAttendancePublic {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    scheduledSessionId: ID!
+    joinedAt: DateTime
+    leftAt: DateTime
+    totalDurationSeconds: Int!
+    cyclesCount: Int!
+    attendanceStatus: String!
+    source: String!
+    lastEventAt: DateTime
+  }
+
   extend type Query {
     myBbbMeetings(skip: Int, take: Int): BbbMeetingPublicList!
     myBbbCapacityGrants: [BbbCapacityGrantPublic!]!
     myBbbRooms: [BbbRoomPublic!]!
     bbbRoomStatus(id: ID!): BbbRoomPublic
     myScheduledSessions: [BbbScheduledSessionPublic!]!
-    myBbbEnrollments: [BbbEnrollmentPublic!]! @deprecated(reason: "Use myLearningDashboard or myBbbRooms backed by BbbEntitlement")
+    myBbbEnrollments: [BbbEnrollmentPublic!]! @deprecated(reason: "Use myLearningDashboard or myBbRooms backed by BbbEntitlement")
     myTrialRegistrations: [BbbTrialRegistrationPublic!]!
     publicScheduledSessions: [BbbScheduledSessionPublic!]!
+
+    # ─── Attendance Self-View (3D.3d) ──────────────────────────────────────────
+
+    """
+    The calling student's own attendance record for a session.
+    Returns null if no attendance record exists or the student is not the owner.
+    """
+    mySessionAttendance(sessionId: ID!): SessionAttendancePublic
     """
     Student learning dashboard — aggregates entitlements, sessions, and join URLs
     into a single domain API. No Bbb* types exposed (INV-006).

@@ -29,7 +29,9 @@ import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
 import { BbbRoom } from "../entities/bbb-room.entity";
+import { SessionAttendance } from "../entities/session-attendance.entity";
 import { Customer } from "@vendure/core";
+import { AttendanceAnalyticsService } from "../services/attendance-analytics.service";
 
 @Resolver()
 export class BbbShopResolver {
@@ -44,6 +46,7 @@ export class BbbShopResolver {
     private readonly learningDashboardService: LearningDashboardService,
     private readonly customerDeletionService: CustomerDeletionService,
     private readonly authService: AuthService,
+    private readonly attendanceAnalytics: AttendanceAnalyticsService,
   ) {}
 
   @Query()
@@ -646,5 +649,21 @@ export class BbbShopResolver {
 
     await this.customerDeletionService.fullDelete(ctx, customer.id);
     return { success: true, message: null };
+  }
+
+  // ─── Attendance Self-View (3D.3d) ──────────────────────────────────────────
+
+  @Query()
+  @Allow(Permission.Authenticated)
+  async mySessionAttendance(
+    @Ctx() ctx: RequestContext,
+    @Args("sessionId") sessionId: string,
+  ): Promise<SessionAttendance | null> {
+    if (!ctx.activeUserId) throw new ForbiddenError();
+    const rows = await this.attendanceAnalytics.getCustomerAttendance(
+      ctx,
+      String(ctx.activeUserId),
+    );
+    return rows.find((r) => r.scheduledSessionId === sessionId) ?? null;
   }
 }

@@ -168,7 +168,13 @@
   - v1: completionRate == attendanceRate (any join = completed; future threshold will diverge)
   - Channel scoping on every query (security boundary enforced at API layer, 3D.3d)
   - Build + tsc green
-- [ ] **3D.3d — Admin + Shop (self-view only) attendance APIs**
+- [x] **3D.3d — Admin + Shop (self-view) attendance APIs**
+  - Admin schema: `SessionAttendanceAdmin`, `SessionAttendanceSummary`, `ChannelAttendanceSummary` types
+  - Admin queries: `scheduledSessionAttendance`, `scheduledSessionAttendanceSummary`, `channelAttendanceSummary`
+    - Require `BbbManageSessionsPermission`, channel-scoped via `ctx.channelId`
+  - Shop schema: `SessionAttendancePublic` type (limited fields — no channelId/meetingId/watermark)
+  - Shop query: `mySessionAttendance(sessionId)` — self-view only (filtered by `ctx.activeUserId`)
+  - Build + tsc green
 - [ ] **3D.3e — real-infrastructure attendance E2E** (per `phase3-attendance.md` §8 matrix)
 - [ ] **3D.3f — attendance dashboard extension** (`@vendure/dashboard`, new Marketplace/Attendance route)
 - [ ] Certificate generation on `Entitlement` completion
