@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { JobQueue, JobQueueService } from '@vendure/core';
 import { MarketplaceBaselineService } from './marketplace-baseline.service';
+import { MarketplaceIndexQueueService } from './marketplace-index-queue.service';
 
 const loggerCtx = 'BaselineRefreshQueueService';
 const QUEUE_NAME = 'marketplace-baseline-refresh';
@@ -33,6 +34,7 @@ export class BaselineRefreshQueueService implements OnModuleInit {
   constructor(
     private readonly jobQueueService: JobQueueService,
     private readonly baselineService: MarketplaceBaselineService,
+    private readonly indexQueueService: MarketplaceIndexQueueService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -49,8 +51,19 @@ export class BaselineRefreshQueueService implements OnModuleInit {
             `version=${result.baselineVersion}` +
             (result.globalMean != null ? ` mean=${result.globalMean}` : ''),
         );
-        // Step 7 (global target-version reindex) consumes a committed version
-        // here to converge ES documents to the frozen baseline.
+        // Step 7: on a committed refresh, enqueue the global target-version
+        // reindex to converge ES ranking documents to the new frozen baseline.
+        // On 'resumed' (crash-after-persist retry of this same generation), the
+        // matching reindex was already enqueued by the original execution; but
+        // enqueueing again is safe because the target-version guard is
+        // idempotent (baseline still matches target). On 'superseded', a newer
+        // refresh owns convergence — no reindex for this job.
+        if (result.status === 'committed' || result.status === 'resumed') {
+          await this.indexQueueService.addGlobalReindexJob(result.baselineVersion);
+          this.logger.log(
+            `Enqueued global reindex for V${result.baselineVersion}`,
+          );
+        }
         return result;
       },
     });

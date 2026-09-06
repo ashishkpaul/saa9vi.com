@@ -26,11 +26,17 @@ export interface DeleteInstructorJobData {
   profileId: string;
 }
 
+export interface GlobalReindexJobData {
+  type: 'global-reindex';
+  baselineVersion: number;
+}
+
 export type MarketplaceIndexJobData =
   | IndexSessionJobData
   | DeleteSessionJobData
   | IndexInstructorJobData
-  | DeleteInstructorJobData;
+  | DeleteInstructorJobData
+  | GlobalReindexJobData;
 
 /**
  * BullMQ job queue for async marketplace ES index writes.
@@ -76,6 +82,12 @@ export class MarketplaceIndexQueueService implements OnModuleInit {
           case 'delete-instructor':
             await this.indexerService.deleteInstructor(data.profileId);
             break;
+          case 'global-reindex':
+            // Path B (3D.1b): converge all eligible ranking documents to the
+            // frozen baseline snapshot for this exact target version. A
+            // superseded target aborts inside globalReindex.
+            await this.indexerService.globalReindex(data.baselineVersion, ctx);
+            break;
         }
       },
     });
@@ -106,6 +118,18 @@ export class MarketplaceIndexQueueService implements OnModuleInit {
   async addDeleteInstructorJob(profileId: string): Promise<void> {
     await this.jobQueue.add(
       { type: 'delete-instructor', profileId },
+      { retries: 3 },
+    );
+  }
+
+  /**
+   * 3D.1b Step 7 — enqueue a global reindex for a specific target baseline
+   * version (Path B convergence). The job aborts (target-version guard) if a
+   * newer refresh advanced the baseline before it runs.
+   */
+  async addGlobalReindexJob(baselineVersion: number): Promise<void> {
+    await this.jobQueue.add(
+      { type: 'global-reindex', baselineVersion },
       { retries: 3 },
     );
   }

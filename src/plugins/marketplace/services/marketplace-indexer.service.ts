@@ -6,6 +6,7 @@ import { BbbOrganization } from '../../bigbluebutton-plugin/entities/bbb-organiz
 import { TenantProfile } from '../../tenant-plugin/entities/tenant-profile.entity';
 import { InstructorProfile } from '../../tenant-plugin/entities/instructor-profile.entity';
 import { BbbInstructorAssignment } from '../../bigbluebutton-plugin/entities/instructor-assignment.entity';
+import { In } from 'typeorm';
 import { MarketplaceAdService } from './marketplace-ad.service';
 import { BayesianRatingService } from './bayesian-rating.service';
 import { MarketplaceBaselineService } from './marketplace-baseline.service';
@@ -301,6 +302,62 @@ export class MarketplaceIndexerService {
     } catch (err: any) {
       if (err.statusCode !== 404) throw err;
     }
+  }
+
+  /**
+   * 3D.1b Step 7 — Path B global reindex with target-version snapshot
+   * semantics.
+   *
+   * Enqueued by the baseline refresh worker after a baseline was committed to
+   * version V. This converges ALL currently-eligible marketplace ranking
+   * documents to that exact frozen baseline snapshot.
+   *
+   * Target-version guard: if the authoritative baseline has already advanced
+   * past `targetVersion` (a newer refresh superseded this job while it was
+   * queued), the job aborts — the newer generation's reindex owns convergence
+   * and every document will converge to the newer version. This prevents the
+   * race where a job claims to target V but silently recalculates against V+1.
+   *
+   * Each `indexSession()` resolves the baseline snapshot ONCE and writes that
+   * exact version (single-snapshot invariant), so with baseline frozen during
+   * this window all documents converge to targetVersion.
+   *
+   * Eligible population (F7) mirrors the per-document guard in indexSession():
+   * PUBLIC + SCHEDULED/LIVE sessions. indexSession() additionally prunes
+   * documents that are no longer eligible.
+   */
+  async globalReindex(targetVersion: number, ctx: RequestContext): Promise<void> {
+    // Resolve the authoritative baseline for THIS target version.
+    const baseline = await this.baselineService.getCurrentBaseline(ctx);
+
+    // Guard: a newer refresh advanced the baseline while this job was queued.
+    if (baseline.baselineVersion !== targetVersion) {
+      this.logger.log(
+        `Global reindex for V${targetVersion}: baseline already at V${baseline.baselineVersion}, aborting`,
+      );
+      return;
+    }
+
+    const sessionRepo = this.connection.rawConnection.getRepository(BbbScheduledSession);
+    // F7 eligible population. indexSession() applies the same guard and prunes
+    // stale documents on the per-session path.
+    const sessions = await sessionRepo.find({
+      where: {
+        visibility: 'PUBLIC',
+        status: In(['SCHEDULED', 'LIVE']),
+      },
+    });
+
+    let indexed = 0;
+    for (const session of sessions) {
+      await this.indexSession(String(session.id), ctx);
+      indexed += 1;
+    }
+
+    // "Job submitted" ≠ "converged". This reports the number of eligible
+    // sessions reindexed; actual ES convergence against targetVersion is a
+    // measurable property (Step 8 measureConvergence), not this count.
+    this.logger.log(`Global reindex for V${targetVersion}: reindexed ${indexed} eligible session(s)`);
   }
 
   /**
