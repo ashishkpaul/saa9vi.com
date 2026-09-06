@@ -125,3 +125,102 @@ describe('MarketplaceIndexerService.globalReindex target-version guard (Step 7)'
     expect(indexSessionCalls).toEqual([]);
   });
 });
+describe('MarketplaceIndexerService.measureConvergence (Step 8)', () => {
+  function makeIndexerForConvergence(esDocs: Array<{ id: string; baselineVersion: number }>) {
+    const allSessions: Array<{ id: string; visibility: string; status: string }> = [
+      { id: '1', visibility: 'PUBLIC', status: 'SCHEDULED' },
+      { id: '2', visibility: 'PUBLIC', status: 'LIVE' },
+      { id: '3', visibility: 'PUBLIC', status: 'SCHEDULED' }, // eligible, missing from ES
+      { id: '4', visibility: 'PRIVATE', status: 'SCHEDULED' }, // not eligible
+      { id: '5', visibility: 'PUBLIC', status: 'CANCELLED' }, // not eligible
+    ];
+    const repo = {
+      find: vi.fn(async () =>
+        allSessions.filter(
+          (s) =>
+            s.visibility === 'PUBLIC' &&
+            (s.status === 'SCHEDULED' || s.status === 'LIVE'),
+        ),
+      ),
+    };
+    const connection = {
+      rawConnection: { getRepository: vi.fn(() => repo) },
+    } as any;
+    const configService = {
+      entityIdStrategy: { encodeId: (id: any) => String(id) },
+    } as any;
+    const baselineService = { getCurrentBaseline: vi.fn() } as any;
+    const indexer = new MarketplaceIndexerService(
+      connection,
+      {} as any,
+      {} as any,
+      baselineService,
+      configService,
+      {} as any,
+    );
+    (indexer as any).client = {
+      search: vi.fn(async () => ({ hits: { hits: esDocs.map((d) => ({ _source: d })) } })),
+      index: vi.fn(),
+      delete: vi.fn(),
+    };
+    return { indexer, repo };
+  }
+
+  it('counts converged only against docs with the target baselineVersion; missing docs are stale', async () => {
+    const { indexer, repo } = makeIndexerForConvergence([
+      { id: '1', baselineVersion: 42 },
+      { id: '2', baselineVersion: 41 }, // stale (wrong version)
+    ]);
+    const report = await indexer.measureConvergence(42, ctx);
+    // Eligible public sessions are 1, 2, 3 (PRIVATE 4 and CANCELLED 5 excluded).
+    expect(repo.find).toHaveBeenCalledTimes(1);
+    expect(report).toEqual({ total: 3, converged: 1, stale: 2 });
+  });
+
+  it('is read-only: only queries ES, never writes/deletes', async () => {
+    const { indexer } = makeIndexerForConvergence([{ id: '1', baselineVersion: 42 }]);
+    await indexer.measureConvergence(42, ctx);
+    expect((indexer as any).client.search).toHaveBeenCalledTimes(1);
+    expect((indexer as any).client.index).not.toHaveBeenCalled();
+    expect((indexer as any).client.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('MarketplaceIndexerService.globalReindex mid-run version-advance guard (Step 8)', () => {
+  it('stops reindexing when the baseline advances to a newer version mid-run', async () => {
+    const indexSessionCalls: string[] = [];
+    const sessions = [
+      { id: '1', visibility: 'PUBLIC', status: 'SCHEDULED' },
+      { id: '2', visibility: 'PUBLIC', status: 'SCHEDULED' },
+      { id: '3', visibility: 'PUBLIC', status: 'SCHEDULED' },
+    ];
+    const repo = { find: vi.fn(async () => sessions) };
+    const connection = { rawConnection: { getRepository: vi.fn(() => repo) } } as any;
+    // Baseline is V42 for the initial guard + first iteration, then advances to
+    // V43 on the second iteration's mid-run check.
+    const baselineService = {
+      getCurrentBaseline: vi
+        .fn()
+        .mockResolvedValueOnce({ globalMean: 4.3, baselineVersion: 42, computedAt: new Date() })
+        .mockResolvedValueOnce({ globalMean: 4.3, baselineVersion: 42, computedAt: new Date() })
+        .mockResolvedValue({ globalMean: 4.5, baselineVersion: 43, computedAt: new Date() }),
+    } as any;
+    const indexer = new MarketplaceIndexerService(
+      connection,
+      {} as any,
+      {} as any,
+      baselineService,
+      {} as any,
+      {} as any,
+    );
+    (indexer as any).indexSession = vi.fn(async (id: string) => {
+      indexSessionCalls.push(id);
+    });
+    (indexer as any).client = { index: vi.fn(), delete: vi.fn() };
+
+    await indexer.globalReindex(42, ctx);
+    // Only session '1' is written before the V43 advance is detected; the rest
+    // are left to the newer generation's reindex (no mixed-version writes).
+    expect(indexSessionCalls).toEqual(['1']);
+  });
+});

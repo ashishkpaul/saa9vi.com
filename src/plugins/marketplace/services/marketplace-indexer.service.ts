@@ -350,6 +350,20 @@ export class MarketplaceIndexerService {
 
     let indexed = 0;
     for (const session of sessions) {
+      // Mid-run version-advance guard (3D.1b Step 8): if another refresh
+      // committed V43 while this V42 job is halfway through, stop reindexing
+      // rather than write documents whose baselineVersion no longer matches the
+      // target. The already-written docs used the frozen V42 snapshot; the V43
+      // job's reindex owns the remaining (and these) documents' convergence.
+      const currentBaseline = await this.baselineService.getCurrentBaseline(ctx);
+      if (currentBaseline.baselineVersion !== targetVersion) {
+        this.logger.log(
+          `Global reindex for V${targetVersion}: baseline advanced to ` +
+            `V${currentBaseline.baselineVersion} mid-run, stopped at ${indexed} session(s) — ` +
+            'the newer generation owns remaining convergence',
+        );
+        return;
+      }
       await this.indexSession(String(session.id), ctx);
       indexed += 1;
     }
@@ -358,6 +372,60 @@ export class MarketplaceIndexerService {
     // sessions reindexed; actual ES convergence against targetVersion is a
     // measurable property (Step 8 measureConvergence), not this count.
     this.logger.log(`Global reindex for V${targetVersion}: reindexed ${indexed} eligible session(s)`);
+  }
+
+  /**
+   * 3D.1b Step 8 — measure Path B convergence as observable ES truth.
+   *
+   * Read-only oracle. NO mutation of ES or baseline state. Distinguishes
+   * "job submitted/executed" (globalReindex) from "all eligible ranking
+   * documents carry the target baseline version".
+   *
+   * Authoritative population = currently-eligible PostgreSQL sessions
+   * (ADR-007: PG is authoritative); F7 eligibility (PUBLIC + SCHEDULED/LIVE).
+   * An eligible session MISSING from ES counts as stale (not dropped from the
+   * denominator); a doc for a now-ineligible session does NOT inflate total.
+   *
+   *   total     = PG-eligible sessions
+   *   converged = eligible sessions whose ES doc.baselineVersion === targetVersion
+   *   stale     = total - converged (includes missing ES docs and wrong-version docs)
+   */
+  async measureConvergence(targetVersion: number, ctx: RequestContext): Promise<{
+    total: number;
+    converged: number;
+    stale: number;
+  }> {
+    const sessionRepo = this.connection.rawConnection.getRepository(BbbScheduledSession);
+    const sessions = await sessionRepo.find({
+      where: {
+        visibility: 'PUBLIC',
+        status: In(['SCHEDULED', 'LIVE']),
+      },
+    });
+    const total = sessions.length;
+
+    if (total === 0) {
+      return { total: 0, converged: 0, stale: 0 };
+    }
+
+    // Query ES only for the eligible public ids; a missing doc simply does not
+    // appear, so it is counted as stale.
+    const ids = sessions.map((s) => this.toPublicId(s.id));
+    const esResult = await this.client.search({
+      index: this.sessionsIndex,
+      _source: ['id', 'baselineVersion'],
+      size: 10000,
+      query: { terms: { id: ids } },
+    });
+
+    let converged = 0;
+    for (const hit of esResult.hits.hits as Array<{ _source?: { baselineVersion?: number } }>) {
+      if (hit._source?.baselineVersion === targetVersion) {
+        converged += 1;
+      }
+    }
+
+    return { total, converged, stale: total - converged };
   }
 
   /**
