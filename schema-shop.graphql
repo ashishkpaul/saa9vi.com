@@ -80,13 +80,13 @@ type Query {
   instructorProfile(slug: String!): InstructorProfile
   instructorProfiles(options: InstructorProfileListOptions): InstructorProfileList!
   tenantProfile: TenantProfile
-  mediaResources(ownerType: String!, ownerId: ID!): [MediaResource!]!
+  mediaResources(ownerType: String!, ownerId: String!): [MediaResource!]!
   myBbbMeetings(skip: Int, take: Int): BbbMeetingPublicList!
   myBbbCapacityGrants: [BbbCapacityGrantPublic!]!
   myBbbRooms: [BbbRoomPublic!]!
   bbbRoomStatus(id: ID!): BbbRoomPublic
   myScheduledSessions: [BbbScheduledSessionPublic!]!
-  myBbbEnrollments: [BbbEnrollmentPublic!]!
+  myBbbEnrollments: [BbbEnrollmentPublic!]! @deprecated(reason: "Use myLearningDashboard or myBbbRooms backed by BbbEntitlement")
   myTrialRegistrations: [BbbTrialRegistrationPublic!]!
   publicScheduledSessions: [BbbScheduledSessionPublic!]!
 
@@ -261,6 +261,7 @@ type Mutation {
   """Resets a Customer's password based on the provided token"""
   resetPassword(token: String!, password: String!): ResetPasswordResult!
   registerNewTenant(input: RegisterTenantInput!): RegisterTenantResult!
+  verifyTenantAdmin(token: String!): VerifyTenantAdminResult!
   bbbJoinMeeting(meetingId: ID!, participantName: String!): String!
   bbbJoinRoom(roomId: ID!, participantName: String!): BbbJoinRoomResult!
 
@@ -284,6 +285,19 @@ type Mutation {
   submitProductReview(input: SubmitProductReviewInput!): ProductReview!
   voteOnReview(id: ID!, vote: Boolean!): ProductReview!
   reportReview(input: ReportReviewInput!): Boolean!
+
+  """
+  Attach a server-verified marketplace attribution reference to the active order.
+  Discriminated result object (not a union):
+    ok = true  -> orderId present, code null
+    ok = false -> code present, orderId null
+  The storefront only supplies the opaque marketplaceRef it received from the
+  marketplace discovery API. Vendure resolves it (HMAC + TTL + channel binding)
+  BEFORE storing, so the client can never select orderSource (INV-008; ADR-021
+  Decisions 7 and 8). orderSource is never accepted nor written here; it is
+  classified later at the order lifecycle boundary (3B.3 listener).
+  """
+  applyMarketplaceReference(ref: String!): MarketplaceReferenceApplyResult!
 }
 
 type Address implements Node {
@@ -825,6 +839,27 @@ enum Permission {
   Permission to manage BigBlueButton servers, organizations, and meetings
   """
   BBBAdmin
+
+  """Manage BBB servers and platform capacity infrastructure"""
+  BBBPlatformInfrastructure
+
+  """Create, read, update and delete BBB organizations"""
+  BBBManageOrganizations
+
+  """Manage BBB rooms, product access and enrollments"""
+  BBBManageRooms
+
+  """Manage BBB scheduled sessions and trial registrations"""
+  BBBManageSessions
+
+  """Manage BBB meetings, retry, end and moderator join"""
+  BBBManageMeetings
+
+  """Manage BBB access entitlements"""
+  BBBManageEntitlements
+
+  """Manage BBB organization members and memberships"""
+  BBBManageMembers
 
   """Grants permission to create CmsArticle"""
   CreateCmsArticle
@@ -2829,7 +2864,7 @@ type Order implements Node {
   """A summary of the taxes being applied to this Order"""
   taxSummary: [OrderTaxSummary!]!
   history(options: HistoryEntryListOptions): HistoryEntryList!
-  customFields: JSON
+  customFields: OrderCustomFields
 }
 
 """
@@ -3908,6 +3943,12 @@ type RegisterTenantResult {
   administratorId: ID!
 }
 
+type VerifyTenantAdminResult {
+  success: Boolean!
+  message: String
+  channelToken: String
+}
+
 type BbbMeetingPublic {
   id: ID!
   title: String!
@@ -3996,8 +4037,18 @@ type LearningCourse {
   joinUrl: String
   nextSession: SessionWindow
   instructorName: String
+  isTrial: Boolean!
   entitlementType: String!
   entitlementSource: String!
+
+  """
+  Server-driven CTA action (INV-008). join | none. The storefront renders
+  this — it must not re-derive entitlement/eligibility from the clock.
+  """
+  ctaAction: String!
+
+  """Server-driven CTA label (INV-008)."""
+  ctaLabel: String!
 }
 
 type LearningDashboard {
@@ -4059,6 +4110,11 @@ enum BannerPlacement {
   CHECKOUT_PROMO
 }
 
+enum BannerScope {
+  tenant
+  marketplace
+}
+
 type Banner implements Node {
   id: ID!
   createdAt: DateTime!
@@ -4071,6 +4127,10 @@ type Banner implements Node {
   isActive: Boolean!
   startsAt: DateTime
   endsAt: DateTime
+  scope: BannerScope!
+  targetSubject: String
+  targetCity: String
+  campaignId: ID
   channels: [Channel!]!
   customFields: JSON
 }
@@ -4229,6 +4289,7 @@ input ReportReviewInput {
 type MarketplaceSession {
   id: ID!
   productVariantId: ID
+  channelId: String!
   channelToken: String!
   title: String!
   startTime: DateTime!
@@ -4236,9 +4297,15 @@ type MarketplaceSession {
   priceInPaise: Int!
   academyName: String!
   academySlug: String!
+  customDomain: String
   instructorName: String
   subjectTags: [String!]!
   bayesianRating: Float!
+
+  """
+  3D.1b: baseline version of the frozen {G,V} snapshot used for this score.
+  """
+  baselineVersion: Int
   isSponsored: Boolean!
 }
 
@@ -4263,12 +4330,29 @@ type MarketplaceSearchResult {
   totalInstructors: Int!
 }
 
+enum MarketplaceSessionSort {
+  RELEVANCE
+  PRICE_ASC
+  PRICE_DESC
+  SOONEST
+}
+
 input MarketplaceSearchInput {
   query: String!
   subjectTags: [String!]
-  city: String
+  priceMin: Int
+  priceMax: Int
+  startFrom: String
+  startTo: String
+  sessionSort: MarketplaceSessionSort
   skip: Int
   take: Int
+}
+
+type MarketplaceReferenceApplyResult {
+  ok: Boolean!
+  orderId: ID
+  code: String
 }
 
 input ProductVariantFilterParameter {
@@ -4344,6 +4428,8 @@ input OrderFilterParameter {
   totalWithTax: NumberOperators
   _and: [OrderFilterParameter!]
   _or: [OrderFilterParameter!]
+  orderSource: StringOperators
+  marketplaceRef: StringOperators
 }
 
 input OrderSortParameter {
@@ -4360,6 +4446,8 @@ input OrderSortParameter {
   shippingWithTax: SortOrder
   total: SortOrder
   totalWithTax: SortOrder
+  orderSource: SortOrder
+  marketplaceRef: SortOrder
 }
 
 input FacetValueFilterParameter {
@@ -4566,6 +4654,11 @@ input ArticleSortParameter {
 
 type CustomerCustomFields {
   status: String
+}
+
+type OrderCustomFields {
+  orderSource: String
+  marketplaceRef: String
 }
 
 type ProductCustomFields {

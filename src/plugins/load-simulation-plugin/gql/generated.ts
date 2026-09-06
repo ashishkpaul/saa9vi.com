@@ -181,6 +181,7 @@ export type AuthenticationResult = CurrentUser | InvalidCredentialsError | NotVe
 
 export type Banner = Node & {
   __typename?: 'Banner';
+  campaignId?: Maybe<Scalars['ID']['output']>;
   channels: Array<Channel>;
   createdAt: Scalars['DateTime']['output'];
   customFields?: Maybe<Scalars['JSON']['output']>;
@@ -191,7 +192,10 @@ export type Banner = Node & {
   linkUrl?: Maybe<Scalars['String']['output']>;
   placement: BannerPlacement;
   priority: Scalars['Int']['output'];
+  scope: BannerScope;
   startsAt?: Maybe<Scalars['DateTime']['output']>;
+  targetCity?: Maybe<Scalars['String']['output']>;
+  targetSubject?: Maybe<Scalars['String']['output']>;
   title: Scalars['String']['output'];
   updatedAt: Scalars['DateTime']['output'];
 };
@@ -213,6 +217,11 @@ export enum BannerPlacement {
   HOMEPAGE_HERO = 'HOMEPAGE_HERO',
   HOMEPAGE_STRIP = 'HOMEPAGE_STRIP',
   SIDEBAR = 'SIDEBAR'
+}
+
+export enum BannerScope {
+  marketplace = 'marketplace',
+  tenant = 'tenant'
 }
 
 export type BbbCapacityGrantPublic = {
@@ -1984,10 +1993,18 @@ export enum LanguageCode {
 export type LearningCourse = {
   __typename?: 'LearningCourse';
   canJoin: Scalars['Boolean']['output'];
+  /**
+   * Server-driven CTA action (INV-008). join | none. The storefront renders
+   * this — it must not re-derive entitlement/eligibility from the clock.
+   */
+  ctaAction: Scalars['String']['output'];
+  /** Server-driven CTA label (INV-008). */
+  ctaLabel: Scalars['String']['output'];
   entitlementSource: Scalars['String']['output'];
   entitlementType: Scalars['String']['output'];
   id: Scalars['ID']['output'];
   instructorName?: Maybe<Scalars['String']['output']>;
+  isTrial: Scalars['Boolean']['output'];
   joinUrl?: Maybe<Scalars['String']['output']>;
   nextSession?: Maybe<SessionWindow>;
   title: Scalars['String']['output'];
@@ -2064,10 +2081,21 @@ export type MarketplaceInstructor = {
   subjectTags: Array<Scalars['String']['output']>;
 };
 
+export type MarketplaceReferenceApplyResult = {
+  __typename?: 'MarketplaceReferenceApplyResult';
+  code?: Maybe<Scalars['String']['output']>;
+  ok: Scalars['Boolean']['output'];
+  orderId?: Maybe<Scalars['ID']['output']>;
+};
+
 export type MarketplaceSearchInput = {
-  city?: InputMaybe<Scalars['String']['input']>;
+  priceMax?: InputMaybe<Scalars['Int']['input']>;
+  priceMin?: InputMaybe<Scalars['Int']['input']>;
   query: Scalars['String']['input'];
+  sessionSort?: InputMaybe<MarketplaceSessionSort>;
   skip?: InputMaybe<Scalars['Int']['input']>;
+  startFrom?: InputMaybe<Scalars['String']['input']>;
+  startTo?: InputMaybe<Scalars['String']['input']>;
   subjectTags?: InputMaybe<Array<Scalars['String']['input']>>;
   take?: InputMaybe<Scalars['Int']['input']>;
 };
@@ -2084,8 +2112,12 @@ export type MarketplaceSession = {
   __typename?: 'MarketplaceSession';
   academyName: Scalars['String']['output'];
   academySlug: Scalars['String']['output'];
+  /** 3D.1b: baseline version of the frozen {G,V} snapshot used for this score. */
+  baselineVersion?: Maybe<Scalars['Int']['output']>;
   bayesianRating: Scalars['Float']['output'];
+  channelId: Scalars['String']['output'];
   channelToken: Scalars['String']['output'];
+  customDomain?: Maybe<Scalars['String']['output']>;
   endTime: Scalars['DateTime']['output'];
   id: Scalars['ID']['output'];
   instructorName?: Maybe<Scalars['String']['output']>;
@@ -2096,6 +2128,13 @@ export type MarketplaceSession = {
   subjectTags: Array<Scalars['String']['output']>;
   title: Scalars['String']['output'];
 };
+
+export enum MarketplaceSessionSort {
+  PRICE_ASC = 'PRICE_ASC',
+  PRICE_DESC = 'PRICE_DESC',
+  RELEVANCE = 'RELEVANCE',
+  SOONEST = 'SOONEST'
+}
 
 export type MediaResource = Node & {
   __typename?: 'MediaResource';
@@ -2147,6 +2186,18 @@ export type Mutation = {
   adjustOrderLine: UpdateOrderItemsResult;
   /** Applies the given coupon code to the active Order */
   applyCouponCode: ApplyCouponCodeResult;
+  /**
+   * Attach a server-verified marketplace attribution reference to the active order.
+   * Discriminated result object (not a union):
+   *   ok = true  -> orderId present, code null
+   *   ok = false -> code present, orderId null
+   * The storefront only supplies the opaque marketplaceRef it received from the
+   * marketplace discovery API. Vendure resolves it (HMAC + TTL + channel binding)
+   * BEFORE storing, so the client can never select orderSource (INV-008; ADR-021
+   * Decisions 7 and 8). orderSource is never accepted nor written here; it is
+   * classified later at the order lifecycle boundary (3B.3 listener).
+   */
+  applyMarketplaceReference: MarketplaceReferenceApplyResult;
   /** Authenticates the user using a named authentication strategy */
   authenticate: AuthenticationResult;
   bbbJoinMeeting: Scalars['String']['output'];
@@ -2259,6 +2310,7 @@ export type Mutation = {
    * provided here.
    */
   verifyCustomerAccount: VerifyCustomerAccountResult;
+  verifyTenantAdmin: VerifyTenantAdminResult;
   voteOnReview: ProductReview;
 };
 
@@ -2287,6 +2339,11 @@ export type MutationAdjustOrderLineArgs = {
 
 export type MutationApplyCouponCodeArgs = {
   couponCode: Scalars['String']['input'];
+};
+
+
+export type MutationApplyMarketplaceReferenceArgs = {
+  ref: Scalars['String']['input'];
 };
 
 
@@ -2454,6 +2511,11 @@ export type MutationVerifyCustomerAccountArgs = {
 };
 
 
+export type MutationVerifyTenantAdminArgs = {
+  token: Scalars['String']['input'];
+};
+
+
 export type MutationVoteOnReviewArgs = {
   id: Scalars['ID']['input'];
   vote: Scalars['Boolean']['input'];
@@ -2536,7 +2598,7 @@ export type Order = Node & {
   couponCodes: Array<Scalars['String']['output']>;
   createdAt: Scalars['DateTime']['output'];
   currencyCode: CurrencyCode;
-  customFields?: Maybe<Scalars['JSON']['output']>;
+  customFields?: Maybe<OrderCustomFields>;
   customer?: Maybe<Customer>;
   discounts: Array<Discount>;
   fulfillments?: Maybe<Array<Fulfillment>>;
@@ -2603,6 +2665,12 @@ export type OrderAddress = {
   streetLine2?: Maybe<Scalars['String']['output']>;
 };
 
+export type OrderCustomFields = {
+  __typename?: 'OrderCustomFields';
+  marketplaceRef?: Maybe<Scalars['String']['output']>;
+  orderSource?: Maybe<Scalars['String']['output']>;
+};
+
 export type OrderFilterParameter = {
   _and?: InputMaybe<Array<OrderFilterParameter>>;
   _or?: InputMaybe<Array<OrderFilterParameter>>;
@@ -2611,7 +2679,9 @@ export type OrderFilterParameter = {
   createdAt?: InputMaybe<DateOperators>;
   currencyCode?: InputMaybe<StringOperators>;
   id?: InputMaybe<IdOperators>;
+  marketplaceRef?: InputMaybe<StringOperators>;
   orderPlacedAt?: InputMaybe<DateOperators>;
+  orderSource?: InputMaybe<StringOperators>;
   shipping?: InputMaybe<NumberOperators>;
   shippingWithTax?: InputMaybe<NumberOperators>;
   state?: InputMaybe<StringOperators>;
@@ -2741,7 +2811,9 @@ export type OrderSortParameter = {
   code?: InputMaybe<SortOrder>;
   createdAt?: InputMaybe<SortOrder>;
   id?: InputMaybe<SortOrder>;
+  marketplaceRef?: InputMaybe<SortOrder>;
   orderPlacedAt?: InputMaybe<SortOrder>;
+  orderSource?: InputMaybe<SortOrder>;
   shipping?: InputMaybe<SortOrder>;
   shippingWithTax?: InputMaybe<SortOrder>;
   state?: InputMaybe<SortOrder>;
@@ -2941,6 +3013,20 @@ export enum Permission {
   Authenticated = 'Authenticated',
   /** Permission to manage BigBlueButton servers, organizations, and meetings */
   BBBAdmin = 'BBBAdmin',
+  /** Manage BBB access entitlements */
+  BBBManageEntitlements = 'BBBManageEntitlements',
+  /** Manage BBB meetings, retry, end and moderator join */
+  BBBManageMeetings = 'BBBManageMeetings',
+  /** Manage BBB organization members and memberships */
+  BBBManageMembers = 'BBBManageMembers',
+  /** Create, read, update and delete BBB organizations */
+  BBBManageOrganizations = 'BBBManageOrganizations',
+  /** Manage BBB rooms, product access and enrollments */
+  BBBManageRooms = 'BBBManageRooms',
+  /** Manage BBB scheduled sessions and trial registrations */
+  BBBManageSessions = 'BBBManageSessions',
+  /** Manage BBB servers and platform capacity infrastructure */
+  BBBPlatformInfrastructure = 'BBBPlatformInfrastructure',
   /** Grants permission to create Administrator */
   CreateAdministrator = 'CreateAdministrator',
   /** Grants permission to create ApiKey */
@@ -3643,6 +3729,7 @@ export type Query = {
   me?: Maybe<CurrentUser>;
   mediaResources: Array<MediaResource>;
   myBbbCapacityGrants: Array<BbbCapacityGrantPublic>;
+  /** @deprecated Use myLearningDashboard or myBbbRooms backed by BbbEntitlement */
   myBbbEnrollments: Array<BbbEnrollmentPublic>;
   myBbbMeetings: BbbMeetingPublicList;
   myBbbRooms: Array<BbbRoomPublic>;
@@ -3747,7 +3834,7 @@ export type QueryMarketplaceSearchArgs = {
 
 
 export type QueryMediaResourcesArgs = {
-  ownerId: Scalars['ID']['input'];
+  ownerId: Scalars['String']['input'];
   ownerType: Scalars['String']['input'];
 };
 
@@ -4417,6 +4504,13 @@ export type VerificationTokenInvalidError = ErrorResult & {
 };
 
 export type VerifyCustomerAccountResult = CurrentUser | MissingPasswordError | NativeAuthStrategyError | PasswordAlreadySetError | PasswordValidationError | VerificationTokenExpiredError | VerificationTokenInvalidError;
+
+export type VerifyTenantAdminResult = {
+  __typename?: 'VerifyTenantAdminResult';
+  channelToken?: Maybe<Scalars['String']['output']>;
+  message?: Maybe<Scalars['String']['output']>;
+  success: Scalars['Boolean']['output'];
+};
 
 export type Zone = Node & {
   __typename?: 'Zone';
