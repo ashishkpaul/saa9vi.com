@@ -332,7 +332,7 @@ None (extends `orderOptions.process` with `customerStatusOrderProcess` to block 
 
 | Entity | Table | ChannelAware |
 |---|---|---|
-| SubscriptionPlan | `subscription_plan` | Yes |
+| SubscriptionPlan | `subscription_plan` | No (platform-global plan catalogue; unique `slug`, not channel-scoped — scoping happens via `OrganizationSubscription`) |
 | OrganizationSubscription | `organization_subscription` | Yes (= Channel/tenant) |
 | JuspayPaymentAttempt | `juspay_payment_attempt` | No (scalar `channelId`; CLAIM→CHARGE→FINALIZE CAS) |
 | JuspaySubscriptionMandate | `juspay_subscription_mandate` | No |

@@ -2,6 +2,8 @@
 
 > **Historical snapshot:** This audit records the repository state **before Phase 3C implementation** (dated 2026-08). Its capability matrix, gate tracking, and deferred-item lists reflect the pre-3C state and are **no longer the current implementation status**. For current status, see `roadmap.md` and `plugin-map.md`. The canonical field→event matrix (Gate 1.4) in this file remains the authoritative reference for the event-listener projection contract.
 
+>
+> **Stale-status note (2026-09 sweep):** Any "still pending" / "not implemented" phrase inside this file (e.g. AdSpendLedger service-level test, Gate 1.4 listener side, canonical field→event matrix) reflects the dated snapshot only. Current truth: AdSpendLedger immutability (INV-010) is E2E-verified, Gate 1.4 event coverage is complete, and Gate 1.4's matrix is codified. `RankingMaterializedView` remains deliberately deferred. Do not act on pending-language in this file without cross-checking `roadmap.md`.
 **Date:** 2026-08 · **Branch:** `main` · **Method:** direct code inspection of `src/plugins/marketplace/`, `src/migrations/`, `src/vendure-config.ts` — not doc-derived.
 
 **Purpose:** resolve the contradiction between `roadmap.md` ("scaffold complete") and `plugin-map.md` ("production-ready") by establishing what is actually implemented, before Phase 3 work begins.

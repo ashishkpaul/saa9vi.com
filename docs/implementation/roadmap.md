@@ -85,7 +85,7 @@
 
 ### Phase 3A — Discovery correctness (complete)
 
-- [x] **Latent defect closure:** migration `1788265440266-MarketplaceAdEntities` generated via Vendure CLI, applied, and PostgreSQL-verified (`marketplace_ad_campaign`, `ad_wallet`, `ad_spend_ledger` — schemas match entity definitions; tables previously existed out-of-band, see `phase3-audit.md` F2). AdSpendLedger immutability service-level test still pending.
+- [x] **Latent defect closure:** migration `1788265440266-MarketplaceAdEntities` generated via Vendure CLI, applied, and PostgreSQL-verified (`marketplace_ad_campaign`, `ad_wallet`, `ad_spend_ledger` — schemas match entity definitions; tables previously existed out-of-band, see `phase3-audit.md` F2). AdSpendLedger immutability (INV-010) is verified by the Phase 3A/3C infrastructure-gated E2E (UPDATE/DELETE rejection — see Gate 1.5 and 3C.6 below).
 - [x] `MarketplaceIndexerPlugin` projection infrastructure — ES indices, BullMQ queue, event listener, public search resolver *(code-verified; E2E coverage added at Gate 1.5 below)*
 - [x] Canonical marketplace document contract — `customDomain` added to both documents + ES mappings (F3/Gate 1.2); session `subjectTags` sourced from new `BbbScheduledSession.subjectTags` column via migration `1788266256055` (F4/Gate 1.3); instructor tags from `expertiseAreas`. `MarketplaceCategory` entity deferred until category-browsing UI exists. Field→event matrix completed at Gate 1.4 (see below)
 - [x] **Public-index leak fix (F7):** `indexSession()` gates on `visibility === 'PUBLIC'` + `status IN ('SCHEDULED','LIVE')`, removing non-conforming documents
