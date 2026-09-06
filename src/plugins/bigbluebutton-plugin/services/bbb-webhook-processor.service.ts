@@ -110,6 +110,7 @@ export class BbbWebhookProcessorService {
         ctx,
         event.eventType,
         event.payload,
+        eventId,
       );
 
       event.status = "PROCESSED";

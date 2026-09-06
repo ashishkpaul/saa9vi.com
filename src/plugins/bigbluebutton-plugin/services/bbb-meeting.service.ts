@@ -37,6 +37,7 @@ import { BbbMetricsService } from "./bbb-metrics.service";
 import { BbbReconciliationService } from "./bbb-reconciliation.service";
 import { BbbEntitlementService } from "./bbb-entitlement.service";
 import { BbbChannelAccessService } from "./bbb-channel-access.service";
+import { SessionAttendanceService } from "./session-attendance.service";
 import {
   MeetingProvisionedEvent,
   MeetingCompletedEvent,
@@ -105,6 +106,7 @@ export class BbbMeetingService implements OnModuleInit {
     private readonly entitlementService: BbbEntitlementService,
     private readonly membershipService: BbbMembershipService,
     private readonly channelAccess: BbbChannelAccessService,
+    private readonly sessionAttendanceService: SessionAttendanceService,
   ) {}
 
   async onModuleInit() {
@@ -1208,6 +1210,7 @@ export class BbbMeetingService implements OnModuleInit {
     ctx: RequestContext,
     eventType: string,
     payload: Record<string, unknown>,
+    webhookEventId?: string,
   ): Promise<void> {
     const bbbMeetingId = this.extractBbbMeetingId(payload);
     if (!bbbMeetingId) {
@@ -1233,6 +1236,32 @@ export class BbbMeetingService implements OnModuleInit {
           source: "webhook",
         });
         await this.updateTrialAttendanceForMeeting(ctx, meeting, payload);
+        // 3D.3b — derive SessionAttendance from the final attendee snapshot.
+        // channelId is derived server-side from the linked session.
+        try {
+          const session = await this.connection
+            .getRepository(ctx, BbbScheduledSession)
+            .findOne({
+              where: { activeMeeting: { id: meeting.id as string } },
+            });
+          if (session) {
+            const attendeeIds = this.extractWebhookAttendeeCustomerIds(payload);
+            await this.sessionAttendanceService.recordMeetingEndedAttendance(
+              ctx,
+              session,
+              attendeeIds,
+              webhookEventId ?? null,
+              new Date(),
+            );
+          }
+        } catch (err) {
+          // Attendance derivation must not break the meeting lifecycle.
+          // The raw webhook event remains persisted for replay/recovery.
+          Logger.error(
+            `Session attendance derivation failed for meeting ${meeting.id}: ${(err as Error).message}`,
+            loggerCtx,
+          );
+        }
         break;
       case BbbMeetingService.BBB_EVENTS.RECORDING_READY: {
         const recordId = payload.recordID as string;

@@ -23,6 +23,8 @@ import { BbbProductAccess } from "./entities/bbb-product-access.entity";
 import { BbbTrialRegistration } from "./entities/trial-registration.entity";
 import { BbbInstructorAssignment } from "./entities/instructor-assignment.entity";
 import { BbbWebhookEvent } from "./entities/bbb-webhook-event.entity";
+import { SessionAttendance } from "./entities/session-attendance.entity";
+import { SessionAttendanceService } from "./services/session-attendance.service";
 import { BbbEntitlement } from "./entities/bbb-entitlement.entity";
 import { BbbOrganizationMembership } from "./entities/bbb-organization-membership.entity";
 import { BbbCapacityAlertLog } from "./entities/bbb-capacity-alert-log.entity";
@@ -96,6 +98,7 @@ import {
     BbbTrialRegistration,
     BbbInstructorAssignment,
     BbbWebhookEvent,
+    SessionAttendance,
     BbbEntitlement,
     BbbOrganizationMembership,
     BbbCapacityAlertLog,
@@ -136,6 +139,7 @@ import {
     BbbJoinUrlService,
     BbbProvisioningWorkerService,
     CapacityIntelligenceService,
+    SessionAttendanceService,
     BbbOrderFulfillmentListener,
     BbbSubscriptionListener,
   ],

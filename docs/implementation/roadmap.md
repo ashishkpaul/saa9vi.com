@@ -149,6 +149,14 @@
     - Instructor docs enriched with `upcomingSessionsCount`, `minPriceInPaise`, `nextSessionStart` (F7-eligible sessions via BbbInstructorAssignment); mapping ensured on existing instructor indices.
     - Boundary: these instructor aggregate fields are **projection data only** — never authoritative application facts.
     - Verified: `tsc --noEmit`, `npm run build`, marketplace unit suite, and full gated marketplace E2E (7/7) on real PostgreSQL + Redis + Elasticsearch.
+- [x] **3D.3b — `SessionAttendance` entity + idempotent aggregation service**
+  - `SessionAttendance` entity (PG authority, derived/recomputable fact)
+  - `SessionAttendanceService.recordMeetingEndedAttendance()` — v1 aggregation from MEETING_ENDED attendee snapshot
+  - Idempotent via raw-event watermark (`lastProcessedWebhookEventId`)
+  - ChannelId derived server-side from linked `BbScheduledSession`
+  - Wired into `BbbMeetingService.handleWebhookEvent` → `MEETING_ENDED` case (try/catch isolated — attendance failure can't break meeting lifecycle)
+  - Vendure CLI governed migration (`1788681926219-AddSessionAttendance`, verified live in PostgreSQL)
+  - Build + tsc green; E2E tests pending real BBB infrastructure
 - [x] **3D.3a — Attendance analytics design gate COMPLETE** (`docs/implementation/phase3-attendance.md`): two-layer fact model (immutable `BbbWebhookEvent` raw events → derived, recomputable `SessionAttendance` PG fact), `UNIQUE (scheduledSessionId, customerId, channelId)` identity, idempotent webhook aggregation with raw-event watermark, late-event `MANUAL_CORRECTION` path, channel isolation, NO connection to Bayesian ranking in 3D.3, and full E2E acceptance matrix. Implementation checkpoints 3D.3b–3D.3g follow.
 - [ ] **3D.3b — `SessionAttendance` entity + Vendure CLI migration + idempotent aggregation service**
 - [ ] **3D.3c — `AttendanceAnalyticsService`** (summaries: registered/attended/noShow/attendanceRate/avgDuration)
