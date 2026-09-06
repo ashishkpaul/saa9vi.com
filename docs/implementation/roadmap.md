@@ -184,6 +184,7 @@
   - `attendance-overview.tsx` — Channel summary with 30-day window (sessions/registered/attended/noShow/rate)
   - `attendance-session-detail.tsx` — Per-student table (status/duration/cycles/source)
   - Registered under `Marketplace` nav section
+  - CORRECTION: `ListPage` replaced with `Page` + `useQuery` + `api.query` in both files — summary/detail queries are single objects/collections, not `PaginatedList`, so `ListPage`'s generated-variables contract did not apply. Verified via `tsc --noEmit` + `build:dashboard` (both exit 0).
 - [x] **3D.3g — documentation + release notes**
   - `phase3-attendance.md` status → ALL CHECKPOINTS COMPLETE
   - `release-notes.md` → 3D.3 entry added
