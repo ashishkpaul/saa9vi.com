@@ -216,7 +216,10 @@ async function findDocId(es: EsClient, sessionId: string | number): Promise<stri
   if (hit) return hit._id;
   // Fall back: encoded public id may differ from raw id (entityIdStrategy).
   const hit2 = res.hits.hits.find((h) => String((h._source as any)?.id).endsWith(target));
-  return hit2?._id;
+  if (hit2) return hit2._id;
+  const available = res.hits.hits.map((h) => String((h._source as any)?.id));
+  console.log(`[findDocId] no doc for ${sessionId} (target=${target}); available ids: ${JSON.stringify(available)}; count=${res.hits.hits.length}`);
+  return undefined;
 }
 
 describe('Marketplace convergence / recovery (3D.1b Step 9)', () => {
