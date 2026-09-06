@@ -140,10 +140,14 @@
 
 - [x] **3D.1b = COMPLETE** — all steps (1–9) implemented and verified: baseline contract (frozen G, Settings Store), refresh + retry-generation guard, ScheduledTask orchestration → BullMQ refresh queue, target-version global reindex with supersession abort + mid-run version-advance guard, read-only convergence oracle, and a 4/4 convergence/recovery E2E on real PostgreSQL + Redis/BullMQ + Elasticsearch. Scale note (Phase 4): `globalReindex` is sequential per-session — bounded concurrency / bulk ES indexing deferred.
 - [ ] **Ranking materialization** — `RankingMaterializedView` (Postgres) for ranking-history audit / stable snapshot / multi-signal ranking. Deferred until ranking-history audit or multi-signal ranking requires it; not needed for the 3D.1a/3D.1b contract.
-- [x] 3D.2 — Elasticsearch instructor/course search refinement
+- [x] 3D.2 — Elasticsearch instructor/session search refinement
+    - Note on terminology: the marketplace's course representation *is* the scheduled session (BbbScheduledSession + product variant); there is no separate MarketplaceCourse entity. If a distinct course surface is ever added, this becomes its foundation.
+    - **Breaking Shop API change:** removed the dead `city` input from `MarketplaceSearchInput` (never consumed; no location data exists in the model). External callers must not send `city`.
     - Removed dead `city` input; added `priceMin/priceMax/startFrom/startTo` range filters (filter context) and `MarketplaceSessionSort` (RELEVANCE, PRICE_ASC, PRICE_DESC, SOONEST) with `_score` tiebreak for field sorts.
+    - Sort semantics: under `PRICE_*`/`SOONEST`, the explicit field is the **primary** ordering — Bayesian/sponsored score only breaks ties within equal field values. Global ranking dominance applies only under `RELEVANCE`.
     - Fuzzy `multi_match` (fuzziness AUTO) for sessions and instructors — typo-tolerant matching.
     - Instructor docs enriched with `upcomingSessionsCount`, `minPriceInPaise`, `nextSessionStart` (F7-eligible sessions via BbbInstructorAssignment); mapping ensured on existing instructor indices.
+    - Boundary: these instructor aggregate fields are **projection data only** — never authoritative application facts.
     - Verified: `tsc --noEmit`, `npm run build`, marketplace unit suite, and full gated marketplace E2E (7/7) on real PostgreSQL + Redis + Elasticsearch.
 - [ ] Attendance analytics dashboard
 - [ ] Certificate generation on `Entitlement` completion

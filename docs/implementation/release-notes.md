@@ -1,5 +1,23 @@
 # Release Notes
 
+# Release Notes
+
+## Unreleased
+
+### Changed (breaking)
+
+- **3D.2 — Shop API:** removed the dead `city` input from `MarketplaceSearchInput`. It was never consumed by the resolver and no location field exists anywhere in the data model. External storefronts must stop sending `city`; `schema-shop.graphql` and all plugin codegen types have been regenerated.
+
+### New
+
+- **3D.2 — Instructor/session search refinement:**
+  - `MarketplaceSearchInput` gains `priceMin`/`priceMax` (paise) and `startFrom`/`startTo` range filters (ES filter context, no score impact) plus `MarketplaceSessionSort` (RELEVANCE, PRICE_ASC, PRICE_DESC, SOONEST).
+  - Sort semantics: under `PRICE_*`/`SOONEST` the explicit field is the primary ordering; Bayesian/sponsored score only breaks ties. Global ranking dominance applies only under `RELEVANCE`.
+  - Fuzzy `multi_match` (`fuzziness: AUTO`) for session and instructor searches.
+  - Instructor documents enriched with `upcomingSessionsCount`, `minPriceInPaise`, `nextSessionStart` projected from the F7-eligible session population via `BbbInstructorAssignment`; ES mapping ensured on pre-existing instructor indices. These aggregates are projection data only — not authoritative application facts.
+  - Terminology: the marketplace's course representation *is* the scheduled session (BbbScheduledSession + product variant); no separate MarketplaceCourse entity exists.
+
+## v1.17 — 2026-09-04
 ## v1.17 — 2026-09-04
 
 ### New
