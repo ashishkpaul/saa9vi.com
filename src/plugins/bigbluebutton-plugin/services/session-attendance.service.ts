@@ -3,6 +3,7 @@ import { RequestContext, TransactionalConnection } from "@vendure/core";
 
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
+import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { SessionAttendance } from "../entities/session-attendance.entity";
 
 const loggerCtx = "SessionAttendanceService";
@@ -46,7 +47,8 @@ export class SessionAttendanceService {
     eventTime: Date,
   ): Promise<{ created: number; updated: number; noShows: number }> {
     const sessionKey = String(session.id);
-    const channelId = session.channelId ? String(session.channelId) : null;
+    // BbScheduledSession has no channelId — derive from the linked organization.
+    const channelId = await this.resolveSessionChannelId(ctx, session);
 
     // Registered population = active bbb_session entitlements.
     const entitlements = await this.connection
@@ -137,5 +139,23 @@ export class SessionAttendanceService {
       loggerCtx,
     );
     return { created, updated, noShows };
+  }
+
+  /**
+   * Resolve the channelId for a session via its linked organization.
+   * BbScheduledSession has no channelId field — the organization is the
+   * source of the tenant scope (Channel=Tenant invariant).
+   */
+  private async resolveSessionChannelId(
+    ctx: RequestContext,
+    session: BbbScheduledSession,
+  ): Promise<string> {
+    if (session.organization?.channelId) {
+      return String(session.organization.channelId);
+    }
+    const org = await this.connection
+      .getRepository(ctx, BbbOrganization)
+      .findOne({ where: { id: String(session.organizationId) } });
+    return org ? String(org.channelId) : "";
   }
 }

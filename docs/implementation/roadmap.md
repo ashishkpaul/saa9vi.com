@@ -174,7 +174,12 @@
   - Shop schema: `SessionAttendancePublic` type (limited fields — no channelId/meetingId/watermark)
   - Shop query: `mySessionAttendance(sessionId)` — self-view only (filtered by `ctx.activeUserId`)
   - Build + tsc green
-- [ ] **3D.3e — real-infrastructure attendance E2E** (per `phase3-attendance.md` §8 matrix)
+- [x] **3D.3e — real-infrastructure attendance E2E** (4/4 pass on real PostgreSQL)
+  - PRESENT for attendees, NO_SHOW for registered non-attendees
+  - Idempotent: reprocessing same webhook event does not double-count
+  - Late event recomputes status with updated watermark
+  - Admin channel-scoped summary aggregates
+  - Fix: BbScheduledSession has no channelId — resolved via linked organization (Channel=Tenant invariant)
 - [ ] **3D.3f — attendance dashboard extension** (`@vendure/dashboard`, new Marketplace/Attendance route)
 - [ ] Certificate generation on `Entitlement` completion
 - [ ] `bbbSession` CMS section type (CMS-004)
