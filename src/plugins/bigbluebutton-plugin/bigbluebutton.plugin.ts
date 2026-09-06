@@ -52,6 +52,7 @@ import { BbbMembershipService } from "./services/bbb-membership.service";
 import { GrantReaderService } from "./services/grant-reader.service";
 import { LearningDashboardService } from "./services/learning-dashboard.service";
 import { CapacityIntelligenceService } from "./services/capacity-intelligence.service";
+import { AttendanceAnalyticsService } from "./services/attendance-analytics.service";
 import { BbbPlatformCapacityPolicyService } from "./services/bbb-platform-capacity-policy.service";
 import { BbbJoinUrlService } from "./services/bbb-join-url.service";
 import { BbbProvisioningWorkerService } from "./services/bbb-provisioning-worker.service";
@@ -140,6 +141,7 @@ import {
     BbbProvisioningWorkerService,
     CapacityIntelligenceService,
     SessionAttendanceService,
+    AttendanceAnalyticsService,
     BbbOrderFulfillmentListener,
     BbbSubscriptionListener,
   ],

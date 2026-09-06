@@ -159,7 +159,15 @@
   - Build + tsc green; E2E tests pending real BBB infrastructure
 - [x] **3D.3a — Attendance analytics design gate COMPLETE** (`docs/implementation/phase3-attendance.md`): two-layer fact model (immutable `BbbWebhookEvent` raw events → derived, recomputable `SessionAttendance` PG fact), `UNIQUE (scheduledSessionId, customerId, channelId)` identity, idempotent webhook aggregation with raw-event watermark, late-event `MANUAL_CORRECTION` path, channel isolation, NO connection to Bayesian ranking in 3D.3, and full E2E acceptance matrix. Implementation checkpoints 3D.3b–3D.3g follow.
 - [ ] **3D.3b — `SessionAttendance` entity + Vendure CLI migration + idempotent aggregation service**
-- [ ] **3D.3c — `AttendanceAnalyticsService`** (summaries: registered/attended/noShow/attendanceRate/avgDuration)
+- [x] **3D.3c — `AttendanceAnalyticsService`** (read-only query layer)
+  - `getSessionAttendance(ctx, sessionId)` — per-student facts, channel-scoped
+  - `getSessionAttendanceSummary(ctx, sessionId)` — registered/attended/noShow/attendanceRate/avgDuration/completionRate
+  - `getCustomerAttendance(ctx, customerId)` — student's own history, channel-scoped
+  - `getChannelAttendanceSummary(ctx, from, to)` — operational reporting window (filters on lastEventAt)
+  - Metrics: attendanceRate = attended/registered, averageDurationSeconds = mean(totalDurationSeconds) over attended rows
+  - v1: completionRate == attendanceRate (any join = completed; future threshold will diverge)
+  - Channel scoping on every query (security boundary enforced at API layer, 3D.3d)
+  - Build + tsc green
 - [ ] **3D.3d — Admin + Shop (self-view only) attendance APIs**
 - [ ] **3D.3e — real-infrastructure attendance E2E** (per `phase3-attendance.md` §8 matrix)
 - [ ] **3D.3f — attendance dashboard extension** (`@vendure/dashboard`, new Marketplace/Attendance route)
