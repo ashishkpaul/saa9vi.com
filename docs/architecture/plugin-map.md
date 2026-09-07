@@ -194,7 +194,7 @@ None (injects TenantPlugin services for org verification).
 | Property | Value |
 |---|---|
 | **Directory** | `src/plugins/marketplace/` |
-| **Status** | Projection layer implemented; Gate 1 discovery E2E passing (7/7, commit `2e74020`). Ad-entity tables migrated (Gate 1.1: `1788265440266-MarketplaceAdEntities`). **Gates 2–3 complete** — attribution (`d6926a9`, `683b2f7`) and commission ledger with atomic single-use replay (`f534872`), verified by 6/6 commission e2e (`1bcf5e2`). **Phase 3C advertising COMPLETE** (3C.1–3C.7b): AdWalletLedger, wallet service boundary, campaign spend wiring, Banner.scope, bounded bid-boost, 14/14 advertising E2E, 3C.7a self-serve Admin API (tenant-scoped campaign/wallet/spend resolvers), and 3C.7b React dashboard (campaign list/detail, wallet, spend report — all consuming the Admin API). **Phase 3D retention remains.** See `docs/implementation/roadmap.md` for the full Phase 3C breakdown. |
+| **Status** | Projection layer implemented; Gate 1 discovery E2E passing (7/7, commit `2e74020`). Ad-entity tables migrated (Gate 1.1: `1788265440266-MarketplaceAdEntities`). **Gates 2–3 complete** — attribution (`d6926a9`, `683b2f7`) and commission ledger with atomic single-use replay (`f534872`), verified by 6/6 commission e2e (`1bcf5e2`). **Phase 3C advertising COMPLETE** (3C.1–3C.7b): AdWalletLedger, wallet service boundary, campaign spend wiring, Banner.scope, bounded bid-boost, 14/14 advertising E2E, 3C.7a self-serve Admin API (tenant-scoped campaign/wallet/spend resolvers), and 3C.7b React dashboard (campaign list/detail, wallet, spend report — all consuming the Admin API). **Commission reconciliation (R1–R3) COMPLETE** (`fab9969`): read-only `CommissionReconciliationService` + Admin GraphQL query, channel-scoped with SuperAdmin `allChannels` service-side clamp, 7/7 reconciliation E2E on real PostgreSQL. **Phase 3D retention remains.** See `docs/implementation/roadmap.md` for the full Phase 3C breakdown. |
 | **Purpose** | Cross-channel Elasticsearch discovery layer for marketplace. |
 
 ### Owns
@@ -235,6 +235,8 @@ None.
 | `MarketplaceSearchResolver` | Shop API (Public) | `marketplaceSearch` |
 | `MarketplaceAdminResolver` | Admin API (SuperAdmin) | Full reindex |
 | `MarketplaceAdvertisingResolver` | Admin API (MarketplaceAdvertising) | Self-serve campaign management, wallet ledger, spend reports |
+| `MarketplaceCommissionResolver` | Admin API (ReadMarketplaceCommission) | Commission ledger reads for tenant admins |
+| `MarketplaceCommissionReconciliationResolver` | Admin API (ReadMarketplaceCommission) | Read-only `commissionReconciliation` Orders↔CommissionLedger report; channel-scoped, SuperAdmin may pass `allChannels:true` (service-side clamp) |
 
 ### Elasticsearch Indices
 

@@ -6,6 +6,12 @@
 
 ### New
 
+- **Commission reconciliation (Phase 3B, Gates R1–R3) — complete (`fab9969`):**
+  - R1 contract (`docs/implementation/commission-reconciliation.md`): read-only Orders↔CommissionLedger reconciliation; ledger is the sole financial authority (never recalculated, never mutated). Discrepancy classes: MISSING, REPLAYED_REF (informational), AMOUNT_MISMATCH (stored-row internal consistency only — never validated against the current env rate), ORPHAN_LEDGER_ROW, RATE_DRIFT (informational). ZERO_RATE rows are valid facts. All `from`/`to` filters bind to `Order.orderPlacedAt` (including replay diagnostics).
+  - R2 implementation: `CommissionReconciliationService` (4-phase, pure report) exposed as the `commissionReconciliation` Admin GraphQL query via `MarketplaceCommissionReconciliationResolver`, gated by a dedicated `ReadMarketplaceCommission` permission (separate from advertising grants). Channel-scoped by `ctx.channelId`; SuperAdmin may pass `allChannels: true`, enforced by a service-side clamp (a non-SuperAdmin cannot cross channels via the GraphQL argument). Semantic clarity: `commissionLedgerOrderCount` = ledger rows found, `marketplaceOrdersExpected` = marketplace-order population; `effectiveCommissionPercent` is `null` only when GMV is 0 (a 0% row with positive GMV reports `0`).
+  - Correctness fixes surfaced and verified by R3: channel filtering uses TypeORM relation joins (`order.channels`) instead of raw SQL relation expressions; custom-field predicates target the flattened physical columns (`customFieldsOrdersource`, `customFieldsMarketplaceref`) emitted by Vendure 3.6.5.
+  - R3 E2E (`commission-reconciliation.e2e-spec.ts`, `npm run test:e2e:reconciliation`): 7/7 through Admin GraphQL on real PostgreSQL — MATCH (exact count semantics), MISSING (missingCount=1 with no repair), REPLAYED_REF, DIRECT excluded, ZERO_RATE, AMOUNT_MISMATCH (read-only verified: stored value not rewritten), CHANNEL_ISOLATION (A↔B both directions + SuperAdmin allChannels + tenant-admin clamp).
+
 - **Attendance analytics (Phase 3D.3) — complete:**
   - Two-layer fact model: immutable `BbbWebhookEvent` raw events → derived/recomputable `SessionAttendance` PostgreSQL fact (`UNIQUE(scheduledSessionId, customerId, channelId)`).
   - `SessionAttendanceService.recordMeetingEndedAttendance()` — v1 aggregation from MEETING_ENDED webhook attendee snapshot; idempotent via raw-event watermark (`lastProcessedWebhookEventId`); registered population sourced from `BbbEntitlement(type=bbb_session)`; unregistered attendees still get a row (evidence exists).
