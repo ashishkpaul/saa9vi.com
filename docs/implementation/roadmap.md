@@ -56,7 +56,7 @@
 - [x] `BbbCapacityGrant.sourceType` discriminator and subscription-sourced grants on `SubscriptionRenewedEvent`.
 - [x] Monthly subscription invoice-generation path — current implementation publishes `SubscriptionInvoicePaidEvent` from the renewal worker; provider-backed settlement is the Juspay work below.
 
-### Juspay recurring billing — implementation complete; production gates pending
+### Juspay recurring billing — renewal-charge execution implemented; mandate-registration onboarding seam pending
 
 - [x] Step 0 — BuyLits reference analysis (`reference/buylits/`; port patterns, not files).
 - [x] Step 1 — vestigial Juspay surface inventory and subscription-aware integration seam.
