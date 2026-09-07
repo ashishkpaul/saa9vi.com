@@ -81,7 +81,7 @@
 
 ## Phase 3 — Marketplace & Retention
 
-> **Status framing (verified against code 2026-09-05, updated post-3C.7b):** the *projection layer* of `MarketplaceIndexerPlugin` is implemented (ES indices, BullMQ queue, event listener, public `marketplaceSearch` with bayesian + sponsored function-score). Phase 3A discovery gates complete; Phase 3B attribution + commission complete and E2E-verified; **Phase 3C advertising is now COMPLETE** (3C.1 wallet ledger → 3C.2 wallet service → 3C.3 campaign spend → 3C.4 banner scope → 3C.5 bounded bid-boost → 3C.6 E2E → 3C.7a Admin API → 3C.7b React dashboard). **Remaining: Phase 3D retention/aggregation surfaces.** See `docs/implementation/phase3-audit.md` for the verified capability table (note: that audit is a pre-3C historical snapshot — see its header).
+> **Status framing (verified against code 2026-09-05, reconciliation closure 2026-09-07):** the *projection layer* of `MarketplaceIndexerPlugin` is implemented (ES indices, BullMQ queue, event listener, public `marketplaceSearch` with bayesian + sponsored function-score). Phase 3A discovery gates complete; **Phase 3B attribution + commission + reconciliation complete and E2E-verified** (reconciliation R1–R3: 7/7 real-PostgreSQL GraphQL E2E, `fab9969`); **Phase 3C advertising is now COMPLETE** (3C.1 wallet ledger → 3C.2 wallet service → 3C.3 campaign spend → 3C.4 banner scope → 3C.5 bounded bid-boost → 3C.6 E2E → 3C.7a Admin API → 3C.7b React dashboard). **Remaining: Phase 3D retention/aggregation surfaces.** See `docs/implementation/phase3-audit.md` for the verified capability table (note: that audit is a pre-3C historical snapshot — see its header).
 
 ### Phase 3A — Discovery correctness (complete)
 
