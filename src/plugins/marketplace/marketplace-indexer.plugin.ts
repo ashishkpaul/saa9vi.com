@@ -62,6 +62,17 @@ import { bayesianBaselineRefreshTask } from './jobs/bayesian-baseline-refresh.ta
  * - ProductVariantEvent subscription for session index updates ✅ (corrected 2026-09-04: handler was a logging stub; now resolves affected sessions via productVariantId and funnels through the canonical indexSession() F7 gate)
  * - BullMQ job queue for async index writes ✅
  * - Product.customFields.bbbSessionId and instructorProfileId populated ✅
+ *
+ * Phase 3B/3C/3D additions (implemented — see roadmap.md for the authoritative list):
+ * - Commission: `CommissionLedger` + `CommissionLedgerService` + `CommissionListener`
+ *   (OrderPlacedEvent → marketplaceRef re-verify → single-use ledger fact) + `MarketplaceCommissionResolver`
+ * - Attribution: `MarketplaceAttributionService` (server-side orderSource classification)
+ * - Advertising: `MarketplaceAdService` / `MarketplaceAdvertisingService` / `MarketplaceBannerService`
+ *   / `SponsoredBoostConfigService` + `AdWallet` / `AdWalletLedger` / `AdSpendLedger` (INV-010)
+ * - Ranking baseline: `MarketplaceBaselineService` + `BaselineRefreshQueueService` +
+ *   `bayesianBaselineRefreshTask` (ScheduledTask → refresh → target-version globalReindex →
+ *   read-only measureConvergence; 3D.1a/3D.1b contract, steps 1–9)
+ * - Dashboard: attendance overview + session detail routes (`dashboard/index.tsx`)
  */
 @VendurePlugin({
   compatibility: '^3.0.0',
