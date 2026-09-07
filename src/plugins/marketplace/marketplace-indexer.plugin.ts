@@ -25,6 +25,8 @@ import { MarketplaceAdvertisingResolver } from './api/marketplace-advertising.re
 import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema';
 import { BaselineRefreshQueueService } from './services/baseline-refresh-queue.service';
 import { bayesianBaselineRefreshTask } from './jobs/bayesian-baseline-refresh.task';
+import { CommissionReconciliationService } from './services/commission-reconciliation.service';
+import { MarketplaceCommissionReconciliationResolver } from './api/marketplace-commission-reconciliation.resolver';
 
 /**
  * MarketplaceIndexerPlugin — Phase 3.
@@ -99,6 +101,7 @@ import { bayesianBaselineRefreshTask } from './jobs/bayesian-baseline-refresh.ta
     CommissionListener,
     MarketplaceAdvertisingService,
     BaselineRefreshQueueService,
+    CommissionReconciliationService,
   ],
   shopApiExtensions: {
     schema: shopApiExtensions,
@@ -106,7 +109,11 @@ import { bayesianBaselineRefreshTask } from './jobs/bayesian-baseline-refresh.ta
   },
   adminApiExtensions: {
     schema: adminApiExtensions,
-    resolvers: [MarketplaceAdminResolver, MarketplaceAdvertisingResolver],
+    resolvers: [
+      MarketplaceAdminResolver,
+      MarketplaceAdvertisingResolver,
+      MarketplaceCommissionReconciliationResolver,
+    ],
   },
   configuration: (config) => {
     // Order custom fields for Stream 2 commission attribution (ADR-021).

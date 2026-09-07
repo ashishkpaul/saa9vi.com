@@ -235,5 +235,71 @@ export const adminApiExtensions = gql`
     """
     pauseCampaign(id: ID!): Campaign!
   }
+
+  # ── Commission reconciliation / reporting (Gate R2) ──────────────
+
+  type CommissionReconciliationPeriod {
+    from: DateTime
+    to: DateTime
+  }
+
+  type CommissionReconciliationFinancials {
+    marketplaceOrderCount: Int!
+    marketplaceGmvInPaise: Int!
+    commissionEarnedInPaise: Int!
+    zeroRateRowCount: Int!
+    """
+    commissionEarned / GMV for the population, in percent.
+    null when GMV is 0 — "no GMV" and "0% commission" are different facts.
+    """
+    effectiveCommissionPercent: Float
+  }
+
+  type CommissionReconciliationDiagnostics {
+    marketplaceOrdersExpected: Int!
+    ledgerRowsFound: Int!
+    """
+    Marketplace-classified orders with no ledger row — the dangerous class.
+    """
+    missingCount: Int!
+    """
+    Informational: non-marketplace orders whose ref was already consumed
+    by another order (Decision-6 replay arbitration worked as designed).
+    """
+    replayedRefCount: Int!
+    """
+    Stored amount ≠ floor(stored gross × stored percent / 100).
+    """
+    amountMismatchCount: Int!
+    """
+    Ledger rows whose orderId does not resolve to a marketplace-classified order.
+    """
+    orphanLedgerRowCount: Int!
+    """
+    Informational: rows whose stored percent differs from the current
+    env configuration. Historical rows are never invalid.
+    """
+    rateDriftCount: Int!
+  }
+
+  type CommissionReconciliationReport {
+    channelId: String
+    period: CommissionReconciliationPeriod!
+    financials: CommissionReconciliationFinancials!
+    reconciliation: CommissionReconciliationDiagnostics!
+  }
+
+  extend type Query {
+    """
+    Read-only commission reconciliation & reporting (Gate R2).
+    Channel-scoped by default; SuperAdmin may pass allChannels: true.
+    Requires MarketplaceCommission read permission.
+    """
+    commissionReconciliation(
+      from: DateTime
+      to: DateTime
+      allChannels: Boolean
+    ): CommissionReconciliationReport!
+  }
 `;
 

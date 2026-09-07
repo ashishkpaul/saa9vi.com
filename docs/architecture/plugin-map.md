@@ -205,6 +205,7 @@ None (injects TenantPlugin services for org verification).
 | AdSpendLedger | `ad_spend_ledger` | Append-only ad spend records |
 | AdWallet | `ad_wallet` | Prepaid ad wallet per tenant |
 | AdWalletLedger | `ad_wallet_ledger` | Append-only wallet transactions (3C.1, immutable subscriber enforced) |
+| CommissionLedger | `commission_ledger` | Append-only marketplace commission facts (3B; INV-002/DL-030; UNIQUE orderId + UNIQUE marketplaceRef) |
 
 ### Publishes
 

@@ -139,6 +139,12 @@ count and participate in MISSING/MISMATCH accounting identically to paid rows.
 
 * **On-demand, read-only** — an Admin GraphQL query, not a second ScheduledTask.
 * Optional `from`/`to` filter (order placement date); default = all time.
+  **`from`/`to` is applied via `Order.orderPlacedAt`** (Vendure's indexed
+  placement timestamp) — NEVER `CommissionLedger.createdAt` (ledger insertion
+  time is a write-event fact, not a period boundary). Ledger financial values
+  (`grossAmountInPaise`, `commissionPercent`, `commissionAmountInPaise`,
+  `currency`) remain authoritative for all monetary aggregates regardless of
+  the selected period.
 * Channel-scoped by `RequestContext`: a channel admin reconciles only their channel;
   SuperAdmin may reconcile all (INV-002 tenant isolation).
 * Single pass over marketplace orders + ledger join suffices at current volume. If volume
