@@ -104,7 +104,7 @@
 - [x] **`CommissionLedger` $0-row pattern** (DL-030) — entity, service, listener, `MARKETPLACE_COMMISSION_PERCENT` env var, append-only; governed migration with UNIQUE constraints on `marketplaceRef` and `orderId`. Even at 0% commission, a row is written with `commissionAmountInPaise: 0` so GMV history survives rate changes.
 - [x] **Server-side classification listener** (`CommissionListener`) — re-verifies HMAC/TTL/channel at placement, resource-in-order check (Decision 8), single-use replay via UNIQUE index (Decision 6), stamps `orderSource` (INV-008), records ledger row.
 - [x] **Commission E2E** (`commission.e2e-spec.ts`) — 6 cases pass: positive, $0-row, INV-008 forge, replay, no-ref, single-use ref.
-- [ ] Commission reconciliation/admin reporting
+- [ ] Commission reconciliation/admin reporting — **Gate R1 contract adopted** (`commission-reconciliation.md`): read-only Orders↔CommissionLedger comparison; ledger = sole authority (never recalculated, never mutated); discrepancy classes MISSING / REPLAYED_REF (informational) / AMOUNT_MISMATCH (stored-row internal consistency, never vs current env rate) / ORPHAN_LEDGER_ROW; ZERO_RATE rows are valid facts. Next: R2 read-only reporting service + Admin GraphQL, then R3 E2E (7 cases).
 
 ### Phase 3C — Advertising (Stream 3)
 
