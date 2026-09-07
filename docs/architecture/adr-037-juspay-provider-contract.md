@@ -1,6 +1,10 @@
 # ADR-037: Juspay Provider Contract — Verified
+**Status:** ✅ Accepted — Documentation Contract Verified; Live Sandbox Verification Pending
 
-**Status:** ✅ Accepted — Verified Against Live Juspay Documentation
+**Status Semantics:**
+- Documentation contract: ✅ Verified (HyperCheckout docs cross-checked)
+- Application integration: ⚠️ Mandate-registration gap identified (see §8)
+- Live sandbox verification: ⏳ Pending — no live API calls made yet
 
 **Date:** 2026-08-31
 
