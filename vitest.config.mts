@@ -5,7 +5,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     setupFiles: ['./src/plugins/tenant-plugin/e2e/test-setup.ts'],
-    include: ['src/**/*.e2e-spec.ts'],
+    include: ['src/**/*.e2e-spec.ts', 'src/**/*.spec.ts'],
     typecheck: {
       tsconfig: path.join(__dirname, 'tsconfig.e2e.json'),
     },

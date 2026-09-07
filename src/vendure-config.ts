@@ -33,6 +33,7 @@ import { AdSpendLedgerImmutableSubscriber } from './plugins/marketplace/ad-spend
 import { CommissionLedgerImmutableSubscriber } from './plugins/marketplace/commission-ledger-immutable.subscriber';
 import { AdWalletLedgerImmutableSubscriber } from './plugins/marketplace/ad-wallet-ledger-immutable.subscriber';
 import { SubscriptionPlugin } from './plugins/subscription/subscription.plugin';
+import { resolveBillingConfig } from './plugins/subscription/juspay/juspay-billing-config';
 
 /**
  * Security headers middleware enforcing HTTP header hardening for production safety.
@@ -278,6 +279,11 @@ apiOptions: {
     CustomerSuspensionPlugin.init({}),
     PlatformDashboardPlugin.init({}),
     SubscriptionPlugin.init({
+        // Juspay billing credentials (credential-hardening audit GAP 1/2):
+        // env → plugin options is the ONLY credential entry path. When absent,
+        // the plugin's existing fail-closed behavior applies (dev simulates
+        // with a clear log; production refuses to boot).
+        billing: resolveBillingConfig(process.env),
         webhook: {
             // Fail-closed: empty values reject ALL webhook traffic (the auth
             // service never allows when unset — unlike the BuyLits reference).
