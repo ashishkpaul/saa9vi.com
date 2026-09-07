@@ -10,7 +10,11 @@ export interface ReconciliationOptions {
 }
 
 export interface ReconciliationFinancials {
-  marketplaceOrderCount: number;
+  /**
+   * Ledger rows found — NOT the marketplace order population.
+   * When missingCount > 0, reconciliation.marketplaceOrdersExpected > this.
+   */
+  commissionLedgerOrderCount: number;
   marketplaceGmvInPaise: number;
   commissionEarnedInPaise: number;
   zeroRateRowCount: number;
@@ -161,6 +165,14 @@ export class CommissionReconciliationService {
       .where(`order.customFields ->> 'orderSource' IN (:...sources)`, { sources: ['direct', 'referral'] })
       .andWhere(`order.customFields ->> 'marketplaceRef' IS NOT NULL`)
       .andWhere('order.orderPlacedAt IS NOT NULL');
+    // Period-scope (R1 rule: ALL order-derived diagnostics refer to the selected
+    // population — replayed refs outside the window belong to another report).
+    if (options.from) {
+      replayCandidates.andWhere('order.orderPlacedAt >= :rFrom', { rFrom: options.from });
+    }
+    if (options.to) {
+      replayCandidates.andWhere('order.orderPlacedAt <= :rTo', { rTo: options.to });
+    }
     if (!allChannels) {
       replayCandidates.andWhere(
         `EXISTS (SELECT 1 FROM order.channels channel WHERE channel.id = :filterChannelId)`,
@@ -193,7 +205,9 @@ export class CommissionReconciliationService {
         to: options.to ? options.to.toISOString() : null,
       },
       financials: {
-        marketplaceOrderCount: ledgerRowsFound,
+        // Ledger-row count, NOT the marketplace order population —
+        // when missingCount > 0 these differ (see reconciliation.marketplaceOrdersExpected).
+        commissionLedgerOrderCount: ledgerRowsFound,
         marketplaceGmvInPaise,
         commissionEarnedInPaise,
         zeroRateRowCount,

@@ -244,7 +244,12 @@ export const adminApiExtensions = gql`
   }
 
   type CommissionReconciliationFinancials {
-    marketplaceOrderCount: Int!
+    """
+    Number of CommissionLedger rows found for the population.
+    Distinct from reconciliation.marketplaceOrdersExpected: when
+    missingCount > 0, expected > this value.
+    """
+    commissionLedgerOrderCount: Int!
     marketplaceGmvInPaise: Int!
     commissionEarnedInPaise: Int!
     zeroRateRowCount: Int!

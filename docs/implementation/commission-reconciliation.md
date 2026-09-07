@@ -168,12 +168,22 @@ Aggregates computed **from the ledger** (SUM over immutable rows — never a cop
 ```text
 marketplace GMV                  = SUM(grossAmountInPaise)
 commission earned                = SUM(commissionAmountInPaise)
-marketplace order count          = COUNT(rows)
+commissionLedgerOrderCount       = COUNT(rows)   ← ledger rows, NOT the order
+                                                   population (when missingCount > 0,
+                                                   expected > rows)
 zero-rate row count
-effective rate                   = commission / GMV
+effective rate                   = commission / GMV   (null when GMV = 0)
 by channel / by period
 + reconciliation section: missing / amountMismatch / orphan / replayedRef counts
 ```
+
+### Period-scoping rule (frozen)
+
+**ALL order-derived diagnostics are period-scoped** — financials, MISSING,
+REPLAYED_REF, AMOUNT_MISMATCH and the expected population all refer to
+orders with `orderPlacedAt` inside the selected window. ORPHAN_LEDGER_ROW is
+period-agnostic by design (a broken relationship is not a date-window
+mismatch); RATE_DRIFT is a property of the selected ledger rows.
 
 ---
 
