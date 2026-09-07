@@ -447,7 +447,7 @@ The client carries a signed reference but **cannot** choose `orderSource = 'mark
 - Position injection (couples ranking and ad logic, fragile)
 - Separate sponsored endpoint (bad UX, no interleaving)
 
-> **ADR-023 and ADR-024 are intentionally unassigned.** The canonical sequence runs **ADR-022 → ADR-025**; no ADR-023 or ADR-024 exists in the canonical archive or the legacy file, and neither is referenced anywhere. When adding a new decision, use the next free number (**ADR-037**) rather than claiming ADR-023/024.
+> **ADR-023 and ADR-024 are intentionally unassigned.** The canonical sequence runs **ADR-022 → ADR-025**; no ADR-023 or ADR-024 exists in the canonical archive or the legacy file, and neither is referenced anywhere. When adding a new decision, use the next free number after the highest claimed ADR (**ADR-037 is already claimed** — see `docs/architecture/adr-037-juspay-provider-contract.md`); do not claim ADR-023/024.
 
 ---
 
