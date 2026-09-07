@@ -27,6 +27,10 @@ import { BaselineRefreshQueueService } from './services/baseline-refresh-queue.s
 import { bayesianBaselineRefreshTask } from './jobs/bayesian-baseline-refresh.task';
 import { CommissionReconciliationService } from './services/commission-reconciliation.service';
 import { MarketplaceCommissionReconciliationResolver } from './api/marketplace-commission-reconciliation.resolver';
+import {
+  marketplaceAdvertisingPermission,
+  marketplaceCommissionPermission,
+} from './constants';
 
 /**
  * MarketplaceIndexerPlugin — Phase 3.
@@ -116,6 +120,14 @@ import { MarketplaceCommissionReconciliationResolver } from './api/marketplace-c
     ],
   },
   configuration: (config) => {
+    // Register custom permissions (Gate R2). Without this, @Allow() rejects
+    // every caller — including SuperAdmin — because the permission strings
+    // never enter the role/permission registry.
+    config.authOptions.customPermissions.push(
+      marketplaceAdvertisingPermission,
+      marketplaceCommissionPermission,
+    );
+
     // Order custom fields for Stream 2 commission attribution (ADR-021).
     // - orderSource: server-classified only (INV-008); client never writes it.
     // - marketplaceRef: attached ONLY via the dedicated applyMarketplaceReference mutation.

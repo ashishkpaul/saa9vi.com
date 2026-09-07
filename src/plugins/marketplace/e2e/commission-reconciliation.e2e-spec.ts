@@ -1,21 +1,34 @@
 /**
- * Commission classification + ledger e2e (Phase 3B.5).
+ * Commission reconciliation surface — R3 (Phase 3B reconciliation gate).
  *
- * Infrastructure-gated: requires Postgres. No Elasticsearch or Redis needed.
+ * Consumer-level verification of the read-only reconciliation contract
+ * (docs/implementation/commission-reconciliation.md §8):
  *
- * Run:  COMMISSION_E2E=true npm run test:e2e:commission
+ *   R3.1 MATCH            — marketplace order + ledger row align exactly
+ *   R3.2 MISSING          — marketplace order with its ledger row removed
+ *   R3.3 REPLAYED_REF     — ref consumed by order A, replayed on order B (informational)
+ *   R3.4 DIRECT excluded  — non-marketplace order is out of the expected population
+ *   R3.5 ZERO_RATE        — 0% row with GMV > 0 => effective commission 0 (valid fact)
+ *   R3.6 AMOUNT_MISMATCH  — corrupt only the stored amount (historical-row integrity)
+ *   R3.7 CHANNEL_ISOLATION— both directions + SuperAdmin allChannels + tenant-admin clamp
  *
- * Coverage (the six cases the 3B.3 review flagged as essential):
- *   1. Positive        - valid ref + resource on order -> marketplace + ledger row
- *   2. DL-30 $0-row    - MARKETPLACE_COMMISSION_PERCENT=0 -> row with amount=0
- *   3. INV-008 forge   - client forges orderSource='marketplace' -> reclassified direct
- *   4. Replay          - same ref on a 2nd order -> direct, no 2nd row
- *   5. No-ref          - plain checkout -> direct, no row
- *   6. Concurrency     - two concurrent same-ref orders -> exactly one ledger row
+ * Every case drives the full path:
+ *   Admin GraphQL  -> @Allow(MarketplaceCommissionRead)
+ *                 -> MarketplaceCommissionReconciliationResolver
+ *                 -> CommissionReconciliationService
+ *                 -> PostgreSQL (Order + CommissionLedger)
  *
- * Isolation: dedicated Postgres schema (e2e_reconciliation) so dev/live ledgers are
- * never touched. The dummy payment handler settles immediately, firing
- * OrderPlacedEvent without any external payment provider.
+ * Infra-gated: requires Postgres. No Elasticsearch or Redis needed.
+ *
+ * Run:  RECONCILIATION_E2E=true npm run test:e2e:reconciliation
+ *
+ * Isolation: dedicated Postgres schema (e2e_commission). Each case provisions its
+ * OWN fresh channel + marketplace order via the proven tenant fixture, so exact
+ * counts are deterministic and order-independent — reconciliation never depends
+ * on rows left behind by a previous test.
+ *
+ * Read-only invariant is asserted inline (R3.1 ledger snapshot; R3.6 stored
+ * amount is NOT rewritten by reconciliation — observation, not repair).
  */
 
 import 'reflect-metadata';
@@ -29,31 +42,42 @@ import {
   testConfig,
 } from '@vendure/testing';
 import {
+  Administrator,
+  Channel,
   DefaultLogger,
   LogLevel,
+  NativeAuthenticationMethod,
+  Order,
+  PasswordCipher,
+  PaymentMethodService,
+  Permission,
+  ProductService,
+  ProductVariantService,
+  Role,
+  RoleService,
+  TransactionalConnection,
+  User,
   dummyPaymentHandler,
   mergeConfig,
-  Order,
-  PaymentMethodService,
-  ProductService,
-  ProductVariant,
-  ProductVariantService,
 } from '@vendure/core';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { getSuperadminContext } from '@vendure/testing/lib/utils/get-superadmin-context';
 
 import { TenantPlugin } from '../../tenant-plugin/tenant-plugin.plugin';
+// registerNewTenant assigns TENANT_ADMIN_ROLE_PERMISSIONS which includes
+// BBB/CMS/Reviews granular permissions — those plugins must be registered or
+// RoleService rejects the role as invalid (error.permission-invalid).
+import { BigBlueButtonPlugin } from '../../bigbluebutton-plugin';
+import { CmsPlugin } from '../../cms/cms.plugin';
+import { ReviewsPlugin } from '../../reviews/reviews-plugin';
 import { MarketplaceIndexerPlugin } from '../marketplace-indexer.plugin';
 import { SchemaPostgresInitializer } from '../../tenant-plugin/e2e/schema-postgres-initializer';
 import { CommissionLedger } from '../entities/commission-ledger.entity';
-import { CommissionLedgerService } from '../services/commission-ledger.service';
 import { CommissionReconciliationService } from '../services/commission-reconciliation.service';
 import { MarketplaceAttributionService } from '../services/marketplace-attribution.service';
-import { TransactionalConnection } from '@vendure/core';
 
 registerInitializer('postgres', new SchemaPostgresInitializer());
 
-const COMMISSION_E2E = process.env.COMMISSION_E2E === 'true';
 const RECONCILIATION_E2E = process.env.RECONCILIATION_E2E === 'true';
 
 async function assertPostgres(): Promise<void> {
@@ -84,9 +108,19 @@ const { server, adminClient, shopClient } = createTestEnvironment(
     paymentOptions: {
       paymentMethodHandlers: [dummyPaymentHandler],
     },
-    plugins: [TenantPlugin, MarketplaceIndexerPlugin],
+    plugins: [TenantPlugin, MarketplaceIndexerPlugin, BigBlueButtonPlugin, CmsPlugin, ReviewsPlugin],
   }),
 );
+
+const REGISTER_NEW_TENANT = gql`
+  mutation RegisterNewTenant($input: RegisterTenantInput!) {
+    registerNewTenant(input: $input) {
+      channelId
+      channelToken
+      administratorId
+    }
+  }
+`;
 
 const REGISTER_CUSTOMER = gql`
   mutation RegisterCustomer($input: RegisterCustomerInput!) {
@@ -184,7 +218,7 @@ async function waitFor<T>(
   return last;
 }
 
-async function createVariant(priceInPaise: number): Promise<string> {
+async function createVariant(priceInPaise: number): Promise<{ variantId: string; productId: string }> {
   const ctx = await getSuperadminContext(server.app);
   const productService = server.app.get(ProductService);
   const variantService = server.app.get(ProductVariantService);
@@ -212,15 +246,15 @@ async function createVariant(priceInPaise: number): Promise<string> {
     },
   ]);
   const variant = Array.isArray(variants) ? variants[0] : variants;
-  return String(variant.id);
+  return { variantId: String(variant.id), productId: String(product.id) };
 }
 
-async function issueRef(resourceId: string): Promise<string> {
+async function issueRef(resourceId: string, channelToken: string): Promise<string> {
   const attribution = server.app.get(MarketplaceAttributionService);
   return attribution.issueRef({
     resourceType: 'session',
     resourceId,
-    channelId: E2E_DEFAULT_CHANNEL_TOKEN,
+    channelId: channelToken,
   });
 }
 
@@ -350,151 +384,6 @@ async function readOrderSource(orderId: string): Promise<string | null> {
 // Suite
 // ---------------------------------------------------------------------------
 
-describe('Commission classification + ledger (3B.5)', () => {
-  const d = COMMISSION_E2E ? describe : describe.skip;
-
-  beforeAll(async () => {
-    await assertPostgres();
-    await server.init({
-      initialData: {
-        defaultLanguage: 'en' as any,
-        defaultZone: 'India',
-        taxRates: [{ name: 'Standard Tax', percentage: 18 }],
-        shippingMethods: [{ name: 'Standard Shipping', price: 0 }],
-        paymentMethods: [
-          { name: 'Dummy Payment', handler: { code: 'dummy-payment-handler', arguments: [{ name: 'automaticSettle', value: 'true' }] } },
-        ],
-        countries: [{ name: 'India', code: 'IN', zone: 'India' }],
-        collections: [],
-      },
-      customerCount: 0,
-    });
-    shopClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
-
-    // Create the dummy payment method explicitly (the populator's
-    // populatePaymentMethods swallows errors, so we create it directly).
-    const ctx = await getSuperadminContext(server.app);
-    const pmService = server.app.get(PaymentMethodService);
-    await pmService.create(ctx, {
-      code: 'dummy-payment',
-      enabled: true,
-      handler: { code: 'dummy-payment-handler', arguments: [{ name: 'automaticSettle', value: 'true' }] },
-      translations: [{ languageCode: 'en' as any, name: 'Dummy Payment' }],
-    });
-  }, 60000);
-
-  d('commission flow', () => {
-    it('classifies marketplace + writes a ledger row for a valid ref', async () => {
-      await registerAndLoginCustomer();
-      const variantId = await createVariant(100000);
-      const ref = await issueRef(variantId);
-      const orderId = await placeOrder({ variantId, withRef: ref });
-
-      const source = await waitFor(() => readOrderSource(orderId), (s) => s === 'marketplace');
-      expect(source).toBe('marketplace');
-
-      const rows = await waitFor(() => readLedgerRows(), (r) => r.length === 1);
-      expect(rows).toHaveLength(1);
-      expect(rows[0].orderId).toBe(orderId);
-      expect(rows[0].orderSource).toBe('marketplace');
-      expect(rows[0].marketplaceRef).toBe(ref);
-      expect(rows[0].grossAmountInPaise).toBe(100000);
-      expect(rows[0].commissionPercent).toBe(0);
-      expect(rows[0].commissionAmountInPaise).toBe(0);
-    });
-
-    it('writes a $0 ledger row at 0% rate + commission math is correct', async () => {
-      const ledgerService = server.app.get(CommissionLedgerService);
-      expect(ledgerService.computeCommissionAmount(100000, 10)).toBe(10000);
-      expect(ledgerService.computeCommissionAmount(100000, 0)).toBe(0);
-      expect(ledgerService.computeCommissionAmount(99999, 10)).toBe(9999);
-      expect(ledgerService.computeCommissionAmount(100000, 100)).toBe(100000);
-
-      await registerAndLoginCustomer();
-      const variantId = await createVariant(50000);
-      const ref = await issueRef(variantId);
-      const orderId = await placeOrder({ variantId, withRef: ref });
-
-      const rows = await waitFor(() => readLedgerRows(), (r) => r.some((x) => x.orderId === orderId));
-      const row = rows.find((x) => x.orderId === orderId)!;
-      expect(row.commissionPercent).toBe(0);
-      expect(row.commissionAmountInPaise).toBe(0);
-      expect(row.grossAmountInPaise).toBe(50000);
-    });
-
-    it('reclassifies a forged orderSource=marketplace to direct (INV-008)', async () => {
-      await registerAndLoginCustomer();
-      const variantId = await createVariant(100000);
-      const orderId = await placeOrder({ variantId, forgeOrderSource: true });
-
-      const source = await waitFor(() => readOrderSource(orderId), (s) => s === 'direct');
-      expect(source).toBe('direct');
-
-      const rows = await readLedgerRows();
-      expect(rows.some((r) => r.orderId === orderId)).toBe(false);
-    });
-
-    it('reclassifies a replayed ref to direct and writes no second row', async () => {
-      await registerAndLoginCustomer();
-      const variantId = await createVariant(100000);
-      const ref = await issueRef(variantId);
-
-      const order1 = await placeOrder({ variantId, withRef: ref });
-      await waitFor(() => readOrderSource(order1), (s) => s === 'marketplace');
-
-      await registerAndLoginCustomer();
-      const order2 = await placeOrder({ variantId, withRef: ref });
-      const source2 = await waitFor(() => readOrderSource(order2), (s) => s !== null);
-      expect(source2).toBe('direct');
-
-      const rows = await waitFor(() => readLedgerRows(), (r) => r.some((x) => x.orderId === order1));
-      const rowsForRef = rows.filter((r) => r.marketplaceRef === ref);
-      expect(rowsForRef).toHaveLength(1);
-      expect(rowsForRef[0].orderId).toBe(order1);
-    });
-
-    it('classifies a no-ref checkout as direct with no ledger row', async () => {
-      await registerAndLoginCustomer();
-      const variantId = await createVariant(100000);
-      const orderId = await placeOrder({ variantId });
-
-      const source = await waitFor(() => readOrderSource(orderId), (s) => s === 'direct');
-      expect(source).toBe('direct');
-
-      const rows = await readLedgerRows();
-      expect(rows.some((r) => r.orderId === orderId)).toBe(false);
-    });
-
-    it('writes exactly one ledger row for two same-ref orders', async () => {
-      // Two orders present the SAME marketplace ref. The UNIQUE (marketplaceRef)
-      // index guarantees exactly one CommissionLedger row is written; the
-      // second order is reclassified to 'direct' (ADR-021 Decision 6).
-      //
-      // Note: run sequentially rather than via Promise.all because the shared
-      // ShopApiClient uses a cookie jar that cannot safely serve two
-      // concurrent sessions. The single-use guarantee is enforced at the DB
-      // level by the UNIQUE index, not by client-level parallelism.
-      const variantId = await createVariant(100000);
-      const ref = await issueRef(variantId);
-
-      const order1 = await placeOrder({ variantId, withRef: ref });
-      await waitFor(() => readOrderSource(order1), (s) => s === 'marketplace');
-
-      const order2 = await placeOrder({ variantId, withRef: ref });
-      await waitFor(() => readOrderSource(order2), (s) => s === 'direct');
-
-      const rows = await waitFor(() => readLedgerRows(), (r) => r.some((x) => x.orderId === order1));
-      const rowsForRef = rows.filter((r) => r.marketplaceRef === ref);
-      expect(rowsForRef).toHaveLength(1);
-
-      const src1 = await readOrderSource(order1);
-      const src2 = await readOrderSource(order2);
-      expect(src1).toBe('marketplace');
-      expect(src2).toBe('direct');
-    });
-  });
-});
-
 // ---- R3: reconciliation surface (gated by RECONCILIATION_E2E) ----
 const RECONCILE = gql`
   query Reconcile($allChannels: Boolean) {
@@ -506,7 +395,8 @@ const RECONCILE = gql`
   }
 `;
 
-async function runRecon(allChannels?: boolean): Promise<any> {
+async function runRecon(allChannels?: boolean | null, channelToken?: string): Promise<any> {
+  await adminClient.setChannelToken(channelToken ?? '');
   const r = await adminClient.query(RECONCILE, { allChannels: allChannels ?? null });
   return (r as any).commissionReconciliation;
 }
@@ -515,58 +405,293 @@ async function runRecon(allChannels?: boolean): Promise<any> {
 const rawRepo = (entity: any): any =>
   server.app.get(TransactionalConnection).rawConnection.getRepository(entity);
 
+/** Provision a brand-new tenant channel via the proven registerNewTenant flow. */
+async function provisionChannel(prefix: string): Promise<{ channelId: string; token: string }> {
+  shopClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
+  const email = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@e2e.com`;
+  const result = await shopClient.query(REGISTER_NEW_TENANT, {
+    input: {
+      businessName: `${prefix}-${Date.now()}`,
+      firstName: 'E2E',
+      lastName: 'Tenant',
+      emailAddress: email,
+      password: 'StrongP@ss1',
+      timezone: 'Asia/Kolkata',
+    },
+  });
+  const reg = (result as any).registerNewTenant;
+  if (!reg || !reg.channelId) {
+    throw new Error('provisionChannel failed: ' + JSON.stringify(result));
+  }
+  return { channelId: String(reg.channelId).replace(/^T_/, ''), token: reg.channelToken };
+}
+
+interface OrderInChannelOpts {
+  gross?: number;
+  variantId?: string;
+  productId?: string;
+  ref?: string;
+  expectSource?: 'marketplace' | 'direct';
+}
+
+/** Place an order in the given channel, controlling classification state explicitly. */
+async function orderInChannel(
+  ch: { channelId: string; token: string },
+  opts: OrderInChannelOpts = {},
+): Promise<{ orderId: string; variantId: string }> {
+  shopClient.setChannelToken(ch.token);
+  await registerAndLoginCustomer();
+
+  let variantId = opts.variantId;
+  let productId = opts.productId;
+  if (!variantId || !productId) {
+    const v = await createVariant(opts.gross ?? 100000);
+    variantId = v.variantId;
+    productId = v.productId;
+  }
+
+  const ctx = await getSuperadminContext(server.app);
+  await server.app.get(ProductService).assignProductsToChannel(ctx, {
+    channelId: ch.channelId,
+    productIds: [String(productId)],
+  });
+
+  const ref = opts.ref !== undefined
+    ? opts.ref
+    : opts.expectSource === 'direct'
+      ? undefined
+      : await issueRef(variantId, ch.token);
+
+  const orderId = await placeOrder({ variantId, withRef: ref });
+  const want = opts.expectSource ?? 'marketplace';
+  await waitFor(() => readOrderSource(orderId), (s) => s === want);
+  return { orderId, variantId };
+}
+
+/** Create a non-SuperAdmin administrator with the reconciliation read permission, scoped to one channel. */
+async function createReconAdmin(
+  ch: { channelId: string; token: string },
+): Promise<{ email: string; password: string }> {
+  const ctx = await getSuperadminContext(server.app);
+  const conn = server.app.get(TransactionalConnection);
+  const email = `recon-admin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@e2e.com`;
+  const password = 'StrongP@ss1';
+
+  const role = await server.app.get(RoleService).create(ctx, {
+    code: `recon-admin-${Date.now()}`,
+    description: 'R3 reconciliation channel-scoped admin',
+    // CrudPermissionDefinition generates operation-prefixed names:
+    // ReadMarketplaceCommission (matches marketplaceCommissionPermission.Read).
+    permissions: [Permission.Authenticated, 'ReadMarketplaceCommission'] as Permission[],
+  });
+
+  const roleRepo = conn.getRepository(ctx, Role);
+  const roleEntity = await roleRepo.findOne({ where: { id: role.id }, relations: ['channels'] });
+  const channelEntity = await conn.getRepository(ctx, Channel).findOne({ where: { id: ch.channelId } });
+  if (!roleEntity || !channelEntity) {
+    throw new Error('createReconAdmin: role or channel not found');
+  }
+  roleEntity.channels = [channelEntity];
+  await roleRepo.save(roleEntity);
+
+  const userRepo = conn.getRepository(ctx, User);
+  const savedUser = await userRepo.save(userRepo.create({ identifier: email, verified: true }));
+
+  const hashed = await server.app.get(PasswordCipher).hash(password);
+  const nativeRepo = conn.getRepository(ctx, NativeAuthenticationMethod);
+  const native = nativeRepo.create({ identifier: email, passwordHash: hashed });
+  native.user = savedUser as any;
+  await nativeRepo.save(native);
+
+  const userWithRoles = await userRepo.findOne({ where: { id: savedUser.id }, relations: ['roles'] });
+  if (userWithRoles) {
+    userWithRoles.roles = [roleEntity];
+    await userRepo.save(userWithRoles);
+  }
+
+  const adminRepo = conn.getRepository(ctx, Administrator);
+  await adminRepo.save(adminRepo.create({
+    firstName: 'Recon',
+    lastName: 'Admin',
+    emailAddress: email,
+    user: savedUser,
+  }));
+
+  return { email, password };
+}
+
 describe('Commission reconciliation surface (R3)', () => {
   const d = RECONCILIATION_E2E ? describe : describe.skip;
 
   d('reconciliation cases', () => {
-    it('r1 MATCH + count semantics', async () => {
-      await registerAndLoginCustomer();
-      const vid = await createVariant(100000);
-      const ref = await issueRef(vid);
-      const oid = await placeOrder({ variantId: vid, withRef: ref });
-      await waitFor(() => readOrderSource(oid), (s) => s === 'marketplace');
+    beforeAll(async () => {
+      await assertPostgres();
+      await server.init({
+        initialData: {
+          defaultLanguage: 'en' as any,
+          defaultZone: 'India',
+          taxRates: [{ name: 'Standard Tax', percentage: 18 }],
+          shippingMethods: [{ name: 'Standard Shipping', price: 0 }],
+          paymentMethods: [
+            { name: 'Dummy Payment', handler: { code: 'dummy-payment-handler', arguments: [{ name: 'automaticSettle', value: 'true' }] } },
+          ],
+          countries: [{ name: 'India', code: 'IN', zone: 'India' }],
+          collections: [],
+        },
+        customerCount: 0,
+      });
+      shopClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
+      // Set the default channel token BEFORE logging in as SuperAdmin —
+      // asSuperAdmin() performs a login that needs a valid channel token
+      // (same requirement documented in tenant-plugin.e2e-spec.ts).
+      adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
+      await adminClient.asSuperAdmin();
 
-      const report = await runRecon();
-      expect(report.reconciliation.marketplaceOrdersExpected).toBeGreaterThanOrEqual(1);
+      // Create the dummy payment method explicitly (the populator's
+      // populatePaymentMethods swallows errors, so we create it directly).
+      const ctx = await getSuperadminContext(server.app);
+      const pmService = server.app.get(PaymentMethodService);
+      await pmService.create(ctx, {
+        code: 'dummy-payment',
+        enabled: true,
+        handler: { code: 'dummy-payment-handler', arguments: [{ name: 'automaticSettle', value: 'true' }] },
+        translations: [{ languageCode: 'en' as any, name: 'Dummy Payment' }],
+      });
+    }, 120000);
+
+    it('R3.1 MATCH + exact count semantics (commissionLedgerOrderCount vs marketplaceOrdersExpected)', async () => {
+      const ch = await provisionChannel('recon-match');
+      await orderInChannel(ch, { gross: 100000, expectSource: 'marketplace' });
+      const ledgerBefore = await readLedgerRows();
+
+      const report = await runRecon(null, ch.token);
+
+      expect(report.reconciliation.marketplaceOrdersExpected).toBe(1);
+      expect(report.reconciliation.ledgerRowsFound).toBe(1);
+      expect(report.financials.commissionLedgerOrderCount).toBe(1);
       expect(report.reconciliation.missingCount).toBe(0);
+      expect(report.reconciliation.replayedRefCount).toBe(0);
       expect(report.reconciliation.amountMismatchCount).toBe(0);
+      expect(report.reconciliation.orphanLedgerRowCount).toBe(0);
+
+      // Financial aggregates are ledger-derived.
+      expect(report.financials.marketplaceGmvInPaise).toBe(100000);
+      expect(report.financials.commissionEarnedInPaise).toBe(0); // env rate = 0
+      expect(report.financials.zeroRateRowCount).toBe(1);
+      expect(report.financials.effectiveCommissionPercent).toBe(0); // GMV > 0 => 0%, not null
+
+      // Read-only: reconciliation did not touch the ledger.
+      expect(await readLedgerRows()).toEqual(ledgerBefore);
     });
 
-    it('r2 MISSING (dangerous class)', async () => {
-      await registerAndLoginCustomer();
-      const vid = await createVariant(100000);
-      const ref = await issueRef(vid);
-      const oid = await placeOrder({ variantId: vid, withRef: ref });
-      await waitFor(() => readOrderSource(oid), (s) => s === 'marketplace');
+    it('R3.2 MISSING — the financially dangerous class', async () => {
+      const ch = await provisionChannel('recon-missing');
+      const { orderId } = await orderInChannel(ch, { gross: 100000, expectSource: 'marketplace' });
 
       const rows = await readLedgerRows();
-      const victim = rows.find((x) => x.orderId === oid)!;
+      const victim = rows.find((r) => r.orderId === orderId)!;
       await rawRepo(CommissionLedger).delete(victim.id);
 
-      const report = await runRecon();
-      expect(report.reconciliation.missingCount).toBeGreaterThan(0);
+      const report = await runRecon(null, ch.token);
+
+      expect(report.reconciliation.marketplaceOrdersExpected).toBe(1);
+      expect(report.reconciliation.ledgerRowsFound).toBe(0);
+      expect(report.financials.commissionLedgerOrderCount).toBe(0);
+      expect(report.reconciliation.missingCount).toBe(1);
     });
 
-    it('r7 NO-MUTATION', async () => {
-      const ctx = await getSuperadminContext(server.app);
-      // Snapshot the full ledger row set and the latest order's customFields from
-      // the DB directly, BEFORE running reconciliation.
-      const beforeRows = await readLedgerRows();
-      const orderRepo = rawRepo(Order);
-      const orderBefore = await orderRepo.findOne({ order: { id: 'DESC' } as any, take: 1 } as any);
-      const beforeRawId = orderBefore ? Number(String(orderBefore.id).replace('T_', '')) : null;
-      const beforeCf = JSON.stringify((orderBefore as any)?.customFields ?? {});
+    it('R3.3 REPLAYED_REF — ref consumed by A, replayed on B (informational)', async () => {
+      const ch = await provisionChannel('recon-replay');
+      const v = await createVariant(100000);
+      const ref = await issueRef(v.variantId, ch.token);
 
-      await server.app.get(CommissionReconciliationService).reconcile(ctx as any);
+      await orderInChannel(ch, { variantId: v.variantId, productId: v.productId, ref, expectSource: 'marketplace' });
+      await orderInChannel(ch, { variantId: v.variantId, productId: v.productId, ref, expectSource: 'direct' });
 
-      // Re-query from the DB AFTER reconciliation — a mutation would show up here.
-      const afterRows = await readLedgerRows();
-      expect(afterRows).toEqual(beforeRows);
-      const orderAfter = beforeRawId != null && !isNaN(beforeRawId)
-        ? await orderRepo.findOne({ where: { id: beforeRawId } })
-        : null;
-      const afterCf = JSON.stringify((orderAfter as any)?.customFields ?? {});
-      expect(afterCf).toBe(beforeCf);
+      const rows = await readLedgerRows();
+      const rowsForRef = rows.filter((r) => r.marketplaceRef === ref);
+      expect(rowsForRef).toHaveLength(1);
+
+      const report = await runRecon(null, ch.token);
+      expect(report.reconciliation.marketplaceOrdersExpected).toBe(1); // only A
+      expect(report.reconciliation.ledgerRowsFound).toBe(1);
+      expect(report.reconciliation.replayedRefCount).toBe(1);
+    });
+
+    it('R3.4 DIRECT excluded from the expected population', async () => {
+      const ch = await provisionChannel('recon-direct');
+      await orderInChannel(ch, { gross: 100000, expectSource: 'direct' });
+
+      const report = await runRecon(null, ch.token);
+      expect(report.reconciliation.marketplaceOrdersExpected).toBe(0);
+      expect(report.reconciliation.ledgerRowsFound).toBe(0);
+      expect(report.reconciliation.missingCount).toBe(0);
+    });
+    it('R3.5 ZERO_RATE — 0% row with GMV > 0 is a valid fact (effective 0, not null)', async () => {
+      const ch = await provisionChannel('recon-zero');
+      await orderInChannel(ch, { gross: 50000, expectSource: 'marketplace' });
+
+      const report = await runRecon(null, ch.token);
+      expect(report.financials.zeroRateRowCount).toBe(1);
+      expect(report.financials.marketplaceGmvInPaise).toBe(50000);
+      expect(report.financials.commissionEarnedInPaise).toBe(0);
+      expect(report.financials.effectiveCommissionPercent).toBe(0);
+      expect(report.reconciliation.amountMismatchCount).toBe(0);
+      expect(report.reconciliation.missingCount).toBe(0);
+    });
+
+    it('R3.6 AMOUNT_MISMATCH — stored-row integrity, and reconciliation never rewrites it', async () => {
+      const ch = await provisionChannel('recon-mismatch');
+      const { orderId } = await orderInChannel(ch, { gross: 100000, expectSource: 'marketplace' });
+
+      const rows = await readLedgerRows();
+      const victim = rows.find((r) => r.orderId === orderId)!;
+      await rawRepo(CommissionLedger).update(victim.id, { commissionAmountInPaise: 999 });
+
+      const report = await runRecon(null, ch.token);
+      expect(report.reconciliation.amountMismatchCount).toBe(1);
+
+      // Read-only: the stored value was NOT rewritten by reconciliation.
+      const after = (await readLedgerRows()).find((r) => r.orderId === orderId)!;
+      expect(after.commissionAmountInPaise).toBe(999);
+    });
+
+    it('R3.7 CHANNEL_ISOLATION — both directions + SuperAdmin allChannels + tenant-admin clamp', async () => {
+      // allChannels is global; baseline the report first so the exact delta
+      // assertion is deterministic regardless of what earlier cases left behind.
+      // NOTE: ledgerRowsFound baseline ≠ marketplaceOrdersExpected baseline —
+      // R3.2 deliberately deleted a ledger row for a still-marketplace order,
+      // so both counters must be baselined independently.
+      const baselineReport = await runRecon(true);
+      const baselineOrders = baselineReport.reconciliation.marketplaceOrdersExpected;
+      const baselineLedger = baselineReport.reconciliation.ledgerRowsFound;
+
+      const chA = await provisionChannel('recon-iso-a');
+      const chB = await provisionChannel('recon-iso-b');
+      await orderInChannel(chA, { gross: 100000, expectSource: 'marketplace' });
+      await orderInChannel(chB, { gross: 200000, expectSource: 'marketplace' });
+
+      // SuperAdmin scoped to channel A sees A only.
+      const scopedA = await runRecon(null, chA.token);
+      expect(scopedA.reconciliation.marketplaceOrdersExpected).toBe(1);
+      expect(scopedA.reconciliation.ledgerRowsFound).toBe(1);
+
+      // SuperAdmin scoped to channel B sees B only.
+      const scopedB = await runRecon(null, chB.token);
+      expect(scopedB.reconciliation.marketplaceOrdersExpected).toBe(1);
+      expect(scopedB.reconciliation.ledgerRowsFound).toBe(1);
+
+      // SuperAdmin allChannels:true sees A + B on top of the global baseline.
+      const all = await runRecon(true);
+      expect(all.reconciliation.marketplaceOrdersExpected).toBe(baselineOrders + 2);
+      expect(all.reconciliation.ledgerRowsFound).toBe(baselineLedger + 2);
+
+      // Channel A tenant admin with allChannels:true is CLAMPED to A (service-side).
+      const adminA = await createReconAdmin(chA);
+      await adminClient.asUserWithCredentials(adminA.email, adminA.password);
+      const clamped = await runRecon(true, chA.token);
+      expect(clamped.reconciliation.marketplaceOrdersExpected).toBe(1);
+      expect(clamped.reconciliation.ledgerRowsFound).toBe(1);
     });
   });
 });

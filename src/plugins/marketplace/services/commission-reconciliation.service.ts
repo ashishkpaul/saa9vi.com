@@ -73,11 +73,14 @@ export class CommissionReconciliationService {
     const orderRepo = this.connection.getRepository(ctx, Order);
     const qb = orderRepo
       .createQueryBuilder('order')
-      .where(`order.customFields ->> 'orderSource' = :source`, { source: 'marketplace' })
+      .where('order.customFieldsOrdersource = :source', { source: 'marketplace' })
       .andWhere('order.orderPlacedAt IS NOT NULL');
 
     if (!allChannels) {
-      qb.andWhere(`EXISTS (SELECT 1 FROM order.channels channel WHERE channel.id = :filterChannelId)`, {
+      // Channel isolation via TypeORM relation join (order ↔ channels M2M join
+      // table). A raw `EXISTS (... order.channels ...)` is emitted as literal
+      // SQL — TypeORM does not translate relation paths there.
+      qb.innerJoin('order.channels', 'channel').andWhere('channel.id = :filterChannelId', {
         filterChannelId: channelId,
       });
     }
@@ -143,7 +146,7 @@ export class CommissionReconciliationService {
       const resolved = await orderRepo
         .createQueryBuilder('order')
         .select('order.id', 'id')
-        .addSelect(`order.customFields ->> 'orderSource'`, 'source')
+        .addSelect('order.customFieldsOrdersource', 'source')
         .where('order.id IN (:...ids)', { ids: orphanCandidateIds })
         .getRawMany();
       const sourceById = new Map(resolved.map((r) => [String(r.id), r.source]));
@@ -161,9 +164,9 @@ export class CommissionReconciliationService {
     const replayCandidates = await orderRepo
       .createQueryBuilder('order')
       .select('order.id', 'id')
-      .addSelect(`order.customFields ->> 'marketplaceRef'`, 'ref')
-      .where(`order.customFields ->> 'orderSource' IN (:...sources)`, { sources: ['direct', 'referral'] })
-      .andWhere(`order.customFields ->> 'marketplaceRef' IS NOT NULL`)
+      .addSelect('order.customFieldsMarketplaceref', 'ref')
+      .where('order.customFieldsOrdersource IN (:...sources)', { sources: ['direct', 'referral'] })
+      .andWhere('order.customFieldsMarketplaceref IS NOT NULL')
       .andWhere('order.orderPlacedAt IS NOT NULL');
     // Period-scope (R1 rule: ALL order-derived diagnostics refer to the selected
     // population — replayed refs outside the window belong to another report).
@@ -174,10 +177,9 @@ export class CommissionReconciliationService {
       replayCandidates.andWhere('order.orderPlacedAt <= :rTo', { rTo: options.to });
     }
     if (!allChannels) {
-      replayCandidates.andWhere(
-        `EXISTS (SELECT 1 FROM order.channels channel WHERE channel.id = :filterChannelId)`,
-        { filterChannelId: channelId },
-      );
+      replayCandidates.innerJoin('order.channels', 'channel').andWhere('channel.id = :filterChannelId', {
+        filterChannelId: channelId,
+      });
     }
     const replayRows = await replayCandidates.getRawMany();
     if (replayRows.length > 0) {
