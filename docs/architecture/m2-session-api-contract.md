@@ -327,6 +327,6 @@ This contract will be frozen after:
 4. Does the initial registration include a first payment (charge) or just the mandate?
 5. What's the Order Status API response shape after mandate registration?
 6. What's the exact mandate field schema for your merchant/account? (start_date, end_date, rule_value, block_funds)
-7. **Merchant ID discrepancy:** ADR-037 says `saa9vi`, portal screenshot showed `Saa9viOnlineServices`. Resolve before production.
+7. ~~**Merchant ID discrepancy:**~~ ✅ **Resolved:** `JUSPAY_MERCHANT_ID=saa9vi` confirmed. The earlier `Saa9viOnlineServices` was the account label, not the MID.
 8. **EXPIRED terminal policy:** When a mandate expires, what happens to the OrganizationSubscription? (past_due? cancelled? new expired status?)
 9. **`mandate.rule_value` mapping:** How does Saa9vi's SubscriptionPlan billing cadence map to Juspay's rule_value (1..31 for MONTHLY)?
