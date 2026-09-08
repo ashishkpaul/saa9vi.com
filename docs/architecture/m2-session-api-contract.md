@@ -311,6 +311,55 @@ turning the subscription flow into a core `PaymentMethodHandler`.
 The Session API seam is a **subscription onboarding flow**, not a checkout
 payment. It belongs in the SubscriptionPlugin, not in Vendure's payment system.
 
+### 8.1 Saa9vi domain ↔ provider adapter separation
+
+The M2 implementation MUST isolate provider-specific parameter names from the
+Saa9vi subscription domain. The current draft shows raw Juspay fields
+(`mandate.frequency`, `mandate.rule_value`, `mandate.max_amount`) at the
+application boundary — this is wrong.
+
+**Correct architecture:**
+
+```ts
+SubscriptionPlan
+  frequency
+  billingDay
+  maxRecurringAmount
+        ↓
+JuspaySessionAdapter
+        ↓
+mandate.frequency
+mandate.rule_value
+mandate.max_amount
+```
+
+The adapter maps Saa9vi domain fields to Juspay-specific fields. The domain
+layer never sees provider parameter names. This keeps the provider contract
+isolated and makes it possible to support a different provider in the future
+without changing the subscription domain.
+
+### 8.2 Customer enrollment ≠ Admin subscription
+
+The customer-facing enrollment operation belongs in a **Shop API extension**
+in the SubscriptionPlugin, not in the existing Admin `subscribeToPlan` mutation.
+
+```text
+Admin/platform
+    subscribeToPlan(channelId, planId)
+          ↓
+OrganizationSubscription
+
+Customer
+    enrollment (Shop API)
+          ↓
+Juspay Session
+          ↓
+HyperCheckout
+```
+
+Vendure explicitly supports separate Shop and Admin API extensions, so this
+separation is natural.
+
 ## 9. Freeze criteria
 
 This contract will be frozen after:
@@ -330,3 +379,5 @@ This contract will be frozen after:
 7. ~~**Merchant ID discrepancy:**~~ ✅ **Resolved:** `JUSPAY_MERCHANT_ID=saa9vi` confirmed. The earlier `Saa9viOnlineServices` was the account label, not the MID.
 8. **EXPIRED terminal policy:** When a mandate expires, what happens to the OrganizationSubscription? (past_due? cancelled? new expired status?)
 9. **`mandate.rule_value` mapping:** How does Saa9vi's SubscriptionPlan billing cadence map to Juspay's rule_value (1..31 for MONTHLY)?
+10. **Execution identifier:** Does `POST /txns` require `mandate_id` or `mandate_token` for recurring execution? The existing `executeMandateCharge()` takes `mandate_id`, but the registration flow may return both. Confirm against actual Sandbox response.
+11. **Webhook path dependency:** The application reports "No JUSPAY_WEBHOOK_* seed credentials configured". Before M1.4 can produce meaningful evidence, the Sandbox webhook must point to a live Saa9vi endpoint with Basic Auth + HMAC configured.
