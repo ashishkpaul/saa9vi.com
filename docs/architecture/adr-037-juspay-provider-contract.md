@@ -1,10 +1,11 @@
 # ADR-037: Juspay Provider Contract — Verified
-**Status:** ✅ Accepted — Documentation Contract Verified; Live Sandbox Verification Pending
+**Status:** ✅ Accepted — Documentation Contract Verified; Live Sandbox M1.1 Verified
 
 **Status Semantics:**
 - Documentation contract: ✅ Verified (HyperCheckout docs cross-checked)
+- Live sandbox M1.1: ✅ Verified (auth, session, payment methods discovered)
 - Application integration: ⚠️ Mandate-registration gap identified (see §8)
-- Live sandbox verification: ⏳ Pending — no live API calls made yet
+- Full mandate flow E2E: ⏳ Pending (requires real PG + HyperCheckout UI)
 
 **Date:** 2026-08-31
 
@@ -132,7 +133,8 @@ Authentication with fresh sandbox credentials **succeeded**. The M1.1 verifier
 
 ### Session API contract (live)
 
-`POST /session` returns:
+`POST /session` with required fields (`action`, `return_url`, `order_id`,
+`amount`, `customer_id`, `customer_email`, `customer_phone`) returns:
 
 ```json
 {
@@ -157,20 +159,50 @@ Authentication with fresh sandbox credentials **succeeded**. The M1.1 verifier
 to initialize HyperCheckout. This is the actual handshake, not a server-side
 mandate creation.
 
+### Payment Methods (live discovery)
+
+| Attempt | Result |
+|---|---|
+| `POST /payment_methods` | 404 (does not exist) |
+| `POST /orders/payment_methods` | 400 (order_id mismatch — endpoint exists but wrong path) |
+| `POST /orders/{order_id}/payment_methods` | 404 (does not exist) |
+| `GET /orders/{order_id}/payment_methods` | 404 (does not exist) |
+| **`POST /session` with `options.add_emandate_payment_methods: true`** | **200 NEW** ✅ |
+
+**Key finding:** There is NO separate Payment Methods API. The documented
+"Payment Methods API" is the **Session API** with
+`options.add_emandate_payment_methods: true`. The mandate-capable payment
+methods are rendered in the HyperCheckout UI (via `payment_links.web` or
+`sdk_payload`), not returned in the API response.
+
+The `sdk_payload.payload` echoes back:
+- `options.add_emandate_payment_methods: true` — confirmed
+- `mandate: { frequency, max_amount, block_funds, amount_rule }` — confirmed
+
 ### Merchant capability (confirmed)
 
 - Merchant ID: `saa9vi` (Juspay merchant identifier)
 - Environment: `sandbox`
 - Service: `in.juspay.hyperpay`
 - Session creation: ✅ Working
+- Mandate params in Session API: ✅ Echoed back in sdk_payload
+- Payment methods: ✅ Rendered in HyperCheckout UI (not a separate API)
 
 ### Status update
 
 - Documentation contract: ✅ Verified
 - Live sandbox authentication: ✅ Verified (M1.1)
-- Merchant capability: ✅ Partially confirmed (session creation)
-- Mandate registration flow: ⏳ Not yet tested (requires HyperCheckout UI)
+- Merchant capability: ✅ Confirmed (session + mandate params)
+- Payment methods: ✅ Discovered (via Session API, not separate endpoint)
+- Mandate registration flow: ⏳ Not yet tested (requires HyperCheckout UI + real PG)
 - Webhook events: ⏳ Not yet observed
+
+### Sandbox gateway note
+
+The Sandbox portal shows gateway = `DUMMY`. This means a successful Session
+API call proves authentication + Session API + account configuration, but does
+**not** yet prove a real PG mandate flow. A real PG (not DUMMY) is required for
+the full mandate registration test.
 
 ## Implementation Changes
 

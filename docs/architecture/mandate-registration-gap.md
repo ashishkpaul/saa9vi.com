@@ -1,6 +1,6 @@
 # Mandate-Registration Gap Analysis
 
-> **Status:** Gap confirmed. No code changes yet — this document establishes the contract before implementation.
+> **Status:** Gap confirmed. M1.1 sandbox verification complete (2026-09-08). No code changes yet — this document establishes the contract before implementation.
 > **Supersedes:** The earlier (incorrect) assumption that `subscribeToPlan()` calls `createMandate()`.
 
 ## 1. The central finding
@@ -43,8 +43,47 @@ reads it. **But nothing in Saa9vi's application layer ever inserts the first row
 | Any caller of `JuspaySdk.createMandate()` | SDK method is dead code |
 | Any GraphQL mutation to enroll a mandate | No API seam |
 | Any service method that creates `JuspaySubscriptionMandate` from a customer authorization | Mandate row never inserted |
-| Any Session API integration (Juspay HyperCheckout) | No customer-facing authorization flow |
+| Any Session API integration (Juspay HyperCheckout) | No customer-facing authorization flow — **M1.1 confirmed this is the correct path** |
 | Any mapping from Juspay provider status strings to internal `JuspayMandateStatus` | Webhook processor must assume alignment |
+
+---
+
+## 5A. M1.1 Live Sandbox Findings (2026-09-08)
+
+The M1.1 verifier (`juspay-m1.1-verify.ts`) confirmed the following against the
+live Sandbox environment:
+
+### Session API contract (live-confirmed)
+
+`POST /session` requires these fields (official docs confirmed by live call):
+- `action`: `"paymentPage"` — required
+- `return_url`: valid HTTPS URL — required
+- `order_id`, `amount`, `customer_id`, `customer_email`, `customer_phone` — required
+- `options.create_mandate`: `"REQUIRED"` — mandate registration flag
+- `mandate.max_amount`, `mandate.frequency`, `mandate.amount_rule`, `mandate.block_funds` — mandate params
+
+Response: `200 NEW` with `sdk_payload.payload.clientAuthToken` (the HyperCheckout
+handshake token) and `payment_links.web` (the checkout URL).
+
+### Payment methods (live-discovered)
+
+There is **NO separate Payment Methods API**. The documented "Payment Methods
+API" is the **Session API** with `options.add_emandate_payment_methods: true`.
+The mandate-capable payment methods are rendered in the HyperCheckout UI, not
+returned in the API response.
+
+### Sandbox gateway limitation
+
+The Sandbox portal shows gateway = `DUMMY`. This proves authentication + Session
+API + account configuration, but does **not** prove a real PG mandate flow. A real
+PG (not DUMMY) is required for the full mandate registration test.
+
+### What this confirms
+
+- The Session API is the correct mandate-registration path (not `POST /mandates`)
+- The frontend needs `sdk_payload.payload.clientAuthToken` to open HyperCheckout
+- Mandate params are echoed back in `sdk_payload.payload.mandate`
+- Payment methods are rendered in HyperCheckout UI (not a separate API)
 
 ---
 
@@ -200,6 +239,7 @@ or remove it.
 
 ## 11. Acceptance criteria for closing this gate
 
+- [x] M1.1 sandbox verification complete — auth, Session API, payment methods confirmed
 - [ ] Mandate-registration flow decision documented (section 7 decisions made)
 - [ ] `createMandate()` either removed or verified + wired to the chosen flow
 - [ ] New application seam creates `JuspaySubscriptionMandate` after customer authorization

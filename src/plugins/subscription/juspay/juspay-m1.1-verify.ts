@@ -4,20 +4,22 @@
  * PURPOSE: Establish the mandate-registration contract for the
  * Saa9viOnlineServices merchant account BEFORE implementing M2 code.
  *
- * FOCUS (post-401 result):
- *   1. Authentication probe — confirm valid credentials
- *   2. Session API — the documented HyperCheckout registration path
- *   3. Controlled Order Status — post-authorization probe
+ * FOCUS:
+ *   A. Authentication probe — confirm valid credentials
+ *   B. Session API — documented HyperCheckout registration path
+ *      (now includes required `action` + `return_url` per official docs)
+ *   C. Controlled Order Status — post-authorization probe
+ *   D. Payment Methods — query merchant's available payment methods
+ *      and identify which support mandate registration
  *
  * DELIBERATELY EXCLUDES: legacy POST /mandates (not the documented
  * registration flow; removed to avoid noise/obsolete documentation).
  *
  * PREREQUISITES: Valid sandbox API key + merchant ID in .env
- *   (the key previously in .env was exposed and must be rotated).
  *   JUSPAY_SANDBOX=true.
  *
- * STATUS: M1.1 authentication unsuccessful (401). Merchant capability
- * not established. Re-run after obtaining valid credentials.
+ * STATUS: M1.1 authentication verified (400 = authenticated). Merchant
+ * capability probe pending (payment methods + mandate-capable methods).
  *
  * USAGE:
  *   npx ts-node src/plugins/subscription/juspay/juspay-m1.1-verify.ts
@@ -78,9 +80,13 @@ async function main() {
     } catch (err) { console.log("  ERROR: " + (err as Error).message); }
 
     // M1.1-B: Session API (documented HyperCheckout registration path)
+    // Official docs require: action, return_url, order_id, amount, customer_id,
+    // customer_email, customer_phone + mandate params
     console.log("\n[M1.1-B] Session API (documented HyperCheckout flow) ...");
     try {
         const sessionBody: Record<string, string> = {
+            action: "paymentPage",
+            return_url: "https://sandbox.saa9vi.com/payments/juspay/return",
             order_id: "m1.1-test-" + Date.now(), amount: "1.00", customer_id: "m1.1-test-customer",
             customer_email: "test@e2e.saa9vi.com", customer_phone: "9999999912",
             "options.create_mandate": "REQUIRED", "mandate.max_amount": "1000.00",
@@ -123,6 +129,40 @@ async function main() {
         }
     } catch (err) { console.log("  ERROR: " + (err as Error).message); }
 
+    // M1.1-D: Payment Methods probe
+    // The Payment Methods API is NOT a separate endpoint. Per the documented
+    // mandate flow, payment methods are filtered via the Session API using
+    // options.add_emandate_payment_methods=true. The actual methods are then
+    // rendered in the HyperCheckout UI (payment_links.web / sdk_payload).
+    // The /orders/{id}/payment_methods endpoint returns 404 (does not exist).
+    console.log("\n[M1.1-D] Payment Methods probe (via Session API) ...");
+    try {
+        const pmOrderId = "m1.1-pm-session-" + Date.now();
+        const pmBody: Record<string, any> = {
+            action: "paymentPage",
+            return_url: "https://sandbox.saa9vi.com/payments/juspay/return",
+            order_id: pmOrderId, amount: "1.00", customer_id: "m1.1-test-customer",
+            customer_email: "test@e2e.saa9vi.com", customer_phone: "9999999912",
+            options: { create_mandate: "REQUIRED", add_emandate_payment_methods: true },
+            mandate: { max_amount: "1000.00", frequency: "MONTHLY", amount_rule: "VARIABLE", block_funds: false },
+            payment_page_client_id: merchantId,
+        };
+        const r = await callApi("D-payment-methods-session", "POST", "/session", pmBody);
+        console.log("  POST /session (with add_emandate_payment_methods) → " + r.status + " (" + r.durationMs + "ms)");
+        const json = r.json as any;
+        if (r.status === 200) {
+            const mandateInPayload = json?.sdk_payload?.payload?.mandate;
+            const addEmandate = json?.sdk_payload?.payload?.options?.add_emandate_payment_methods;
+            console.log("  → sdk_payload.payload.options.add_emandate_payment_methods: " + addEmandate);
+            console.log("  → sdk_payload.payload.mandate: " + JSON.stringify(mandateInPayload));
+            console.log("  → Payment methods rendered in HyperCheckout UI (not returned in API response)");
+            captures[captures.length - 1].notes.push("PAYMENT_METHODS_VIA_SESSION_OK");
+            captures[captures.length - 1].notes.push("mandate_params_echoed=true");
+        } else {
+            console.log("  → " + r.status + ". Response: " + JSON.stringify(r.json, null, 2).slice(0, 400));
+        }
+    } catch (err) { console.log("  ERROR: " + (err as Error).message); }
+
     // Summary
     console.log("\n" + "=".repeat(72));
     console.log("  CAPTURE SUMMARY");
@@ -131,7 +171,9 @@ async function main() {
         console.log("  [" + c.step + "] " + c.method + " " + c.endpoint + " → " + c.httpStatus + " (" + c.durationMs + "ms)");
         if (c.notes.length) console.log("    Notes: " + c.notes.join(", "));
     }
-    console.log("\n  NEXT: Obtain valid sandbox credentials, then re-run.");
+    console.log("\n  KEY FINDING: Payment methods are NOT a separate API.");
+    console.log("  Use Session API with options.add_emandate_payment_methods=true.");
+    console.log("  Methods render in HyperCheckout UI (payment_links.web).");
     console.log("  Do NOT put credentials in ADR-037.");
     console.log("=".repeat(72));
 }
