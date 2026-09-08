@@ -115,6 +115,63 @@ Juspay Billing `BILLING_EXECUTION_*` events exist but are **not** in scope. Saa9
 owns its renewal FSM (CLAIM → ATTEMPT → CHARGE → FINALIZE) per RFC-001. A future
 ADR would be required to switch.
 
+## M1.1 — Live Sandbox Observation Addendum (2026-09-08)
+
+Authentication with fresh sandbox credentials **succeeded**. The M1.1 verifier
+(`juspay-m1.1-verify.ts`) reached `sandbox.juspay.in` and confirmed:
+
+### Authentication
+
+| Probe | Result | Meaning |
+|---|---|---|
+| `GET /orders/{nonexistent}` | 400 RESOURCE_NOT_FOUND | ✅ Authenticated (not 401) |
+| `POST /session` | 200 NEW | ✅ Session created |
+| `GET /orders/{id}` | 400 RESOURCE_NOT_FOUND | ✅ Authenticated |
+
+400 = authenticated, order simply doesn't exist. This is the expected shape.
+
+### Session API contract (live)
+
+`POST /session` returns:
+
+```json
+{
+  "status": "NEW",
+  "id": "ordv2_...",
+  "order_id": "<merchant-order-id>",
+  "payment_links": {
+    "web": "https://sandbox.assets.juspay.in/payment-page/order/ordv2_...",
+    "expiry": "<ISO-8601>"
+  },
+  "sdk_payload": {
+    "service": "in.juspay.hyperpay",
+    "payload": {
+      "clientAuthToken": "tkn_jz-...",
+      "environment": "sandbox"
+    }
+  }
+}
+```
+
+**Integration contract:** The frontend needs `sdk_payload.payload.clientAuthToken`
+to initialize HyperCheckout. This is the actual handshake, not a server-side
+mandate creation.
+
+### Merchant capability (confirmed)
+
+- Merchant ID: `saa9vi` (Juspay merchant identifier)
+- Environment: `sandbox`
+- Service: `in.juspay.hyperpay`
+- Session creation: ✅ Working
+
+### Status update
+
+- Documentation contract: ✅ Verified
+- Live sandbox authentication: ✅ Verified (M1.1)
+- Merchant capability: ✅ Partially confirmed (session creation)
+- Mandate registration flow: ⏳ Not yet tested (requires HyperCheckout UI)
+- Webhook events: ⏳ Not yet observed
+
 ## Implementation Changes
 
 SDK corrected: `executeMandateCharge()` → `POST /txns`; dot-notation body;
