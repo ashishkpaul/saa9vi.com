@@ -9,18 +9,38 @@
 
 ## ⚠️ CRITICAL: Juspay Billing vs HyperCheckout Decision Point
 
-**Before M1.2, investigate whether your Juspay Sandbox merchant has access to
-"Juspay Billing" — a separate product that could significantly simplify the
-implementation.**
+**Status (updated):** Portal screenshot shows **"Mandate Management"** in the
+Sandbox sidebar → Juspay Billing is likely enabled. This changes the next gate.
 
-### What I found
+### What we know
 
-Juspay has **two distinct products** for recurring payments:
+The Sandbox portal (`sandbox.portal.juspay.in`) shows:
 
-| Product | Description | Best for |
-|---|---|---|
-| **HyperCheckout** | One-time payment page + Session API + basic mandate support | Simple mandate registration |
-| **Juspay Billing** | "End to end Mandate lifecycle. Treat Mandates as a configuration, not a codebase" | Full subscription billing |
+```text
+Sandbox portal
+├── Payments
+├── Payment Page
+└── Mandate Management   ← EVIDENCE: Juspay Billing likely enabled
+```
+
+Juspay's official Billing documentation says plans are configured at:
+
+> Dashboard → Mandate Management → Plan Management
+
+and describes Juspay Billing as:
+
+> "End to end Mandate lifecycle. Treat Mandates as a configuration, not a codebase."
+
+### Why this matters
+
+If Juspay Billing is enabled, the architecture changes from:
+
+```text
+Saa9vi owns everything → Juspay executes paymentsto:
+Saa9vi owns domain → Juspay Billing owns payment lifecycle
+```
+
+This could eliminate substantial Saa9vi implementation (scheduling, dunning, retry, plan changes).
 
 ### Juspay Billing capabilities (from docs)
 
@@ -48,18 +68,61 @@ platform handles scheduling, notifications, dunning automatically.
 | Does Juspay Billing expose APIs (not just dashboard)? | Can integrate with Saa9vi | May not be usable |
 | Does it support our renewal model (POST /txns)? | Can reuse existing renewal path | Need to rebuild renewal |
 
-### Recommended action
+### Revised gate sequence
 
-**Before M1.2 (gateway configuration):**
+**Previous plan (now on hold):**
 
-1. Log into the Juspay Sandbox portal
-2. Check if "Juspay Billing" appears as a product/feature
-3. If yes, send me a screenshot of the Billing dashboard/options
-4. We can then evaluate whether it's a better fit than HyperCheckout mandates
+```text
+M1.2  Mandate-capable PG   ← HOLD: don't configure yet
+M1.3  HyperCheckout registration
+M1.4  Provider observation
+M1.5  Contract freeze
+```
 
-**This is a go/no-go decision point.** If Juspay Billing is available and
-API-accessible, it could save months of implementation work. If not, we continue
-with the HyperCheckout path we've already proven (M1.1).
+**New plan (investigate Juspay Billing first):**
+
+```text
+M1.2-A  Juspay Billing capability           ← NOW: click Mandate Management
+M1.2-B  Billing plan configuration
+M1.2-C  Test mandate registration
+M1.2-D  Observe mandate lifecycle
+M1.3    Freeze Saa9vi ↔ Juspay Billing boundary
+M2      Implement adapter
+```
+
+**Fallback (if Plan Management not available):**
+
+```text
+M1.2  Mandate-capable PG
+M1.3  HyperCheckout registration
+M1.4  Provider observation
+M1.5  Contract freeze
+M2    Implementation
+```
+
+### Saa9vi ↔ Juspay Billing boundary (to be confirmed)
+
+```text
+Saa9vi                              Juspay
+────────                            ─────────────
+SubscriptionPlan       ────────→    Billing Plan
+OrganizationSubscription ───────→   Mandate
+Tenant entitlement
+Access state
+Course access
+BBB capacity
+
+                                    Payment scheduling
+                                    Mandate execution
+                                    Payment retry
+                                    Provider dunning
+```
+
+Saa9vi owns education-platform business semantics. Juspay owns payment-provider concerns.
+
+### One important question
+
+Is the current `JuspayBillingService` actually implementing the Juspay Billing product, or merely calling underlying HyperCheckout/Express mandate APIs? This determines how much of the existing renewal code is reusable.
 
 ---
 
