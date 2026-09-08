@@ -68,6 +68,10 @@
 - [x] **Step 5 — Portal Admin billing surface** — read-only mandate status, payment-attempt ledger, webhook/reconciliation incidents, operational filters.
 - [x] **Step 6 — production hardening** — encrypt stored webhook credentials, final secrets review, production credential validation, regression/e2e coverage.
 - [x] **M1.1 — Merchant/account capability verification** — ✅ complete (2026-09-08): authentication ✅, Session API ✅ (action + return_url required), payment methods discovered (via Session API `options.add_emandate_payment_methods=true`, not a separate endpoint), mandate params echoed in sdk_payload ✅. Sandbox gateway = DUMMY (real PG needed for full mandate flow).
+- [ ] **M1.2 — Mandate-capable Sandbox gateway** — configure a real PG (not DUMMY) in the Juspay Sandbox portal that supports mandate registration. Use the Mandates-specific docs ("Payment Methods in Mandates", "Gateway Wise Differences") to identify the correct gateway/payment-method combination.
+- [ ] **M1.3 — Customer authorization test** — perform one controlled HyperCheckout mandate-registration test using the real Session response (`payment_links.web` / `sdk_payload`).
+- [ ] **M1.4 — Observe provider state** — capture `order_id`, `mandate_id`, `mandate_status`, transaction status, webhook event from the M1.3 test.
+- [ ] **M1.5 — Freeze M2 contract** — based on M1.3–M1.4 observations, freeze the M2 application contract.
 - [ ] **M2 — Session API registration seam** — implement the Saa9vi adapter that creates a Juspay Session with mandate parameters and returns the checkout/session contract to the frontend.
 - [ ] **M3 — HyperCheckout authorization + callback** — customer-facing mandate authorization flow; webhook/order-status-driven creation of the first `JuspaySubscriptionMandate` row.
 - [ ] **M4 — Mandate persistence + status mapping** — explicit provider-status → internal-FSM mapper (`pending | active | paused | revoked`), including terminal handling for `FAILURE`/`EXPIRED`.

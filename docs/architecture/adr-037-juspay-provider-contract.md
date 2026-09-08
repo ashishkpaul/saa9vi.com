@@ -1,11 +1,12 @@
 # ADR-037: Juspay Provider Contract — Verified
-**Status:** ✅ Accepted — Documentation Contract Verified; Live Sandbox M1.1 Verified
+**Status:** ✅ Accepted — Documentation Contract Verified; Live Sandbox M1.1 Verified (Session API only)
 
 **Status Semantics:**
 - Documentation contract: ✅ Verified (HyperCheckout docs cross-checked)
-- Live sandbox M1.1: ✅ Verified (auth, session, payment methods discovered)
+- Live sandbox M1.1: ✅ Verified (auth + Session API creation; does NOT prove mandate registration)
+- M1.2 — Mandate-capable Sandbox gateway: ⏳ Pending (current gateway = DUMMY)
 - Application integration: ⚠️ Mandate-registration gap identified (see §8)
-- Full mandate flow E2E: ⏳ Pending (requires real PG + HyperCheckout UI)
+- Full mandate flow E2E: ⏳ Pending (requires M1.2 + HyperCheckout UI + real PG)
 
 **Date:** 2026-08-31
 
@@ -192,17 +193,40 @@ The `sdk_payload.payload` echoes back:
 
 - Documentation contract: ✅ Verified
 - Live sandbox authentication: ✅ Verified (M1.1)
-- Merchant capability: ✅ Confirmed (session + mandate params)
+- Session API creation: ✅ Verified (M1.1 — `status: NEW` proves session, not mandate)
+- Merchant capability: ✅ Confirmed (session + mandate params echoed)
 - Payment methods: ✅ Discovered (via Session API, not separate endpoint)
-- Mandate registration flow: ⏳ Not yet tested (requires HyperCheckout UI + real PG)
+- Mandate registration flow: ⏳ Not yet tested (requires M1.2 + HyperCheckout UI + real PG)
 - Webhook events: ⏳ Not yet observed
 
-### Sandbox gateway note
+### M1.1 scope disclaimer
 
-The Sandbox portal shows gateway = `DUMMY`. This means a successful Session
-API call proves authentication + Session API + account configuration, but does
-**not** yet prove a real PG mandate flow. A real PG (not DUMMY) is required for
-the full mandate registration test.
+> **M1.1 proves authenticated Session API creation with mandate-registration
+> parameters accepted by the Sandbox merchant. It does NOT prove customer
+> mandate authorization.** The `status: NEW` response confirms the session was
+> created — not that a mandate was registered. A real PG (not DUMMY) and a
+> controlled HyperCheckout customer authorization are required to prove mandate
+> registration.
+
+### M1.2 — Next gate: Mandate-capable Sandbox gateway
+
+The Sandbox portal currently shows gateway = `DUMMY`. This is sufficient to
+prove Session API behavior, but **not sufficient to prove the customer
+mandate-registration flow**.
+
+Before implementing M2 application code, the next gate is:
+
+1. **M1.2** — Configure a mandate-capable Sandbox gateway/payment-method
+   combination in the Juspay portal (use the Mandates-specific docs:
+   "Payment Methods in Mandates" and "Gateway Wise Differences").
+2. **M1.3** — Perform one controlled HyperCheckout mandate-registration test
+   using the real Session response (`payment_links.web` / `sdk_payload`).
+3. **M1.4** — Observe provider state: `order_id`, `mandate_id`, `mandate_status`,
+   transaction status, webhook event.
+4. **M1.5** — Freeze M2 application contract based on observed provider behavior.
+
+**Do NOT implement M2 until M1.2–M1.4 are complete.** The application contract
+cannot be frozen without observing the full provider side of the flow.
 
 ## Implementation Changes
 

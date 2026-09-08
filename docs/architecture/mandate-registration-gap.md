@@ -84,6 +84,18 @@ PG (not DUMMY) is required for the full mandate registration test.
 - The frontend needs `sdk_payload.payload.clientAuthToken` to open HyperCheckout
 - Mandate params are echoed back in `sdk_payload.payload.mandate`
 - Payment methods are rendered in HyperCheckout UI (not a separate API)
+- **M1.1 proves session creation, NOT mandate registration** — a real PG (not DUMMY) and customer authorization are required
+
+### M1.2 — Next gate
+
+Before implementing M2 application code:
+
+1. **M1.2** — Configure a mandate-capable Sandbox gateway/payment-method combination
+2. **M1.3** — Perform one controlled HyperCheckout mandate-registration test
+3. **M1.4** — Observe provider state (order_id, mandate_id, mandate_status, webhook)
+4. **M1.5** — Freeze M2 application contract
+
+**Do NOT implement M2 until M1.2–M1.4 are complete.**
 
 ---
 
