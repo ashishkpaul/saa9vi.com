@@ -291,6 +291,10 @@ export interface JuspayWebhookPayload {
 
 ### 5.3 Mandate creation flow (M3)
 
+> **⚠️ Do not assume this flow until M1.4.** The provider could return a
+> successful registration state directly, or the webhook sequence could differ.
+> M1.4 should decide the exact transition.
+
 ```
 "Mandate Created" webhook received
         ↓
@@ -303,9 +307,9 @@ create JuspaySubscriptionMandate row:
   - juspayCustomerId: from webhook
   - mandateId: from webhook (content.mandate.mandate_id)
   - mandateToken: from webhook (content.mandate.mandate_token) ← NEW FIELD
-  - status: "pending"
+  - status: PENDING (assumed — verify in M1.4)
         ↓
-"Mandate Active" webhook → status: "pending" → "active"
+"Mandate Active" webhook → status: pending → active
         ↓
 transition OrganizationSubscription: "pending" → "active"
 ```
