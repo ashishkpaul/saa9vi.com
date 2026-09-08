@@ -1,9 +1,9 @@
 # M2 — Session API Application Contract (DRAFT)
 
-> **Status:** ⏳ PENDING M1.4 FREEZE — This document is a preparation draft.
-> Do NOT implement until M1.2–M1.4 are complete and the contract is frozen.
+> **Status:** ⏳ PENDING M1.5 FREEZE — This document is a preparation draft.
+> Do NOT implement until M1.2–M1.5 are complete and the contract is frozen.
 >
-> **Last updated:** 2026-09-08
+> **Last updated:** 2026-09-08 (corrected: mandate fields, rule_value, event names, merchant ID)
 
 ---
 
@@ -57,7 +57,7 @@ webhook → FINALIZE CAS (existing)
 ### 4.1 SDK method (new)
 
 ```ts
-// juspay-sdk.ts — NEW METHOD (pending M1.4 freeze)
+// juspay-sdk.ts — NEW METHOD (pending M1.5 freeze)
 
 export interface JuspaySessionRequest {
   order_id: string;           // unique merchant order ID (idempotency)
@@ -67,11 +67,27 @@ export interface JuspaySessionRequest {
   customer_phone: string;
   return_url: string;         // HTTPS URL for post-authorization redirect
   payment_page_client_id: string; // merchant ID
+  // Mandate parameters use dot-notation in the actual API request:
+  //   options.create_mandate = "REQUIRED"
+  //   mandate.start_date    = UNIX epoch (required, must be today)
+  //   mandate.end_date      = UNIX epoch (conditional)
+  //   mandate.frequency     = "MONTHLY" | "WEEKLY" | etc.
+  //   mandate.rule_value    = 1..31 for MONTHLY (execution day)
+  //   mandate.max_amount    = decimal rupees
+  //   mandate.amount_rule   = "FIXED" | "VARIABLE"
+  //   mandate.block_funds   = boolean (provider-specific, conditional)
+  options: {
+    create_mandate: "REQUIRED";
+    add_emandate_payment_methods?: boolean;
+  };
   mandate: {
+    start_date: number;       // UNIX epoch timestamp (required, must be today's date)
+    end_date?: number;        // UNIX epoch timestamp (conditional)
+    frequency: string;        // "MONTHLY" | "WEEKLY" | "BIMONTHLY" | etc.
+    rule_value?: number;      // 1..31 for MONTHLY (execution day of month)
     max_amount: string;       // max debit amount (e.g. "1000.00")
-    frequency: string;        // "MONTHLY" | "WEEKLY" | etc.
-    amount_rule: "FIXED" | "VARIABLE";
-    block_funds: boolean;
+    amount_rule?: "FIXED" | "VARIABLE";
+    block_funds?: boolean;    // provider-specific/conditional — NOT universally required
   };
 }
 
@@ -102,6 +118,19 @@ export interface JuspaySessionResponse {
 
 async createSession(req: JuspaySessionRequest): Promise<JuspaySessionResponse>
 ```
+
+**⚠️ IMPORTANT — Mandate field schema (corrected 2026-09-08):**
+The mandate fields above reflect the **current official Juspay Web Session API
+documentation** (`mandate.start_date`, `mandate.end_date`, `mandate.frequency`,
+`mandate.rule_value`). The earlier draft used a simplified flat structure that
+does not match the authoritative schema.
+
+- **`mandate.start_date`** — required for Web mandate flow; UNIX epoch timestamp; must be today's date
+- **`mandate.rule_value`** — maps from Saa9vi's `SubscriptionPlan` billing cadence (e.g. 1..31 for MONTHLY = execution day of month)
+- **`mandate.block_funds`** — provider-specific/conditional; do NOT make it a mandatory Saa9vi domain field until M1.4 confirms it's required for your chosen payment method
+
+**Do NOT freeze this interface until M1.4 confirms the exact field names for
+your merchant/account.**
 
 **Endpoint:** `POST /session` (JSON body, Basic Auth + x-merchantid + x-routing-id)
 
@@ -154,17 +183,28 @@ frontend opens HyperCheckout
 ### 5.1 New webhook events (pending M1.4 verification)
 
 ```ts
-// types.ts — EXTEND (pending M1.4 freeze)
+// types.ts — EXTEND (pending M1.5 freeze)
 
 export type JuspayWebhookEventName =
-  | "MANDATE_CREATED"      // ← NEW: initial mandate registration complete
-  | "MANDATE_FAILED"       // ← NEW: mandate registration failed
-  | "MANDATE_ACTIVATED"    // existing
-  | "MANDATE_PAUSED"       // existing
-  | "MANDATE_REVOKED"      // existing
-  | "CHARGE_SUCCEEDED"     // existing
-  | "CHARGE_FAILED";       // existing
+  | "Mandate Created"       // ← NEW: initial mandate registration complete
+  | "Mandate Active"        // ← NEW: mandate activated (replaces pending)
+  | "Mandate Failed"        // ← NEW: mandate registration failed
+  | "MANDATE_ACTIVATED"     // existing (legacy name — verify if same as "Mandate Active")
+  | "MANDATE_PAUSED"        // existing
+  | "MANDATE_REVOKED"       // existing
+  | "CHARGE_SUCCEEDED"      // existing
+  | "CHARGE_FAILED";        // existing
 ```
+
+**⚠️ IMPORTANT:** The current Juspay documentation describes mandate-specific
+webhooks as **"Mandate Created"**, **"Mandate Active"**, **"Mandate Failed"**.
+These exact provider event names should be used as documented, rather than
+prematurely converting them to Saa9vi-internal names. The implementation should
+normalize provider events internally, but the provider event constants must match
+what Juspay actually sends.
+
+**Verify in M1.4:** Are the event names exactly "Mandate Created", "Mandate Active",
+"Mandate Failed"? Or does your merchant/account use different casing/format?
 
 ### 5.2 Webhook payload extension (pending M1.4 verification)
 
@@ -196,7 +236,7 @@ export interface JuspayWebhookPayload {
 ### 5.3 Mandate creation flow (M3)
 
 ```
-MANDATE_CREATED webhook received
+"Mandate Created" webhook received
         ↓
 extract order_id from payload
         ↓
@@ -209,10 +249,28 @@ create JuspaySubscriptionMandate row:
   - mandateToken: from webhook (content.mandate.mandate_token) ← NEW FIELD
   - status: "pending"
         ↓
-MANDATE_ACTIVATED webhook → status: "pending" → "active"
+"Mandate Active" webhook → status: "pending" → "active"
         ↓
 transition OrganizationSubscription: "pending" → "active"
 ```
+
+### 5.4 Terminal policy for EXPIRED (domain decision needed)
+
+The current Juspay documentation says a mandate moves to `EXPIRED` after its
+end date and recurring execution is no longer allowed. Saa9vi cannot simply
+ignore `EXPIRED`.
+
+**Domain decision pending M1.4:**
+
+```
+EXPIRED
+    ↓
+OrganizationSubscription = past_due?
+                         = cancelled?
+                         = expired? (new status?)
+```
+
+This is a domain decision that affects the subscription FSM.
 
 ## 6. Data-Model Considerations (pending M1.4)
 
@@ -258,13 +316,17 @@ payment. It belongs in the SubscriptionPlugin, not in Vendure's payment system.
 This contract will be frozen after:
 - [ ] M1.2: Mandate-capable Sandbox gateway configured (not DUMMY)
 - [ ] M1.3: One controlled HyperCheckout mandate-registration test
-- [ ] M1.4: Provider state observed (mandate_id, mandate_token, mandate_status, webhook)
-- [ ] M1.5: Contract reviewed and adjusted based on M1.4 evidence
+- [ ] M1.4: Provider state observed (mandate_id, mandate_token, mandate_status, webhook event names, webhook payload)
+- [ ] M1.5: Contract reviewed and adjusted based on M1.4 evidence — **this document frozen**
 
 ## 10. Open questions (resolve in M1.4)
 
 1. Does the webhook contain `mandate_token`? What's the exact field name?
 2. What's the exact `mandate_status` value for a successfully registered mandate?
-3. Is `MANDATE_CREATED` the correct event name, or is it something else?
+3. Are the webhook event names exactly "Mandate Created", "Mandate Active", "Mandate Failed"? Or different casing/format?
 4. Does the initial registration include a first payment (charge) or just the mandate?
 5. What's the Order Status API response shape after mandate registration?
+6. What's the exact mandate field schema for your merchant/account? (start_date, end_date, rule_value, block_funds)
+7. **Merchant ID discrepancy:** ADR-037 says `saa9vi`, portal screenshot showed `Saa9viOnlineServices`. Resolve before production.
+8. **EXPIRED terminal policy:** When a mandate expires, what happens to the OrganizationSubscription? (past_due? cancelled? new expired status?)
+9. **`mandate.rule_value` mapping:** How does Saa9vi's SubscriptionPlan billing cadence map to Juspay's rule_value (1..31 for MONTHLY)?
