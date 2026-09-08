@@ -3,7 +3,63 @@
 > **Status:** ⏳ PENDING M1.5 FREEZE — This document is a preparation draft.
 > Do NOT implement until M1.2–M1.5 are complete and the contract is frozen.
 >
-> **Last updated:** 2026-09-08 (corrected: mandate fields, rule_value, event names, merchant ID)
+> **Last updated:** 2026-09-08 (corrected: mandate fields, rule_value, event names, merchant ID, **Juspay Billing finding**)
+
+---
+
+## ⚠️ CRITICAL: Juspay Billing vs HyperCheckout Decision Point
+
+**Before M1.2, investigate whether your Juspay Sandbox merchant has access to
+"Juspay Billing" — a separate product that could significantly simplify the
+implementation.**
+
+### What I found
+
+Juspay has **two distinct products** for recurring payments:
+
+| Product | Description | Best for |
+|---|---|---|
+| **HyperCheckout** | One-time payment page + Session API + basic mandate support | Simple mandate registration |
+| **Juspay Billing** | "End to end Mandate lifecycle. Treat Mandates as a configuration, not a codebase" | Full subscription billing |
+
+### Juspay Billing capabilities (from docs)
+
+- **Process Tracker (PT) engine** — deterministic scheduling, handles leap years, timezones, edge cases
+- **Pre-debit notifications** — automatic 24-48 hour window (required by RBI in India)
+- **Plan changes** — automatic pro-rata calculations for upgrades/downgrades
+- **Metric billing** — usage-based billing (POST /usage_events)
+- **Strict idempotency** — zero double-charges, 100% revenue assurance
+- **Configurable dunning** — "Retry 3 times, then Skip" rules
+- **APIs:** Session API, Create Order, Mandate Register, Order Status, Webhooks
+
+### Why this matters for Saa9vi
+
+**Current plan (HyperCheckout):** Build the entire mandate lifecycle yourself —
+scheduling, notifications, dunning, plan changes, idempotency.
+
+**Alternative (Juspay Billing):** Configure the lifecycle, don't code it. The
+platform handles scheduling, notifications, dunning automatically.
+
+### Decision criteria
+
+| Question | If Yes → | If No → |
+|---|---|---|
+| Does our Sandbox have Juspay Billing? | Evaluate as primary path | Continue with HyperCheckout |
+| Does Juspay Billing expose APIs (not just dashboard)? | Can integrate with Saa9vi | May not be usable |
+| Does it support our renewal model (POST /txns)? | Can reuse existing renewal path | Need to rebuild renewal |
+
+### Recommended action
+
+**Before M1.2 (gateway configuration):**
+
+1. Log into the Juspay Sandbox portal
+2. Check if "Juspay Billing" appears as a product/feature
+3. If yes, send me a screenshot of the Billing dashboard/options
+4. We can then evaluate whether it's a better fit than HyperCheckout mandates
+
+**This is a go/no-go decision point.** If Juspay Billing is available and
+API-accessible, it could save months of implementation work. If not, we continue
+with the HyperCheckout path we've already proven (M1.1).
 
 ---
 
