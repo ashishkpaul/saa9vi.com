@@ -67,7 +67,11 @@
 - [x] **Step 4 — recurring charge implementation** — SDK boundary, mandate charge initiation, asynchronous `initiated` semantics, webhook-authoritative terminal result, success finalization, failure `past_due`, and reconciliation incident handling.
 - [x] **Step 5 — Portal Admin billing surface** — read-only mandate status, payment-attempt ledger, webhook/reconciliation incidents, operational filters.
 - [x] **Step 6 — production hardening** — encrypt stored webhook credentials, final secrets review, production credential validation, regression/e2e coverage.
-- [ ] **Provider-contract verification gate** — verify exact sandbox/live mandate, charge, webhook event, signature, idempotency, retry, order-ID and transaction-ID contracts before production use.
+- [ ] **M1.1 — Merchant/account capability verification** — confirm which Juspay recurring product is enabled (HyperCheckout Mandates / Juspay Billing / NACH Mandates), which mandate payment methods are available, the exact Session API variant, the `create_mandate` payload accepted, the Session response needed by HyperCheckout, the post-authorization result (order_id, mandate_id, mandate_status, customer_id), the registration webhook event name + payload, the provider status values observed, and whether initial registration includes a first payment.
+- [ ] **M2 — Session API registration seam** — implement the Saa9vi adapter that creates a Juspay Session with mandate parameters and returns the checkout/session contract to the frontend.
+- [ ] **M3 — HyperCheckout authorization + callback** — customer-facing mandate authorization flow; webhook/order-status-driven creation of the first `JuspaySubscriptionMandate` row.
+- [ ] **M4 — Mandate persistence + status mapping** — explicit provider-status → internal-FSM mapper (`pending | active | paused | revoked`), including terminal handling for `FAILURE`/`EXPIRED`.
+- [ ] **M5 — Live end-to-end sandbox verification** — full path: subscription → Session API → HyperCheckout → mandate webhook/order-status → `JuspaySubscriptionMandate` → renewal `POST /txns` → charge webhook → FINALIZE CAS. Append live observations to ADR-037.
 
 ### Remaining Phase 2 product/platform work
 
