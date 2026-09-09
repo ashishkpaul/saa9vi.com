@@ -1,10 +1,10 @@
 import { Body, Controller, ForbiddenException, Headers, HttpCode, Logger, Param, Post, RawBodyRequest, Req, ServiceUnavailableException } from "@nestjs/common";
 import { RequestContextService, TransactionalConnection } from "@vendure/core";
-import { JuspayWebhookAuthService } from "../auth/juspay-webhook-auth.service";
-import { JuspayWebhookQueueService } from "../services/juspay-webhook-queue.service";
-import { JuspayWebhookEvent } from "../entities/juspay-webhook-event.entity";
-import { JuspayWebhookEndpoint } from "../entities/juspay-webhook-endpoint.entity";
-import type { JuspayWebhookPayload } from "../types";
+import { JuspayWebhookAuthService } from "./juspay-webhook-auth.service";
+import { JuspayWebhookQueueService } from "./juspay-webhook-queue.service";
+import { JuspayWebhookEvent } from "../../entities/juspay-webhook-event.entity";
+import { JuspayWebhookEndpoint } from "../../entities/juspay-webhook-endpoint.entity";
+import type { JuspayWebhookPayload } from "../../types";
 
 const loggerCtx = "JuspayWebhookController";
 

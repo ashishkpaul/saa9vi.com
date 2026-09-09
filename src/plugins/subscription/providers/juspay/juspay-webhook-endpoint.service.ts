@@ -2,9 +2,9 @@ import { Injectable, Logger, OnApplicationBootstrap } from "@nestjs/common";
 import { TransactionalConnection } from "@vendure/core";
 import * as crypto from "crypto";
 import { Inject } from "@nestjs/common";
-import { JuspayWebhookEndpoint } from "../entities/juspay-webhook-endpoint.entity";
-import { SUBSCRIPTION_PLUGIN_OPTIONS } from "../constants";
-import type { PluginInitOptions } from "../types";
+import { JuspayWebhookEndpoint } from "../../entities/juspay-webhook-endpoint.entity";
+import { SUBSCRIPTION_PLUGIN_OPTIONS } from "../../constants";
+import type { PluginInitOptions } from "../../types";
 import { JuspayEncryptionService } from "./juspay-encryption.service";
 
 const loggerCtx = "JuspayWebhookEndpointService";

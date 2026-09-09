@@ -28,9 +28,9 @@ import { NestFactory } from '@nestjs/core';
 import { SchemaPostgresInitializer } from '../../tenant-plugin/e2e/schema-postgres-initializer';
 import { E2E_INITIAL_DATA } from '../../tenant-plugin/e2e/fixtures/e2e-initial-data';
 import { SubscriptionPlugin } from '../subscription.plugin';
-import { JuspayWebhookEndpointService } from '../services/juspay-webhook-endpoint.service';
-import { JuspayWebhookProcessorService } from '../services/juspay-webhook-processor.service';
-import { JuspayEncryptionService } from '../services/juspay-encryption.service';
+import { JuspayWebhookEndpointService } from '../providers/juspay/juspay-webhook-endpoint.service';
+import { JuspayWebhookProcessorService } from '../providers/juspay/juspay-webhook-processor.service';
+import { JuspayEncryptionService } from '../providers/juspay/juspay-encryption.service';
 import {
   JuspayPaymentAttempt,
   JuspaySubscriptionMandate,

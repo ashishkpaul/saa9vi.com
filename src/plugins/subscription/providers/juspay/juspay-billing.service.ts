@@ -1,7 +1,7 @@
 import { Injectable, Inject, Logger } from "@nestjs/common";
 import { ID } from "@vendure/core";
-import { JUSPAY_SDK } from "../constants";
-import { JuspaySdk, JuspayChargeResult } from "../juspay/juspay-sdk";
+import { JUSPAY_SDK } from "../../constants";
+import { JuspaySdk, JuspayChargeResult } from "./juspay-sdk";
 
 const loggerCtx = "JuspayBillingService";
 

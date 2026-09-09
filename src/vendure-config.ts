@@ -33,7 +33,7 @@ import { AdSpendLedgerImmutableSubscriber } from './plugins/marketplace/ad-spend
 import { CommissionLedgerImmutableSubscriber } from './plugins/marketplace/commission-ledger-immutable.subscriber';
 import { AdWalletLedgerImmutableSubscriber } from './plugins/marketplace/ad-wallet-ledger-immutable.subscriber';
 import { SubscriptionPlugin } from './plugins/subscription/subscription.plugin';
-import { resolveBillingConfig } from './plugins/subscription/juspay/juspay-billing-config';
+import { resolveBillingConfig } from './plugins/subscription/providers/juspay/juspay-billing-config';
 
 /**
  * Security headers middleware enforcing HTTP header hardening for production safety.

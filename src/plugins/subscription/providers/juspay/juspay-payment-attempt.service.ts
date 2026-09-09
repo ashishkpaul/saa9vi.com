@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { TransactionalConnection, ID } from "@vendure/core";
-import { JuspayPaymentAttempt } from "../entities/juspay-payment-attempt.entity";
+import { JuspayPaymentAttempt } from "../../entities/juspay-payment-attempt.entity";
 
 /**
  * INV-019 transition primitive — the ONLY service allowed to mutate a

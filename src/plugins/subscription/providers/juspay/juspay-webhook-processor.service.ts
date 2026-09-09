@@ -1,11 +1,11 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { RequestContextService, TransactionalConnection } from "@vendure/core";
-import { JuspayWebhookEvent } from "../entities/juspay-webhook-event.entity";
-import { JuspaySubscriptionMandate } from "../entities/juspay-subscription-mandate.entity";
-import { JuspayPaymentAttempt } from "../entities/juspay-payment-attempt.entity";
+import { JuspayWebhookEvent } from "../../entities/juspay-webhook-event.entity";
+import { JuspaySubscriptionMandate } from "../../entities/juspay-subscription-mandate.entity";
+import { JuspayPaymentAttempt } from "../../entities/juspay-payment-attempt.entity";
 import { JuspayPaymentAttemptService } from "./juspay-payment-attempt.service";
-import { SubscriptionRenewalService } from "./subscription-renewal.service";
-import type { JuspayWebhookPayload } from "../types";
+import { SubscriptionRenewalService } from "../../services/subscription-renewal.service";
+import type { JuspayWebhookPayload } from "../../types";
 
 const loggerCtx = "JuspayWebhookProcessorService";
 

@@ -34,10 +34,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SchemaPostgresInitializer } from '../../tenant-plugin/e2e/schema-postgres-initializer';
 import { E2E_INITIAL_DATA } from '../../tenant-plugin/e2e/fixtures/e2e-initial-data';
 import { SubscriptionPlugin } from '../subscription.plugin';
-import { JuspayWebhookAuthService } from '../auth/juspay-webhook-auth.service';
-import { JuspayWebhookProcessorService } from '../services/juspay-webhook-processor.service';
-import { JuspayWebhookQueueService } from '../services/juspay-webhook-queue.service';
-import { JuspayWebhookEndpointService } from '../services/juspay-webhook-endpoint.service';
+import { JuspayWebhookAuthService } from '../providers/juspay/juspay-webhook-auth.service';
+import { JuspayWebhookProcessorService } from '../providers/juspay/juspay-webhook-processor.service';
+import { JuspayWebhookQueueService } from '../providers/juspay/juspay-webhook-queue.service';
+import { JuspayWebhookEndpointService } from '../providers/juspay/juspay-webhook-endpoint.service';
 import {
   JuspayPaymentAttempt,
   JuspaySubscriptionMandate,

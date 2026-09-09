@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import * as crypto from "crypto";
-import { JuspayWebhookEndpoint } from "../entities/juspay-webhook-endpoint.entity";
-import { JuspayWebhookEndpointService } from "../services/juspay-webhook-endpoint.service";
+import { JuspayWebhookEndpoint } from "../../entities/juspay-webhook-endpoint.entity";
+import { JuspayWebhookEndpointService } from "./juspay-webhook-endpoint.service";
 
 const loggerCtx = "JuspayWebhookAuthService";
 
