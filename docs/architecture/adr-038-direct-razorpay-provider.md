@@ -105,4 +105,4 @@ ADR-038 becomes **Accepted** only after:
 - Razorpay Subscriptions: https://razorpay.com/docs/payments/subscriptions
 - Razorpay Webhooks: https://razorpay.com/docs/webhooks/subscriptions
 - Vendure Stripe Plugin: https://docs.vendure.io/current/community-plugins/stripe-plugin
-- Commit: 9c5478d (initial provider-neutral boundary)
+- Commits: `9c5478d` through `d8efcc4` (provider-neutral boundary + Razorpay adapter)
