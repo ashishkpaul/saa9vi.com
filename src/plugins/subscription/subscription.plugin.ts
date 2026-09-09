@@ -31,6 +31,7 @@ import { RazorpayWebhookController } from './providers/razorpay/razorpay-webhook
 import { subscriptionRenewalTask } from './jobs/subscription-renewal.task';
 import { subscriptionDunningTask } from './jobs/subscription-dunning.task';
 import { PluginInitOptions } from './types';
+import { ProviderWebhookEvent } from './entities/provider-webhook-event.entity';
 
 @VendurePlugin({
     imports: [PluginCommonModule],
@@ -44,6 +45,7 @@ import { PluginInitOptions } from './types';
         RenewalPaymentReconciliationRequired,
         SubscriptionProviderBinding,
         SubscriptionBillingAttempt,
+        ProviderWebhookEvent,
     ],
     providers: [
         { provide: SUBSCRIPTION_PLUGIN_OPTIONS, useFactory: () => SubscriptionPlugin.options },
