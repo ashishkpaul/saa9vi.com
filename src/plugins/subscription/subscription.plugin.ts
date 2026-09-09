@@ -1,6 +1,6 @@
 import { PluginCommonModule, RuntimeVendureConfig, Type, VendurePlugin } from '@vendure/core';
 
-import { SUBSCRIPTION_PLUGIN_OPTIONS, JUSPAY_SDK, RAZORPAY_SUBSCRIPTION_PROVIDER } from './constants';
+import { SUBSCRIPTION_PLUGIN_OPTIONS, JUSPAY_SDK, RAZORPAY_SUBSCRIPTION_PROVIDER, RECURRING_BILLING_PROVIDER } from './constants';
 import { OrganizationSubscription } from './entities/organization-subscription.entity';
 import { SubscriptionPlan } from './entities/subscription-plan.entity';
 import { JuspaySubscriptionMandate } from './entities/juspay-subscription-mandate.entity';
@@ -80,6 +80,12 @@ import { ProviderWebhookEvent } from './entities/provider-webhook-event.entity';
         // Razorpay Subscription Provider (new production provider)
         {
             provide: RAZORPAY_SUBSCRIPTION_PROVIDER,
+            useClass: RazorpaySubscriptionProvider,
+        },
+        // Recurring Billing Provider - maps the provider-neutral interface
+        // to the configured provider implementation (Razorpay)
+        {
+            provide: RECURRING_BILLING_PROVIDER,
             useClass: RazorpaySubscriptionProvider,
         },
         // Core services

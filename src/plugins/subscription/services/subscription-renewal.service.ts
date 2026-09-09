@@ -7,23 +7,26 @@ import {
   TransactionalConnection,
 } from "@vendure/core";
 import { OrganizationSubscription } from "../entities/organization-subscription.entity";
-import { JuspaySubscriptionMandate } from "../entities/juspay-subscription-mandate.entity";
-import { JuspayPaymentAttempt } from "../entities/juspay-payment-attempt.entity";
+import { SubscriptionBillingAttempt } from "../entities/subscription-billing-attempt.entity";
 import { RenewalPaymentReconciliationRequired } from "../entities/juspay-reconciliation-required.entity";
 import { SubscriptionRenewedEvent, SubscriptionInvoicePaidEvent } from "../events/subscription.events";
 import { SubscriptionRenewalQueueService } from "./subscription-renewal-queue.service";
-import { JuspayPaymentAttemptService } from "./juspay-payment-attempt.service";
-import { JuspayBillingService } from "./juspay-billing.service";
+import { SubscriptionBillingAttemptService } from "./subscription-billing-attempt.service";
+import { RecurringBillingProvider } from "../providers/recurring-billing.provider";
 import { RenewalResult } from "../types";
+import { RECURRING_BILLING_PROVIDER } from "../constants";
 
 const loggerCtx = "SubscriptionRenewalService";
 
 /**
  * Handles the periodic renewal logic for organization-level SaaS subscriptions.
  * 
- * Separation of Concerns (ADR-037):
+ * Separation of Concerns (ADR-038):
  * - processRenewals(): Discovery of pending renewals (ScheduledTask entry point).
  * - executeRenewal(): Execution of a single renewal (JobQueue worker entry point).
+ *
+ * Provider-neutral: depends on RecurringBillingProvider interface, not Juspay.
+ * Razorpay owns recurring execution. Saa9vi owns business state.
  */
 @Injectable()
 export class SubscriptionRenewalService {
@@ -35,8 +38,9 @@ export class SubscriptionRenewalService {
     private readonly requestContextService: RequestContextService,
     @Inject(forwardRef(() => SubscriptionRenewalQueueService))
     private readonly queueService: SubscriptionRenewalQueueService,
-    private readonly attemptService: JuspayPaymentAttemptService,
-    private readonly billingService: JuspayBillingService,
+    private readonly attemptService: SubscriptionBillingAttemptService,
+    @Inject(forwardRef(() => RECURRING_BILLING_PROVIDER))
+    private readonly billingProvider: RecurringBillingProvider | null,
   ) {}
 
   /**
@@ -84,7 +88,7 @@ export class SubscriptionRenewalService {
      * re-processing (treated as abandoned).
      */
     const inFlightAttemptRows = await this.connection.rawConnection
-      .getRepository(JuspayPaymentAttempt)
+      .getRepository(SubscriptionBillingAttempt)
       .createQueryBuilder("attempt")
       .select("DISTINCT attempt.subscriptionId", "subscriptionId")
       .where("attempt.status = :status", { status: "initiated" })
@@ -163,8 +167,9 @@ export class SubscriptionRenewalService {
      *   Phase 1 CLAIM CAS (INV-017): establishes ownership of this renewal
      *     attempt ONLY. Period is NOT advanced here — period advancement is
      *     NOT equivalent to successful payment.
-     *   Phase 2 ATTEMPT (INV-019): a JuspayPaymentAttempt row records the
-     *     charge attempt BEFORE the gateway call.
+     *   Phase 2 ATTEMPT (INV-019): a SubscriptionBillingAttempt row records the
+     *     charge attempt. In the Razorpay model, the provider owns recurring
+     *     execution — Saa9vi records the attempt and waits for the webhook.
      *   Phase 3 CHARGE: the Juspay call (currently simulated).
      *   Phase 4 FINALIZE CAS: period advancement + status, guarded on the
      *     claimed version, ONLY after payment success.
@@ -203,123 +208,30 @@ export class SubscriptionRenewalService {
       invoiceId,
       billingPeriodStart,
       amountPaise: sub.plan.monthlyPriceInPaise,
-      juspayOrderId: orderId,
+      provider: "juspay",
+      providerAttemptId: orderId,
     });
 
-    // Resolve the current active mandate for the charge (channel-scoped).
-    const mandate = await this.connection.rawConnection
-      .getRepository(JuspaySubscriptionMandate)
-      .findOne({
-        where: { channelId: sub.channelId, status: "active", subscription: { id: sub.id } as any },
-      });
+    // Note: In the Razorpay model, charges are NOT initiated by Saa9vi.
+    // This method records the attempt and waits for the provider webhook.
+    // Note: In the Razorpay model, charges are NOT initiated by Saa9vi.
+    // This method records the attempt and waits for the provider webhook.
+    // The chargeSubscription() call has been removed — Razorpay owns recurring execution.
 
-    /**
-     * Phase 3 — CHARGE (INV-019). The Juspay call is isolated inside
-     * JuspayBillingService; the renewal worker only sees JuspayChargeResult.
-     * When no billing credentials are configured this simulates success
-     * (clearly logged), so the state machine still runs in dev/sandbox.
-     */
-    const charge = await this.billingService.chargeSubscription({
-      subscriptionId: sub.id,
-      channelId: sub.channelId,
-      juspayCustomerId: mandate?.juspayCustomerId ?? "",
-      mandateId: mandate?.mandateId ?? "",
-      invoiceId,
-      amountPaise: sub.plan.monthlyPriceInPaise,
-      orderId,
-    });
-
-    if (charge.status === "failed") {
-        const reason = charge.errorMessage ?? "charge_initiation_failed";
-        const won = await this.attemptService.recordAttemptFailure(attempt.id, reason, charge.txnId);
-        if (!won) {
-            // CAS lost — another writer (likely the webhook processor) already
-            // moved the attempt to terminal. Re-read the attempt to determine
-            // the actual outcome rather than trusting our (possibly stale) charge result.
-            const currentAttempt = await this.connection.rawConnection
-                .getRepository(JuspayPaymentAttempt)
-                .findOne({ where: { id: attempt.id } });
-            if (currentAttempt?.status === "succeeded") {
-                // The webhook already won the CHARGE_SUCCEEDED CAS and owns
-                // finalization — it calls finalizeAfterPayment() synchronously
-                // after recording the attempt as succeeded. Returning
-                // CHARGE_INITIATED prevents us from clobbering the subscription
-                // with past_due. The period will be advanced by the webhook's
-                // finalize call, not by us.
-                this.logger.warn(
-                    `Attempt ${attempt.id} CAS lost on failure-write but attempt is 'succeeded' — webhook owns finalization; returning CHARGE_INITIATED`,
-                    loggerCtx,
-                );
-                return RenewalResult.CHARGE_INITIATED;
-            } else {
-                // Payment failed: subscription becomes past_due, period NOT advanced.
-                await this.markSubscriptionPastDue(sub, claimedVersion);
-                return RenewalResult.PAYMENT_FAILED;
-            }
-        } else {
-            // Payment failed: subscription becomes past_due, period NOT advanced.
-            await this.markSubscriptionPastDue(sub, claimedVersion);
-            return RenewalResult.PAYMENT_FAILED;
-        }
-    }
-
-    if (charge.status === "initiated") {
-        // Charge request accepted by Juspay. Store the provider-issued
-        // order ID so the webhook processor can match the incoming
-        // CHARGE_SUCCEEDED/FAILED event to this attempt. The period is NOT
-        // advanced here — finalization happens only after the webhook
-        // confirms the debit (see finalizeAfterPayment()).
-        await this.attemptService.recordProviderOrderId(attempt.id, charge.juspayOrderId);
-        Logger.info(
-            `Charge initiated for subscription ${sub.id} (order ${charge.juspayOrderId}) — awaiting webhook for terminal outcome`,
-            loggerCtx,
-        );
-        return RenewalResult.CHARGE_INITIATED;
-    }
-
-    // charge.status === "succeeded" (simulation path only): the full
-    // lifecycle is assumed to have succeeded. Record the attempt as
-    // succeeded and proceed to finalization.
-    const won = await this.attemptService.recordAttemptSuccess(attempt.id, charge.txnId);
-    if (!won) {
-        // The attempt already left 'initiated' (e.g. webhook raced ahead
-        // and already moved it to terminal). Re-read to determine actual status.
-        const currentAttempt = await this.connection.rawConnection
-            .getRepository(JuspayPaymentAttempt)
-            .findOne({ where: { id: attempt.id } });
-        if (currentAttempt?.status === "failed") {
-            // The webhook already recorded failure — follow the failure path.
-            this.logger.warn(
-                `Attempt ${attempt.id} CAS lost on success-write but attempt is 'failed' — webhook raced ahead, following failure path`,
-                loggerCtx,
-            );
-            await this.markSubscriptionPastDue(sub, claimedVersion);
-            return RenewalResult.PAYMENT_FAILED;
-        }
-        // Otherwise the attempt is 'succeeded' — another writer already
-        // recorded success and owns finalization (Phase 4 FINALIZE by the
-        // first worker, or finalizeAfterPayment by the webhook). The period
-        // is already being advanced; we just return CHARGE_INITIATED.
-        this.logger.warn(
-            `Attempt ${attempt.id} for subscription ${sub.id} already left 'initiated' — another writer owns finalization`,
-            loggerCtx,
-        );
-        return RenewalResult.CHARGE_INITIATED;
-    }
-
-    // Phase 4 — FINALIZE CAS: period advancement ONLY on payment success.
-    // Delegates to the shared finalizeRenewalPeriod() — both the worker
-    // (this path) and the webhook (finalizeAfterPayment) call it to prevent
-    // finalize-logic drift (INV-019).
-    return this.finalizeRenewalPeriod(
-      sub,
-      claimedVersion,
-      invoiceId,
-      charge.juspayOrderId,
-      newPeriodStart,
-      newPeriodEnd,
+    // Record the attempt as initiated. The webhook processor will update it
+    // to succeeded/failed when the provider webhook arrives.
+    Logger.info(
+        `Billing attempt recorded for subscription ${sub.id} (provider attempt ${orderId}) — awaiting provider webhook for terminal outcome`,
+        loggerCtx,
     );
+    return RenewalResult.CHARGE_INITIATED;
   }
+
+  /**
+   * Finalizes the subscription period after confirmed payment success.
+   * Called by the webhook processor (not the renewal worker) in the Razorpay model.
+   * Uses CAS on version to avoid clobbering concurrent state changes.
+   */
 
   /**
    * Finalizes a subscription renewal after a successful payment reconciliation.
@@ -334,7 +246,7 @@ export class SubscriptionRenewalService {
    */
   async finalizeAfterPayment(attemptId: string): Promise<RenewalResult> {
     const attempt = await this.connection.rawConnection
-        .getRepository(JuspayPaymentAttempt)
+        .getRepository(SubscriptionBillingAttempt)
         .findOne({
             where: { id: attemptId as any },
             relations: ["subscription", "subscription.plan"],
@@ -382,7 +294,7 @@ export class SubscriptionRenewalService {
         sub,
         oldVersion,
         attempt.invoiceId,
-        attempt.juspayOrderId ?? "",
+        attempt.providerPaymentId ?? attempt.providerAttemptId ?? "",
         newPeriodStart,
         newPeriodEnd,
     );
@@ -396,7 +308,7 @@ export class SubscriptionRenewalService {
    *
    * WHY SHARED: the worker and webhook paths were previously duplicated here
    * line-for-line, which is exactly the drift pattern that birthed the INV-019
-   * "stateful attempt record" model (see JuspayPaymentAttemptService.transition).
+   * "stateful attempt record" model (see SubscriptionBillingAttemptService.transition).
    * Both call sites now delegate to this single method to guarantee identical
    * finalization semantics regardless of which writer wins the CAS.
    *
@@ -410,7 +322,7 @@ export class SubscriptionRenewalService {
     sub: OrganizationSubscription,
     guardVersion: number,
     invoiceId: string,
-    juspayOrderId: string,
+    providerOrderId: string,
     newPeriodStart: Date,
     newPeriodEnd: Date,
   ): Promise<RenewalResult> {
@@ -437,7 +349,7 @@ export class SubscriptionRenewalService {
        * reconciliation incident — never an automatic retry (that would
        * double-charge).
        */
-      await this.recordReconciliationRequired(sub, sub.channelId, invoiceId, juspayOrderId);
+      await this.recordReconciliationRequired(sub, sub.channelId, invoiceId, providerOrderId);
       this.logger.error(
         `FINALIZE CONFLICT for subscription ${sub.id}: charge ${invoiceId} succeeded but period was not advanced. MANUAL RECONCILIATION REQUIRED.`,
         loggerCtx,
@@ -465,7 +377,7 @@ export class SubscriptionRenewalService {
         sub,
         sub.channelId,
         invoiceId,
-        juspayOrderId,
+        providerOrderId,
       );
       this.logger.error(
         `Channel ${sub.channelId} not found for subscription ${sub.id} AFTER finalize CAS won — period advanced but events not published. MANUAL RECONCILIATION REQUIRED.`,
@@ -517,21 +429,21 @@ export class SubscriptionRenewalService {
     subscription: OrganizationSubscription,
     channelId: string,
     invoiceId: string,
-    juspayOrderId: string,
+    providerOrderId: string,
   ): Promise<void> {
     const repo = this.connection.rawConnection.getRepository(RenewalPaymentReconciliationRequired);
     await repo.save(
       repo.create({
         subscription: { id: subscription.id } as any,
         channelId,
-        juspayOrderId,
+        providerOrderId,
         invoiceId,
         status: "PENDING",
         detectedAt: new Date(),
-      }),
+      } as any),
     );
     this.logger.error(
-      `Recorded RenewalPaymentReconciliationRequired for subscription ${subscription.id}, order ${juspayOrderId}, invoice ${invoiceId}`,
+      `Recorded RenewalPaymentReconciliationRequired for subscription ${subscription.id}, order ${providerOrderId}, invoice ${invoiceId}`,
       loggerCtx,
     );
   }

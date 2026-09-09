@@ -49,6 +49,14 @@ export class SubscriptionBillingAttempt extends VendureEntity {
     @Column({ nullable: true })
     providerEventId: string;
 
+    /** Invoice ID for this attempt (matches SubscriptionInvoicePaidEvent.invoiceId). */
+    @Column({ nullable: true })
+    invoiceId: string;
+
+    /** Provider's attempt ID (e.g., merchant order ID for Juspay). */
+    @Column({ nullable: true })
+    providerAttemptId: string;
+
     /** Amount in paise (minor currency unit). */
     @Column()
     amountPaise: number;
