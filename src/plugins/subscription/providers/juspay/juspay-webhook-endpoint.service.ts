@@ -102,7 +102,14 @@ export class JuspayWebhookEndpointService implements OnApplicationBootstrap {
      */
     async onApplicationBootstrap(): Promise<void> {
         const seed = this.options.webhook;
-        if (!seed?.username || !seed.password || !seed.hmacSecret) {
+        
+        // Type guard: only JuspayWebhookConfig has username/password
+        if (!seed || !('username' in seed)) {
+            this.logger.warn("No Juspay webhook seed credentials configured — no default endpoint; webhook requests will be rejected until endpoints are provisioned");
+            return;
+        }
+        
+        if (!seed.username || !seed.password || !seed.hmacSecret) {
             // Fail-closed posture: without seed credentials no default endpoint
             // exists, and every webhook request is rejected until an operator
             // provisions one.

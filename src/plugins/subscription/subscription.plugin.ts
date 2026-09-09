@@ -1,4 +1,4 @@
-import { PluginCommonModule, RuntimeVendureConfig, Type, VendurePlugin } from '@vendure/core';
+import { PluginCommonModule, RuntimeVendureConfig, Type, VendurePlugin, ConfigService } from '@vendure/core';
 
 import { SUBSCRIPTION_PLUGIN_OPTIONS, JUSPAY_SDK, RAZORPAY_SUBSCRIPTION_PROVIDER, RECURRING_BILLING_PROVIDER } from './constants';
 import { OrganizationSubscription } from './entities/organization-subscription.entity';
@@ -49,64 +49,46 @@ import { ProviderWebhookEvent } from './entities/provider-webhook-event.entity';
     ],
     providers: [
         { provide: SUBSCRIPTION_PLUGIN_OPTIONS, useFactory: () => SubscriptionPlugin.options },
-        // Juspay SDK provided under a token. When no billing credentials are
-        // configured:
-        //   - dev/test: null -> JuspayBillingService falls back to a clearly-logged
-        //     SIMULATED charge so the state machine still runs without real money.
-        //   - production: throws at startup - silently simulating renewals in
-        //     production would mean advancing subscription periods without ever
-        //     charging customers (a revenue-destroying failure mode).
-        {
-            provide: JUSPAY_SDK,
-            inject: [SUBSCRIPTION_PLUGIN_OPTIONS],
-            useFactory: (opts: PluginInitOptions) => {
-                if (opts.billing?.apiKey && opts.billing?.merchantId) {
-                    return new JuspaySdk({
-                        apiKey: opts.billing.apiKey,
-                        merchantId: opts.billing.merchantId,
-                        sandbox: opts.billing.sandbox ?? false,
-                    });
-                }
-                if (process.env.NODE_ENV === 'production') {
-                    throw new Error(
-                        'Juspay billing credentials are required in production. ' +
-                            'Set JUSPAY_API_KEY and JUSPAY_MERCHANT_ID, or the plugin will not load. ' +
-                            'Without credentials, real subscriptions would be renewed without payment.',
-                    );
-                }
-                return null;
-            },
-        },
-        // Razorpay Subscription Provider (new production provider)
-        {
-            provide: RAZORPAY_SUBSCRIPTION_PROVIDER,
-            useClass: RazorpaySubscriptionProvider,
-        },
-        // Recurring Billing Provider - maps the provider-neutral interface
-        // to the configured provider implementation (Razorpay)
+        // Provider selection: explicit config required in production.
+        // Fail-closed: throws if no provider is configured in production.
         {
             provide: RECURRING_BILLING_PROVIDER,
-            useClass: RazorpaySubscriptionProvider,
+            inject: [SUBSCRIPTION_PLUGIN_OPTIONS],
+            useFactory: (opts: PluginInitOptions) => {
+                const provider = opts.provider;
+                
+                // Fail-closed in production: require explicit provider selection
+                if (process.env.NODE_ENV === 'production' && !provider) {
+                    throw new Error(
+                        'Subscription provider is required in production. ' +
+                            'Set provider: "razorpay" in SubscriptionPlugin options.',
+                    );
+                }
+                
+                // Default to Razorpay if not specified
+                if (provider === 'juspay') {
+                    // Juspay is no longer supported as a production provider
+                    // (Razorpay rejected Juspay third-party routing)
+                    throw new Error(
+                        'Juspay is no longer supported as a production provider. ' +
+                            'Use provider: "razorpay".',
+                    );
+                }
+                
+                // Default: Razorpay
+                return new RazorpaySubscriptionProvider(new ConfigService());
+            },
         },
         // Core services
         SubscriptionService,
         SubscriptionRenewalService,
         SubscriptionRenewalQueueService,
-        // Juspay services (legacy)
-        JuspayEncryptionService,
-        JuspayWebhookAuthService,
-        JuspayWebhookQueueService,
-        JuspayWebhookProcessorService,
-        JuspayWebhookEndpointService,
-        JuspayPaymentAttemptService,
-        JuspayBillingService,
-        // Razorpay services (new)
+        // Razorpay services (default provider)
         RazorpaySubscriptionProvider,
         RazorpayWebhookVerifier,
         RazorpayWebhookProcessor,
     ],
     controllers: [
-        JuspayWebhookController,
         RazorpayWebhookController,
     ],
     adminApiExtensions: {

@@ -2,6 +2,17 @@
  * @description
  * The plugin can be configured using the following options:
  */
+
+export type BillingProvider = "razorpay" | "juspay";
+
+export interface RazorpayWebhookConfig {
+    /**
+     * HMAC-SHA256 secret for the X-Razorpay-Signature header.
+     * Required when Razorpay is the provider.
+     */
+    hmacSecret: string;
+}
+
 export interface JuspayWebhookConfig {
     /**
      * Basic Auth username configured in the Juspay dashboard. Required —
@@ -28,7 +39,12 @@ export interface JuspayWebhookConfig {
 
 export interface PluginInitOptions {
     exampleOption?: string;
-    webhook?: JuspayWebhookConfig;
+    /**
+     * Explicit provider selection. Fail-closed: if not set in production,
+     * the plugin throws at startup.
+     */
+    provider?: BillingProvider;
+    webhook?: JuspayWebhookConfig | RazorpayWebhookConfig;
     /**
      * Juspay API credentials for real recurring billing (Step 4). When absent:
      *   - dev/test: the renewal worker falls back to a clearly-logged SIMULATED
