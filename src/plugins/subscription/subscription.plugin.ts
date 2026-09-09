@@ -1,6 +1,6 @@
 import { PluginCommonModule, RuntimeVendureConfig, Type, VendurePlugin, ConfigService } from '@vendure/core';
 
-import { SUBSCRIPTION_PLUGIN_OPTIONS, JUSPAY_SDK, RAZORPAY_SUBSCRIPTION_PROVIDER, RECURRING_BILLING_PROVIDER } from './constants';
+import { SUBSCRIPTION_PLUGIN_OPTIONS, RAZORPAY_SUBSCRIPTION_PROVIDER, RECURRING_BILLING_PROVIDER } from './constants';
 import { OrganizationSubscription } from './entities/organization-subscription.entity';
 import { SubscriptionPlan } from './entities/subscription-plan.entity';
 import { JuspaySubscriptionMandate } from './entities/juspay-subscription-mandate.entity';
@@ -15,15 +15,6 @@ import { adminApiExtensions } from './api/schema/subscription-admin.schema';
 import { SubscriptionService } from './services/subscription.service';
 import { SubscriptionRenewalService } from './services/subscription-renewal.service';
 import { SubscriptionRenewalQueueService } from './services/subscription-renewal-queue.service';
-import { JuspayWebhookQueueService } from './providers/juspay/juspay-webhook-queue.service';
-import { JuspayWebhookProcessorService } from './providers/juspay/juspay-webhook-processor.service';
-import { JuspayWebhookAuthService } from './providers/juspay/juspay-webhook-auth.service';
-import { JuspayWebhookController } from './providers/juspay/juspay-webhook.controller';
-import { JuspayWebhookEndpointService } from './providers/juspay/juspay-webhook-endpoint.service';
-import { JuspayPaymentAttemptService } from './providers/juspay/juspay-payment-attempt.service';
-import { JuspayBillingService } from './providers/juspay/juspay-billing.service';
-import { JuspayEncryptionService } from './providers/juspay/juspay-encryption.service';
-import { JuspaySdk } from './providers/juspay/juspay-sdk';
 import { RazorpaySubscriptionProvider } from './providers/razorpay/razorpay-subscription.provider';
 import { RazorpayWebhookVerifier } from './providers/razorpay/razorpay-webhook.verifier';
 import { RazorpayWebhookProcessor } from './providers/razorpay/razorpay-webhook.processor';
@@ -50,7 +41,7 @@ import { ProviderWebhookEvent } from './entities/provider-webhook-event.entity';
     providers: [
         { provide: SUBSCRIPTION_PLUGIN_OPTIONS, useFactory: () => SubscriptionPlugin.options },
         // Provider selection: explicit config required in production.
-        // Fail-closed: throws if no provider is configured in production.
+        // Fail-closed: throws if an unsupported provider is configured.
         {
             provide: RECURRING_BILLING_PROVIDER,
             inject: [SUBSCRIPTION_PLUGIN_OPTIONS],
@@ -65,18 +56,17 @@ import { ProviderWebhookEvent } from './entities/provider-webhook-event.entity';
                     );
                 }
                 
-                // Default to Razorpay if not specified
-                if (provider === 'juspay') {
-                    // Juspay is no longer supported as a production provider
-                    // (Razorpay rejected Juspay third-party routing)
-                    throw new Error(
-                        'Juspay is no longer supported as a production provider. ' +
-                            'Use provider: "razorpay".',
-                    );
+                // Explicit provider selection
+                switch (provider) {
+                    case 'razorpay':
+                    case undefined: // Default to Razorpay
+                        return new RazorpaySubscriptionProvider(new ConfigService());
+                    default:
+                        throw new Error(
+                            `Unsupported recurring billing provider: ${provider}. ` +
+                                'Use provider: "razorpay".',
+                        );
                 }
-                
-                // Default: Razorpay
-                return new RazorpaySubscriptionProvider(new ConfigService());
             },
         },
         // Core services
@@ -99,8 +89,8 @@ import { ProviderWebhookEvent } from './entities/provider-webhook-event.entity';
     configuration: (config: RuntimeVendureConfig) => {
         // Raw body is captured by Nest's built-in JSON parser via
         // bootstrap({ nestApplicationOptions: { rawBody: true } }) in
-        // src/index.ts - required so the Juspay webhook HMAC can hash the
-        // exact bytes Juspay signed. No route middleware is registered here
+        // src/index.ts - required so the Razorpay webhook HMAC can hash the
+        // exact bytes Razorpay signed. No route middleware is registered here
         // (a plugin json() middleware loses the race against the global
         // parser and would double-parse).
         // Register the renewal task in the Vendure scheduler
