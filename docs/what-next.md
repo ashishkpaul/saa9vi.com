@@ -1,10 +1,162 @@
 # What Next — Saa9vi Platform
 
-**Updated:** 2026-09-04
+**Updated:** 2026-09-09
 
 ---
 
+## Provider Decision Status
+
+| Gate | Status | Notes |
+|------|--------|-------|
+| **Provider decision** | ✅ COMPLETE | Razorpay direct selected |
+| Juspay audit | ✅ Complete | M1.1 verified, M1.2 blocked by provider policy |
+| Juspay → Razorpay routing | ❌ REJECTED | Razorpay ticket #20876157 |
+| Direct Razorpay | ✅ SELECTED | Native Subscriptions + UPI Autopay |
+
+---
+
+## Implementation Gates
+
+| Gate | Status | Notes |
+|------|--------|-------|
+| **R1 — Provider-neutral boundary** | 🟡 IN PROGRESS | Interface added, Juspay still on critical path |
+| **R2 — Razorpay Test Plan** | ⏳ PENDING | Create ₹1/month test plan |
+| **R3 — Razorpay Test Subscription** | ⏳ PENDING | Create test subscription |
+| **R4 — Webhook lifecycle capture** | ⏳ PENDING | Capture all webhook events |
+| **R5 — Contract freeze (ADR-038)** | ⏳ PENDING | Only after R2-R4 evidence |
+| **I1-I3 — Implementation** | 🔒 LOCKED | After R1 complete |
+| **V1 — Production hardening** | 🔒 LOCKED | After I1-I3 complete |
+
+---
+
+## Current Gate: R1 — Provider-Neutral Boundary
+
+### What exists (commit 9c5478d)
+
+```
+src/plugins/subscription/providers/
+├── recurring-billing.provider.ts          ← Provider-neutral interface
+└── razorpay/
+    ├── razorpay-subscription.provider.ts  ← Razorpay implementation
+    ├── razorpay-webhook.verifier.ts       ← HMAC-SHA256 verification
+    ├── razorpay-webhook.processor.ts      ← Event processing
+    └── razorpay-webhook.controller.ts     ← POST /payments/razorpay/webhook
+
+src/plugins/subscription/entities/
+├── subscription-provider-binding.entity.ts  ← Provider-neutral binding
+└── subscription-billing-attempt.entity.ts   ← Provider-neutral ledger
+```
+
+### What still needs to happen for R1
+
+- [ ] `SubscriptionRenewalService` depends on `RecurringBillingProvider` (not `JuspayBillingService`)
+- [ ] Juspay code moved to `providers/juspay/` (not deleted)
+- [ ] `SubscriptionPlugin` registers provider conditionally
+- [ ] `ProviderWebhookEvent` entity (immutable inbox)
+- [ ] Migration for `ProviderWebhookEvent`
+
+### Do NOT
+
+- ❌ Run `npx vendure migrate --run` yet
+- ❌ Add Razorpay env variables yet
+- ❌ Mark ADR-038 as Accepted yet
+- ❌ Delete Juspay code yet
+- ❌ Call Juspay "legacy" yet
+
+---
+
+## Source of Truth
+
+| State | Authority |
+|-------|-----------|
+| Saa9vi organization subscription | Saa9vi DB |
+| Saa9vi entitlement | Saa9vi DB |
+| Razorpay subscription status | Razorpay API/webhooks |
+| Payment success | Verified Razorpay event/API |
+| Webhook receipt | Saa9vi immutable inbox |
+| Provider retry | Razorpay |
+| Access/dunning policy | Saa9vi |
+
+---
+
+## Precondition — Runtime Environment
+
 > **Precondition — runtime environment not yet verified against real infrastructure.**
+
+The application was started with `DB_HOST=localhost`/`DB_PORT=5435` and `REDIS_HOST=localhost`/`REDIS_PORT=6385`, intended to reach Cloudflare Access TCP tunnels (`db.saa9vi.com`, `redis.saa9vi.com`). The tunnels reported local listeners, but the application still fell back to pg-mem (in-memory Postgres) and `DefaultJobQueuePlugin` (in-memory job queue). The startup log proves the fallback path works; it does **not** prove connectivity to the intended public PostgreSQL/Redis services.
+
+**Nothing in the "Current State" section below can be trusted until this is confirmed resolved** — CAS locking, idempotent grants, the payment-attempt ledger, and the webhook queue all depend on a real Postgres and Redis connection to mean anything.
+
+---
+
+## Current State (v1.18 — 2026-09-09)
+
+### Verified complete
+
+- **Phase 3B — Attribution & Commission** — complete: `CommissionListener` (server-side classification, INV-008), `CommissionLedger` $0-row pattern (DL-030), governed migration with UNIQUE constraints, 6-case E2E passing.
+- TypeScript build succeeds (`npm run build`).
+- Vendure starts successfully on v3.6.5 (against fallback pg-mem/DefaultJobQueue — see precondition above).
+- SubscriptionPlan / OrganizationSubscription foundation is implemented.
+- BbbPlatformCapacityPolicy and plan-based capacity enforcement are implemented.
+- Capacity policy Portal Admin API/dashboard is implemented.
+- **Juspay M1.1 Session API verified** — auth + Session API creation confirmed. Does NOT prove mandate registration.
+- **Juspay → Razorpay routing REJECTED** — Razorpay does not accept Juspay for third-party routing (ticket #20876157).
+- **Direct Razorpay pivot selected** — commit 9c5478d adds provider-neutral boundary + Razorpay adapter.
+
+### Current provider implementation
+
+| Component | Status |
+|-----------|--------|
+| `JuspaySdk` | Current (not legacy) |
+| `JuspayBillingService` | Current (not legacy) |
+| `JuspayPaymentAttempt` | Current entity |
+| `JuspaySubscriptionMandate` | Current entity |
+| `RazorpaySubscriptionProvider` | Proposed (not yet integrated) |
+| `RazorpayWebhookProcessor` | Proposed (not yet integrated) |
+
+---
+
+## Important Architectural Boundary
+
+### One-time commerce (Vendure checkout)
+
+```
+Customer → Vendure Checkout → PaymentMethodHandler → Razorpay Orders/Checkout/Refund
+```
+
+### Recurring subscriptions (Saa9vi domain)
+
+```
+Razorpay scheduled charge → Webhook → Saa9vi ProviderWebhookInbox → Queue → Processor
+                                    ↓
+                         SubscriptionBillingAttempt
+                                    ↓
+                         CAS transition → Entitlement
+```
+
+### Do NOT
+
+- Create a second billing engine or second payment-attempt model
+- Let Saa9vi become a recurring-charge scheduler (Razorpay owns this)
+- Mirror Razorpay's state enum 1:1 inside Saa9vi
+- Put Razorpay-specific columns in provider-neutral entities
+
+---
+
+## Repository Truth Rule
+
+Before claiming any implementation is complete:
+
+```bash
+git fetch origin
+git rev-parse HEAD
+git rev-parse origin/main
+git log --oneline -5
+git status --short
+npm run build
+```
+
+A tool-generated summary is NOT evidence that a commit exists.
 >
 > The application was started with `DB_HOST=localhost`/`DB_PORT=5435` and `REDIS_HOST=localhost`/`REDIS_PORT=6385`, intended to reach Cloudflare Access TCP tunnels (`db.saa9vi.com`, `redis.saa9vi.com`). The tunnels reported local listeners, but the application still fell back to pg-mem (in-memory Postgres) and `DefaultJobQueuePlugin` (in-memory job queue). The startup log proves the fallback path works; it does **not** prove connectivity to the intended public PostgreSQL/Redis services.
 >

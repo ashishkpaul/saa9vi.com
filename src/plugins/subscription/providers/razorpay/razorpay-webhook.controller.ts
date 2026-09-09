@@ -1,8 +1,11 @@
 import { Controller, Post, Headers, Body, UnauthorizedException, Req } from '@nestjs/common';
 import { Request } from 'express';
-import { EventBus, RequestContextService, TransactionalConnection, ChannelService } from '@vendure/core';
+import { EventBus, RequestContextService, TransactionalConnection, ChannelService, Logger } from '@vendure/core';
 import { RazorpayWebhookVerifier } from './razorpay-webhook.verifier';
 import { RazorpayWebhookProcessor } from './razorpay-webhook.processor';
+import { ProviderWebhookEvent } from '../../entities/provider-webhook-event.entity';
+
+const loggerCtx = 'RazorpayWebhookController';
 
 /**
  * Controller for receiving Razorpay webhooks.
@@ -12,6 +15,7 @@ import { RazorpayWebhookProcessor } from './razorpay-webhook.processor';
  * Security:
  * - Verifies X-Razorpay-Signature header using webhook secret
  * - Returns 401 if signature is invalid
+ * - Persists event to immutable inbox BEFORE processing
  * - Returns 200 immediately after persisting event (async processing)
  */
 @Controller('payments/razorpay')
@@ -49,6 +53,30 @@ export class RazorpayWebhookController {
         const ctx = await this.requestContextService.create({
             apiType: 'admin',
         });
+
+        // Persist to immutable inbox FIRST (before processing)
+        const crypto = require('crypto');
+        const payloadHash = crypto.createHash('sha256').update(rawBody).digest('hex');
+
+        const eventRepo = this.connection.getRepository(ctx, ProviderWebhookEvent);
+        const webhookEvent = eventRepo.create({
+            channelId: String(ctx.channelId),
+            provider: 'razorpay',
+            providerEventId: payload.event_id || payload.id || `evt_${Date.now()}`,
+            eventType: event,
+            payloadHash,
+            rawPayload: payload,
+            verifiedAt: new Date(),
+            processingStatus: 'pending',
+        });
+
+        try {
+            await eventRepo.save(webhookEvent);
+        } catch (err) {
+            // If UNIQUE constraint violation, event already received
+            Logger.warn(`Webhook event already received: ${webhookEvent.providerEventId}`, loggerCtx);
+            return { status: 'ok' };
+        }
 
         // Process webhook asynchronously
         await this.webhookProcessor.processWebhook(ctx, event, payload);

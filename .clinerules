@@ -87,3 +87,33 @@ All schema changes must be traceable to:
 
 * If ADR/RFC/STORY documents and code disagree, flag the drift via the invariant system.
 * Prefer updating code to match ADR; update ADR only when implementation requires a documented exception.
+
+## 11. Repository Truth Rule (CRITICAL)
+
+Never claim that a commit, file, migration, test, or implementation exists unless it is verified from the current repository state.
+
+For any claimed implementation:
+1. Verify `git status` — working tree must be clean
+2. Verify `git log --oneline -10` — commit must be present
+3. Verify `git rev-parse HEAD` — local HEAD must match claimed commit
+4. Verify `git rev-parse origin/main` — remote must match if claiming pushed
+5. Verify `git cat-file -t <commit>` — commit object must exist
+6. Verify changed file paths with `git show --name-only <commit>`
+7. Verify the working tree contains those files with `find src -type f`
+8. Run `npm run build` to verify compilation
+
+A tool-generated summary is NOT evidence that a commit exists.
+An AI-generated commit message is NOT evidence that code works.
+A reported commit hash is NOT evidence until `git cat-file -t <hash>` returns "commit".
+
+### Verification checklist before declaring work complete
+
+```bash
+# Run this before claiming any implementation is complete
+git fetch origin
+git rev-parse HEAD
+git rev-parse origin/main
+git log --oneline -5
+git status --short
+npm run build
+```

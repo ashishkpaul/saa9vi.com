@@ -1,12 +1,13 @@
 # ADR-037: Juspay Provider Contract — Verified
-**Status:** ✅ Accepted — Documentation Contract Verified; Live Sandbox M1.1 Verified (Session API only)
+**Status:** ⚠️ SUPERSEDED by ADR-038 (Direct Razorpay Subscription Provider)
+
+**Superseded:** 2026-09-09 — Razorpay rejected Juspay third-party routing (ticket #20876157). Pivot to direct Razorpay integration.
 
 **Status Semantics:**
 - Documentation contract: ✅ Verified (HyperCheckout docs cross-checked)
 - Live sandbox M1.1: ✅ Verified (auth + Session API creation; does NOT prove mandate registration)
-- M1.2 — Mandate-capable Sandbox gateway: ⏳ Pending (current gateway = DUMMY)
-- Application integration: ⚠️ Mandate-registration gap identified (see §8)
-- Full mandate flow E2E: ⏳ Pending (requires M1.2 + HyperCheckout UI + real PG)
+- M1.2 — Mandate-capable Sandbox gateway: ❌ BLOCKED (Razorpay rejected Juspay routing)
+- Production path: ❌ REJECTED by Razorpay
 
 **Date:** 2026-08-31
 
