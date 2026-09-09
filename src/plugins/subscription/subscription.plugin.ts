@@ -1,6 +1,6 @@
 import { PluginCommonModule, RuntimeVendureConfig, Type, VendurePlugin } from '@vendure/core';
 
-import { SUBSCRIPTION_PLUGIN_OPTIONS, JUSPAY_SDK } from './constants';
+import { SUBSCRIPTION_PLUGIN_OPTIONS, JUSPAY_SDK, RAZORPAY_SUBSCRIPTION_PROVIDER } from './constants';
 import { OrganizationSubscription } from './entities/organization-subscription.entity';
 import { SubscriptionPlan } from './entities/subscription-plan.entity';
 import { JuspaySubscriptionMandate } from './entities/juspay-subscription-mandate.entity';
@@ -8,6 +8,8 @@ import { JuspayPaymentAttempt } from './entities/juspay-payment-attempt.entity';
 import { JuspayWebhookEvent } from './entities/juspay-webhook-event.entity';
 import { JuspayWebhookEndpoint } from './entities/juspay-webhook-endpoint.entity';
 import { RenewalPaymentReconciliationRequired } from './entities/juspay-reconciliation-required.entity';
+import { SubscriptionProviderBinding } from './entities/subscription-provider-binding.entity';
+import { SubscriptionBillingAttempt } from './entities/subscription-billing-attempt.entity';
 import { SubscriptionAdminResolver } from './api/subscription-admin.resolver';
 import { adminApiExtensions } from './api/schema/subscription-admin.schema';
 import { SubscriptionService } from './services/subscription.service';
@@ -22,6 +24,10 @@ import { JuspayPaymentAttemptService } from './services/juspay-payment-attempt.s
 import { JuspayBillingService } from './services/juspay-billing.service';
 import { JuspayEncryptionService } from './services/juspay-encryption.service';
 import { JuspaySdk } from './juspay/juspay-sdk';
+import { RazorpaySubscriptionProvider } from './providers/razorpay/razorpay-subscription.provider';
+import { RazorpayWebhookVerifier } from './providers/razorpay/razorpay-webhook.verifier';
+import { RazorpayWebhookProcessor } from './providers/razorpay/razorpay-webhook.processor';
+import { RazorpayWebhookController } from './providers/razorpay/razorpay-webhook.controller';
 import { subscriptionRenewalTask } from './jobs/subscription-renewal.task';
 import { subscriptionDunningTask } from './jobs/subscription-dunning.task';
 import { PluginInitOptions } from './types';
@@ -36,6 +42,8 @@ import { PluginInitOptions } from './types';
         JuspayWebhookEvent,
         JuspayWebhookEndpoint,
         RenewalPaymentReconciliationRequired,
+        SubscriptionProviderBinding,
+        SubscriptionBillingAttempt,
     ],
     providers: [
         { provide: SUBSCRIPTION_PLUGIN_OPTIONS, useFactory: () => SubscriptionPlugin.options },
@@ -67,9 +75,16 @@ import { PluginInitOptions } from './types';
                 return null;
             },
         },
+        // Razorpay Subscription Provider (new production provider)
+        {
+            provide: RAZORPAY_SUBSCRIPTION_PROVIDER,
+            useClass: RazorpaySubscriptionProvider,
+        },
+        // Core services
         SubscriptionService,
         SubscriptionRenewalService,
         SubscriptionRenewalQueueService,
+        // Juspay services (legacy)
         JuspayEncryptionService,
         JuspayWebhookAuthService,
         JuspayWebhookQueueService,
@@ -77,8 +92,15 @@ import { PluginInitOptions } from './types';
         JuspayWebhookEndpointService,
         JuspayPaymentAttemptService,
         JuspayBillingService,
+        // Razorpay services (new)
+        RazorpaySubscriptionProvider,
+        RazorpayWebhookVerifier,
+        RazorpayWebhookProcessor,
     ],
-    controllers: [JuspayWebhookController],
+    controllers: [
+        JuspayWebhookController,
+        RazorpayWebhookController,
+    ],
     adminApiExtensions: {
         schema: adminApiExtensions,
         resolvers: [SubscriptionAdminResolver],
