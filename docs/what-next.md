@@ -29,23 +29,31 @@
 
 ---
 
-## Current Gate: R1 — Provider-Neutral Boundary
+## R2: Razorpay Subscription Contract Verification
 
-### What exists (commit 9c5478d)
+| Gate | Status | Notes |
+|------|--------|-------|
+| **R2-A** Test Plan | ⏳ PENDING | Create ₹10/month plan in Dashboard |
+| **R2-B** Webhook Config | ✅ DONE | 11 events, staging endpoint, Test mode |
+| **R2-C** Webhook Ingress | ⏳ NEXT | Verify raw-body HMAC, idempotency, persist-first |
+| **R2-D** Create Subscription | ⏳ PENDING | Via API |
+| **R2-E** Authorization | ⏳ PENDING | Browser |
+| **R2-F** Capture Events | ⏳ PENDING | All events, not just predicted |
+| **R2-G** Failure Semantics | ⏳ PENDING | pending → halted mapping |
+| **R3** ADR-038 Freeze | ⏳ BLOCKED | After R2 evidence |
 
-```
-src/plugins/subscription/providers/
-├── recurring-billing.provider.ts          ← Provider-neutral interface
-└── razorpay/
-    ├── razorpay-subscription.provider.ts  ← Razorpay implementation
-    ├── razorpay-webhook.verifier.ts       ← HMAC-SHA256 verification
-    ├── razorpay-webhook.processor.ts      ← Event processing
-    └── razorpay-webhook.controller.ts     ← POST /payments/razorpay/webhook
+---
 
-src/plugins/subscription/entities/
-├── subscription-provider-binding.entity.ts  ← Provider-neutral binding
-└── subscription-billing-attempt.entity.ts   ← Provider-neutral ledger
-```
+## Current Gate: R2-C — Webhook Ingress Verification
+
+The Razorpay side is ready (R2-B complete). Before creating a test subscription, verify the Saa9vi webhook ingress:
+
+- [ ] Raw body capture (not `JSON.stringify(req.body)`)
+- [ ] HMAC-SHA256 signature verification
+- [ ] Idempotency via `providerEventId`
+- [ ] Persist-first pattern (save before processing)
+- [ ] Return 2xx immediately
+- [ ] Async processing via queue
 
 ### What still needs to happen for R1
 
