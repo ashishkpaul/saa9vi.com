@@ -36,7 +36,12 @@ export class RazorpayWebhookController {
         @Req() req: Request,
     ): Promise<{ status: string }> {
         // Get raw body for signature verification
-        const rawBody = (req as any).rawBody || JSON.stringify(payload);
+        // rawBody: true is configured in src/index.ts bootstrap
+        const rawBody: Buffer | undefined = (req as any).rawBody;
+        if (!rawBody || rawBody.length === 0) {
+            Logger.error('Raw body not available for webhook verification - check rawBody: true configuration', loggerCtx);
+            throw new UnauthorizedException('Raw body not available');
+        }
 
         // Verify webhook signature
         if (!this.webhookVerifier.verify(rawBody, signature)) {
@@ -78,9 +83,15 @@ export class RazorpayWebhookController {
             return { status: 'ok' };
         }
 
-        // Process webhook asynchronously
-        await this.webhookProcessor.processWebhook(ctx, event, payload);
+        // Process webhook asynchronously (non-blocking)
+        // The processor will update the event status when complete
+        setImmediate(() => {
+            this.webhookProcessor.processWebhook(ctx, event, payload).catch((err) => {
+                Logger.error(`Webhook processing failed: ${err.message}`, loggerCtx);
+            });
+        });
 
+        // Return 2xx immediately after persisting
         return { status: 'ok' };
     }
 }
