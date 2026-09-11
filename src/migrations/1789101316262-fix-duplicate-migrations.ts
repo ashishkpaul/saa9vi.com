@@ -1,6 +1,6 @@
 import {MigrationInterface, QueryRunner} from "typeorm";
 
-export class AddBillingAttemptFields1788955214428 implements MigrationInterface {
+export class FixDuplicateMigrations1789101316262 implements MigrationInterface {
 
    public async up(queryRunner: QueryRunner): Promise<any> {
         await queryRunner.query(`CREATE TABLE "provider_webhook_event" ("createdAt" TIMESTAMP NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP NOT NULL DEFAULT now(), "channelId" character varying NOT NULL, "provider" character varying NOT NULL, "providerEventId" character varying NOT NULL, "eventType" character varying NOT NULL, "payloadHash" character varying NOT NULL, "rawPayload" json NOT NULL, "receivedAt" TIMESTAMP NOT NULL DEFAULT now(), "verifiedAt" TIMESTAMP, "processedAt" TIMESTAMP, "processingStatus" character varying NOT NULL DEFAULT 'pending', "errorMessage" character varying, "id" SERIAL NOT NULL, CONSTRAINT "PK_45b1f1155afa5e804fb65d6c3aa" PRIMARY KEY ("id"))`, undefined);

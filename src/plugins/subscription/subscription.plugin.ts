@@ -15,6 +15,7 @@ import { adminApiExtensions } from './api/schema/subscription-admin.schema';
 import { SubscriptionService } from './services/subscription.service';
 import { SubscriptionRenewalService } from './services/subscription-renewal.service';
 import { SubscriptionRenewalQueueService } from './services/subscription-renewal-queue.service';
+import { SubscriptionBillingAttemptService } from './services/subscription-billing-attempt.service';
 import { RazorpaySubscriptionProvider } from './providers/razorpay/razorpay-subscription.provider';
 import { RazorpayWebhookVerifier } from './providers/razorpay/razorpay-webhook.verifier';
 import { RazorpayWebhookProcessor } from './providers/razorpay/razorpay-webhook.processor';
@@ -73,6 +74,7 @@ import { ProviderWebhookEvent } from './entities/provider-webhook-event.entity';
         SubscriptionService,
         SubscriptionRenewalService,
         SubscriptionRenewalQueueService,
+        SubscriptionBillingAttemptService,
         // Razorpay services (default provider)
         RazorpaySubscriptionProvider,
         RazorpayWebhookVerifier,

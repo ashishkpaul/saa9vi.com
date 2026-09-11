@@ -32,6 +32,7 @@ export class RazorpayWebhookController {
     @Post('webhook')
     async handleWebhook(
         @Headers('x-razorpay-signature') signature: string,
+        @Headers('x-razorpay-event-id') eventId: string,
         @Body() payload: any,
         @Req() req: Request,
     ): Promise<{ status: string }> {
@@ -54,6 +55,13 @@ export class RazorpayWebhookController {
             throw new UnauthorizedException('Missing event in payload');
         }
 
+        // Use x-razorpay-event-id header as the authoritative idempotency key
+        // Razorpay recommends using this header to detect duplicate webhook deliveries
+        if (!eventId) {
+            Logger.error('Missing x-razorpay-event-id header', loggerCtx);
+            throw new UnauthorizedException('Missing event ID header');
+        }
+
         // Create request context (system context for webhooks)
         const ctx = await this.requestContextService.create({
             apiType: 'admin',
@@ -67,7 +75,7 @@ export class RazorpayWebhookController {
         const webhookEvent = eventRepo.create({
             channelId: String(ctx.channelId),
             provider: 'razorpay',
-            providerEventId: payload.event_id || payload.id || `evt_${Date.now()}`,
+            providerEventId: eventId,
             eventType: event,
             payloadHash,
             rawPayload: payload,
@@ -79,7 +87,7 @@ export class RazorpayWebhookController {
             await eventRepo.save(webhookEvent);
         } catch (err) {
             // If UNIQUE constraint violation, event already received
-            Logger.warn(`Webhook event already received: ${webhookEvent.providerEventId}`, loggerCtx);
+            Logger.warn(`Webhook event already received: ${eventId}`, loggerCtx);
             return { status: 'ok' };
         }
 
