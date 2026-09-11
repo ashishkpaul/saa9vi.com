@@ -30,6 +30,11 @@ export class RazorpayWebhookVerifier {
             return false;
         }
 
+        if (!signature) {
+            Logger.warn('Missing X-Razorpay-Signature header', loggerCtx);
+            return false;
+        }
+
         const crypto = require('crypto');
         const body = Buffer.isBuffer(rawBody) ? rawBody.toString('utf8') : rawBody;
         const expectedSignature = crypto

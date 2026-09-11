@@ -44,6 +44,12 @@ export class RazorpayWebhookController {
             throw new UnauthorizedException('Raw body not available');
         }
 
+        // Require signature header
+        if (!signature) {
+            Logger.warn('Missing X-Razorpay-Signature header', loggerCtx);
+            throw new UnauthorizedException('Missing webhook signature');
+        }
+
         // Verify webhook signature
         if (!this.webhookVerifier.verify(rawBody, signature)) {
             throw new UnauthorizedException('Invalid webhook signature');
