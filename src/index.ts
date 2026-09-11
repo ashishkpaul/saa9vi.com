@@ -64,7 +64,12 @@ async function start() {
 
         dbOptions.synchronize = true;
     } else {
-        await runMigrations(config);
+        try {
+            await runMigrations(config);
+        } catch (err) {
+            console.error('Migration failed, aborting startup:', err);
+            process.exit(1);
+        }
     }
 
     const redisAvailable = await isRedisReachable();
@@ -83,7 +88,7 @@ async function start() {
     }
 
     // rawBody: true — Nest's documented flag makes the built-in JSON parser
-    // capture the exact request bytes into req.rawBody. Required for Juspay
+    // capture the exact request bytes into req.rawBody. Required for Razorpay
     // webhook HMAC verification over the raw body (a plugin-layer json()
     // middleware cannot work — Nest's global parser consumes the stream
     // before any Nest middleware runs).
