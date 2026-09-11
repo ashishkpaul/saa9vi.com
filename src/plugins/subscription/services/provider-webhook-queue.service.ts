@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit, Inject } from '@nestjs/common';
 import { JobQueue, JobQueueService, RequestContextService, TransactionalConnection } from '@vendure/core';
 import { ProviderWebhookEvent } from '../entities/provider-webhook-event.entity';
+import { SubscriptionProviderBinding } from '../entities/subscription-provider-binding.entity';
 import { RazorpayWebhookProcessor } from '../providers/razorpay/razorpay-webhook.processor';
 
 const loggerCtx = 'ProviderWebhookQueueService';
@@ -26,7 +27,7 @@ export class ProviderWebhookQueueService implements OnModuleInit {
 
     constructor(
         private readonly jobQueueService: JobQueueService,
-        @Inject('RAW_CONNECTION') private readonly connection: any,
+        private readonly connection: TransactionalConnection,
         private readonly requestContextService: RequestContextService,
     ) {}
 
@@ -80,6 +81,12 @@ export class ProviderWebhookQueueService implements OnModuleInit {
                 throw new Error(`Unsupported provider: ${event.provider}`);
             }
 
+            // Resolve authoritative channel from provider binding (INV-001)
+            const resolvedChannelId = await this.resolveChannelFromBinding(ctx, event);
+            if (resolvedChannelId) {
+                event.channelId = resolvedChannelId;
+            }
+
             // Mark as processed
             event.processingStatus = 'processed';
             event.processedAt = new Date();
@@ -95,6 +102,37 @@ export class ProviderWebhookQueueService implements OnModuleInit {
 
             Logger.error(`Webhook event ${eventId} failed: ${err?.message}`, loggerCtx);
             throw err; // Re-throw for BullMQ retry
+        }
+    }
+
+    /**
+     * Resolve the authoritative channel from the provider binding.
+     * The binding's channel is the source of truth for tenant identity (INV-001).
+     */
+    private async resolveChannelFromBinding(ctx: any, event: ProviderWebhookEvent): Promise<string | null> {
+        try {
+            const payload = event.rawPayload as any;
+            const subscriptionId = payload?.subscription?.entity?.id
+                || payload?.subscription_id
+                || payload?.entity?.id;
+
+            if (!subscriptionId) {
+                Logger.warn(`No subscription ID in event ${event.payloadHash} to resolve channel`, loggerCtx);
+                return null;
+            }
+
+            const binding = await this.connection.getRepository(ctx, SubscriptionProviderBinding)
+                .findOne({ where: { provider: event.provider, providerSubscriptionId: subscriptionId } });
+
+            if (!binding) {
+                Logger.warn(`No provider binding found for subscription ${subscriptionId}`, loggerCtx);
+                return null;
+            }
+
+            return binding.channelId;
+        } catch (err: any) {
+            Logger.error(`Failed to resolve channel from binding: ${err?.message}`, loggerCtx);
+            return null;
         }
     }
 }

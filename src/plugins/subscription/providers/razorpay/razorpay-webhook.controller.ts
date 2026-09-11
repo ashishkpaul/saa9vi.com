@@ -82,7 +82,7 @@ export class RazorpayWebhookController {
 
         const eventRepo = this.connection.getRepository(ctx, ProviderWebhookEvent);
         const webhookEvent = eventRepo.create({
-            channelId: String(ctx.channelId),
+            channelId: null, // Resolved by worker after provider binding lookup (INV-001)
             provider: 'razorpay',
             providerEventId: eventId,
             eventType: event,

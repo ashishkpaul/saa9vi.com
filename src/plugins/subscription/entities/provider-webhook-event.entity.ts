@@ -18,9 +18,14 @@ export class ProviderWebhookEvent extends VendureEntity {
         super(input);
     }
 
-    /** Denormalized tenant scope (ADR-003 scalar-only exception). */
-    @Column()
-    channelId: string;
+    /**
+     * Denormalized tenant scope (ADR-003 scalar-only exception).
+     *
+     * Initially NULL at ingress — resolved by the worker after provider binding lookup.
+     * This ensures the authoritative channel comes from the provider binding, not arbitrary request context.
+     */
+    @Column({ type: 'varchar', nullable: true })
+    channelId: string | null;
 
     /** Provider identifier: 'razorpay', 'juspay', etc. */
     @Column()
