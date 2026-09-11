@@ -3,6 +3,7 @@ import { Request } from 'express';
 import { EventBus, RequestContextService, TransactionalConnection, ChannelService, Logger } from '@vendure/core';
 import { RazorpayWebhookVerifier } from './razorpay-webhook.verifier';
 import { RazorpayWebhookProcessor } from './razorpay-webhook.processor';
+import { ProviderWebhookQueueService } from '../../services/provider-webhook-queue.service';
 import { ProviderWebhookEvent } from '../../entities/provider-webhook-event.entity';
 
 const loggerCtx = 'RazorpayWebhookController';
@@ -16,6 +17,7 @@ const loggerCtx = 'RazorpayWebhookController';
  * - Verifies X-Razorpay-Signature header using webhook secret
  * - Returns 401 if signature is invalid
  * - Persists event to immutable inbox BEFORE processing
+ * - Enqueues event ID for BullMQ worker processing
  * - Returns 200 immediately after persisting event (async processing)
  */
 @Controller('payments/razorpay')
@@ -23,6 +25,7 @@ export class RazorpayWebhookController {
     constructor(
         private webhookVerifier: RazorpayWebhookVerifier,
         private webhookProcessor: RazorpayWebhookProcessor,
+        private webhookQueue: ProviderWebhookQueueService,
         private requestContextService: RequestContextService,
         private connection: TransactionalConnection,
         private channelService: ChannelService,
@@ -89,23 +92,20 @@ export class RazorpayWebhookController {
             processingStatus: 'pending',
         });
 
+        let savedEvent: ProviderWebhookEvent;
         try {
-            await eventRepo.save(webhookEvent);
+            savedEvent = await eventRepo.save(webhookEvent);
         } catch (err) {
             // If UNIQUE constraint violation, event already received
             Logger.warn(`Webhook event already received: ${eventId}`, loggerCtx);
             return { status: 'ok' };
         }
 
-        // Process webhook asynchronously (non-blocking)
-        // The processor will update the event status when complete
-        setImmediate(() => {
-            this.webhookProcessor.processWebhook(ctx, event, payload).catch((err) => {
-                Logger.error(`Webhook processing failed: ${err.message}`, loggerCtx);
-            });
-        });
+        // Enqueue for async processing via BullMQ (INV-004)
+        // Only the immutable inbox ID is passed — the worker loads the full event
+        await this.webhookQueue.enqueueWebhookEvent(savedEvent.id as number);
 
-        // Return 2xx immediately after persisting
+        // Return 2xx immediately after persisting and enqueuing
         return { status: 'ok' };
     }
 }
