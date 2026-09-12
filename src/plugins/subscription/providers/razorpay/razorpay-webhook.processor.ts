@@ -67,46 +67,6 @@ export class RazorpayWebhookProcessor {
         }
     }
 
-    /**
-     * Legacy method — kept for backward compatibility.
-     * New code should use processInboxEvent with the immutable inbox record.
-     */
-    async processWebhook(ctx: RequestContext, event: string, payload: any): Promise<void> {
-        const providerEventId = payload.event_id || `evt_${Date.now()}`;
-        
-        if (await this.isEventProcessed(ctx, providerEventId)) {
-            Logger.log(`Event ${providerEventId} already processed`, loggerCtx);
-            return;
-        }
-
-        const ne = this.normalizeEvent(event, payload, providerEventId);
-
-        switch (event) {
-            case 'subscription.authenticated':
-                await this.updateBinding(ctx, ne.providerSubscriptionId, 'authenticated', false);
-                break;
-            case 'subscription.activated':
-                await this.updateBinding(ctx, ne.providerSubscriptionId, 'active', true);
-                if (ne.providerPaymentId && ne.amountPaise) await this.recordAttempt(ctx, ne, 'succeeded');
-                break;
-            case 'subscription.charged':
-                if (ne.providerPaymentId && ne.amountPaise) await this.recordAttempt(ctx, ne, 'succeeded');
-                break;
-            case 'subscription.halted':
-                await this.updateBinding(ctx, ne.providerSubscriptionId, 'halted', false);
-                if (ne.providerPaymentId) await this.recordAttempt(ctx, ne, 'failed');
-                break;
-            case 'subscription.cancelled':
-                await this.updateBinding(ctx, ne.providerSubscriptionId, 'cancelled', false);
-                break;
-            case 'payment.failed':
-                if (ne.providerPaymentId && ne.amountPaise) await this.recordAttempt(ctx, ne, 'failed');
-                break;
-            default:
-                Logger.warn(`Unhandled Razorpay event: ${event}`, loggerCtx);
-        }
-    }
-
     private normalizeEvent(event: string, payload: any, eventId: string): NormalizedBillingEvent {
         const sub = payload.subscription?.entity;
         const pay = payload.payment?.entity;

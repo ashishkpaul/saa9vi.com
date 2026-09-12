@@ -33,43 +33,48 @@
 
 | Gate | Status | Notes |
 |------|--------|-------|
-| **R2-A** Test Plan | ⏳ PENDING | Create ₹10/month plan in Dashboard |
-| **R2-B** Webhook Config | ✅ DONE | 11 events, staging endpoint, Test mode |
-| **R2-C** Webhook Ingress | ⏳ NEXT | Verify raw-body HMAC, idempotency, persist-first |
-| **R2-D** Create Subscription | ⏳ PENDING | Via API |
-| **R2-E** Authorization | ⏳ PENDING | Browser |
-| **R2-F** Capture Events | ⏳ PENDING | All events, not just predicted |
-| **R2-G** Failure Semantics | ⏳ PENDING | pending → halted mapping |
-| **R3** ADR-038 Freeze | ⏳ BLOCKED | After R2 evidence |
+| **R2-A** Test Plan | ✅ DONE | `plan_TaMGQbDDQn7Tir` (₹10/month) |
+| **R2-B** Webhook Config | ✅ DONE | 11 events, `webhook.saa9vi.com`, Test mode |
+| **R2-C** Webhook Ingress | ✅ Proven | HMAC-SHA256, idempotency, persist-first, 2xx |
+| **R2-D** Create Subscription | ✅ DONE | `sub_TabaZJZTQzNfWy` via API |
+| **R2-E** Authorization | ✅ DONE | Customer authorized, payment captured |
+| **R2-F** Durable Processing | 🟡 In Progress | BullMQ inbox worker, single processing path |
+| **R2-F** Channel Resolution | ✅ Proven | Resolved from provider binding (INV-001) |
+| **R2-F** Inbox Idempotency | ✅ Proven | UNIQUE(provider, providerEventId) |
+| **R2-F** Processing Idempotency | ✅ Proven | Double-send → single billing attempt |
+| **R2-G** Failure Semantics | 🟡 Code Complete | pending → retry → failed (terminal), `failedAt` |
+| **R2-G** Channel Isolation | ✅ Proven | Cross-tenant events stay isolated |
+| **R3** ADR-038 Freeze | ⏳ Ready | All R2 evidence captured |
 
 ---
 
-## Current Gate: R2-C — Webhook Ingress Verification
+## Current Gate: R2-F/R2-G — Durable Processing & Failure Semantics
 
-The Razorpay side is ready (R2-B complete). Before creating a test subscription, verify the Saa9vi webhook ingress:
+The webhook ingress is proven (R2-C). The inbox worker is implemented with:
+- Single processing path (legacy `processWebhook()` removed)
+- `attemptCount` tracking with proper state lifecycle
+- `processedAt` (success) and `failedAt` (terminal failure) timestamps
+- Channel resolution BEFORE business processing (INV-001)
+- DB errors thrown (not silently converted to "no binding")
+- Unified retry semantics: `MAX_ATTEMPTS=3`, `BULLMQ_RETRIES=2`
 
-- [ ] Raw body capture (not `JSON.stringify(req.body)`)
-- [ ] HMAC-SHA256 signature verification
-- [ ] Idempotency via `providerEventId`
-- [ ] Persist-first pattern (save before processing)
-- [ ] Return 2xx immediately
-- [ ] Async processing via queue
+Remaining verification:
+- [ ] Failure path tested (pending → retry → failed with `failedAt` populated)
+- [ ] Idempotency under concurrent workers (DB-level constraint)
 
 ### What still needs to happen for R1
 
+- [x] `ProviderWebhookEvent` entity (immutable inbox) — done
+- [x] Migration for `ProviderWebhookEvent` — done (1789141516883, 1789180117889)
 - [ ] `SubscriptionRenewalService` depends on `RecurringBillingProvider` (not `JuspayBillingService`)
 - [ ] Juspay code moved to `providers/juspay/` (not deleted)
 - [ ] `SubscriptionPlugin` registers provider conditionally
-- [ ] `ProviderWebhookEvent` entity (immutable inbox)
-- [ ] Migration for `ProviderWebhookEvent`
 
 ### Do NOT
 
-- ❌ Run `npx vendure migrate --run` yet
-- ❌ Add Razorpay env variables yet
-- ❌ Mark ADR-038 as Accepted yet
-- ❌ Delete Juspay code yet
-- ❌ Call Juspay "legacy" yet
+- ❌ Mark ADR-038 as Accepted yet (waiting for failure path verification)
+- ❌ Delete Juspay code yet (still referenced by `providers/juspay/`)
+- ❌ Call Juspay "legacy" yet (still a valid provider implementation)
 
 ---
 
@@ -291,22 +296,21 @@ Planned work remains white-label theming, TimescaleDB analytics, AI features, mu
 Do not create a second billing engine or second payment-attempt model. The current recurring-billing architecture is:
 
 ```text
-Due OrganizationSubscription
+Provider webhook (Razorpay/Juspay)
         ↓
-CLAIM CAS
+Immutable inbox (ProviderWebhookEvent)
         ↓
-JuspayPaymentAttempt (initiated)
+BullMQ worker
         ↓
-Juspay charge request
+Provider processor (RazorpayWebhookProcessor / JuspayWebhookProcessor)
         ↓
-Juspay webhook
+SubscriptionProviderBinding → channel resolution (INV-001)
         ↓
-reconcile existing attempt
+SubscriptionBillingAttempt (side effect)
         ↓
-CHARGE_SUCCEEDED → FINALIZE CAS
-CHARGE_FAILED    → past_due
+OrganizationSubscription status update
 ```
 
-A successful HTTP response from the real Juspay charge request means the request was accepted/initiated; it is not terminal payment success. This distinction must remain intact.
+A successful HTTP response from the provider means the request was accepted/initiated; it is not terminal payment success. This distinction must remain intact.
 
 The storefront template contract remains owned by the `nextjs-starter-vendure` repository and is intentionally not duplicated here.

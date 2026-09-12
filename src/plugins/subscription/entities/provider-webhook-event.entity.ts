@@ -53,17 +53,33 @@ export class ProviderWebhookEvent extends VendureEntity {
 
     /** When the webhook signature was verified. */
     @Column({ type: 'timestamp', nullable: true })
-    verifiedAt: Date;
+    verifiedAt: Date | null;
 
-    /** When the webhook was processed. */
+    /** When the webhook was successfully processed. */
     @Column({ type: 'timestamp', nullable: true })
-    processedAt: Date;
+    processedAt: Date | null;
 
-    /** Processing status: 'pending', 'processed', 'failed'. */
+    /** When the webhook processing terminally failed (all retries exhausted). */
+    @Column({ type: 'timestamp', nullable: true })
+    failedAt: Date | null;
+
+    /**
+     * Processing status lifecycle:
+     *   pending   → initial state, awaiting worker pickup
+     *   processed → successfully processed (terminal)
+     *   failed    → all retries exhausted, terminal failure
+     *
+     * Intermediate retry failures do NOT change status — the record stays `pending`
+     * until either success or terminal failure. Use `attemptCount` for retry visibility.
+     */
     @Column({ type: 'varchar', default: 'pending' })
     processingStatus: string;
 
-    /** Error message if processing failed. */
-    @Column({ nullable: true })
-    errorMessage: string;
+    /** Number of processing attempts made. Incremented by the worker on each attempt. */
+    @Column({ type: 'int', default: 0 })
+    attemptCount: number;
+
+    /** Error message from the most recent failed attempt (cleared on success). */
+    @Column({ type: String, nullable: true })
+    errorMessage: string | null;
 }

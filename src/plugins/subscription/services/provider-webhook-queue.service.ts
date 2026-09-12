@@ -7,6 +7,20 @@ import { RazorpayWebhookProcessor } from '../providers/razorpay/razorpay-webhook
 const loggerCtx = 'ProviderWebhookQueueService';
 const QUEUE_NAME = 'provider-webhook-processing';
 
+/**
+ * Total processing attempts before terminal failure.
+ *
+ * BullMQ `retries: N` means N retries AFTER the initial attempt, giving N+1 total executions.
+ * We want exactly 3 total attempts, so we set `retries: 2`.
+ *
+ * State machine:
+ *   attempt 1 fails → pending (BullMQ retry 1)
+ *   attempt 2 fails → pending (BullMQ retry 2)
+ *   attempt 3 fails → failed (terminal, no more retries)
+ */
+const MAX_ATTEMPTS = 3;
+const BULLMQ_RETRIES = MAX_ATTEMPTS - 1;
+
 export interface ProviderWebhookJobData {
     eventId: number;
 }
@@ -48,13 +62,27 @@ export class ProviderWebhookQueueService implements OnModuleInit {
     async enqueueWebhookEvent(eventId: number): Promise<void> {
         await this.jobQueue.add(
             { eventId },
-            { retries: 3 },
+            { retries: BULLMQ_RETRIES },
         );
     }
 
     /**
      * Process a webhook event from the immutable inbox.
      * Loads the record, resolves the provider, processes, and updates status.
+     *
+     * State transitions:
+     *   pending + attempt → increment attemptCount, keep pending (retry visibility)
+     *   success → processed + processedAt (terminal)
+     *   failure + attempts left → keep pending, rethrow for BullMQ retry
+     *   failure + no attempts left → failed + failedAt (terminal)
+     *
+     * Channel resolution order (INV-001):
+     *   1. Load inbox event
+     *   2. Extract provider subscription ID from payload
+     *   3. Resolve binding from provider subscription ID
+     *   4. Resolve channel from binding
+     *   5. Process event
+     *   6. Persist resolved channel + processed status
      */
     private async processWebhookEvent(eventId: number): Promise<void> {
         const ctx = await this.requestContextService.create({ apiType: 'admin' });
@@ -71,6 +99,13 @@ export class ProviderWebhookQueueService implements OnModuleInit {
             return;
         }
 
+        // Increment attempt count for visibility (does not change status yet)
+        event.attemptCount += 1;
+        await repo.save(event);
+
+        // Resolve channel from binding BEFORE processing (INV-001)
+        const resolvedChannelId = await this.resolveChannelFromBinding(ctx, event);
+
         try {
             // Route to the appropriate provider processor
             if (event.provider === 'razorpay') {
@@ -81,46 +116,61 @@ export class ProviderWebhookQueueService implements OnModuleInit {
                 throw new Error(`Unsupported provider: ${event.provider}`);
             }
 
-            // Resolve authoritative channel from provider binding (INV-001)
-            const resolvedChannelId = await this.resolveChannelFromBinding(ctx, event);
+            // Persist resolved channel
             if (resolvedChannelId) {
                 event.channelId = resolvedChannelId;
             }
 
-            // Mark as processed
+            // Mark as processed (terminal success)
             event.processingStatus = 'processed';
             event.processedAt = new Date();
+            event.failedAt = null;
+            event.errorMessage = null;
             await repo.save(event);
 
             Logger.log(`Webhook event ${eventId} processed successfully`, loggerCtx);
         } catch (err: any) {
-            // Mark as failed
-            event.processingStatus = 'failed';
-            event.processedAt = new Date();
+            // Update error message for operational visibility
             event.errorMessage = err?.message || 'Unknown error';
-            await repo.save(event);
 
-            Logger.error(`Webhook event ${eventId} failed: ${err?.message}`, loggerCtx);
-            throw err; // Re-throw for BullMQ retry
+            if (event.attemptCount >= MAX_ATTEMPTS) {
+                // Terminal failure: all retries exhausted
+                event.processingStatus = 'failed';
+                event.failedAt = new Date();
+                await repo.save(event);
+                Logger.error(`Webhook event ${eventId} terminal failure after ${event.attemptCount} attempts: ${err?.message}`, loggerCtx);
+            } else {
+                // Retryable: keep pending, save error for visibility
+                await repo.save(event);
+                Logger.warn(`Webhook event ${eventId} attempt ${event.attemptCount} failed (will retry): ${err?.message}`, loggerCtx);
+            }
+
+            // Re-throw so BullMQ knows the job failed (triggers retry or dead-letter)
+            throw err;
         }
     }
 
     /**
      * Resolve the authoritative channel from the provider binding.
      * The binding's channel is the source of truth for tenant identity (INV-001).
+     *
+     * Error handling:
+     *   - No subscription ID in payload → return null (controlled, no binding possible)
+     *   - Binding not found → return null (controlled, may be for different provider)
+     *   - Database error → throws (must not be silently converted to "no binding")
      */
     private async resolveChannelFromBinding(ctx: any, event: ProviderWebhookEvent): Promise<string | null> {
+        const payload = event.rawPayload as any;
+        const subscriptionId = payload?.subscription?.entity?.id
+            || payload?.subscription_id
+            || payload?.entity?.id;
+
+        if (!subscriptionId) {
+            Logger.warn(`No subscription ID in event ${event.payloadHash} to resolve channel`, loggerCtx);
+            return null;
+        }
+
         try {
-            const payload = event.rawPayload as any;
-            const subscriptionId = payload?.subscription?.entity?.id
-                || payload?.subscription_id
-                || payload?.entity?.id;
-
-            if (!subscriptionId) {
-                Logger.warn(`No subscription ID in event ${event.payloadHash} to resolve channel`, loggerCtx);
-                return null;
-            }
-
             const binding = await this.connection.getRepository(ctx, SubscriptionProviderBinding)
                 .findOne({ where: { provider: event.provider, providerSubscriptionId: subscriptionId } });
 
@@ -131,8 +181,9 @@ export class ProviderWebhookQueueService implements OnModuleInit {
 
             return binding.channelId;
         } catch (err: any) {
-            Logger.error(`Failed to resolve channel from binding: ${err?.message}`, loggerCtx);
-            return null;
+            // Database error — must NOT be silently converted to "no binding"
+            Logger.error(`Database error resolving channel from binding for subscription ${subscriptionId}: ${err?.message}`, loggerCtx);
+            throw err;
         }
     }
 }
