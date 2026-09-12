@@ -328,8 +328,8 @@ None (extends `orderOptions.process` with `customerStatusOrderProcess` to block 
 | Property | Value |
 |---|---|
 | **Directory** | `src/plugins/subscription/` |
-| **Status** | Phase 2 — recurring billing & dunning. Billing provider = Juspay. See RFC-001 / ADR-037. |
-| **Purpose** | Subscription billing bounded context — plans, organization subscriptions, Juspay recurring payments, webhooks, dunning FSM, renewal reconciliation. |
+| **Status** | Razorpay integrated (live on `main`); Juspay retained as coexisting provider |
+| **Purpose** | Subscription billing bounded context — plans, organization subscriptions, provider-neutral billing, webhooks, dunning FSM, renewal reconciliation. |
 
 ### Owns
 
@@ -337,11 +337,13 @@ None (extends `orderOptions.process` with `customerStatusOrderProcess` to block 
 |---|---|---|
 | SubscriptionPlan | `subscription_plan` | No (platform-global plan catalogue; unique `slug`, not channel-scoped — scoping happens via `OrganizationSubscription`) |
 | OrganizationSubscription | `organization_subscription` | Yes (= Channel/tenant) |
-| JuspayPaymentAttempt | `juspay_payment_attempt` | No (scalar `channelId`; CLAIM→CHARGE→FINALIZE CAS) |
-| JuspaySubscriptionMandate | `juspay_subscription_mandate` | No |
-| JuspayWebhookEvent | `juspay_webhook_event` | No |
-| JuspayWebhookEndpoint | `juspay_webhook_endpoint` | No (unique `token` + `channelId`, per-tenant secret) |
-| RenewalPaymentReconciliationRequired | `juspay_payment_reconciliation_required` | No (scalar `channelId`; status PENDING/RESOLVED) |
+| SubscriptionProviderBinding | `subscription_provider_binding` | Yes (scalar `channelId`; provider-neutral binding) |
+| SubscriptionBillingAttempt | `subscription_billing_attempt` | Yes (scalar `channelId`; provider-neutral billing attempt) |
+| ProviderWebhookEvent | `provider_webhook_event` | Yes (scalar `channelId`; immutable inbox, UNIQUE(provider, providerEventId)) |
+| JuspayPaymentAttempt | `juspay_payment_attempt` | No (legacy Juspay-specific) |
+| JuspaySubscriptionMandate | `juspay_subscription_mandate` | No (legacy Juspay-specific) |
+| JuspayWebhookEvent | `juspay_webhook_event` | No (legacy Juspay-specific) |
+| JuspayWebhookEndpoint | `juspay_webhook_endpoint` | No (legacy Juspay-specific) |
 
 ### Publishes
 
@@ -351,15 +353,9 @@ None (extends `orderOptions.process` with `customerStatusOrderProcess` to block 
 
 | Event / Input | Source |
 |---|---|
+| Razorpay webhooks | `POST /payments/razorpay/webhook` (`RazorpayWebhookController`, HMAC-SHA256, raw body) |
 | Juspay webhooks | `POST /payments/juspay/webhook/:token` (`JuspayWebhookController`, fail-closed Basic Auth + HMAC, AES-256-GCM secret) |
 | Scheduled tasks | `subscriptionRenewalTask` (every 10 min), `subscriptionDunningTask` |
-
-### Consumes — Scheduled Tasks
-
-| Task | Schedule | Purpose |
-|---|---|---|
-| `subscriptionRenewalTask` | Every 10 min | Discover subscriptions needing period advance / charge |
-| `subscriptionDunningTask` | Every 10 min | Dunning FSM retry + grace-expiry → cancel |
 
 ### API Surfaces
 
@@ -371,14 +367,43 @@ None (extends `orderOptions.process` with `customerStatusOrderProcess` to block 
 
 | Service | Purpose |
 |---|---|
-| `JuspayBillingService` | Recurring charge orchestration (CLaim/charge/reconcile; provider contract ADR-037) |
+| `RazorpayWebhookProcessor` | Razorpay webhook dispatch / reconciliation (uses `providerEventId` for idempotency) |
+| `ProviderWebhookQueueService` | Persist-then-process webhook queue (INV-004), BullMQ-backed, `MAX_ATTEMPTS=3` |
+| `RazorpaySubscriptionProvider` | Razorpay Subscriptions API adapter (implements `RecurringBillingProvider`) |
+| `JuspayBillingService` | Recurring charge orchestration (legacy Juspay-specific) |
 | `JuspayPaymentAttemptService` | CLAIM→CHARGE→FINALIZE optimistic-locking payment-attempt ledger |
-| `JuspayWebhookAuthService` | Fail-closed webhook auth (Basic + HMAC signature) |
-| `JuspayWebhookQueueService` | Persist-then-process webhook queue (INV-004) |
-| `JuspayWebhookProcessorService` | Webhook dispatch / reconciliation |
-| `JuspayEncryptionService` | AES-256-GCM secret-at-rest (fail-closed in production) |
-| `JuspayWebhookEndpointService` | Per-tenant webhook endpoints + secrets |
-| `SubscriptionService` / `SubscriptionRenewalService` | Plan/enrollment lifecycle, renewal discovery & period advance |
-| `JuspaySdk` (`juspay-sdk.ts`) | Juspay HTTP client |
+| `SubscriptionService` / `SubscriptionRenewalService` | Plan/enrollment lifecycle, renewal discovery & period advance (depends on `RecurringBillingProvider` interface) |
 
-> ⚠️ **ADR-037 note:** Recurring-billing provider contract is verified against docs/code; live provider-contract verification + production credential rollout remain pending.
+### Razorpay Webhook Flow
+
+```text
+Razorpay POST /payments/razorpay/webhook
+    ↓
+HMAC-SHA256 signature verification (raw body bytes)
+    ↓
+Persist ProviderWebhookEvent { status: 'pending' } (immutable inbox)
+    ↓
+Return 201 immediately
+    ↓
+BullMQ: provider-webhook-processing queue
+    ↓
+Resolve channel from SubscriptionProviderBinding (INV-001)
+    ↓
+RazorpayWebhookProcessor.processInboxEvent()
+    ↓
+Idempotency: isEventProcessed(providerEventId) → check SubscriptionBillingAttempt
+    ↓
+Create SubscriptionBillingAttempt (UNIQUE(provider, providerEventId))
+    ↓
+Mark ProviderWebhookEvent { status: 'processed', processedAt }
+```
+
+### Failure Semantics
+
+```text
+attempt 1 fails → pending, attemptCount=1
+attempt 2 fails → pending, attemptCount=2
+attempt 3 fails → failed, attemptCount=3, failedAt populated (terminal)
+```
+
+> ✅ **R2-G verified**: Failure path and concurrent idempotency tested via `webhook-failure-path.e2e-spec.ts` and `webhook-concurrent-idempotency.e2e-spec.ts`.

@@ -1,6 +1,6 @@
 # What Next — Saa9vi Platform
 
-**Updated:** 2026-09-09
+**Updated:** 2026-09-12
 
 ---
 
@@ -19,13 +19,11 @@
 
 | Gate | Status | Notes |
 |------|--------|-------|
-| **R1 — Provider-neutral boundary** | 🟡 IN PROGRESS | Interface added, Juspay still on critical path |
-| **R2 — Razorpay Test Plan** | ⏳ PENDING | Create ₹1/month test plan |
-| **R3 — Razorpay Test Subscription** | ⏳ PENDING | Create test subscription |
-| **R4 — Webhook lifecycle capture** | ⏳ PENDING | Capture all webhook events |
-| **R5 — Contract freeze (ADR-038)** | ⏳ PENDING | Only after R2-R4 evidence |
-| **I1-I3 — Implementation** | 🔒 LOCKED | After R1 complete |
-| **V1 — Production hardening** | 🔒 LOCKED | After I1-I3 complete |
+| **R1 — Provider-neutral boundary** | ✅ Complete | Interface + both providers (Razorpay + Juspay) |
+| **R2 — Razorpay Contract Verification** | ✅ Complete | All sub-gates proven (see below) |
+| **R3 — ADR-038 Freeze** | ⏳ Ready | All R2 evidence captured; awaiting freeze decision |
+| **I1-I3 — Implementation** | ✅ Complete | Razorpay live on `main` |
+| **V1 — Production hardening** | ⏳ Next | After ADR-038 freeze |
 
 ---
 
@@ -38,41 +36,44 @@
 | **R2-C** Webhook Ingress | ✅ Proven | HMAC-SHA256, idempotency, persist-first, 2xx |
 | **R2-D** Create Subscription | ✅ DONE | `sub_TabaZJZTQzNfWy` via API |
 | **R2-E** Authorization | ✅ DONE | Customer authorized, payment captured |
-| **R2-F** Durable Processing | 🟡 In Progress | BullMQ inbox worker, single processing path |
+| **R2-F** Durable Processing | ✅ Proven | BullMQ inbox worker, single processing path |
 | **R2-F** Channel Resolution | ✅ Proven | Resolved from provider binding (INV-001) |
 | **R2-F** Inbox Idempotency | ✅ Proven | UNIQUE(provider, providerEventId) |
 | **R2-F** Processing Idempotency | ✅ Proven | Double-send → single billing attempt |
-| **R2-G** Failure Semantics | 🟡 Code Complete | pending → retry → failed (terminal), `failedAt` |
+| **R2-F** Concurrent Idempotency | ✅ Proven | DB UNIQUE constraint blocks duplicates |
+| **R2-G** Failure Semantics | ✅ Proven | pending → retry → failed (terminal), `failedAt` |
 | **R2-G** Channel Isolation | ✅ Proven | Cross-tenant events stay isolated |
 | **R3** ADR-038 Freeze | ⏳ Ready | All R2 evidence captured |
 
 ---
 
-## Current Gate: R2-F/R2-G — Durable Processing & Failure Semantics
+## Current Gate: R3 — ADR-038 Contract Freeze
 
-The webhook ingress is proven (R2-C). The inbox worker is implemented with:
+All R2 evidence is captured:
+- **Failure path**: `pending` → `pending` → `failed` (3 attempts, `failedAt` populated)
+- **Concurrent idempotency**: UNIQUE(provider, providerEventId) blocks duplicate billing attempts
+- **Channel resolution**: Resolved from `SubscriptionProviderBinding` (INV-001)
+- **Infrastructure**: PostgreSQL + Redis + BullMQ confirmed (not fallbacks)
+
+The inbox worker is implemented with:
 - Single processing path (legacy `processWebhook()` removed)
 - `attemptCount` tracking with proper state lifecycle
 - `processedAt` (success) and `failedAt` (terminal failure) timestamps
-- Channel resolution BEFORE business processing (INV-001)
+- Channel resolution BEFORE business processing
 - DB errors thrown (not silently converted to "no binding")
 - Unified retry semantics: `MAX_ATTEMPTS=3`, `BULLMQ_RETRIES=2`
-
-Remaining verification:
-- [ ] Failure path tested (pending → retry → failed with `failedAt` populated)
-- [ ] Idempotency under concurrent workers (DB-level constraint)
 
 ### What still needs to happen for R1
 
 - [x] `ProviderWebhookEvent` entity (immutable inbox) — done
-- [x] Migration for `ProviderWebhookEvent` — done (1789141516883, 1789180117889)
-- [ ] `SubscriptionRenewalService` depends on `RecurringBillingProvider` (not `JuspayBillingService`)
-- [ ] Juspay code moved to `providers/juspay/` (not deleted)
-- [ ] `SubscriptionPlugin` registers provider conditionally
+- [x] Migration for `ProviderWebhookEvent` — done (1789141516883, 1789180117889, 1789180807072)
+- [x] `SubscriptionRenewalService` depends on `RecurringBillingProvider` — done
+- [x] Juspay code moved to `providers/juspay/` — done
+- [x] `SubscriptionPlugin` registers provider conditionally — done
 
 ### Do NOT
 
-- ❌ Mark ADR-038 as Accepted yet (waiting for failure path verification)
+- ❌ Mark ADR-038 as Accepted yet (awaiting formal freeze decision)
 - ❌ Delete Juspay code yet (still referenced by `providers/juspay/`)
 - ❌ Call Juspay "legacy" yet (still a valid provider implementation)
 
@@ -124,8 +125,12 @@ The application was started with `DB_HOST=localhost`/`DB_PORT=5435` and `REDIS_H
 | `JuspayBillingService` | Current (not legacy) |
 | `JuspayPaymentAttempt` | Current entity |
 | `JuspaySubscriptionMandate` | Current entity |
-| `RazorpaySubscriptionProvider` | Proposed (not yet integrated) |
-| `RazorpayWebhookProcessor` | Proposed (not yet integrated) |
+| `RazorpaySubscriptionProvider` | ✅ Integrated (live on `main`) |
+| `RazorpayWebhookProcessor` | ✅ Integrated (live on `main`) |
+| `RazorpayWebhookController` | ✅ Integrated (live on `main`) |
+| `ProviderWebhookEvent` | ✅ Immutable inbox (shared by all providers) |
+| `SubscriptionBillingAttempt` | ✅ Provider-neutral billing attempt |
+| `SubscriptionProviderBinding` | ✅ Provider-neutral binding |
 
 ---
 

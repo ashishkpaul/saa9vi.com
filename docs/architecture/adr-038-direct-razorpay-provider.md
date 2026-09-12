@@ -1,7 +1,20 @@
 # ADR-038: Direct Razorpay Subscription Provider
-**Status:** 🟡 PROPOSED — Not yet Accepted
+**Status:** 🟡 PROPOSED — Evidence Complete, Awaiting Formal Acceptance
 
 **Date:** 2026-09-09
+
+## Evidence Summary
+
+All acceptance criteria are now verified:
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | M1.3 — Razorpay Test Plan + Test Subscription | ✅ | `plan_TaMGQbDDQn7Tir`, `sub_TabaZJZTQzNfWy` |
+| 2 | M1.4 — Webhook lifecycle captured | ✅ | HMAC-SHA256, persist-first, 2xx |
+| 3 | R1 — Provider-neutral boundary complete | ✅ | `RecurringBillingProvider` interface, both providers |
+| 4 | R2-F — Durable processing | ✅ | BullMQ inbox worker, single path |
+| 5 | R2-G — Failure semantics | ✅ | pending → retry → failed, `failedAt` |
+| 6 | R2-G — Concurrent idempotency | ✅ | UNIQUE(provider, providerEventId) |
 
 ## Context
 
@@ -95,14 +108,17 @@ CAS transition → Entitlement update
 ## Acceptance Criteria
 
 ADR-038 becomes **Accepted** only after:
-1. M1.3 — Razorpay Test Plan + Test Subscription created
-2. M1.4 — Webhook lifecycle captured (subscription.authenticated/activated/charged/halted)
-3. R1 — Provider-neutral boundary complete (SubscriptionRenewalService depends on interface)
-4. Evidence documented in this ADR
+1. ✅ M1.3 — Razorpay Test Plan + Test Subscription created
+2. ✅ M1.4 — Webhook lifecycle captured (subscription.authenticated/activated/charged/halted)
+3. ✅ R1 — Provider-neutral boundary complete (SubscriptionRenewalService depends on interface)
+4. ✅ R2-F — Durable processing verified (BullMQ inbox worker, failure semantics)
+5. ✅ R2-G — Concurrent idempotency verified (DB UNIQUE constraint)
+6. ⏳ Evidence documented in this ADR — ready for formal acceptance decision
 
 ## References
 
 - Razorpay Subscriptions: https://razorpay.com/docs/payments/subscriptions
 - Razorpay Webhooks: https://razorpay.com/docs/webhooks/subscriptions
+- Razorpay Best Practices: https://razorpay.com/docs/webhooks/best-practices
 - Vendure Stripe Plugin: https://docs.vendure.io/current/community-plugins/stripe-plugin
-- Commits: `9c5478d` through `d8efcc4` (provider-neutral boundary + Razorpay adapter)
+- Commits: `9c5478d` through `efb4725` (provider-neutral boundary + Razorpay adapter + R2-G tests)

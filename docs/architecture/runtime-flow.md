@@ -98,6 +98,50 @@ bbb-webhook-processor job
 
 ---
 
+## Razorpay Webhook Processing
+
+```
+Razorpay POST /payments/razorpay/webhook
+  │
+  ├─ Verify HMAC-SHA256 signature (raw body bytes)
+  ├─ Persist ProviderWebhookEvent { status: 'pending' } (immutable inbox)
+  ├─ Enqueue eventId to BullMQ: provider-webhook-processing
+  └─ Return { status: 'ok' } immediately (201)
+
+provider-webhook-processing job
+  │
+  ├─ Load ProviderWebhookEvent by id
+  ├─ Increment attemptCount
+  ├─ Resolve channel from SubscriptionProviderBinding (INV-001)
+  ├─ Route to RazorpayWebhookProcessor.processInboxEvent()
+  │    ├─ Idempotency: isEventProcessed(providerEventId) → check SubscriptionBillingAttempt
+  │    ├─ Normalize event → handle by type:
+  │    │    ├─ subscription.authenticated → updateBinding()
+  │    │    ├─ subscription.activated → updateBinding() + recordAttempt()
+  │    │    ├─ subscription.charged → recordAttempt()
+  │    │    ├─ subscription.halted → updateBinding() + recordAttempt()
+  │    │    ├─ subscription.cancelled → updateBinding()
+  │    │    └─ payment.failed → recordAttempt()
+  │    └─ Create SubscriptionBillingAttempt (UNIQUE(provider, providerEventId))
+  ├─ Mark ProviderWebhookEvent { status: 'processed', processedAt }
+  │
+  ├─ On failure + attempts left:
+  │    └─ Keep status: 'pending', rethrow for BullMQ retry
+  │
+  └─ On failure + MAX_ATTEMPTS exhausted:
+       └─ Mark ProviderWebhookEvent { status: 'failed', failedAt } (terminal)
+```
+
+### Failure Semantics
+
+```
+attempt 1 fails → pending, attemptCount=1
+attempt 2 fails → pending, attemptCount=2
+attempt 3 fails → failed, attemptCount=3, failedAt populated (terminal)
+```
+
+---
+
 ## Order Fulfillment → Entitlement
 
 ```
