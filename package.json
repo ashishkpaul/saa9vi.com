@@ -20,6 +20,8 @@
     "seed:demo-academy": "./scripts/seed/seed-via-graphql.sh",
     "seed:demo-academy:direct": "ts-node ./scripts/seed/demo-academy.ts",
     "verify:demo-data": "./scripts/verify/demo-flow.sh",
+    "seed:demo-unblock": "./scripts/seed/demo-unblock-graphql.sh",
+    "seed:demo-unblock:ts": "ts-node ./scripts/seed/unblock-demo.ts",
     "tenant:roles:check": "ts-node ./scripts/tenant-role-reconcile.ts",
     "tenant:roles:repair": "ts-node ./scripts/tenant-role-reconcile.ts --apply",
     "codegen": "graphql-codegen --config codegen.ts",
