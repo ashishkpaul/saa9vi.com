@@ -23,7 +23,7 @@
 | **R2 — Razorpay Contract Verification** | ✅ Complete | All sub-gates proven (see below) |
 | **R3 — ADR-038 Freeze** | ✅ Complete | ADR-038 ACCEPTED 2026-09-12 (R2-F + R2-G evidence, INV-018 channel-scoped worker ctx) |
 | **I1-I3 — Implementation** | ✅ Complete | Razorpay live on `main` |
-| **V1 — Production hardening** | ⏳ Next | After ADR-038 freeze |
+| **V1 — Production hardening** | ⏳ Next | Baseline: `71dc27e` (ADR-038 acceptance). Checklist below — **first action: rotate exposed Razorpay secrets** |
 
 ---
 
@@ -78,6 +78,75 @@ The inbox worker is implemented with:
 - ❌ Call Juspay "legacy" yet (still a valid provider implementation)
 
 ---
+
+## V1 — Production Hardening
+
+**Baseline: `71dc27e` (ADR-038 acceptance, 2026-09-12).** From here the goal is proving the accepted design remains safe under production failure, retries, credentials, and operational conditions — no further architectural redesign.
+
+Order matters: secrets first, then perimeter + observability, then failure-boundary tests, then live mode.
+
+### V1.1 — Secret rotation (FIRST — manual, Razorpay Dashboard)
+
+- [ ] Rotate exposed Razorpay **test API key secret** (was exposed in screenshots/conversation)
+- [ ] Rotate exposed Razorpay **test webhook secret** (independently of the API secret)
+- [ ] Move new secrets into the environment/secret store; never into `.env`-in-repo or chat
+- [ ] Verify old-secret handling: per Razorpay docs, outstanding webhook retries generated with the old secret must remain validatable — retain the old webhook secret only until outstanding deliveries drain, then destroy it
+- [ ] Run one fresh signed webhook lifecycle test using ONLY the new webhook secret
+
+### V1.2 — Webhook perimeter (verify against Razorpay best practices)
+
+- [ ] HTTPS-only at `webhook.saa9vi.com` (Cloudflare → origin)
+- [ ] Exact route exposure: only `POST /payments/razorpay/webhook`
+- [ ] No accidental GraphQL/auth middleware on the webhook route
+- [ ] Raw body preserved byte-for-byte through Cloudflare/any proxy (HMAC depends on it)
+- [ ] Request-size limit on the webhook route
+- [ ] Rate limiting on the webhook route
+- [ ] Review Cloudflare exposure rules (no debug/admin surfaces exposed)
+- [ ] Decide Razorpay source-IP allowlisting policy — **supplementary only; HMAC remains the primary control** (Razorpay recommends signature verification even with IP whitelisting)
+- [ ] Webhook secret never appears in logs or error messages
+
+### V1.3 — Observability (structured events over `ProviderWebhookEvent` fields)
+
+Events to emit: `webhook.received`, `webhook.duplicate`, `webhook.verified`, `webhook.enqueued`, `webhook.processing`, `webhook.processed`, `webhook.retry`, `webhook.failed`, `billing_attempt.created`, `billing_attempt.duplicate`, `channel_resolution.failed`.
+
+- [ ] Structured logging for the lifecycle events above
+- [ ] Failed-webhook operational alert (terminal `failed` events, `failedAt` populated)
+- [ ] Queue backlog / worker-health alert
+- [ ] Log-hygiene review: never log API secrets, webhook secrets, auth credentials, raw payment data, or raw payloads
+
+Operators must be able to answer: Did Razorpay send it? Did we verify it? Did it enter the queue? How many attempts? Why did it fail? Was the billing attempt recorded?
+
+### V1.4 — Retry-domain awareness (design fact, no code change)
+
+Two independent retry domains: (a) Saa9vi processing — `MAX_ATTEMPTS=3` local, terminal `failed`; (b) Razorpay delivery retry — non-2xx → exponential retry up to 24h → possible webhook disablement. Duplicate Razorpay deliveries are absorbed by `UNIQUE(provider, providerEventId)` on the same `x-razorpay-event-id`. Local terminal failure must surface to operators before Razorpay retries exhaust and the webhook is disabled.
+
+### V1.5 — Production failure-boundary tests
+
+- [ ] **Test A — app unavailable:** Razorpay delivery gets 503/timeout → retries → app returns → same event ID → inbox deduplication absorbs it
+- [ ] **Test B — 2xx then worker failure:** event persisted, BullMQ fails → 3 local attempts → terminal `failed` → operator visibility (already proven by R2-G; re-verify in production-like env)
+- [ ] **Test C — duplicate delivery:** same `x-razorpay-event-id` re-POSTed → UNIQUE constraint → no second billing attempt
+
+### V1.6 — Out-of-order webhook safety
+
+Razorpay events may arrive out of order. Regression test: `subscription.activated` before/after `subscription.charged` (both orders). Required property: **an out-of-order webhook must never cause an unsafe entitlement or billing transition.**
+
+### V1.7 — Credential separation (before live mode)
+
+- [ ] Separate TEST vs PRODUCTION credential sets (API keys, webhook secrets, webhook configs, subscriptions)
+- [ ] Never reuse test secrets in production because the code path is identical
+- [ ] Verify the production deployment **fails closed** when required secrets are absent
+
+### V1.8 — Final live-mode smoke test (last)
+
+Full chain on production Razorpay: subscription create/authorize → recurring lifecycle → HTTPS webhook → HMAC → `ProviderWebhookEvent` → BullMQ → `RazorpayWebhookProcessor` → `SubscriptionBillingAttempt` → `OrganizationSubscription` → Entitlement — with corresponding DB facts verified. Then final regression suite, production deploy, post-deployment webhook observation.
+
+### Explicitly out of scope for V1
+
+- Refactoring remaining `setImmediate()` hits (BBB subsystem / `reference/` material — unrelated)
+- Removing Juspay classes (provider-neutral boundary intentionally preserves them; see ADR-038)
+
+---
+
 
 ## Source of Truth
 
