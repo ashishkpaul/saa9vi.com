@@ -93,8 +93,9 @@ Order matters: secrets first, then perimeter + observability, then failure-bound
 - [ ] Verify old-secret handling: per Razorpay docs, outstanding webhook retries generated with the old secret must remain validatable — retain the old webhook secret only until outstanding deliveries drain, then destroy it
 - [ ] Run one fresh signed webhook lifecycle test using ONLY the new webhook secret
 
-### V1.2 — Webhook perimeter (verify against Razorpay best practices)
+### V1.2 — Webhook perimeter (CONFIG AUDIT FIRST — before adding middleware)
 
+- [x] ~~Controller depends only on ingress concerns~~ — done (`7630c5b` batch): unused `RazorpayWebhookProcessor`/`ChannelService`/`EventBus` deps removed; controller = verify → persist → enqueue → 2xx only
 - [ ] HTTPS-only at `webhook.saa9vi.com` (Cloudflare → origin)
 - [ ] Exact route exposure: only `POST /payments/razorpay/webhook`
 - [ ] No accidental GraphQL/auth middleware on the webhook route
@@ -105,38 +106,48 @@ Order matters: secrets first, then perimeter + observability, then failure-bound
 - [ ] Decide Razorpay source-IP allowlisting policy — **supplementary only; HMAC remains the primary control** (Razorpay recommends signature verification even with IP whitelisting)
 - [ ] Webhook secret never appears in logs or error messages
 
-### V1.3 — Observability (structured events over `ProviderWebhookEvent` fields)
+### V1.3 — Inbox/queue failure recovery ✅ DONE (2026-09-12)
+
+The persist-first + async-queue architecture had one reliability hole: if the inbox row persists but BullMQ enqueue fails, Razorpay sees non-2xx and retries — but the old duplicate path returned 2xx WITHOUT re-enqueueing, leaving the event permanently pending with no active job.
+
+- [x] Duplicate path now checks `processingStatus === 'pending'` and re-enqueues (worker idempotency guards make a redundant job a safe no-op)
+- [x] Terminal (`processed`/`failed`) events are never re-enqueued on duplicate delivery
+- [x] Regression test: `webhook-enqueue-failure-recovery.e2e-spec.ts` (persist ✅ / enqueue ❌ / retry → re-enqueue → single inbox row)
+
+### V1.4 — Observability (structured events over `ProviderWebhookEvent` fields)
 
 Events to emit: `webhook.received`, `webhook.duplicate`, `webhook.verified`, `webhook.enqueued`, `webhook.processing`, `webhook.processed`, `webhook.retry`, `webhook.failed`, `billing_attempt.created`, `billing_attempt.duplicate`, `channel_resolution.failed`.
 
 - [ ] Structured logging for the lifecycle events above
 - [ ] Failed-webhook operational alert (terminal `failed` events, `failedAt` populated)
-- [ ] Queue backlog / worker-health alert
+- [ ] Queue backlog / worker-health alert, including **pending-event age** (`pending > 5 min / 30 min / 1 hr`) — a pending inbox event with no active BullMQ job is otherwise indistinguishable from a silently dead worker
 - [ ] Log-hygiene review: never log API secrets, webhook secrets, auth credentials, raw payment data, or raw payloads
+
+Log fields: only safe identifiers — `provider`, `providerEventId`, `eventType`, `inboxEventId`, `attemptCount`, `channelId` (once resolved). Never the raw payload or secrets.
 
 Operators must be able to answer: Did Razorpay send it? Did we verify it? Did it enter the queue? How many attempts? Why did it fail? Was the billing attempt recorded?
 
-### V1.4 — Retry-domain awareness (design fact, no code change)
+### V1.5 — Retry-domain awareness (design fact, no code change)
 
 Two independent retry domains: (a) Saa9vi processing — `MAX_ATTEMPTS=3` local, terminal `failed`; (b) Razorpay delivery retry — non-2xx → exponential retry up to 24h → possible webhook disablement. Duplicate Razorpay deliveries are absorbed by `UNIQUE(provider, providerEventId)` on the same `x-razorpay-event-id`. Local terminal failure must surface to operators before Razorpay retries exhaust and the webhook is disabled.
 
-### V1.5 — Production failure-boundary tests
+### V1.6 — Production failure-boundary tests
 
 - [ ] **Test A — app unavailable:** Razorpay delivery gets 503/timeout → retries → app returns → same event ID → inbox deduplication absorbs it
 - [ ] **Test B — 2xx then worker failure:** event persisted, BullMQ fails → 3 local attempts → terminal `failed` → operator visibility (already proven by R2-G; re-verify in production-like env)
 - [ ] **Test C — duplicate delivery:** same `x-razorpay-event-id` re-POSTed → UNIQUE constraint → no second billing attempt
 
-### V1.6 — Out-of-order webhook safety
+### V1.7 — Out-of-order webhook safety
 
 Razorpay events may arrive out of order. Regression test: `subscription.activated` before/after `subscription.charged` (both orders). Required property: **an out-of-order webhook must never cause an unsafe entitlement or billing transition.**
 
-### V1.7 — Credential separation (before live mode)
+### V1.8 — Credential separation (before live mode)
 
 - [ ] Separate TEST vs PRODUCTION credential sets (API keys, webhook secrets, webhook configs, subscriptions)
 - [ ] Never reuse test secrets in production because the code path is identical
 - [ ] Verify the production deployment **fails closed** when required secrets are absent
 
-### V1.8 — Final live-mode smoke test (last)
+### V1.9 — Final live-mode smoke test (last)
 
 Full chain on production Razorpay: subscription create/authorize → recurring lifecycle → HTTPS webhook → HMAC → `ProviderWebhookEvent` → BullMQ → `RazorpayWebhookProcessor` → `SubscriptionBillingAttempt` → `OrganizationSubscription` → Entitlement — with corresponding DB facts verified. Then final regression suite, production deploy, post-deployment webhook observation.
 
@@ -181,6 +192,10 @@ Vendure server (v3.6.5) now running on port 3000
 CAS locking, idempotent grants, the payment-attempt ledger, and the webhook queue are all operating against real Postgres/Redis.
 
 ---
+
+## Historical Snapshots
+
+> **The sections below this line (Current State v1.18, phase plans, older boundaries) are retained for traceability and are NOT current status.** The current status is defined at the top of this document (Implementation Gates + V1 checklist). The authoritative completed-work record lives in `release-notes.md`; future work lives in `roadmap.md`.
 
 ## Current State (v1.18 — 2026-09-09)
 

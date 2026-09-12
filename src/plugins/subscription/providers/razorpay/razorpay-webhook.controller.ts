@@ -1,8 +1,7 @@
 import { Controller, Post, Headers, Body, UnauthorizedException, Req } from '@nestjs/common';
 import { Request } from 'express';
-import { EventBus, RequestContextService, TransactionalConnection, ChannelService, Logger } from '@vendure/core';
+import { RequestContextService, TransactionalConnection, Logger } from '@vendure/core';
 import { RazorpayWebhookVerifier } from './razorpay-webhook.verifier';
-import { RazorpayWebhookProcessor } from './razorpay-webhook.processor';
 import { ProviderWebhookQueueService } from '../../services/provider-webhook-queue.service';
 import { ProviderWebhookEvent } from '../../entities/provider-webhook-event.entity';
 
@@ -12,6 +11,9 @@ const loggerCtx = 'RazorpayWebhookController';
  * Controller for receiving Razorpay webhooks.
  *
  * Endpoint: POST /payments/razorpay/webhook
+ *
+ * Boundary: this controller does NOT process business events. It only
+ * authenticates, persists to the immutable inbox, and enqueues.
  *
  * Security:
  * - Verifies X-Razorpay-Signature header using webhook secret
@@ -24,12 +26,9 @@ const loggerCtx = 'RazorpayWebhookController';
 export class RazorpayWebhookController {
     constructor(
         private webhookVerifier: RazorpayWebhookVerifier,
-        private webhookProcessor: RazorpayWebhookProcessor,
         private webhookQueue: ProviderWebhookQueueService,
         private requestContextService: RequestContextService,
         private connection: TransactionalConnection,
-        private channelService: ChannelService,
-        private eventBus: EventBus,
     ) {}
 
     @Post('webhook')
@@ -95,9 +94,24 @@ export class RazorpayWebhookController {
         let savedEvent: ProviderWebhookEvent;
         try {
             savedEvent = await eventRepo.save(webhookEvent);
-        } catch (err) {
-            // If UNIQUE constraint violation, event already received
-            Logger.warn(`Webhook event already received: ${eventId}`, loggerCtx);
+        } catch (err: any) {
+            // UNIQUE(provider, providerEventId) violation → duplicate delivery.
+            // Razorpay retries non-2xx responses, so the duplicate path must also
+            // recover the "persisted but enqueue failed" failure mode: if the event
+            // is still pending, ensure it is (re-)enqueued before returning 2xx.
+            const existing = await eventRepo.findOne({
+                where: { provider: 'razorpay', providerEventId: eventId },
+            });
+
+            if (existing && existing.processingStatus === 'pending') {
+                // Recovery: the original delivery may have persisted the event but
+                // failed to enqueue it. Re-enqueue now — the worker's idempotency
+                // guards make a redundant job a safe no-op.
+                await this.webhookQueue.enqueueWebhookEvent(existing.id as number);
+                Logger.warn(`Duplicate webhook ${eventId}: pending event re-enqueued for processing`, loggerCtx);
+            } else {
+                Logger.warn(`Webhook event already received: ${eventId}${existing ? ` (${existing.processingStatus})` : ''}`, loggerCtx);
+            }
             return { status: 'ok' };
         }
 
