@@ -16,7 +16,7 @@ export type BillingAttemptStatus = 'initiated' | 'succeeded' | 'failed';
 @Entity('subscription_billing_attempt')
 @Index(['channelId'])
 @Index(['subscription', 'attemptedAt'])
-@Index(['providerEventId'])
+@Index(['provider', 'providerEventId'], { unique: true })
 export class SubscriptionBillingAttempt extends VendureEntity {
     constructor(input?: DeepPartial<SubscriptionBillingAttempt>) {
         super(input);
