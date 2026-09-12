@@ -54,21 +54,33 @@ Seller (Vendure core — Phase 3)
 
 ---
 
-## INV-004: Webhooks Are Persisted Before Processing.
+## INV-004: External Webhooks Are Persisted Before Processing
 
-**Rule:** BBB webhooks follow this pattern:
+**Rule:** All external webhooks follow this persist-first pattern:
 
 ```
-POST /bbb/webhook
-  → validate HMAC signature
-  → persist BbbWebhookEvent { status: PENDING }
-  → enqueue event ID to BullMQ
-  → return { ok: true }
+POST /webhook
+  → validate signature
+  → persist inbox event { status: PENDING }
+  → enqueue event ID to BullMQ (never the transient payload)
+  → return 2xx immediately
 
 BullMQ processor
-  → fetch BbbWebhookEvent by ID
+  → fetch inbox event by ID
+  → resolve channel from binding (INV-001)
   → process
-  → mark PROCESSED or FAILED
+  → mark PROCESSED or FAILED (terminal states)
+```
+
+**Implementations:**
+
+```
+BBB:
+  POST /bbb/webhook → BbbWebhookEvent → BullMQ → BBB processor
+
+Payments:
+  POST /payments/razorpay/webhook → ProviderWebhookEvent → BullMQ → Razorpay processor
+  POST /payments/juspay/webhook → JuspayWebhookEvent → BullMQ → Juspay processor
 ```
 
 **Rejection criterion:** Any webhook controller that calls a service method before persisting the raw event is rejected.

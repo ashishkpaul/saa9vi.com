@@ -21,7 +21,7 @@
 |------|--------|-------|
 | **R1 — Provider-neutral boundary** | ✅ Complete | Interface + both providers (Razorpay + Juspay) |
 | **R2 — Razorpay Contract Verification** | ✅ Complete | All sub-gates proven (see below) |
-| **R3 — ADR-038 Freeze** | ⏳ Ready | All R2 evidence captured; awaiting freeze decision |
+| **R3 — ADR-038 Freeze** | ✅ Complete | ADR-038 ACCEPTED 2026-09-12 (R2-F + R2-G evidence, INV-018 channel-scoped worker ctx) |
 | **I1-I3 — Implementation** | ✅ Complete | Razorpay live on `main` |
 | **V1 — Production hardening** | ⏳ Next | After ADR-038 freeze |
 
@@ -43,17 +43,17 @@
 | **R2-F** Concurrent Idempotency | ✅ Proven | DB UNIQUE constraint blocks duplicates |
 | **R2-G** Failure Semantics | ✅ Proven | pending → retry → failed (terminal), `failedAt` |
 | **R2-G** Channel Isolation | ✅ Proven | Cross-tenant events stay isolated |
-| **R3** ADR-038 Freeze | ⏳ Ready | All R2 evidence captured |
+| **R3** ADR-038 Freeze | ✅ Complete | Accepted 2026-09-12 |
 
 ---
 
-## Current Gate: R3 — ADR-038 Contract Freeze
+## Gate: R3 — ADR-038 Freeze ✅ COMPLETE
 
-All R2 evidence is captured:
+ADR-038 was formally **ACCEPTED on 2026-09-12** after all R2 evidence was captured:
 - **Failure path**: `pending` → `pending` → `failed` (3 attempts, `failedAt` populated)
 - **Concurrent idempotency**: UNIQUE(provider, providerEventId) blocks duplicate billing attempts
-- **Channel resolution**: Resolved from `SubscriptionProviderBinding` (INV-001)
-- **Infrastructure**: PostgreSQL + Redis + BullMQ confirmed (not fallbacks)
+- **Channel resolution**: Resolved from `SubscriptionProviderBinding` (INV-001), then a channel-scoped `RequestContext` is built from the Channel entity before processing (INV-018)
+- **Infrastructure**: PostgreSQL + Redis (Docker) + BullMQ confirmed — real infrastructure, not fallbacks
 
 The inbox worker is implemented with:
 - Single processing path (legacy `processWebhook()` removed)
@@ -73,7 +73,7 @@ The inbox worker is implemented with:
 
 ### Do NOT
 
-- ❌ Mark ADR-038 as Accepted yet (awaiting formal freeze decision)
+- [x] ADR-038 formally accepted (2026-09-12) — see `docs/architecture/adr-038-direct-razorpay-provider.md`
 - ❌ Delete Juspay code yet (still referenced by `providers/juspay/`)
 - ❌ Call Juspay "legacy" yet (still a valid provider implementation)
 
@@ -93,13 +93,23 @@ The inbox worker is implemented with:
 
 ---
 
-## Precondition — Runtime Environment
+## Runtime Precondition — ✅ VERIFIED (2026-09-12)
 
-> **Precondition — runtime environment not yet verified against real infrastructure.**
+The runtime environment is **verified against real infrastructure**:
 
-The application was started with `DB_HOST=localhost`/`DB_PORT=5435` and `REDIS_HOST=localhost`/`REDIS_PORT=6385`, intended to reach Cloudflare Access TCP tunnels (`db.saa9vi.com`, `redis.saa9vi.com`). The tunnels reported local listeners, but the application still fell back to pg-mem (in-memory Postgres) and `DefaultJobQueuePlugin` (in-memory job queue). The startup log proves the fallback path works; it does **not** prove connectivity to the intended public PostgreSQL/Redis services.
+- **PostgreSQL**: real Postgres via Docker (`localhost:5435`) — no pg-mem fallback.
+- **Redis**: real Redis via Docker (`localhost:6385`) — `BullMQJobQueuePlugin` connected, no in-memory `DefaultJobQueuePlugin` fallback.
+- **BullMQ worker**: provider webhook queue (`provider-webhook-processing`) initialized and processing through the BullMQ worker process (`index-worker.js`).
+- **Webhook ingress**: `webhook.saa9vi.com` (Cloudflare tunnel → localhost:3000) delivering signed Razorpay test events.
 
-**Nothing in the "Current State" section below can be trusted until this is confirmed resolved** — CAS locking, idempotent grants, the payment-attempt ledger, and the webhook queue all depend on a real Postgres and Redis connection to mean anything.
+Startup log evidence:
+```
+[BullMQJobQueuePlugin] Connected to Redis ✔
+[ProviderWebhookQueueService] Provider webhook processing queue initialized
+Vendure server (v3.6.5) now running on port 3000
+```
+
+CAS locking, idempotent grants, the payment-attempt ledger, and the webhook queue are all operating against real Postgres/Redis.
 
 ---
 
@@ -109,11 +119,12 @@ The application was started with `DB_HOST=localhost`/`DB_PORT=5435` and `REDIS_H
 
 - **Phase 3B — Attribution & Commission** — complete: `CommissionListener` (server-side classification, INV-008), `CommissionLedger` $0-row pattern (DL-030), governed migration with UNIQUE constraints, 6-case E2E passing.
 - TypeScript build succeeds (`npm run build`).
-- Vendure starts successfully on v3.6.5 (against fallback pg-mem/DefaultJobQueue — see precondition above).
+- Vendure runs successfully on v3.6.5 against real PostgreSQL + Redis (Docker) with BullMQ — verified 2026-09-12 (see Runtime Precondition above).
 - SubscriptionPlan / OrganizationSubscription foundation is implemented.
 - BbbPlatformCapacityPolicy and plan-based capacity enforcement are implemented.
 - Capacity policy Portal Admin API/dashboard is implemented.
 - **Juspay M1.1 Session API verified** — auth + Session API creation confirmed. Does NOT prove mandate registration.
+
 - **Juspay → Razorpay routing REJECTED** — Razorpay does not accept Juspay for third-party routing (ticket #20876157).
 - **Direct Razorpay pivot selected** — commit 9c5478d adds provider-neutral boundary + Razorpay adapter.
 
@@ -175,12 +186,6 @@ npm run build
 ```
 
 A tool-generated summary is NOT evidence that a commit exists.
->
-> The application was started with `DB_HOST=localhost`/`DB_PORT=5435` and `REDIS_HOST=localhost`/`REDIS_PORT=6385`, intended to reach Cloudflare Access TCP tunnels (`db.saa9vi.com`, `redis.saa9vi.com`). The tunnels reported local listeners, but the application still fell back to pg-mem (in-memory Postgres) and `DefaultJobQueuePlugin` (in-memory job queue). The startup log proves the fallback path works; it does **not** prove connectivity to the intended public PostgreSQL/Redis services.
->
-> **Nothing in the "Current State" section below can be trusted until this is confirmed resolved** — CAS locking, idempotent grants, the payment-attempt ledger, and the webhook queue all depend on a real Postgres and Redis connection to mean anything.
->
-> **Next verification:** use `127.0.0.1` rather than `localhost` in `.env`, then independently verify the tunnels with `pg_isready`/`psql` and `redis-cli` before starting Vendure.
 
 ---
 
@@ -198,51 +203,6 @@ A tool-generated summary is NOT evidence that a commit exists.
 | `docs/implementation/` | `roadmap.md` | Future work only |
 | `docs/implementation/` | `known-bugs.md` | Active and fixed bugs |
 | `docs/implementation/` | `release-notes.md` | Completed work |
-
----
-
-## Current State (v1.17 — 2026-09-04)
-
-### Verified complete
-
-- **Phase 3B — Attribution & Commission** — complete: `CommissionListener` (server-side classification, INV-008), `CommissionLedger` $0-row pattern (DL-030), governed migration with UNIQUE constraints, 6-case E2E passing.
-
-- TypeScript build succeeds (`npm run build`).
-- Vendure starts successfully on v3.6.5 (against fallback pg-mem/DefaultJobQueue — see precondition above).
-- SubscriptionPlan / OrganizationSubscription foundation is implemented.
-- BbbPlatformCapacityPolicy and plan-based capacity enforcement are implemented.
-- Capacity policy Portal Admin API/dashboard is implemented.
-- **Juspay subscription billing — M1.1 Session API verified; M1.2 gateway configuration next** (Step 0–6): provider-contract verified against docs (ADR-037), webhook ingestion (fail-closed Basic Auth + HMAC), real recurring charge (POST /txns), Portal Admin Dashboard (Billing nav with 4 routes), production secret hardening (AES-256-GCM encryption at rest, fail-closed in production), full lifecycle e2e regression suite. **M1.1 live sandbox verification complete (2026-09-08): authentication ✅, Session API creation ✅ (does NOT prove mandate registration), payment methods discovered (via Session API, not separate endpoint), mandate params echoed in sdk_payload ✅. Next: M1.2 configure mandate-capable Sandbox gateway (current = DUMMY). Do NOT implement M2 until M1.2–M1.4 are complete.**
-- **Phase 1.5 blockers resolved** — all five remaining blockers closed:
-  - FEAT-002 schema migration — verified already applied (Vendure CLI: no schema changes; `sourceType` + `isUnbounded` confirmed in DB)
-  - Next.js public instructor/CMS pages — CMS page route (`/[locale]/page/[slug]`) added; instructor page already existed
-  - Email verification for tenant admins — `verifyTenantAdmin` Shop API mutation + unverified admin creation
-  - End-to-end customer deletion test — `customer-deletion.e2e-spec.ts` covering Flow A + Flow B across BBB/Tenant/Reviews
-  - Load estimation ratios tuning — PILOS ratios configurable via `BigBlueButtonPluginOptions` + env vars
-- BUG-022 (entitlement/enrollment read mismatch) — fixed
-- BUG-023 (marketplace indexer redirect fields) — fixed
-- BUG-024 (auto-provision shipping/payment/stock) — fixed
-- BUG-025 / BUG-026 (role & administrator visibility) — fixed
-- BUG-027 (pendingReviewRequests `undefined` options) — fixed
-- BUG-028 (Academy Console permission names) — fixed
-- BUG-029 (BBB platform infrastructure boundary) — fixed
-- BUG-030 (tenant admin role channel relations) — fixed
-- BUG-031 (CMS channel ownership leak) — fixed
-- `myLearningDashboard` Shop API query — complete
-- `GrantReaderService` — implemented
-- Capacity Intelligence System (CI-001 to CI-006) — implemented
-- Tenant role reconciliation tooling (`tenant:roles:check` / `tenant:roles:repair`) — added
-- Dunning flow (RFC-001 §4.2) — scheduled retry + auto-cancellation task implemented
-- NavigationMenu entity in CMS — entity, service, migration applied
-- E2E suite: 44 tests passing
-
-### Still pending before calling Juspay production-ready
-
-1. **Provider-contract verification** — verify the exact sandbox/live Juspay mandate, charge, webhook, signature, idempotency, retry, order-ID and transaction-ID contracts against the live Juspay sandbox API. The implementation seam is ready; provider verification is still a release gate.
-2. **Production credential rollout** — provision real production Juspay API keys and webhook credentials, configure `JUSPAY_WEBHOOK_*` env vars, and confirm the fail-closed guards behave correctly in a `NODE_ENV=production` deployment.
-3. **E2e coverage gaps** — the existing 552-line `juspay-webhook.e2e-spec.ts` covers auth, dedupe, concurrency, and queue-failure semantics. Not yet covered: live sandbox charge round-trip, mandate pause/revoke lifecycle, and dunning (past_due → retry → cancellation) flow.
-
----
 
 ## Phase 2 — Remaining Work
 

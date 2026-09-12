@@ -6,6 +6,15 @@
 
 ### New
 
+- **Razorpay subscription provider (ADR-038) — accepted 2026-09-12:**
+  - Provider-neutral webhook inbox: `ProviderWebhookEvent` (immutable, UNIQUE(provider, providerEventId))
+  - Razorpay adapter: `RazorpayWebhookProcessor`, `RazorpaySubscriptionProvider`, `RazorpayWebhookController`
+  - BullMQ worker: persist-first, channel resolution from binding (INV-001), 3-attempt retry with `failedAt`
+  - Concurrent idempotency: `SubscriptionBillingAttempt` UNIQUE(provider, providerEventId)
+  - Migrations: `1789141516883` (attemptCount), `1789180117889` (failedAt), `1789180807072` (unique constraint)
+  - Tests: `webhook-failure-path.e2e-spec.ts`, `webhook-concurrent-idempotency.e2e-spec.ts`
+  - Migration incident (recorded for deployment-history traceability): an untracked duplicate migration `1789180759171` was generated alongside the tracked/applied `1789180807072` (unique constraint). The duplicate was deleted, stale `dist/` artifacts cleaned, and `1789180807072` marked applied. Final condition verified: source migration history == DB migration history (`rm -rf dist && npm run build` + `vendure migrate --run` clean).
+
 - **Commission reconciliation (Phase 3B, Gates R1–R3) — complete (`fab9969`):**
   - R1 contract (`docs/implementation/commission-reconciliation.md`): read-only Orders↔CommissionLedger reconciliation; ledger is the sole financial authority (never recalculated, never mutated). Discrepancy classes: MISSING, REPLAYED_REF (informational), AMOUNT_MISMATCH (stored-row internal consistency only — never validated against the current env rate), ORPHAN_LEDGER_ROW, RATE_DRIFT (informational). ZERO_RATE rows are valid facts. All `from`/`to` filters bind to `Order.orderPlacedAt` (including replay diagnostics).
   - R2 implementation: `CommissionReconciliationService` (4-phase, pure report) exposed as the `commissionReconciliation` Admin GraphQL query via `MarketplaceCommissionReconciliationResolver`, gated by a dedicated `ReadMarketplaceCommission` permission (separate from advertising grants). Channel-scoped by `ctx.channelId`; SuperAdmin may pass `allChannels: true`, enforced by a service-side clamp (a non-SuperAdmin cannot cross channels via the GraphQL argument). Semantic clarity: `commissionLedgerOrderCount` = ledger rows found, `marketplaceOrdersExpected` = marketplace-order population; `effectiveCommissionPercent` is `null` only when GMV is 0 (a 0% row with positive GMV reports `0`).

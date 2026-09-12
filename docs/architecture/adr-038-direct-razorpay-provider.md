@@ -1,11 +1,11 @@
 # ADR-038: Direct Razorpay Subscription Provider
-**Status:** 🟡 PROPOSED — Evidence Complete, Awaiting Formal Acceptance
+**Status:** ✅ ACCEPTED — 2026-09-12
 
 **Date:** 2026-09-09
 
 ## Evidence Summary
 
-All acceptance criteria are now verified:
+All acceptance criteria are verified:
 
 | # | Criterion | Status | Evidence |
 |---|-----------|--------|----------|
@@ -15,6 +15,17 @@ All acceptance criteria are now verified:
 | 4 | R2-F — Durable processing | ✅ | BullMQ inbox worker, single path |
 | 5 | R2-G — Failure semantics | ✅ | pending → retry → failed, `failedAt` |
 | 6 | R2-G — Concurrent idempotency | ✅ | UNIQUE(provider, providerEventId) |
+
+## Acceptance Criteria
+
+1. ✅ M1.3 — Razorpay Test Plan + Test Subscription created
+2. ✅ M1.4 — Webhook lifecycle captured (subscription.authenticated/activated/charged/halted)
+3. ✅ R1 — Provider-neutral boundary complete (SubscriptionRenewalService depends on interface)
+4. ✅ R2-F — Durable processing verified (BullMQ inbox worker, failure semantics)
+5. ✅ R2-G — Concurrent idempotency verified (DB UNIQUE constraint)
+6. ✅ Evidence documented in this ADR
+
+**Accepted:** 2026-09-12 after R2-G integration tests passed (failure path + concurrent idempotency).
 
 ## Context
 
@@ -105,20 +116,11 @@ CAS transition → Entitlement update
 - Razorpay adapter: RazorpaySubscriptionProvider, RazorpayWebhookProcessor
 - Migration required for new entities
 
-## Acceptance Criteria
-
-ADR-038 becomes **Accepted** only after:
-1. ✅ M1.3 — Razorpay Test Plan + Test Subscription created
-2. ✅ M1.4 — Webhook lifecycle captured (subscription.authenticated/activated/charged/halted)
-3. ✅ R1 — Provider-neutral boundary complete (SubscriptionRenewalService depends on interface)
-4. ✅ R2-F — Durable processing verified (BullMQ inbox worker, failure semantics)
-5. ✅ R2-G — Concurrent idempotency verified (DB UNIQUE constraint)
-6. ⏳ Evidence documented in this ADR — ready for formal acceptance decision
-
 ## References
 
 - Razorpay Subscriptions: https://razorpay.com/docs/payments/subscriptions
 - Razorpay Webhooks: https://razorpay.com/docs/webhooks/subscriptions
 - Razorpay Best Practices: https://razorpay.com/docs/webhooks/best-practices
 - Vendure Stripe Plugin: https://docs.vendure.io/current/community-plugins/stripe-plugin
-- Commits: `9c5478d` through `efb4725` (provider-neutral boundary + Razorpay adapter + R2-G tests)
+- Commits: `9c5478d` through `56cba8d` (provider-neutral boundary + Razorpay adapter + R2-G tests + docs)
+- Tests: `webhook-failure-path.e2e-spec.ts`, `webhook-concurrent-idempotency.e2e-spec.ts`

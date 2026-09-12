@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleInit, Inject } from '@nestjs/common';
-import { JobQueue, JobQueueService, RequestContextService, TransactionalConnection } from '@vendure/core';
+import { JobQueue, JobQueueService, RequestContextService, TransactionalConnection, Channel } from '@vendure/core';
 import { ProviderWebhookEvent } from '../entities/provider-webhook-event.entity';
 import { SubscriptionProviderBinding } from '../entities/subscription-provider-binding.entity';
 import { RazorpayWebhookProcessor } from '../providers/razorpay/razorpay-webhook.processor';
@@ -107,10 +107,32 @@ export class ProviderWebhookQueueService implements OnModuleInit {
         const resolvedChannelId = await this.resolveChannelFromBinding(ctx, event);
 
         try {
-            // Route to the appropriate provider processor
+            // Route to the appropriate provider processor — validate provider first,
+            // then enforce INV-018 channel-scoped context for supported providers.
             if (event.provider === 'razorpay') {
+                // INV-018: build a channel-scoped RequestContext from the resolved Channel ENTITY
+                // (never a raw ID and never a generic admin ctx) before any business processing.
+                // This guarantees multi-tenant isolation for all repository operations inside
+                // the processor.
+                let processingCtx = ctx;
+                if (resolvedChannelId) {
+                    const channelEntity = await this.connection.getRepository(ctx, Channel).findOne({
+                        where: { id: resolvedChannelId },
+                    });
+                    if (!channelEntity) {
+                        throw new Error(`Channel ${resolvedChannelId} referenced by binding not found for event ${eventId}`);
+                    }
+                    processingCtx = await this.requestContextService.create({
+                        apiType: 'admin',
+                        channelOrToken: channelEntity,
+                    });
+                } else {
+                    // Fail closed: an unresolvable channel must not be processed with a
+                    // default-channel context (INV-018).
+                    throw new Error(`Could not resolve channel for webhook event ${eventId}; refusing to process with generic context`);
+                }
                 const processor = new RazorpayWebhookProcessor(this.connection);
-                await processor.processInboxEvent(ctx, event);
+                await processor.processInboxEvent(processingCtx, event);
             } else {
                 Logger.warn(`Unknown provider: ${event.provider}`, loggerCtx);
                 throw new Error(`Unsupported provider: ${event.provider}`);
