@@ -29,6 +29,7 @@ ADMIN_EMAIL="${UNBLOCK_ADMIN_EMAIL:-superadmin}"
 ADMIN_PASS="${UNBLOCK_ADMIN_PASSWORD:-superadmin}"
 VARIANT_SKU="${UNBLOCK_VARIANT_SKU:-PY-BOOTCAMP-01}"
 SESSION_TITLE="${UNBLOCK_SESSION_TITLE:-Apex Python Bootcamp}"
+DEMO_EMAIL="${UNBLOCK_CUSTOMER_EMAIL:-apex2.customer@example.com}"
 
 COOKIE_FILE="/tmp/demo_unblock_admin_cookie.txt"
 STATE_FILE="/tmp/demo-unblock-state.json"
@@ -126,11 +127,11 @@ echo -e "  ${GREEN}✓${NC} Admin authenticated (token: ${ADMIN_TOKEN:0:20}...${
 # ─── 2. Set stock on product variant ─────────────────────────────────────────
 echo "[2] Setting stock on variant SKU=$VARIANT_SKU (stockOnHand=10, trackInventory=ENABLED)..."
 
-FIND_VARIANT=$(graphql_admin '{
-  productVariants(options: { filter: { sku: { eq: "PY-BOOTCAMP-01" } } }) {
+FIND_VARIANT=$(graphql_admin "{
+  productVariants(options: { filter: { sku: { eq: \"$VARIANT_SKU\" } } }) {
     items { id sku stockOnHand trackInventory enabled }
   }
-}')
+}")
 VARIANT_ID=$(jq_val "$FIND_VARIANT" "data.productVariants.items.0.id")
 
 if [ -z "$VARIANT_ID" ]; then
@@ -168,55 +169,32 @@ echo "    ✓ Variant stockOnHand=$UPDATED_STOCK trackInventory=$UPDATED_TRACK"
 # ─── 3. Make scheduled session PUBLIC ────────────────────────────────────────
 echo "[3] Setting session visibility=PUBLIC for session '$SESSION_TITLE'..."
 
-# Find the session by title across organizations
-FIND_SESSION=""
-SESSION_ID=""
-for org_id in 1 13 14 15; do
-  SEARCH=$(graphql_admin "{
-    bbbScheduledSessions(organizationId: \"$org_id\") {
-      items { id title visibility status startTime endTime productVariantId isTrial }
-    }
-  }")
-  TITLE_CHECK=$(jq_val "$SEARCH" "data.bbbScheduledSessions.items.0.title")
-  if [ "$TITLE_CHECK" = "$SESSION_TITLE" ]; then
-    FIND_SESSION="$SEARCH"
-    SESSION_ID=$(jq_val "$SEARCH" "data.bbbScheduledSessions.items.0.id")
-    break
-  fi
-done
+# Discover the session by querying bbbScheduledSessions with a title filter.
+# This avoids hard-coding organization IDs and works across any tenant layout.
+SESSION_SEARCH=$(graphql_admin "{
+  bbbScheduledSessions(options: { filter: { title: { eq: \"$SESSION_TITLE\" } } }) {
+    items { id title visibility status startTime endTime productVariantId isTrial }
+    totalItems
+  }
+}")
 
-# If not found by exact title, try a broader search
-if [ -z "$SESSION_ID" ]; then
-  echo "    Searching all organizations for '$SESSION_TITLE'..."
-  ALL_SESSIONS=""
-  for org_id in 1 13 14 15; do
-    SEARCH=$(graphql_admin "{
-      bbbScheduledSessions(organizationId: \"$org_id\") {
-        items { id title visibility status startTime endTime productVariantId isTrial }
-      }
-    }")
-    T=$(jq_val "$SEARCH" "data.bbbScheduledSessions.items.0.title")
-    if [ "$T" = "$SESSION_TITLE" ]; then
-      FIND_SESSION="$SEARCH"
-      SESSION_ID=$(jq_val "$SEARCH" "data.bbbScheduledSessions.items.0.id")
-      break
-    fi
-  done
-fi
+SESSION_ID=$(jq_val "$SESSION_SEARCH" "data.bbbScheduledSessions.items.0.id")
+SESSION_TOTAL=$(jq_val "$SESSION_SEARCH" "data.bbbScheduledSessions.totalItems")
 
-SESSION_VISIBILITY_BEFORE=$(jq_val "$FIND_SESSION" "data.bbbScheduledSessions.items.0.visibility")
-SESSION_STATUS=$(jq_val "$FIND_SESSION" "data.bbbScheduledSessions.items.0.status")
-SESSION_START=$(jq_val "$FIND_SESSION" "data.bbbScheduledSessions.items.0.startTime")
-SESSION_END=$(jq_val "$FIND_SESSION" "data.bbbScheduledSessions.items.0.endTime")
-SESSION_VARIANT_ID=$(jq_val "$FIND_SESSION" "data.bbbScheduledSessions.items.0.productVariantId")
-SESSION_ISTRIAL=$(jq_val "$FIND_SESSION" "data.bbbScheduledSessions.items.0.isTrial")
-
-if [ -z "$SESSION_ID" ]; then
+if [ -z "$SESSION_ID" ] || [ "$SESSION_TOTAL" = "0" ]; then
   echo -e "${RED}❌ Session '$SESSION_TITLE' not found${NC}"
-  echo "    Searched orgs 1,13,14,15"
+  echo "    Queried bbbScheduledSessions with title filter — totalItems=$SESSION_TOTAL"
   exit 1
 fi
-echo "    Found session id=$SESSION_ID title=$SESSION_TITLE visibility=$SESSION_VISIBILITY_BEFORE status=$SESSION_STATUS"
+
+SESSION_VISIBILITY_BEFORE=$(jq_val "$SESSION_SEARCH" "data.bbbScheduledSessions.items.0.visibility")
+SESSION_STATUS=$(jq_val "$SESSION_SEARCH" "data.bbbScheduledSessions.items.0.status")
+SESSION_START=$(jq_val "$SESSION_SEARCH" "data.bbbScheduledSessions.items.0.startTime")
+SESSION_END=$(jq_val "$SESSION_SEARCH" "data.bbbScheduledSessions.items.0.endTime")
+SESSION_VARIANT_ID=$(jq_val "$SESSION_SEARCH" "data.bbbScheduledSessions.items.0.productVariantId")
+SESSION_ISTRIAL=$(jq_val "$SESSION_SEARCH" "data.bbbScheduledSessions.items.0.isTrial")
+
+echo "    Found session id=$SESSION_ID title=$SESSION_TITLE visibility=$SESSION_VISIBILITY_BEFORE status=$SESSION_STATUS (total=$SESSION_TOTAL)"
 
 # Update session visibility to PUBLIC
 # NOTE: UpdateBbbScheduledSessionInput does NOT have a 'status' field.
@@ -245,7 +223,7 @@ echo "    ✓ Session visibility=$UPDATED_VISIBILITY status=$UPDATED_STATUS"
 # ─── 4. Trigger marketplace full reindex ─────────────────────────────────────
 echo "[4] Triggering marketplace full reindex..."
 
-REINDEX_RESP=$(graphql_admin 'mutation { marketplaceFullReindex }')
+REINDEX_RESP=$(graphql_admin 'query { marketplaceFullReindex }')
 REINDEX_RESULT=$(jq_val "$REINDEX_RESP" "data.marketplaceFullReindex")
 
 assert "Marketplace reindex succeeded" '[ "$REINDEX_RESULT" = "true" ]' "got marketplaceFullReindex=$REINDEX_RESULT"
@@ -256,14 +234,16 @@ echo ""
 echo "[5] Read-only verification..."
 
 # 5a. Verify variant stock
-VERIFY_VARIANT=$(graphql_admin '{
-  productVariants(options: { filter: { sku: { eq: "PY-BOOTCAMP-01" } } }) {
+VERIFY_VARIANT=$(graphql_admin "{
+  productVariants(options: { filter: { sku: { eq: \"$VARIANT_SKU\" } } }) {
     items { id sku stockOnHand trackInventory }
   }
-}')
+}")
 V_STOCK=$(jq_val "$VERIFY_VARIANT" "data.productVariants.items.0.stockOnHand")
+V_SKU_CHECK=$(jq_val "$VERIFY_VARIANT" "data.productVariants.items.0.sku")
+assert "Variant found by SKU=$VARIANT_SKU" '[ -n "$V_SKU_CHECK" ]' "no variant with sku=$VARIANT_SKU"
 assert "Verified stockOnHand=10" '[ "$V_STOCK" = "10" ]' "stockOnHand=$V_STOCK"
-echo "    ✓ Variant stockOnHand=$V_STOCK"
+echo "    ✓ Variant sku=$V_SKU_CHECK stockOnHand=$V_STOCK"
 
 # 5b. Verify session visibility
 VERIFY_SESSION=$(graphql_admin "{
@@ -298,7 +278,7 @@ echo "    ✓ Marketplace search totalItems=$MS_TOTAL"
 echo ""
 echo "[6] Asserting NO fabricated business outcomes..."
 
-DEMO_EMAIL="${UNBLOCK_CUSTOMER_EMAIL:-apex2.customer@example.com}"
+# DEMO_EMAIL is declared at top of script (line 32) — uses UNBLOCK_CUSTOMER_EMAIL
 CUSTOMER_SEARCH=$(graphql_admin "{
   customers(options: { filter: { emailAddress: { eq: \"$DEMO_EMAIL\" } } }) {
     items { id emailAddress }
@@ -306,28 +286,27 @@ CUSTOMER_SEARCH=$(graphql_admin "{
 }")
 CUST_ID=$(jq_val "$CUSTOMER_SEARCH" "data.customers.items.0.id")
 
-if [ -n "$CUST_ID" ]; then
-  ENTITLEMENT_CHECK=$(graphql_admin "{
-    bbbEntitlements(options: { filter: { customerId: { eq: \"$CUST_ID\" } } }) {
-      items { id type resourceId source }
-      totalItems
-    }
-  }")
-  ENT_TOTAL=$(jq_val "$ENTITLEMENT_CHECK" "data.bbbEntitlements.totalItems")
-  assert "No entitlement for demo customer ($DEMO_EMAIL)" \
-    '[ "$ENT_TOTAL" = "0" ]' \
-    "found $ENT_TOTAL entitlements (expected 0)"
-  echo "    ✓ No entitlements for $DEMO_EMAIL (count=$ENT_TOTAL)"
-else
-  echo "    ℹ Demo customer $DEMO_EMAIL not found — skipping entitlement check"
-fi
+assert "Demo customer exists ($DEMO_EMAIL)" '[ -n "$CUST_ID" ]' \
+  "customer with email=$DEMO_EMAIL not found — required for fixture boundary verification"
+
+ENTITLEMENT_CHECK=$(graphql_admin "{
+  bbbEntitlements(options: { filter: { customerId: { eq: \"$CUST_ID\" } } }) {
+    items { id type resourceId source }
+    totalItems
+  }
+}")
+ENT_TOTAL=$(jq_val "$ENTITLEMENT_CHECK" "data.bbbEntitlements.totalItems")
+assert "No entitlement for demo customer ($DEMO_EMAIL)" \
+  '[ "$ENT_TOTAL" = "0" ]' \
+  "found $ENT_TOTAL entitlements (expected 0)"
+echo "    ✓ No entitlements for $DEMO_EMAIL (count=$ENT_TOTAL)"
 
 # Check no reviews for the product
-PRODUCT_CHECK=$(graphql_admin '{
-  productVariants(options: { filter: { sku: { eq: "PY-BOOTCAMP-01" } } }) {
+PRODUCT_CHECK=$(graphql_admin "{
+  productVariants(options: { filter: { sku: { eq: \"$VARIANT_SKU\" } } }) {
     items { id product { id name } }
   }
-}')
+}")
 PRODUCT_ID=$(jq_val "$PRODUCT_CHECK" "data.productVariants.items.0.product.id")
 
 if [ -n "$PRODUCT_ID" ]; then
@@ -342,17 +321,23 @@ if [ -n "$PRODUCT_ID" ]; then
     '[ "$REV_TOTAL" = "0" ]' \
     "found $REV_TOTAL reviews (expected 0)"
   echo "    ✓ No reviews for product (count=$REV_TOTAL)"
+else
+  echo -e "    ${RED}✗${NC} Product not found for SKU=$VARIANT_SKU — cannot verify review boundary"
+  exit 1
 fi
 
-# Check orders
+# Check orders — must assert zero for clean fixture boundary
 ORDER_CHECK=$(graphql_admin "{
-  orders(options: { filter: { code: { contains: \"PY-BOOTCAMP\" } } }) {
+  orders(options: { filter: { code: { contains: \"$VARIANT_SKU\" } } }) {
     items { id code state total }
     totalItems
   }
 }")
 ORDER_TOTAL=$(jq_val "$ORDER_CHECK" "data.orders.totalItems")
-echo "    ℹ Orders matching 'PY-BOOTCAMP': $ORDER_TOTAL (expected 0 for fixture prep)"
+assert "No orders for $VARIANT_SKU (clean fixture boundary)" \
+  '[ "$ORDER_TOTAL" = "0" ]' \
+  "found $ORDER_TOTAL orders (expected 0 for fixture prep)"
+echo "    ✓ No orders matching '$VARIANT_SKU' (count=$ORDER_TOTAL)"
 
 # ─── 7. Write state file ─────────────────────────────────────────────────────
 echo ""
