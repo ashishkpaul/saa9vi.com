@@ -96,7 +96,10 @@ export class RazorpayWebhookProcessor {
 
     private async recordAttempt(ctx: RequestContext, ne: NormalizedBillingEvent, status: BillingAttemptStatus): Promise<void> {
         const bindingRepo = this.connection.getRepository(ctx, SubscriptionProviderBinding);
-        const binding = await bindingRepo.findOne({ where: { providerSubscriptionId: ne.providerSubscriptionId } });
+        const binding = await bindingRepo.findOne({
+            where: { providerSubscriptionId: ne.providerSubscriptionId },
+            relations: ['subscription'],
+        });
         if (!binding) return;
 
         const attemptRepo = this.connection.getRepository(ctx, SubscriptionBillingAttempt);
