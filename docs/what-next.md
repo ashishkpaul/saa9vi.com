@@ -266,10 +266,17 @@ git rev-parse HEAD
 git rev-parse origin/main
 git log --oneline -5
 git status --short
-npm run build
+npm run build:all
 ```
 
-A tool-generated summary is NOT evidence that a commit exists.
+**`npm run build:all` (not `npm run build`) is the mandatory truth-rule build.** Proven 2026-09-12: `npm run build` (tsc only) reported green while the production Dashboard was NOT buildable — because the Dashboard Vite plugin executes `vendure-config.ts` at build time, and the then-active SubscriptionPlugin config eagerly resolved Juspay credentials, tripping the production `JUSPAY_SANDBOX` fail-closed guard. Fix: the active config now explicitly selects `provider: 'razorpay'` and never resolves Juspay config (Juspay implementation remains retained under `providers/juspay/`, per ADR-038 — retained source ≠ active runtime configuration).
+
+## S0–S3 Verification Gates (post-ADR-038 UX audit)
+
+- **S0 — Full application build** ✅ DONE (2026-09-12, `b7337a5`+): `npm run build:all` → tsc ✅ + dashboard `vite build` ✅ → real `dist/dashboard/` artifact (6.7M, `index.html` + assets). Guard was NOT disabled — the obsolete Juspay config path was removed.
+- **S1 — Admin Portal UX** ⏳ Next: `/dashboard` login → authenticated admin → tenant/academy → instructor → sessions → subscription → capacity
+- **S2 — Storefront UX** ⏳: visitor → academy → course/session → trial/purchase → entitlement → My Learning → join live class
+- **S3 — Story compliance** ⏳: does the storefront obey the Saa9vi product story (admin-created reality → Shop API → storefront → learner)?
 
 ---
 

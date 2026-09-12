@@ -33,7 +33,11 @@ import { AdSpendLedgerImmutableSubscriber } from './plugins/marketplace/ad-spend
 import { CommissionLedgerImmutableSubscriber } from './plugins/marketplace/commission-ledger-immutable.subscriber';
 import { AdWalletLedgerImmutableSubscriber } from './plugins/marketplace/ad-wallet-ledger-immutable.subscriber';
 import { SubscriptionPlugin } from './plugins/subscription/subscription.plugin';
-import { resolveBillingConfig } from './plugins/subscription/providers/juspay/juspay-billing-config';
+// NOTE: resolveBillingConfig (Juspay) is intentionally NOT imported/used here.
+// ADR-038: Razorpay is the active provider; the Juspay implementation is
+// retained under src/plugins/subscription/providers/juspay/ but must not be
+// eagerly resolved at config-evaluation time (it also executes during the
+// Dashboard Vite build, where the Juspay production sandbox guard throws).
 
 /**
  * Security headers middleware enforcing HTTP header hardening for production safety.
@@ -279,18 +283,19 @@ apiOptions: {
     CustomerSuspensionPlugin.init({}),
     PlatformDashboardPlugin.init({}),
     SubscriptionPlugin.init({
-        // Juspay billing credentials (credential-hardening audit GAP 1/2):
-        // env → plugin options is the ONLY credential entry path. When absent,
-        // the plugin's existing fail-closed behavior applies (dev simulates
-        // with a clear log; production refuses to boot).
-        billing: resolveBillingConfig(process.env),
+        // ADR-038: Razorpay is the accepted recurring-billing provider. Explicit
+        // selection is REQUIRED (fail-closed in production) — the plugin's
+        // provider factory only accepts 'razorpay'.
+        provider: 'razorpay',
         webhook: {
-            // Fail-closed: empty values reject ALL webhook traffic (the auth
-            // service never allows when unset — unlike the BuyLits reference).
-            username: process.env.JUSPAY_WEBHOOK_USERNAME ?? '',
-            password: process.env.JUSPAY_WEBHOOK_PASSWORD ?? '',
-            hmacSecret: process.env.JUSPAY_WEBHOOK_HMAC_SECRET ?? '',
-            hmacSecretVersion: process.env.JUSPAY_WEBHOOK_HMAC_SECRET_VERSION,
+            // HMAC-SHA256 secret for X-Razorpay-Signature verification.
+            // Fail-closed: when empty, the verifier rejects ALL webhook traffic.
+            // Juspay configuration is NOT resolved here: the Juspay provider
+            // implementation is retained under providers/juspay/ (per ADR-038)
+            // but is not the active runtime provider, and eagerly resolving its
+            // credentials breaks Dashboard compilation via the production
+            // Juspay sandbox guard.
+            hmacSecret: process.env.RAZORPAY_WEBHOOK_SECRET ?? '',
         },
     }),
 ],
