@@ -19,6 +19,11 @@ src/plugins/**/gql/
 .tanstack/
 *.log
 
+# Generated GraphQL Schemas (full introspection dumps — regenerated locally)
+schema.graphql
+schema-admin.graphql
+schema-shop.graphql
+
 # Helper / One-off Fix Scripts
 _edit_script.js
 _fix_script.js
