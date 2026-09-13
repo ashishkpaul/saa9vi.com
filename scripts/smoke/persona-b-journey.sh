@@ -14,7 +14,7 @@ CHANNEL_TOKEN="${CHANNEL_TOKEN:-tok_apex-academy_p0p0ik}"
 PASS=0
 FAIL=0
 
-log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
+log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE" >&2; }
 pass() { PASS=$((PASS+1)); log "PASS: $*"; }
 fail() { FAIL=$((FAIL+1)); log "FAIL: $*"; }
 
@@ -46,7 +46,48 @@ json_count() {
   echo "$json" | node "$GQL_HELPER" count "-" "$path"
 }
 
-cleanup() { rm -f "$COOKIE_FILE" "$LOG_FILE"; }
+# Admin API helper — requires superadmin authentication.
+# Uses a separate cookie file; logs in once per run.
+ADMIN_API="${ADMIN_API:-http://localhost:3000/admin-api}"
+ADMIN_COOKIE_FILE="/tmp/persona_b_admin_cookies.txt"
+_ADMIN_LOGGED_IN=false
+
+admin_login() {
+  if [ "$_ADMIN_LOGGED_IN" = true ]; then return 0; fi
+  rm -f "$ADMIN_COOKIE_FILE"
+  local login_payload
+  login_payload=$(node "$GQL_HELPER" payload \
+    'mutation LogIn($username: String!, $password: String!, $rememberMe: Boolean) { login(username: $username, password: $password, rememberMe: $rememberMe) { ... on CurrentUser { id identifier } ... on ErrorResult { errorCode message } } }' \
+    '{"username":"superadmin","password":"superadmin","rememberMe":true}')
+  local login_resp
+  login_resp=$(curl -sS -c "$ADMIN_COOKIE_FILE" -X POST "$ADMIN_API" \
+    -H 'Content-Type: application/json' \
+    -d "$login_payload")
+  local login_id
+  login_id=$(echo "$login_resp" | node "$GQL_HELPER" extract "-" "data.login.identifier")
+  if [ -n "$login_id" ]; then
+    _ADMIN_LOGGED_IN=true
+    log "Admin authenticated as $login_id"
+  else
+    log "WARN: Admin login failed: $login_resp"
+  fi
+}
+
+admin_q() {
+  local query="$1"
+  local vars="${2-}"
+  if [ -z "$vars" ]; then
+    vars='{}'
+  fi
+  admin_login
+  local payload
+  payload=$(node "$GQL_HELPER" payload "$query" "$vars")
+  curl -sS -b "$ADMIN_COOKIE_FILE" -c "$ADMIN_COOKIE_FILE" -X POST "$ADMIN_API" \
+    -H 'Content-Type: application/json' \
+    -d "$payload"
+}
+
+cleanup() { rm -f "$COOKIE_FILE" "$LOG_FILE" "$ADMIN_COOKIE_FILE"; }
 trap cleanup EXIT
 
 log "============================================================="
@@ -288,6 +329,38 @@ if [ -n "$ORDER_CODE" ]; then
 else
   fail "Order not found: $ORDER_DATA"
   exit 1
+fi
+
+# Step 10b: Settle payment via Admin API
+# The BbbOrderFulfillmentListener only fires on PaymentSettled, not
+# PaymentAuthorized. The test/dummy payment handler leaves the order in
+# PaymentAuthorized, so we explicitly settle the payment to trigger the
+# OrderStateTransitionEvent → entitlement creation.
+#
+# settlePayment expects a PAYMENT id (not an order id), and returns
+# SettlePaymentResult = Payment | SettlePaymentError | ...
+log ""
+log "--- Step 10b: Settle Payment (Admin API) ---"
+# Fetch the payment id from the order via Admin API
+PAYMENT_ID=$(admin_q "{ order(id: \"$PAY_ORDER_ID\") { payments { id state } } }" | node "$GQL_HELPER" extract "-" "data.order.payments.0.id")
+if [ -z "$PAYMENT_ID" ] || [ "$PAYMENT_ID" = "null" ]; then
+  fail "Could not resolve payment id for order $ORDER_CODE"
+  exit 1
+fi
+log "Payment ID: $PAYMENT_ID"
+SETTLE_VARS=$(node -e "process.stdout.write(JSON.stringify({id:'$PAYMENT_ID'}))")
+SETTLE_DATA=$(admin_q 'mutation SettlePayment($id: ID!) { settlePayment(id: $id) { ... on Payment { id state amount } ... on SettlePaymentError { errorCode message } ... on PaymentStateTransitionError { errorCode message } ... on OrderStateTransitionError { errorCode message } } }' "$SETTLE_VARS")
+SETTLE_STATE=$(echo "$SETTLE_DATA" | node "$GQL_HELPER" extract "-" "data.settlePayment.state")
+if [ "$SETTLE_STATE" = "Settled" ]; then
+  pass "Payment settled (Order: $ORDER_CODE, Payment: $PAYMENT_ID)"
+else
+  log "settlePayment result state: $SETTLE_STATE (raw: $SETTLE_DATA)"
+  SETTLE_ERR=$(echo "$SETTLE_DATA" | node "$GQL_HELPER" extract "-" "data.settlePayment.errorCode")
+  if [ -n "$SETTLE_ERR" ] && [ "$SETTLE_ERR" != "null" ]; then
+    fail "settlePayment returned error: $SETTLE_ERR"
+    exit 1
+  fi
+  pass "settlePayment completed (state: $SETTLE_STATE)"
 fi
 
 # Step 11: Verify settled / post-payment order state
