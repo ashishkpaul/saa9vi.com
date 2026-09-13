@@ -14,7 +14,11 @@ set -euo pipefail
 #   3. Makes a scheduled session PUBLIC via Admin GraphQL mutation
 #      updateBbbScheduledSession (status stays whatever it was — creation
 #      defaults to SCHEDULED, so no separate status mutation is needed)
-#   4. Triggers marketplace fullReindex via Admin GraphQL query
+#   4. Establishes Bayesian baseline via Admin GraphQL mutation
+#      marketplaceRefreshBaseline (SuperAdmin only) — required before any
+#      marketplace indexing can succeed (fail-closed: indexSession throws if
+#      no baseline exists)
+#   5. Triggers marketplace fullReindex via Admin GraphQL query
 #      marketplaceFullReindex (SuperAdmin only)
 #   5. Verifies state: stock >= 10, session visibility=PUBLIC,
 #      marketplace contains session
@@ -39,12 +43,17 @@ STATE_FILE="/tmp/demo-unblock-state.json"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo "=== Demo Unblocker (GraphQL fixture prep) ==="
 echo "Host: $HOST"
 
 # ─── Helper: GraphQL admin query ─────────────────────────────────────────────
+# SuperAdmin-only operations (no channel token). Without a vendure-token header,
+# the request runs in the global context where SuperAdmin permission is recognized.
+# NOTE: Do NOT add a vendure-token here — that scopes the request to a channel,
+# and SuperAdmin permission does not carry into channel-scoped contexts.
 graphql_admin() {
   local query="$1"
   # Use node to construct the JSON payload so that multi-line queries and
@@ -202,6 +211,90 @@ assert "Stock set to 10" '[ "$UPDATED_STOCK" = "10" ]' "got stockOnHand=$UPDATED
 assert "trackInventory=TRUE" '[ "$UPDATED_TRACK" = "TRUE" ]' "got trackInventory=$UPDATED_TRACK"
 echo "    ✓ Variant stockOnHand=$UPDATED_STOCK trackInventory=$UPDATED_TRACK"
 
+# ─── 2b. Discover channel from variant (fixes channel mismatch) ─────────────
+# Only auto-discover if no channel token was explicitly provided. If the user
+# passed UNBLOCK_CHANNEL_TOKEN, respect it — the variant may be assigned to
+# multiple channels and the BBB organization may not be on the first one found.
+if [ -z "$CHANNEL_TOKEN" ]; then
+  echo "[2b] Discovering channel from variant..."
+  VARIANT_CHANNELS=$(graphql_admin "{
+    productVariants(options: { filter: { sku: { eq: \"$VARIANT_SKU\" } } }) {
+      items { channels { id code token } }
+    }
+  }")
+  # Extract first non-default channel token (skip __default_channel__)
+  DISCOVERED_TOKEN=$(echo "$VARIANT_CHANNELS" | node -e "
+    try {
+      const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+      const channels = d.data?.productVariants?.items?.[0]?.channels || [];
+      const nonDefault = channels.find(c => c.code !== '__default_channel__');
+      process.stdout.write(nonDefault ? nonDefault.token : '');
+    } catch(e) { process.stdout.write(''); }
+  ")
+  if [ -n "$DISCOVERED_TOKEN" ]; then
+    CHANNEL_TOKEN="$DISCOVERED_TOKEN"
+    echo "    ✓ Using discovered channel token: $CHANNEL_TOKEN"
+  else
+    echo "    ⚠ No non-default channel found on variant — BBB queries may fail"
+  fi
+else
+  echo "[2b] Using provided channel token: $CHANNEL_TOKEN"
+fi
+
+# ─── 2c. Ensure product, variant & stock location are assigned to the channel ──
+# Vendure treats Product, ProductVariant and StockLocation as ChannelAware entities.
+# The seed script creates them in the tenant context, but as a safety net (and for
+# fixtures run against pre-existing data) we explicitly assign them here.
+echo "[2c] Ensuring product/variant/stock-location are assigned to channel..."
+
+# Get the product ID and channel ID from the variant
+PRODUCT_AND_CHANNEL=$(graphql_admin "{
+  productVariants(options: { filter: { sku: { eq: \"$VARIANT_SKU\" } } }) {
+    items { id productId channels { id code } }
+  }
+}")
+PRODUCT_ID=$(echo "$PRODUCT_AND_CHANNEL" | node -e "try { const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); process.stdout.write(d.data?.productVariants?.items?.[0]?.productId || ''); } catch(e) { process.stdout.write(''); }")
+CHANNEL_ID=$(echo "$PRODUCT_AND_CHANNEL" | node -e "try { const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); const ch = d.data?.productVariants?.items?.[0]?.channels?.find(c => c.code !== '__default_channel__'); process.stdout.write(ch ? String(ch.id) : ''); } catch(e) { process.stdout.write(''); }")
+
+if [ -n "$PRODUCT_ID" ] && [ -n "$CHANNEL_ID" ]; then
+  # Assign product to channel
+  ASSIGN_PRODUCT=$(graphql_admin "mutation {
+    assignProductsToChannel(input: { channelId: \"$CHANNEL_ID\", productIds: [\"$PRODUCT_ID\"] }) {
+      id
+    }
+  }")
+  echo "    ✓ Product $PRODUCT_ID assigned to channel $CHANNEL_ID"
+
+  # Assign variant to channel
+  ASSIGN_VARIANT=$(graphql_admin "mutation {
+    assignProductVariantsToChannel(input: { channelId: \"$CHANNEL_ID\", productVariantIds: [\"$VARIANT_ID\"] }) {
+      id sku
+    }
+  }")
+  echo "    ✓ Variant $VARIANT_ID assigned to channel $CHANNEL_ID"
+
+  # Discover the default stock location and assign it to the channel
+  STOCK_LOCATIONS=$(graphql_admin "{
+    stockLocations(options: { take: 1 }) {
+      items { id name }
+    }
+  }")
+  STOCK_LOCATION_ID=$(echo "$STOCK_LOCATIONS" | node -e "try { const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); process.stdout.write(d.data?.stockLocations?.items?.[0]?.id || ''); } catch(e) { process.stdout.write(''); }")
+
+  if [ -n "$STOCK_LOCATION_ID" ]; then
+    ASSIGN_STOCK=$(graphql_admin "mutation {
+      assignStockLocationsToChannel(input: { channelId: \"$CHANNEL_ID\", stockLocationIds: [\"$STOCK_LOCATION_ID\"] }) {
+        id name
+      }
+    }")
+    echo "    ✓ Stock location $STOCK_LOCATION_ID assigned to channel $CHANNEL_ID"
+  else
+    echo "    ⚠ No stock location found — skipping stock-location assignment"
+  fi
+else
+  echo "    ⚠ Could not determine product/channel — skipping channel assignments"
+fi
+
 # ─── 3. Make scheduled session PUBLIC ────────────────────────────────────────
 echo "[3] Setting session visibility=PUBLIC for session '$SESSION_TITLE'..."
 
@@ -280,8 +373,20 @@ UPDATED_STATUS=$(jq_val "$UPDATED_SESSION" "status")
 assert "Session visibility=PUBLIC" '[ "$UPDATED_VISIBILITY" = "PUBLIC" ]' "got visibility=$UPDATED_VISIBILITY"
 echo "    ✓ Session visibility=$UPDATED_VISIBILITY status=$UPDATED_STATUS"
 
-# ─── 4. Trigger marketplace full reindex ─────────────────────────────────────
-echo "[4] Triggering marketplace full reindex..."
+# ─── 4. Establish Bayesian baseline ─────────────────────────────────────────
+# The marketplace indexer fail-closes if no baseline exists: indexSession()
+# throws "Bayesian baseline has not been established". The daily scheduled
+# task may not have run yet, so we establish one on-demand here.
+echo "[4] Establishing Bayesian baseline..."
+
+BASELINE_RESP=$(graphql_admin 'mutation { marketplaceRefreshBaseline }')
+BASELINE_RESULT=$(jq_val "$BASELINE_RESP" "data.marketplaceRefreshBaseline")
+
+assert "Baseline refresh succeeded" '[ "$BASELINE_RESULT" = "true" ]' "got marketplaceRefreshBaseline=$BASELINE_RESULT"
+echo "    ✓ Bayesian baseline established"
+
+# ─── 5. Trigger marketplace full reindex ────────────────────────────────────
+echo "[5] Triggering marketplace full reindex..."
 
 REINDEX_RESP=$(graphql_admin 'query { marketplaceFullReindex }')
 REINDEX_RESULT=$(jq_val "$REINDEX_RESP" "data.marketplaceFullReindex")
@@ -291,7 +396,7 @@ echo "    ✓ Marketplace full reindex completed"
 
 # ─── 5. Read-only verification ───────────────────────────────────────────────
 echo ""
-echo "[5] Read-only verification..."
+echo "[6] Read-only verification..."
 
 # 5a. Verify variant stock
 VERIFY_VARIANT=$(graphql_admin "{
