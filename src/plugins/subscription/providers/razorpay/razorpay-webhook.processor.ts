@@ -4,6 +4,7 @@ import { SubscriptionProviderBinding } from '../../entities/subscription-provide
 import { SubscriptionBillingAttempt, BillingAttemptStatus } from '../../entities/subscription-billing-attempt.entity';
 import { OrganizationSubscription } from '../../entities/organization-subscription.entity';
 import { ProviderWebhookEvent } from '../../entities/provider-webhook-event.entity';
+import { SubscriptionService } from '../../services/subscription.service';
 
 const loggerCtx = 'RazorpayWebhookProcessor';
 
@@ -16,12 +17,17 @@ export interface NormalizedBillingEvent {
     amountPaise?: number;
     currency?: string;
     status: string;
+    channelId?: string;
+    planId?: string;
     rawPayload: any;
 }
 
 @Injectable()
 export class RazorpayWebhookProcessor {
-    constructor(private connection: TransactionalConnection) {}
+    constructor(
+        private connection: TransactionalConnection,
+        private readonly subscriptionService: SubscriptionService,
+    ) {}
 
     /**
      * Process a webhook event from the immutable inbox.
@@ -43,21 +49,21 @@ export class RazorpayWebhookProcessor {
 
         switch (event) {
             case 'subscription.authenticated':
-                await this.updateBinding(ctx, ne.providerSubscriptionId, 'authenticated', false);
+                await this.updateBinding(ctx, ne.providerSubscriptionId, 'authenticated', false, ne.channelId, ne.planId);
                 break;
             case 'subscription.activated':
-                await this.updateBinding(ctx, ne.providerSubscriptionId, 'active', true);
+                await this.updateBinding(ctx, ne.providerSubscriptionId, 'active', true, ne.channelId, ne.planId);
                 if (ne.providerPaymentId && ne.amountPaise) await this.recordAttempt(ctx, ne, 'succeeded');
                 break;
             case 'subscription.charged':
                 if (ne.providerPaymentId && ne.amountPaise) await this.recordAttempt(ctx, ne, 'succeeded');
                 break;
             case 'subscription.halted':
-                await this.updateBinding(ctx, ne.providerSubscriptionId, 'halted', false);
+                await this.updateBinding(ctx, ne.providerSubscriptionId, 'halted', false, ne.channelId, ne.planId);
                 if (ne.providerPaymentId) await this.recordAttempt(ctx, ne, 'failed');
                 break;
             case 'subscription.cancelled':
-                await this.updateBinding(ctx, ne.providerSubscriptionId, 'cancelled', false);
+                await this.updateBinding(ctx, ne.providerSubscriptionId, 'cancelled', false, ne.channelId, ne.planId);
                 break;
             case 'payment.failed':
                 if (ne.providerPaymentId && ne.amountPaise) await this.recordAttempt(ctx, ne, 'failed');
@@ -71,6 +77,7 @@ export class RazorpayWebhookProcessor {
         const sub = payload.subscription?.entity;
         const pay = payload.payment?.entity;
         const inv = payload.invoice?.entity;
+        const notes = sub?.notes || {};
         return {
             eventType: event,
             providerEventId: eventId,
@@ -80,17 +87,52 @@ export class RazorpayWebhookProcessor {
             amountPaise: pay?.amount || inv?.amount,
             currency: pay?.currency || inv?.currency,
             status: sub?.status || pay?.status || 'unknown',
+            channelId: notes.channelId,
+            planId: sub?.plan_id,
             rawPayload: payload,
         };
     }
 
-    private async updateBinding(ctx: RequestContext, subId: string, status: string, active: boolean): Promise<void> {
+    private async updateBinding(
+        ctx: RequestContext,
+        subId: string,
+        status: string,
+        active: boolean,
+        channelId?: string,
+        planId?: string,
+    ): Promise<void> {
         const repo = this.connection.getRepository(ctx, SubscriptionProviderBinding);
         const binding = await repo.findOne({ where: { providerSubscriptionId: subId } });
         if (binding) {
             binding.providerStatus = status;
             binding.active = active;
             await repo.save(binding);
+        } else if (channelId) {
+            // Lazily create the binding on authenticated/activated events
+            // where the channelId is known from the Razorpay payload notes.
+            // Previously this silently no-op'd, breaking the webhook→subscription link.
+            try {
+                await this.subscriptionService.createProviderBinding(
+                    ctx,
+                    channelId,
+                    'razorpay',
+                    subId,
+                    planId || '',
+                    status,
+                    { initialEvent: true },
+                );
+                Logger.log(
+                    `Created lazy SubscriptionProviderBinding for ${subId} on channel ${channelId}`,
+                    loggerCtx,
+                );
+            } catch (err) {
+                // If the OrganizationSubscription doesn't exist yet for this channel,
+                // log and let a retry or manual reconciliation handle it.
+                Logger.warn(
+                    `Could not create binding for ${subId}: ${err instanceof Error ? err.message : String(err)}`,
+                    loggerCtx,
+                );
+            }
         }
     }
 

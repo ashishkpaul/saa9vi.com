@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import {
   Channel,
   ChannelService,
+  DeepPartial,
   ID,
   ListQueryBuilder,
   Logger,
@@ -13,6 +14,7 @@ import {
 import { loggerCtx } from "../constants";
 import { OrganizationSubscription } from "../entities/organization-subscription.entity";
 import { SubscriptionPlan } from "../entities/subscription-plan.entity";
+import { SubscriptionProviderBinding } from "../entities/subscription-provider-binding.entity";
 
 /**
  * Lifecycle service for tenant SaaS subscriptions (Phase 2).
@@ -160,6 +162,80 @@ export class SubscriptionService {
     const saved = await repo.save(sub);
     Logger.info(
       `Channel ${channelId} ('${channel.code}') subscribed to plan '${plan.name}'`,
+      loggerCtx,
+    );
+    return saved;
+  }
+
+  /**
+   * Creates a SubscriptionProviderBinding linking an OrganizationSubscription
+   * to a provider-specific subscription. This is the seam that connects the
+   * domain subscription to the provider's webhook events.
+   *
+   * Called by RazorpayWebhookProcessor when the first subscription lifecycle
+   * event arrives (authenticated/activated), ensuring webhook lookups succeed
+   * rather than silently no-op'ing.
+   */
+  async createProviderBinding(
+    ctx: RequestContext,
+    channelId: string,
+    provider: string,
+    providerSubscriptionId: string,
+    providerPlanId: string,
+    providerStatus: string,
+    metadata?: DeepPartial<Record<string, unknown>>,
+  ): Promise<SubscriptionProviderBinding> {
+    const bindingRepo = this.connection.getRepository(ctx, SubscriptionProviderBinding);
+
+    // Idempotency: return existing binding if one already exists
+    const existing = await bindingRepo.findOne({
+      where: { providerSubscriptionId },
+    });
+    if (existing) {
+      return existing;
+    }
+
+    // Resolve the OrganizationSubscription for this channel
+    const subRepo = this.connection.getRepository(ctx, OrganizationSubscription);
+    const subscription = await subRepo.findOne({
+      where: { channelId },
+      relations: ["plan"],
+    });
+    if (!subscription) {
+      throw new Error(
+        `Cannot create SubscriptionProviderBinding: no OrganizationSubscription found for channel ${channelId}`,
+      );
+    }
+
+    // Resolve the channel entity for INV-001 compliance
+    const channel = await this.connection.rawConnection
+      .getRepository(Channel)
+      .findOne({ where: { id: channelId } });
+    if (!channel) {
+      throw new Error(`Cannot create SubscriptionProviderBinding: channel ${channelId} not found`);
+    }
+
+    const binding = new SubscriptionProviderBinding({
+      subscription,
+      channelId,
+      provider,
+      providerSubscriptionId,
+      providerPlanId,
+      providerStatus,
+      active: false,
+      metadata,
+    });
+
+    // Assign to channel (INV-001: Channel = Tenant)
+    const targetCtx = await this.requestContextService.create({
+      apiType: "admin",
+      channelOrToken: channel,
+    });
+    await this.channelService.assignToCurrentChannel(binding, targetCtx);
+
+    const saved = await bindingRepo.save(binding);
+    Logger.info(
+      `Created SubscriptionProviderBinding: channel=${channelId}, provider=${provider}, providerSub=${providerSubscriptionId}`,
       loggerCtx,
     );
     return saved;
