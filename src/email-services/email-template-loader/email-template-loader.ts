@@ -71,4 +71,41 @@ export class ChannelBasedTemplateLoader implements TemplateLoader {
     console.error(errorMessage);
     throw new Error(errorMessage);
   }
+
+  /**
+   * Load Handlebars partials (e.g. {{> header }}, {{> footer }}) for the
+   * EmailPlugin generator. Called by the EmailPlugin when rendering emails.
+   * Channel-specific partials (`<baseDir>/<channelToken>/partials/`) take
+   * priority over shared partials (`<baseDir>/partials/`).
+   */
+  async loadPartials(): Promise<Array<{ name: string; content: string }>> {
+    const partialsDirs = [
+      path.join(this.baseTemplatePath, 'partials'),
+      path.join(this.baseTemplatePath, 'default', 'partials'),
+    ];
+
+    const partials = new Map<string, string>();
+    for (const dir of partialsDirs) {
+      let files: string[] = [];
+      try {
+        files = await fs.readdir(dir);
+      } catch (error: any) {
+        if (error.code !== 'ENOENT') {
+          console.warn(`[ChannelBasedTemplateLoader] Error reading partials directory ${dir}:`, error.message);
+        }
+        continue;
+      }
+      for (const file of files.filter((f) => f.endsWith('.hbs'))) {
+        const name = path.basename(file, '.hbs');
+        // Channel-specific dirs (later in the list) win over shared ones.
+        partials.set(name, await fs.readFile(path.join(dir, file), 'utf8'));
+      }
+    }
+
+    if (partials.size === 0) {
+      console.warn(`[ChannelBasedTemplateLoader] No partials found in: ${partialsDirs.join(', ')}`);
+    }
+
+    return Array.from(partials.entries()).map(([name, content]) => ({ name, content }));
+  }
 }
