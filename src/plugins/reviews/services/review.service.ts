@@ -129,6 +129,8 @@ export class ReviewService {
         const verifiedPurchase = verificationType === ReviewVerificationType.ORDER;
 
         // 8. Create the review
+        // channelId is NOT NULL on ProductReview (ChannelAware) — must be populated
+        // from the RequestContext for INV-001 (Channel = Tenant) isolation.
         const reviewData: any = {
             summary,
             body,
@@ -141,6 +143,7 @@ export class ReviewService {
             upvotes: 0,
             downvotes: 0,
             assets,
+            channelId: ctx.channelId as string,
         };
 
         // If target is PRODUCT, populate product relation (for backward compatibility)
