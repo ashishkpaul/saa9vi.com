@@ -31,6 +31,9 @@ import { TENANT_ADMIN_ROLE_PERMISSIONS } from '../constants';
 
 const loggerCtx = 'TenantRegistrationService';
 
+/** Vendure's built-in customer role code — grants the Authenticated permission. */
+const CUSTOMER_ROLE_CODE = '__customer_role__';
+
 export interface RegisterTenantInput {
   businessName: string;
   firstName: string;
@@ -473,6 +476,26 @@ export class TenantRegistrationService {
       }
     } catch (e: any) {
       Logger.warn(`Failed to assign stock locations to channel ${newChannel.code}: ${e.message}`, loggerCtx);
+    }
+
+    // Customer role
+    //
+    // Without this, the shared __customer_role__ (which grants the
+    // "Authenticated" permission) is not scoped to the new tenant channel.
+    // Customers who register/verify in that channel then fail every
+    // permission-guarded Shop API operation (me, activeOrder, checkout)
+    // with FORBIDDEN, because the permission guard resolves permissions
+    // per active channel.
+    try {
+      const roleRepo = this.connection.getRepository(ctx, Role);
+      const customerRole = await roleRepo.findOne({ where: { code: CUSTOMER_ROLE_CODE }, relations: ['channels'] });
+      if (customerRole && !customerRole.channels.some((c) => c.id === newChannel.id)) {
+        customerRole.channels = [...customerRole.channels, newChannel];
+        await roleRepo.save(customerRole);
+        Logger.log(`Assigned __customer_role__ to channel ${newChannel.code}`, loggerCtx);
+      }
+    } catch (e: any) {
+      Logger.warn(`Failed to assign __customer_role__ to channel ${newChannel.code}: ${e.message}`, loggerCtx);
     }
   }
 }
