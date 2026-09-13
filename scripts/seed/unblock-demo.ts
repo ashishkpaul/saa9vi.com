@@ -68,7 +68,7 @@ async function main() {
     const updated = await productVariantService.update(ctx, [{
       id: String(variant.id),
       stockOnHand: 10,
-      trackInventory: 'ENABLED' as any,
+      trackInventory: 'TRUE' as any,
       outOfStockThreshold: 0,
     }]);
     const updatedVariant = updated[0];
