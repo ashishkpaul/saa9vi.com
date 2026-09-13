@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { RequestContext, TransactionalConnection } from '@vendure/core';
+import { LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
 import { MarketplaceAdCampaign } from '../entities/marketplace-ad-campaign.entity';
 import { AdSpendLedger } from '../entities/ad-spend-ledger.entity';
 import { AdWallet } from '../entities/ad-wallet.entity';
@@ -55,8 +56,8 @@ export class MarketplaceAdService {
       where: {
         targetSessionId: sessionId,
         status: 'active',
-        startsAt: { $lte: now } as any,
-        endsAt: { $gte: now } as any,
+        startsAt: LessThanOrEqual(now),
+        endsAt: MoreThanOrEqual(now),
       },
       order: { boostWeight: 'DESC' },
     });
@@ -72,8 +73,8 @@ export class MarketplaceAdService {
       where: {
         channelId,
         status: 'active',
-        startsAt: { $lte: now } as any,
-        endsAt: { $gte: now } as any,
+        startsAt: LessThanOrEqual(now),
+        endsAt: MoreThanOrEqual(now),
       },
     });
   }

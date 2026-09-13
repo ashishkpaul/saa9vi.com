@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ID, RequestContext, TransactionalConnection } from "@vendure/core";
+import { In } from "typeorm";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbEntitlementService } from "./bbb-entitlement.service";
@@ -82,7 +83,7 @@ export class LearningDashboardService {
       ? await this.connection
           .getRepository(ctx, BbbScheduledSession)
           .find({
-            where: { id: { $in: sessionIds } as any },
+            where: { id: In(sessionIds) },
             relations: ["trainer", "activeMeeting", "organization"],
           })
       : [];
@@ -101,7 +102,7 @@ export class LearningDashboardService {
     const instructorProfiles = trainerCustomerIds.length
       ? await this.connection
           .getRepository(ctx, InstructorProfile)
-          .find({ where: { customerId: { $in: trainerCustomerIds } as any } })
+          .find({ where: { customerId: In(trainerCustomerIds) } })
       : [];
 
     const instructorNameMap = new Map<string, string>();

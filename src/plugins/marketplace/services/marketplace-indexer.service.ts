@@ -6,7 +6,7 @@ import { BbbOrganization } from '../../bigbluebutton-plugin/entities/bbb-organiz
 import { TenantProfile } from '../../tenant-plugin/entities/tenant-profile.entity';
 import { InstructorProfile } from '../../tenant-plugin/entities/instructor-profile.entity';
 import { BbbInstructorAssignment } from '../../bigbluebutton-plugin/entities/instructor-assignment.entity';
-import { In } from 'typeorm';
+import { In, Not, IsNull } from 'typeorm';
 import { MarketplaceAdService } from './marketplace-ad.service';
 import { BayesianRatingService } from './bayesian-rating.service';
 import { MarketplaceBaselineService } from './marketplace-baseline.service';
@@ -648,7 +648,7 @@ export class MarketplaceIndexerService {
     // Reindex all sessions with productVariantId
     const sessions = await this.connection.rawConnection
       .getRepository(BbbScheduledSession)
-      .find({ where: { productVariantId: { $ne: null } as any } });
+      .find({ where: { productVariantId: Not(IsNull()) } });
 
     for (const session of sessions) {
       await this.indexSession(String(session.id), ctx);
