@@ -75,6 +75,8 @@ export class ReviewReportService {
       reporterUserAgent: input.reporterUserAgent ?? null,
 
       status: "pending",
+
+      channelId: ctx.channelId as string,
     });
 
     const saved = await repo.save(report);

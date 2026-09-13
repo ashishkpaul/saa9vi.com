@@ -102,6 +102,8 @@ export class ReviewRewardService {
       metadata: input.metadata
         ? this.safeStringifyMetadata(input.metadata)
         : null,
+
+      channelId: ctx.channelId as string,
     });
 
     const saved = await repo.save(reward);

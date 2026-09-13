@@ -266,6 +266,7 @@ export class ProductReviewShopResolver {
           review: { id },
           customer: { id: customer.id },
           isUpvote: vote,
+          channelId: ctx.channelId as string,
         }),
       );
     }
