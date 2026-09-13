@@ -383,7 +383,23 @@ else
   fail "No learning dashboard: $DASH_DATA"
 fi
 
-# Step 13: Summary
+# Step 13: Verify server-driven authorization (canJoin / ctaAction)
+# Session is SCHEDULED (not LIVE), so canJoin MUST be false.
+# The storefront must NOT re-derive this from the clock (INV-008).
+log ""
+log "--- Step 13: Learning Authorization (canJoin / ctaAction) ---"
+CAN_JOIN=$(echo "$DASH_DATA" | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); const c=d.data?.myLearningDashboard?.courses?.[0]; console.log(c ? c.canJoin : "NO_COURSE")')
+CTA_ACTION=$(echo "$DASH_DATA" | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); const c=d.data?.myLearningDashboard?.courses?.[0]; console.log(c ? c.ctaAction : "NO_COURSE")')
+if [ "$COURSE_COUNT" -le 0 ]; then
+  fail "Cannot check canJoin: no course in dashboard"
+elif [ "$CAN_JOIN" = "false" ] && [ "$CTA_ACTION" = "none" ]; then
+  pass "Server-driven authorization correct (canJoin=false, ctaAction=none, session not LIVE)"
+  log "Entitlement present but join blocked until session goes LIVE — INV-008 preserved"
+else
+  fail "Authorization mismatch: canJoin=$CAN_JOIN ctaAction=$CTA_ACTION (expected false/none for SCHEDULED)"
+fi
+
+# Step 14: Summary
 log ""
 log "============================================================="
 log "Persona B Journey Summary"
