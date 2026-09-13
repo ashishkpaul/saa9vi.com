@@ -45,3 +45,6 @@ _fix_script.js
 changes.patch
 .vendure-docs-cache/
 *.tsbuildinfo
+
+# Generated development email mailbox output
+/static/email/test-emails/
