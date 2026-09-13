@@ -212,6 +212,15 @@ export const adminApiExtensions = gql`
 
   extend type Mutation {
     """
+    Establish the Bayesian baseline on-demand.
+    The marketplace indexer fail-closes if no baseline exists (indexSession throws),
+    so this mutation must be called before marketplaceFullReindex when the daily
+    scheduled baseline-refresh task has not yet run.
+    Requires SuperAdmin permission.
+    """
+    marketplaceRefreshBaseline: Boolean!
+
+    """
     Create a campaign for the caller's channel.
     Requires MarketplaceAdvertising create permission.
     """
