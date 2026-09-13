@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import {
   ConfigService,
   ID,
+  Permission,
   RequestContext,
   TransactionalConnection,
   EntityNotFoundError,
@@ -61,14 +62,33 @@ export class BbbOrganizationService {
     const take = Math.min(Math.max(options?.take ?? 25, 1), 100);
     const skip = Math.max(options?.skip ?? 0, 0);
     const channelId = ctx.channelId as string;
-    const [items, totalItems] = await this.connection
-      .getRepository(ctx, BbbOrganization)
-      .findAndCount({
-        where: { channelId },
+
+    // SuperAdmin sees all organizations regardless of channel.
+    // Tenant admins see organizations on their authorized channels,
+    // checking the channels many-to-many relation (not just scalar channelId).
+    const isSuperAdmin = ctx.userHasPermissions([Permission.SuperAdmin]);
+    const repo = this.connection.getRepository(ctx, BbbOrganization);
+
+    if (isSuperAdmin) {
+      const [items, totalItems] = await repo.findAndCount({
         order: { createdAt: "ASC" },
         skip,
         take,
       });
+      return { items, totalItems };
+    }
+
+    // For tenant admins, find orgs where the channels relation includes
+    // the current channel. This matches assertOrganizationAccess semantics.
+    const [items, totalItems] = await repo
+      .createQueryBuilder("org")
+      .innerJoin("org.channels", "ch")
+      .where("ch.id = :channelId", { channelId })
+      .orderBy("org.createdAt", "ASC")
+      .skip(skip)
+      .take(take)
+      .getManyAndCount();
+
     return { items, totalItems };
   }
 
