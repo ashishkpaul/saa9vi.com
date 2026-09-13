@@ -9,8 +9,8 @@ const GET_CHANNELS = `
 `;
 
 const GET_ATTEMPTS = `
-  query GetJuspayPaymentAttempts($channelId: String!, $filter: JuspayPaymentAttemptFilter) {
-    juspayPaymentAttempts(channelId: $channelId, filter: $filter) {
+  query GetProviderPaymentAttempts($channelId: String!, $filter: ProviderPaymentAttemptFilter) {
+    providerPaymentAttempts(channelId: $channelId, filter: $filter) {
       items { id invoiceId billingPeriodStart amountPaise status juspayOrderId juspayTransactionId failureReason attemptedAt }
       total
     }
@@ -45,7 +45,7 @@ export function PaymentAttemptsList() {
   }, [channelsQuery.data, channelId]);
 
   const attemptsQuery = useQuery({
-    queryKey: ['juspayPaymentAttempts', channelId, statusFilter],
+    queryKey: ['providerAttempts', channelId, statusFilter],
     queryFn: () => api.query(GET_ATTEMPTS, {
       channelId,
       filter: statusFilter ? { status: statusFilter } : undefined,
@@ -53,14 +53,14 @@ export function PaymentAttemptsList() {
     enabled: !!channelId,
   });
 
-  const attempts = attemptsQuery.data?.juspayPaymentAttempts?.items ?? [];
-  const total = attemptsQuery.data?.juspayPaymentAttempts?.total ?? 0;
+  const attempts = attemptsQuery.data?.providerPaymentAttempts?.items ?? [];
+  const total = attemptsQuery.data?.providerPaymentAttempts?.total ?? 0;
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Payment Attempts</h1>
-        <p className="text-muted-foreground">Immutable ledger of Juspay charge attempts. INV-002: read-only financial facts.</p>
+        <p className="text-muted-foreground">Immutable ledger of provider charge attempts. INV-002: read-only financial facts.</p>
       </div>
 
       <Card>

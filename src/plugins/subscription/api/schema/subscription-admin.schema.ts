@@ -4,9 +4,12 @@ import gql from "graphql-tag";
  * Admin API extensions for Phase 2 tenant SaaS subscriptions.
  *
  * Portal Admin (SuperAdmin) manages the platform-global plan catalogue and
- * views tenant subscriptions. Step 5 adds read-only billing ledger surfaces:
- * Juspay mandates, payment attempts, and reconciliation incidents — all
+ * views tenant subscriptions. Read-only billing ledger surfaces:
+ * provider mandates, payment attempts, and reconciliation incidents — all
  * filtered by channel (SEC-002 channel isolation).
+ *
+ * NOTE: Type names are provider-neutral (ProviderMandate, ProviderPaymentAttempt)
+ * even though historical data may originate from a specific provider.
  */
 export const adminApiExtensions = gql`
   type SubscriptionPlan {
@@ -54,11 +57,11 @@ export const adminApiExtensions = gql`
   }
 
   """
-  Read-only view of a JuspaySubscriptionMandate for the Portal Admin ledger.
+  Read-only view of a provider subscription mandate for the Portal Admin ledger.
   Mirrors entity fields but exposes no mutations (mandates are created via the
-  Juspay checkout flow, not the admin API).
+  provider checkout flow, not the admin API).
   """
-  type JuspayMandate {
+  type ProviderMandate {
     id: ID!
     createdAt: DateTime!
     updatedAt: DateTime!
@@ -72,10 +75,10 @@ export const adminApiExtensions = gql`
   }
 
   """
-  Read-only view of a JuspayPaymentAttempt for the Portal Admin ledger.
+  Read-only view of a provider payment attempt for the Portal Admin ledger.
   INV-002: immutable financial fact — no mutations exposed.
   """
-  type JuspayPaymentAttempt {
+  type ProviderPaymentAttempt {
     id: ID!
     createdAt: DateTime!
     channelId: String!
@@ -91,9 +94,9 @@ export const adminApiExtensions = gql`
   }
 
   """
-  Operator-visible reconciliation incident (Step 4D). Created when a charge
-  succeeded at Juspay but the Saa9vi period could not be finalized (CAS
-  conflict, channel-missing, etc.). Must be resolved by an operator.
+  Operator-visible reconciliation incident. Created when a charge
+  succeeded at the payment provider but the Saa9vi period could not be finalized
+  (CAS conflict, channel-missing, etc.). Must be resolved by an operator.
   """
   type RenewalPaymentReconciliationRequired {
     id: ID!
@@ -112,35 +115,35 @@ export const adminApiExtensions = gql`
     RESOLVED
   }
 
-  input JuspayMandateFilter {
+  input ProviderMandateFilter {
     status: String
     subscriptionId: ID
   }
 
-  input JuspayMandateSort {
-    field: JuspayMandateSortField!
+  input ProviderMandateSort {
+    field: ProviderMandateSortField!
     direction: SortDirection! = DESC
   }
 
-  enum JuspayMandateSortField {
+  enum ProviderMandateSortField {
     createdAt
     activatedAt
     status
   }
 
-  input JuspayPaymentAttemptFilter {
+  input ProviderPaymentAttemptFilter {
     status: String
     invoiceId: String
     subscriptionId: ID
     billingPeriodStart: String
   }
 
-  input JuspayPaymentAttemptSort {
-    field: JuspayPaymentAttemptSortField!
+  input ProviderPaymentAttemptSort {
+    field: ProviderPaymentAttemptSortField!
     direction: SortDirection! = DESC
   }
 
-  enum JuspayPaymentAttemptSortField {
+  enum ProviderPaymentAttemptSortField {
     attemptedAt
     amountPaise
     status
@@ -156,13 +159,13 @@ export const adminApiExtensions = gql`
     take: Int = 50
   }
 
-  type JuspayMandateList {
-    items: [JuspayMandate!]!
+  type ProviderMandateList {
+    items: [ProviderMandate!]!
     total: Int!
   }
 
-  type JuspayPaymentAttemptList {
-    items: [JuspayPaymentAttempt!]!
+  type ProviderPaymentAttemptList {
+    items: [ProviderPaymentAttempt!]!
     total: Int!
   }
 
@@ -178,21 +181,21 @@ export const adminApiExtensions = gql`
     "All tenant subscriptions across channels. SuperAdmin only."
     organizationSubscriptions: [OrganizationSubscription!]!
 
-    "Paginated read-only ledger of Juspay mandates for a channel. SuperAdmin only."
-    juspayMandates(
+    "Paginated read-only ledger of provider mandates for a channel. SuperAdmin only."
+    providerMandates(
       channelId: String!
-      filter: JuspayMandateFilter
-      sort: JuspayMandateSort
+      filter: ProviderMandateFilter
+      sort: ProviderMandateSort
       pagination: PaginationInput
-    ): JuspayMandateList!
+    ): ProviderMandateList!
 
-    "Paginated read-only ledger of Juspay payment attempts for a channel. SuperAdmin only."
-    juspayPaymentAttempts(
+    "Paginated read-only ledger of provider payment attempts for a channel. SuperAdmin only."
+    providerPaymentAttempts(
       channelId: String!
-      filter: JuspayPaymentAttemptFilter
-      sort: JuspayPaymentAttemptSort
+      filter: ProviderPaymentAttemptFilter
+      sort: ProviderPaymentAttemptSort
       pagination: PaginationInput
-    ): JuspayPaymentAttemptList!
+    ): ProviderPaymentAttemptList!
 
     "Paginated list of operator-visible reconciliation incidents. SuperAdmin only."
     reconciliationIncidents(

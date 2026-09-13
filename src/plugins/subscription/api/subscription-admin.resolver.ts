@@ -30,12 +30,12 @@ export class SubscriptionAdminResolver {
   }
 
     /**
-   * Step 5: Read-only Juspay mandate ledger for a channel.
+   * Read-only provider mandate ledger for a channel.
    * SEC-002: channel-isolated via the channelId filter argument.
    */
   @Query()
   @Allow(Permission.SuperAdmin)
-  async juspayMandates(
+  async providerMandates(
     @Ctx() ctx: RequestContext,
     @Args("channelId") channelId: string,
     @Args("filter", { nullable: true }) filter?: { status?: string; subscriptionId?: ID },
@@ -67,12 +67,12 @@ export class SubscriptionAdminResolver {
   }
 
   /**
-   * Step 5: Read-only Juspay payment attempt ledger for a channel.
+   * Read-only provider payment attempt ledger for a channel.
    * INV-002: immutable financial facts — read-only, no mutations possible.
    */
   @Query()
   @Allow(Permission.SuperAdmin)
-  async juspayPaymentAttempts(
+  async providerPaymentAttempts(
     @Ctx() ctx: RequestContext,
     @Args("channelId") channelId: string,
     @Args("filter", { nullable: true }) filter?: { status?: string; invoiceId?: string; subscriptionId?: ID; billingPeriodStart?: string },
@@ -110,8 +110,8 @@ export class SubscriptionAdminResolver {
   }
 
   /**
-   * Step 5: Operator-visible reconciliation incidents (Step 4D).
-   * Shows charges that succeeded at Juspay but could not be finalized —
+   * Operator-visible reconciliation incidents.
+   * Shows charges that succeeded at the provider but could not be finalized —
    * requiring manual operator attention.
    */
   @Query()

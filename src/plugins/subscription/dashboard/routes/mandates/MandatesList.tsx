@@ -9,8 +9,8 @@ const GET_CHANNELS = `
 `;
 
 const GET_MANDATES = `
-  query GetJuspayMandates($channelId: String!, $filter: JuspayMandateFilter) {
-    juspayMandates(channelId: $channelId, filter: $filter) {
+  query GetBillingMandates($channelId: String!, $filter: ProviderMandateFilter) {
+    providerMandates(channelId: $channelId, filter: $filter) {
       items { id channelId juspayCustomerId mandateId status activatedAt revokedAt }
       total
     }
@@ -42,7 +42,7 @@ export function MandatesList() {
   }, [channelsQuery.data, channelId]);
 
   const mandatesQuery = useQuery({
-    queryKey: ['juspayMandates', channelId, statusFilter],
+    queryKey: ['providerMandates', channelId, statusFilter],
     queryFn: () => api.query(GET_MANDATES, {
       channelId,
       filter: statusFilter ? { status: statusFilter } : undefined,
@@ -50,13 +50,13 @@ export function MandatesList() {
     enabled: !!channelId,
   });
 
-  const mandates = mandatesQuery.data?.juspayMandates?.items ?? [];
-  const total = mandatesQuery.data?.juspayMandates?.total ?? 0;
+  const mandates = mandatesQuery.data?.providerMandates?.items ?? [];
+  const total = mandatesQuery.data?.providerMandates?.total ?? 0;
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">Juspay Mandates</h1>
+        <h1 className="text-2xl font-bold">Recurring Payment Mandates</h1>
         <p className="text-muted-foreground">Recurring payment mandates per tenant. Read-only — transitions driven by webhooks.</p>
       </div>
 
@@ -87,7 +87,7 @@ export function MandatesList() {
             <TableHeader>
               <TableRow>
                 <TableHead>Mandate ID</TableHead>
-                <TableHead>Customer</TableHead>
+                <TableHead>Provider Customer</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Activated</TableHead>
                 <TableHead>Revoked</TableHead>

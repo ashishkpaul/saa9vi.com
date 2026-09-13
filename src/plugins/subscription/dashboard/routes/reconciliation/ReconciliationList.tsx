@@ -32,7 +32,7 @@ export function ReconciliationList() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Reconciliation Incidents</h1>
-        <p className="text-muted-foreground">Charges that succeeded at Juspay but the period did not advance. Requires manual operator resolution.</p>
+        <p className="text-muted-foreground">Charges that succeeded at the provider but the period did not advance. Requires manual operator resolution.</p>
       </div>
 
       <Card>
