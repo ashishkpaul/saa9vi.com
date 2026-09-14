@@ -28,6 +28,7 @@ import { BbbProductAccess } from "../entities/bbb-product-access.entity";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
+import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import {
   BbbAdminPermission,
   BbbManageEntitlementsPermission,
@@ -424,11 +425,20 @@ export class BbbAdminResolver {
       await this.roomService.resetFailedRoom(ctx, failed.roomId);
     }
 
-    return this.meetingService.createAndEnqueue(ctx, {
+    const next = await this.meetingService.createAndEnqueue(ctx, {
       organizationId: failed.organization.id,
       title: failed.title,
       recordingEnabled: failed.recordingEnabled,
     });
+
+    // Relink any scheduled session whose activeMeeting was the failed meeting
+    // so the provisioning listener (which transitions the session to LIVE on
+    // MeetingProvisionedEvent of the linked meeting) works for retried meetings.
+    await this.connection
+      .getRepository(ctx, BbbScheduledSession)
+      .update({ activeMeeting: { id: failed.id } }, { activeMeeting: { id: next.id } });
+
+    return next;
   }
 
   // ─── Meetings ───────────────────────────────────────────────────────────────
@@ -928,6 +938,9 @@ export class BbbAdminResolver {
       source: input.source,
       validFrom: input.validFrom ? new Date(input.validFrom) : null,
       validUntil: input.validUntil ? new Date(input.validUntil) : null,
+      // Channel isolation (INV: Channel=Tenant). hasAccess() matches on
+      // channelId — an entitlement without it is invisible in the shop API.
+      channelId: ctx.channelId as string,
     });
     return this.connection.getRepository(ctx, BbbEntitlement).save(entitlement);
   }

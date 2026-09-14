@@ -9,14 +9,12 @@ import {
   Customer,
   EventBus,
   ID,
-  JobQueue,
-  JobQueueService,
   Logger,
   RequestContext,
-  SerializedRequestContext,
   TransactionalConnection,
 } from "@vendure/core";
 import { BbbMembershipService } from "./bbb-membership.service";
+import { BbbProvisioningWorkerService } from "./bbb-provisioning-worker.service";
 import * as crypto from "crypto";
 import { EntityManager } from "typeorm";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
@@ -44,7 +42,6 @@ import {
   MeetingFailedEvent,
 } from "../events/bbb-events";
 import {
-  BBB_PROVISIONING_QUEUE,
   MEETING_STATE,
   MEETING_STATE_TRANSITIONS,
 } from "../constants";
@@ -59,11 +56,6 @@ export interface CreateMeetingInput {
   maxParticipants?: number;
   welcomeMessage?: string;
   pluginManifests?: Array<{ url: string }>;
-}
-
-export interface ProvisioningJobData {
-  serializedCtx: SerializedRequestContext;
-  meetingId: ID;
 }
 
 interface CompleteMeetingLifecycleOptions {
@@ -86,11 +78,8 @@ interface CompleteMeetingLifecycleOptions {
  */
 @Injectable()
 export class BbbMeetingService implements OnModuleInit {
-  private provisioningQueue: JobQueue<ProvisioningJobData>;
-
   constructor(
     private readonly connection: TransactionalConnection,
-    private readonly jobQueueService: JobQueueService,
     private readonly bbbApiService: BbbApiService,
     private readonly serverService: BbbServerService,
     private readonly serverSelectionService: BbbServerSelectionService,
@@ -107,23 +96,18 @@ export class BbbMeetingService implements OnModuleInit {
     private readonly membershipService: BbbMembershipService,
     private readonly channelAccess: BbbChannelAccessService,
     private readonly sessionAttendanceService: SessionAttendanceService,
+    @Inject(forwardRef(() => BbbProvisioningWorkerService))
+    private readonly provisioningWorker: BbbProvisioningWorkerService,
   ) {}
 
-  async onModuleInit() {
-    // forwardRef handles circular DI — no runtime resolution needed
-  }
+  /**
+   * Kept for backwards compatibility with the plugin bootstrap call.
+   * The single provisioning queue consumer lives in
+   * BbbProvisioningWorkerService — this service is enqueue-only.
+   */
+  async onModuleInit() {}
 
-  async init() {
-    this.provisioningQueue =
-      await this.jobQueueService.createQueue<ProvisioningJobData>({
-        name: BBB_PROVISIONING_QUEUE,
-        process: async (job) => {
-          const { serializedCtx, meetingId } = job.data;
-          const ctx = RequestContext.deserialize(serializedCtx);
-          await this.doProvisionMeeting(ctx, meetingId, job.id as string);
-        },
-      });
-  }
+  async init() {}
 
   // ─── FSM ─────────────────────────────────────────────────────────────────────
 
@@ -236,12 +220,10 @@ export class BbbMeetingService implements OnModuleInit {
     // before the BullMQ worker queries the DB for this meeting. Without this
     // deferral, the worker races the DB commit and sees "Meeting not found".
     setImmediate(() => {
-      this.provisioningQueue
-        .add({
-          serializedCtx: ctx.serialize(),
-          meetingId: saved.id,
-        })
-        .catch((err) =>
+      // Enqueue via the single provisioning consumer (BbbProvisioningWorkerService).
+      this.provisioningWorker
+        .enqueueProvisioning(ctx, saved.id)
+        .catch((err: unknown) =>
           Logger.error(
             `Failed to enqueue provisioning for meeting ${saved.id}: ${(err as Error).message}`,
             loggerCtx,
@@ -364,6 +346,7 @@ export class BbbMeetingService implements OnModuleInit {
       // consumeGrantHours() resolves.
       this.eventBus.publish(
         new MeetingCompletedEvent(
+          ctx,
           meeting.id as string,
           meeting.roomId ?? null,
           meeting.organization?.id as string,
@@ -380,183 +363,6 @@ export class BbbMeetingService implements OnModuleInit {
     }
 
     return meeting;
-  }
-
-  // ─── Provisioning Worker ─────────────────────────────────────────────────────
-
-  /**
-   * Provisions a meeting on BBB and stores immutable grant linkage.
-   * The active grant is resolved at provisioning time and stored as
-   * meeting.grantId so that billing always debits the correct grant,
-   * regardless of org-level grant changes during the meeting's lifetime.
-   */
-  private async doProvisionMeeting(
-    ctx: RequestContext,
-    meetingId: ID,
-    _jobId: string | number,
-  ): Promise<void> {
-    const startedAt = Date.now();
-    const meeting = await this.connection
-      .getRepository(ctx, BbbMeeting)
-      .findOne({
-        where: { id: meetingId as string },
-        relations: ["organization"],
-      });
-
-    if (!meeting) {
-      Logger.error(
-        `Meeting ${meetingId} not found in provisioning worker`,
-        loggerCtx,
-      );
-      return;
-    }
-
-    if (meeting.state !== MEETING_STATE.PENDING) {
-      Logger.warn(
-        `Meeting ${meetingId} is in state ${meeting.state}, skipping provisioning`,
-        loggerCtx,
-      );
-      return;
-    }
-
-    await this.transitionState(ctx, meeting, MEETING_STATE.PROVISIONING);
-
-    try {
-      const server = await this.serverSelectionService.selectServer(ctx);
-      if (!server) {
-        throw new Error("No healthy BBB server available");
-      }
-
-      // Resolve the active grant at provisioning time — immutable linkage
-      // Consume earliest-expiring grant first to avoid lapsing unused hours
-      const grant = await this.connection
-        .getRepository(ctx, BbbCapacityGrant)
-        .createQueryBuilder("grant")
-        .where("grant.organizationId = :orgId", {
-          orgId: meeting.organization.id,
-        })
-        .andWhere("grant.exhausted = :exhausted", { exhausted: false })
-        .andWhere("grant.validFrom <= :now", { now: new Date() })
-        .andWhere("grant.validUntil >= :now", { now: new Date() })
-        .orderBy("grant.validUntil", "ASC")
-        .addOrderBy("grant.createdAt", "ASC")
-        .getOne();
-
-      if (!grant) {
-        throw new Error(
-          "No active capacity grant found for this organization. Please purchase or renew a plan.",
-        );
-      }
-
-      // S3: capacity guard before provisioning
-      const remainingMinutes =
-        (grant.grantedMinutes ?? 0) - (grant.consumedMinutes ?? 0);
-      if (remainingMinutes <= 0) {
-        throw new Error("No minutes remaining on plan");
-      }
-
-      const bbbMeetingId = `bbb-${meeting.id}`;
-      const attendeePW = crypto.randomUUID().replace(/-/g, "").substring(0, 16);
-      const moderatorPW = crypto
-        .randomUUID()
-        .replace(/-/g, "")
-        .substring(0, 16);
-
-      // Note: pluginManifests is intentionally omitted here. Passing a raw
-      // JSON string as a query parameter causes the BBB HTML5 client to crash
-      // during plugin initialization. Re-enable only after verifying the
-      // correct BBB 3.x API format for plugin manifests.
-      const { internalMeetingID } = await this.bbbApiService.createMeeting(
-        server,
-        {
-          meetingID: bbbMeetingId,
-          name: meeting.title,
-          attendeePW,
-          moderatorPW,
-          record: meeting.recordingEnabled,
-          autoStartRecording: false,
-          allowStartStopRecording: true,
-          maxParticipants: meeting.organization.maxParticipantsPerMeeting,
-          logoutURL: process.env.STOREFRONT_URL
-            ? `${process.env.STOREFRONT_URL}/bbb-logout`
-            : undefined,
-        },
-      );
-
-      const encryptedAttendeePW = this.encryptionService.encrypt(attendeePW);
-      const encryptedModeratorPW = this.encryptionService.encrypt(moderatorPW);
-
-      // NOTE: We bypass the FSM transitionState() here intentionally.
-      // The transition is trivially Provisioning → Active which is always
-      // valid at this point. Using transitionState() would call .save() on
-      // the full entity, overwriting the encryptedAttendeePassword and
-      // encryptedModeratorPassword columns (which are select: false and
-      // would be saved as undefined). Direct .update() is safer here.
-      await this.connection
-        .getRepository(ctx, BbbMeeting)
-        .update(meetingId as string, {
-          bbbMeetingId,
-          bbbInternalMeetingId: internalMeetingID,
-          serverId: server.id as string,
-          grantId: grant.id as string,
-          encryptedAttendeePassword: encryptedAttendeePW,
-          encryptedModeratorPassword: encryptedModeratorPW,
-          state: MEETING_STATE.ACTIVE,
-          provisionedAt: new Date(),
-        });
-
-      this.metrics.recordProvisioningSucceeded(Date.now() - startedAt);
-      Logger.info(
-        `Meeting ${meetingId} provisioned → BBB meetingID: ${bbbMeetingId} (grantId: ${grant.id})`,
-        loggerCtx,
-      );
-
-      this.eventBus.publish(
-        new MeetingProvisionedEvent(
-          ctx,
-          meetingId as string,
-          bbbMeetingId,
-          meeting.roomId ?? null,
-          meeting.organization.id as string,
-          grant.id as string,
-        ),
-      );
-
-      // Notify room (if this meeting was created via a room)
-      if (meeting.roomId) {
-        await this.roomService.onMeetingActive(ctx, meeting.roomId, meetingId);
-      }
-    } catch (err) {
-      const msg = (err as Error).message;
-      this.metrics.recordProvisioningFailed();
-      Logger.error(
-        `Provisioning failed for meeting ${meetingId}: ${msg}`,
-        loggerCtx,
-      );
-
-      await this.connection
-        .getRepository(ctx, BbbMeeting)
-        .update(meetingId as string, {
-          state: MEETING_STATE.FAILED,
-          failureReason: msg,
-          retryCount: (meeting.retryCount ?? 0) + 1,
-        });
-
-      this.eventBus.publish(
-        new MeetingFailedEvent(
-          meetingId as string,
-          meeting.roomId ?? null,
-          meeting.organization.id as string,
-          msg,
-          (meeting.retryCount ?? 0) + 1,
-        ),
-      );
-
-      // Notify room of failure
-      if (meeting.roomId) {
-        await this.roomService.onMeetingFailed(ctx, meeting.roomId);
-      }
-    }
   }
 
   // ─── Dynamic Join URL Generation ────────────────────────────────────────────
@@ -594,8 +400,11 @@ export class BbbMeetingService implements OnModuleInit {
       // getMeetingInfo returns null if the meeting doesn't exist or was destroyed
       return info !== null;
     } catch (err: any) {
-      // BBB API network error (timeout, DNS, etc.) — the meeting may still exist.
-      // Only treat explicit notFound responses as "meeting gone".
+      // BBB API error — only explicit notFound responses mean the meeting is
+      // gone. Other errors (timeout, forbidden while the room is starting, etc.)
+      // are ambiguous; treat the meeting as still existing so a freshly
+      // provisioned room can generate a join URL. The actual BBB join call is the
+      // authoritative gate — a stale URL simply fails in the browser.
       if (
         err.message?.includes("[notFound]") ||
         err.message?.includes("notFound") ||
@@ -604,8 +413,11 @@ export class BbbMeetingService implements OnModuleInit {
       ) {
         return false;
       }
-      // Transient network error — rethrow so the caller doesn't destroy the room
-      throw err;
+      Logger.warn(
+        `[validateMeetingExistsOnBbb] Ambiguous BBB error for meeting ${meeting.id} (${meeting.bbbMeetingId}): ${(err as Error).message} — treating as still existing`,
+        loggerCtx,
+      );
+      return true;
     }
   }
 
@@ -957,12 +769,10 @@ export class BbbMeetingService implements OnModuleInit {
       // The TypeORM save() opens its own transaction; the worker must not
       // query for the meeting before that transaction commits.
       setImmediate(() => {
-        this.provisioningQueue
-          .add({
-            serializedCtx: ctx.serialize(),
-            meetingId: saved.id,
-          })
-          .catch((err) =>
+        // Enqueue via the single provisioning consumer (BbbProvisioningWorkerService).
+        this.provisioningWorker
+          .enqueueProvisioning(ctx, saved.id)
+          .catch((err: unknown) =>
             Logger.error(
               `Failed to enqueue room meeting ${saved.id}: ${(err as Error).message}`,
               loggerCtx,

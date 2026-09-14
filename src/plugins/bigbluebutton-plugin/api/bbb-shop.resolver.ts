@@ -12,6 +12,7 @@ import {
   Logger,
   Permission,
   RequestContext,
+  Transaction,
   TransactionalConnection,
 } from "@vendure/core";
 import { BbbMeetingService } from "../services/bbb-meeting.service";
@@ -535,6 +536,7 @@ export class BbbShopResolver {
   }
 
   @Mutation()
+  @Transaction()
   @Allow(Permission.Authenticated)
   async startScheduledSession(
     @Ctx() ctx: RequestContext,

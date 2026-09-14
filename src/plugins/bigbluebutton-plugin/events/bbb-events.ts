@@ -35,6 +35,12 @@ export class SessionStartedEvent extends VendureEvent {
   }
 }
 
+export class SessionEndedEvent extends VendureEvent {
+  constructor(public readonly sessionId: string, public readonly channelId: string | null) {
+    super();
+  }
+}
+
 export class MeetingProvisionedEvent extends VendureEvent {
   constructor(
     public readonly ctx: RequestContext,
@@ -50,6 +56,7 @@ export class MeetingProvisionedEvent extends VendureEvent {
 
 export class MeetingCompletedEvent extends VendureEvent {
   constructor(
+    public readonly ctx: RequestContext,
     public readonly meetingId: string,
     public readonly roomId: string | null,
     public readonly organizationId: string,

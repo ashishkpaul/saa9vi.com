@@ -156,38 +156,43 @@ export class BbbOrganizationService {
     ctx: RequestContext,
     org: BbbOrganization,
   ): Promise<void> {
-    const repo = this.connection.getRepository(ctx, BbbOrganization);
+    // A pessimistic_write lock REQUIRES an open transaction. Wrap the whole
+    // assertion in a transaction so the lock is valid and the limit check
+    // is atomic with respect to concurrent meeting creation.
+    await this.connection.withTransaction(ctx, async (txCtx) => {
+      const repo = this.connection.getRepository(txCtx, BbbOrganization);
 
-    const locked = await repo
-      .createQueryBuilder("org")
-      .setLock("pessimistic_write")
-      .where("org.id = :id", { id: org.id })
-      .getOne();
+      const locked = await repo
+        .createQueryBuilder("org")
+        .setLock("pessimistic_write")
+        .where("org.id = :id", { id: org.id })
+        .getOne();
 
-    if (!locked) throw new Error("Organization not found");
-    if (locked.suspended) {
-      throw new Error(
-        `Organization "${locked.name}" is suspended. Please check your subscription.`,
-      );
-    }
+      if (!locked) throw new Error("Organization not found");
+      if (locked.suspended) {
+        throw new Error(
+          `Organization "${locked.name}" is suspended. Please check your subscription.`,
+        );
+      }
 
-    const rawCount = await this.connection
-      .getRepository(ctx, BbbMeeting)
-      .createQueryBuilder("meeting")
-      .select("COUNT(meeting.id)", "count")
-      .where("meeting.organizationId = :orgId", { orgId: org.id as string })
-      .andWhere("meeting.state IN (:...states)", {
-        states: [MEETING_STATE.PROVISIONING, MEETING_STATE.ACTIVE],
-      })
-      .getRawOne<{ count: string }>();
+      const rawCount = await this.connection
+        .getRepository(txCtx, BbbMeeting)
+        .createQueryBuilder("meeting")
+        .select("COUNT(meeting.id)", "count")
+        .where("meeting.organizationId = :orgId", { orgId: org.id as string })
+        .andWhere("meeting.state IN (:...states)", {
+          states: [MEETING_STATE.PROVISIONING, MEETING_STATE.ACTIVE],
+        })
+        .getRawOne<{ count: string }>();
 
-    const count = rawCount?.count ?? "0";
-    if (parseInt(count, 10) >= locked.concurrentMeetingLimit) {
-      throw new Error(
-        `Concurrent meeting limit reached (${locked.concurrentMeetingLimit}). ` +
-          "Upgrade your plan for more simultaneous meetings.",
-      );
-    }
+      const count = rawCount?.count ?? "0";
+      if (parseInt(count, 10) >= locked.concurrentMeetingLimit) {
+        throw new Error(
+          `Concurrent meeting limit reached (${locked.concurrentMeetingLimit}). ` +
+            "Upgrade your plan for more simultaneous meetings.",
+        );
+      }
+    });
   }
 
   async create(
