@@ -17,7 +17,6 @@ import { BbbChannelAccessService } from "./bbb-channel-access.service";
 import {
   SessionCancelledEvent,
   SessionCreatedEvent,
-  SessionStartedEvent,
   SessionUpdatedEvent,
 } from "../events/bbb-events";
 
@@ -306,18 +305,23 @@ export class BbbScheduledSessionService {
       title: session.title,
     });
 
-    // Link session to meeting and mark LIVE
+    // Link session to the pending meeting.
+    // NOTE: session.status intentionally remains SCHEDULED here. It will
+    // transition to LIVE only after the meeting is successfully provisioned:
+    // the BullMQ worker calls BBB createMeeting, and on success emits
+    // MeetingProvisionedEvent, which BbbSessionProvisioningListener uses to
+    // transition the session to LIVE.
+    // Setting LIVE here would create a race where learners see canJoin=true
+    // before the BBB room actually exists on the server.
     session.activeMeeting = meeting;
-    session.status = "LIVE";
     const saved = await this.connection
       .getRepository(ctx, BbbScheduledSession)
       .save(session);
 
     Logger.info(
-      `Session ${sessionId} started → meeting ${meeting.id} provisioned`,
+      `Session ${sessionId} provisioning requested → meeting ${meeting.id} pending`,
       loggerCtx,
     );
-    this.eventBus.publish(new SessionStartedEvent(String(saved.id), saved.channelId ?? null));
 
     return saved;
   }

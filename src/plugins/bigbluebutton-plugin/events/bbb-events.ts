@@ -37,6 +37,7 @@ export class SessionStartedEvent extends VendureEvent {
 
 export class MeetingProvisionedEvent extends VendureEvent {
   constructor(
+    public readonly ctx: RequestContext,
     public readonly meetingId: string,
     public readonly bbbMeetingId: string,
     public readonly roomId: string | null,

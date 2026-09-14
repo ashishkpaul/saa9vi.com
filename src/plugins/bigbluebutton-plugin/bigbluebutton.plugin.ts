@@ -58,6 +58,7 @@ import { BbbJoinUrlService } from "./services/bbb-join-url.service";
 import { BbbProvisioningWorkerService } from "./services/bbb-provisioning-worker.service";
 import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.listener";
 import { BbbSubscriptionListener } from "./listeners/bbb-subscription.listener";
+import { BbbSessionProvisioningListener } from "./listeners/bbb-session-provisioning.listener";
 
 import { PlatformTracingModule } from "../../platform/tracing/platform-tracing.module";
 import { CorrelationInterceptor } from "../../platform/tracing/correlation-interceptor";
@@ -144,6 +145,7 @@ import {
     AttendanceAnalyticsService,
     BbbOrderFulfillmentListener,
     BbbSubscriptionListener,
+    BbbSessionProvisioningListener,
   ],
 
   adminApiExtensions: {

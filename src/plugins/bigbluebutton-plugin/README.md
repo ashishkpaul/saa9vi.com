@@ -102,16 +102,19 @@ Consultants are added as Staff members (TRAINER/ORG_ADMIN). They create meetings
 BbbScheduledSession
   ├── startTime / endTime
   ├── trainer (BbbOrganizationMember)
-  └── activeMeeting (BbbMeeting, nullable — only set when LIVE)
+  └── activeMeeting (BbbMeeting, nullable — linked when provisioning is requested)
 ```
 
 **Flow:**
 1. Admin creates `BbbScheduledSession` (title, startTime, endTime, trainerId)
 2. Storefront shows `myScheduledSessions` to enrolled students
 3. Trainer calls `startScheduledSession(sessionId)` at start time
-4. Session transitions SCHEDULED → LIVE, meeting is provisioned
-5. Students poll `myScheduledSessions` for `joinUrl`
-6. Session auto-transitions to FINISHED when endTime passes
+4. `startScheduledSession` creates a **Pending** meeting, links it to the session, and enqueues provisioning (session **stays SCHEDULED**)
+5. The BullMQ worker calls BBB `createMeeting`; on success the meeting becomes **Active**
+6. `BbbSessionProvisioningListener` (on `MeetingProvisionedEvent`) transitions the session SCHEDULED → **LIVE**
+7. Students poll `myScheduledSessions` for `joinUrl` — join authorization requires the session to be **LIVE** *and* its meeting to be **Active**
+8. On provisioning failure the meeting becomes **Failed** and the session remains SCHEDULED
+9. Session auto-transitions to FINISHED when endTime passes
 
 ---
 

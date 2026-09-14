@@ -61,6 +61,21 @@ A student clicks "Join free trial". `TrialRegistrationService.register()` valida
 
 If granted, `requestProvisioning()` acquires a distributed lock, transitions the room from Idle to Provisioning, and enqueues a BullMQ job. The worker selects the BBB server with the lowest `currentLoad`, resolves the earliest-expiring capacity grant, calls the BBB `createMeeting` API, encrypts passwords with AES-256-GCM, and writes the `grantId` to the meeting. The student gets a HMAC-signed join URL.
 
+### Scheduled Session (Live Class) Start
+
+Trainer calls `startScheduledSession(sessionId)` at the session start time. This is an **asynchronous provisioning request**, not an immediate live transition:
+
+```
+Trainer starts scheduled session
+  → meeting provisioning requested (session remains SCHEDULED)
+  → BullMQ worker provisions BBB meeting (createMeeting)
+  → meeting becomes Active
+  → session becomes LIVE (only on provisioning success)
+  → learner authorization becomes joinable (canJoin = true, joinUrl available)
+```
+
+`startScheduledSession` creates a Pending meeting, links it, and enqueues provisioning without changing the session status. `BbbSessionProvisioningListener` transitions the session to LIVE on `MeetingProvisionedEvent` — the only place a session becomes LIVE. If BBB provisioning fails, the meeting becomes `Failed` and the session remains `SCHEDULED` (retryable via `retryBbbMeeting`). Join authorization requires both session status `LIVE` **and** the linked meeting state `Active`.
+
 ### Review
 
 Five days after purchase, the review-request workflow prepares the notification intent. The student submits a review. `ReviewAntiFraudService` runs five checks (velocity, duplicate content, account age, rating pattern, unverified purchase). Score ≥ 50 auto-flags the review. When approved, `reviewAggregationService.recalculateForProduct()` updates `Product.customFields.reviewRating`.
@@ -252,4 +267,7 @@ sequenceDiagram
 
 ## Known Gaps
 
-No current known gaps. (Historical BUG-022/023 were fixed in v1.10–v1.11; see `docs/implementation/release-notes.md`.)
+- **Session provisioning state semantics** — `LIVE` now means "BBB provisioning succeeded" (not "trainer clicked start"). The session may remain `SCHEDULED` while its linked meeting is `Pending`/`Provisioning`. A true persisted session FSM (e.g. a `PROVISIONING` state with explicit transitions) is deferred — no migration yet. If a persisted intermediate state is introduced, use the Vendure CLI migration workflow.
+- Two queue processors are registered for `BBB_PROVISIONING_QUEUE` (`BbbProvisioningWorkerService.onModuleInit` and `BbbMeetingService.init`). Both call their own `doProvisionMeeting` implementation. This is a duplicate-logic risk worth consolidating into a single provisioning path.
+
+(Historical BUG-022/023 were fixed in v1.10–v1.11; see `docs/implementation/release-notes.md`.)

@@ -32,6 +32,7 @@ import { BbbRoom } from "../entities/bbb-room.entity";
 import { SessionAttendance } from "../entities/session-attendance.entity";
 import { Customer } from "@vendure/core";
 import { AttendanceAnalyticsService } from "../services/attendance-analytics.service";
+import { MEETING_STATE } from "../constants";
 
 @Resolver()
 export class BbbShopResolver {
@@ -371,10 +372,13 @@ export class BbbShopResolver {
           }
         }
 
-        // If LIVE, generate a join URL using the active meeting
+        // If LIVE, generate a join URL using the active meeting.
+        // Defense-in-depth: also require the meeting to be ACTIVE (fully
+        // provisioned on BBB), not merely Pending or Provisioning.
         if (
           session.status === "LIVE" &&
           session.activeMeeting &&
+          session.activeMeeting.state === MEETING_STATE.ACTIVE &&
           currentCustomer
         ) {
           try {
@@ -555,7 +559,11 @@ export class BbbShopResolver {
     // and let the frontend poll myScheduledSessions for the join URL once
     // the meeting transitions to ACTIVE.
     let joinUrl: string | null = null;
-    if (session.status === "LIVE" && session.activeMeeting) {
+    if (
+      session.status === "LIVE" &&
+      session.activeMeeting &&
+      session.activeMeeting.state === MEETING_STATE.ACTIVE
+    ) {
       const customer = await this.connection
         .getRepository(ctx, Customer)
         .findOne({ where: { user: { id: ctx.activeUserId as string } } });

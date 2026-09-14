@@ -184,6 +184,7 @@ export class BbbProvisioningWorkerService implements OnModuleInit {
 
       this.eventBus.publish(
         new MeetingProvisionedEvent(
+          ctx,
           meetingId as string,
           bbbMeetingId,
           meeting.roomId ?? null,
