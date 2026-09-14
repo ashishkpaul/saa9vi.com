@@ -11,6 +11,7 @@ import {
 } from "@vendure/core";
 import * as crypto from "crypto";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
+import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbApiService } from "./bbb-api.service";
 import { BbbEncryptionService } from "./bbb-encryption.service";
@@ -69,6 +70,48 @@ export class BbbProvisioningWorkerService implements OnModuleInit {
     Logger.info(`Enqueued provisioning job for meeting ${meetingId}`, loggerCtx);
   }
 
+  /**
+   * Atomically reserves capacity for promotion to PROVISIONING.
+   *
+   * Runs in one transaction: pessimistic-locks the organization row, counts
+   * existing PROVISIONING + ACTIVE meetings, and — only if under the org's
+   * concurrentMeetingLimit — flips the meeting to PROVISIONING. Returns false
+   * (and leaves the meeting PENDING) when the cap is reached, so concurrent
+   * promotions can never push the live count past the configured limit.
+   */
+  private async reserveProvisioningCapacity(
+    ctx: RequestContext,
+    meeting: BbbMeeting,
+  ): Promise<boolean> {
+    const orgId = String(meeting.organization.id);
+    const meetingId = String(meeting.id);
+    return this.connection.withTransaction(ctx, async (tx) => {
+      const org = await this.connection
+        .getRepository(tx, BbbOrganization)
+        .createQueryBuilder("org")
+        .setLock("pessimistic_write")
+        .where("org.id = :id", { id: orgId })
+        .getOne();
+      if (!org) return false;
+
+      const raw = await this.connection
+        .getRepository(tx, BbbMeeting)
+        .createQueryBuilder("meeting")
+        .select("COUNT(meeting.id)", "count")
+        .where("meeting.organizationId = :orgId", { orgId })
+        .andWhere("meeting.state IN (:...states)", {
+          states: [MEETING_STATE.PROVISIONING, MEETING_STATE.ACTIVE],
+        })
+        .getRawOne<{ count: string }>();
+      const live = parseInt(raw?.count ?? "0", 10);
+      if (live >= org.concurrentMeetingLimit) return false;
+
+      await this.connection
+        .getRepository(tx, BbbMeeting)
+        .update(meetingId, { state: MEETING_STATE.PROVISIONING });
+      return true;
+    });
+  }
   async doProvisionMeeting(
     ctx: RequestContext,
     meetingId: ID,
@@ -98,11 +141,20 @@ export class BbbProvisioningWorkerService implements OnModuleInit {
       return;
     }
 
-    await this.connection
-      .getRepository(ctx, BbbMeeting)
-      .update(meetingId as string, {
-        state: MEETING_STATE.PROVISIONING,
-      });
+    // Atomic, capacity-gated promotion PENDING → PROVISIONING.
+    // Guards the invariant that (PROVISIONING + ACTIVE) never exceeds the
+    // org's concurrentMeetingLimit. Because promotion is what enters
+    // PROVISIONING, the pessimistic lock + count + state change must share a
+    // single transaction. Otherwise many PENDING meetings pushed by concurrent
+    // creation could each promote past the cap as they are processed.
+    const promoted = await this.reserveProvisioningCapacity(ctx, meeting);
+    if (!promoted) {
+      Logger.warn(
+        `Meeting ${meetingId} remains PENDING — concurrent meeting limit reached for org ${String(meeting.organization.id)}`,
+        loggerCtx,
+      );
+      return;
+    }
 
     try {
       const server = await this.serverSelectionService.selectServer(ctx);
