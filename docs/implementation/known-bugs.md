@@ -12,6 +12,16 @@
 
 ---
 
+## Active Integration Gaps
+
+**Confirmed external-dependency mismatches that are not application bugs.** These block a production gate but the Saa9vi-side state machine is verified correct; the external dependency's configuration/behavior compatibility remains unresolved.
+
+| ID | Severity | Component | Description | Status |
+|---|---|---|---|---|
+| BBB-INT-001 | Medium | BBB provisioning/join integration | Provisioning-created meetings return `getMeetingInfo error.forbidden` during literal BBB verification against `meeting.saa9vi.com`. Application state machine (SCHEDULED→LIVE→FINISHED, capacity reservation, retry relink) is proven correct; external BBB credential / server configuration / meeting-lifecycle compatibility remains unresolved. Existence validator fails open on this ambiguous error (only explicit `notFound` blocks). | 🔴 Open |
+
+---
+
 ## Fixed Bugs
 
 | ID | Severity | Description | Fix |

@@ -79,6 +79,28 @@ The inbox worker is implemented with:
 
 ---
 
+## Gate: BBB meeting-ended → immutable usage ledger ⏳ NEXT
+
+**The immediate engineering milestone** — the core education-commerce loop is not finished until a real BBB session completes end-to-end:
+
+```text
+SCHEDULED → LIVE → learner joins → BBB ends → FINISHED
+    → immutable BbbUsageLedger fact → grant consumedMinutes
+```
+
+Acceptance criteria (idempotency mirrors the Razorpay webhook gates):
+
+1. BBB `MEETING_ENDED` received → `BbbWebhookEvent` persisted **first** (INV-004)
+2. BullMQ → `BbbWebhookProcessor` → meeting reaches terminal state
+3. `BbbScheduledSession` → FINISHED (via `MeetingCompletedEvent`)
+4. Exactly one immutable `BbbUsageLedger` row (INV-002); billing uses the meeting's **persisted `grantId`** (immutable linkage), never a recomputed "current" grant
+5. `consumedMinutes` increases exactly once
+6. Duplicate webhook / worker retry / concurrent processing are all harmless
+7. Channel isolation holds throughout
+8. Reconciliation path is idempotent
+
+Then proceed to **V1 — Production Hardening**.
+
 ## V1 — Production Hardening
 
 **Baseline: `71dc27e` (ADR-038 acceptance, 2026-09-12).** From here the goal is proving the accepted design remains safe under production failure, retries, credentials, and operational conditions — no further architectural redesign.

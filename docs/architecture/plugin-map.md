@@ -85,7 +85,8 @@ None.
 
 | Event | Subscribers |
 |---|---|
-| `MeetingProvisionedEvent` | BbbMetricsService |
+| `MeetingProvisionedEvent` | BbbSessionProvisioningListener (session → LIVE), BbbMetricsService |
+| `MeetingCompletedEvent` | BbbSessionProvisioningListener (session → FINISHED) |
 | `GrantConsumedEvent` | Email plugin |
 | `RoomActivatedEvent` | BbbMetricsService |
 | `CapacityExhaustedEvent` | Email plugin |
@@ -107,7 +108,9 @@ None (injects TenantPlugin services for org verification).
 
 | Service | Purpose |
 |---|---|
-| `BbbMeetingService` | Meeting lifecycle, join URL generation, provisioning |
+| `BbbMeetingService` | Meeting lifecycle, join URL generation; **enqueue-only** (delegates provisioning to `BbbProvisioningWorkerService`) |
+| `BbbProvisioningWorkerService` | Sole BBB provisioning consumer; provisions BBB meetings; performs **atomic org-capacity reservation** (`PROVISIONING + ACTIVE ≤ concurrentMeetingLimit`, pessimistic org lock + count + promote in one transaction); publishes `MeetingProvisionedEvent` / `MeetingFailedEvent` |
+| `BbbSessionProvisioningListener` | Sole transition of `BbbScheduledSession` SCHEDULED → **LIVE** (on `MeetingProvisionedEvent`) and LIVE → **FINISHED** (on `MeetingCompletedEvent`); startup reconciliation for orphaned LIVE sessions |
 | `BbbRoomService` | Room lifecycle, provisioning requests |
 | `BbbEntitlementService` | Entitlement create/hasAccess/delete |
 | `BbbMembershipService` | Organization membership CRUD and lookup |

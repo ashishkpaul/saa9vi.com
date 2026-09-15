@@ -23,6 +23,8 @@ Seller (Vendure core — Phase 3)
 - `BbbEntitlement` — scalar `channelId` (DL-011)
 - `BbbOrganizationMembership` — scalar `channelId` (DL-017)
 
+- **Inherited tenant scope (ADR-documented aggregates):** BBB entities (`BbbScheduledSession`, `BbbMeeting`, `BbbRoom`, etc.) are intentionally **not** channel-scoped directly; their tenant scope is **inherited through the authoritative channel-scoped aggregate** `BbbOrganization → channelId`. This is an accepted scoping pattern, not a violation: tenant scope may be inherited through an ADR-documented channel-scoped aggregate (e.g. ADR-012 for scheduled sessions). All reads/writes must still enforce the effective channel via `BbbChannelAccessService`.
+
 - **Channel assignment mechanism (ADR-036):** `CmsPlugin` entities (`Article`, `Page`, `Banner`) implement `ChannelAware` but do **not** use the generic `assignToCurrentChannel()` helper. Instead, `CmsChannelAssignmentPolicy.assign()` resolves channel assignment by the creator's role: SuperAdmin → default channel only; Tenant Admin → tenant channel only (never default). This two-class ownership model prevents tenant-created CMS content from leaking onto `__default_channel__` (BUG-031).
 
 **Rejection criterion:** Any PR introducing a `tenantId` column that is not `ctx.channelId` is rejected without review.
@@ -203,16 +205,16 @@ This pattern does **not** apply to Stream 1 (`BbbUsageLedger`) or Stream 3 (`AdS
 
 ## INV-019: Subscription Payment Attempts Are Independently Recorded Financial Facts.
 
-**Status:** Live (registered 2026-08-30 with the Juspay recurring billing foundation; semantics decided in the Step 2 review as the "stateful attempt record" model).
+**Status:** Live (registered 2026-08-30 with the recurring billing foundation; semantics decided in the Step 2 review as the "stateful attempt record" model). **Provider-neutral per ADR-038:** Razorpay is the active provider; Juspay remains a retained provider implementation.
 
-**Rule:** Every Juspay charge attempt against an `OrganizationSubscription` is recorded as a `JuspayPaymentAttempt` row **before** the gateway call. The only permitted mutation of an attempt row is the single lifecycle transition `initiated → succeeded | failed`, performed exclusively by the tightly-scoped attempt-recording service (renewal worker or webhook processor). A retry is always a **new** row; terminal results are never overwritten, history is never rewritten, and no API surface may expose mutation of an existing attempt.
+**Rule:** Every recurring billing attempt against an `OrganizationSubscription` is recorded as a `SubscriptionBillingAttempt` row **before** provider execution. The only permitted mutation of an attempt row is the single lifecycle transition `initiated → succeeded | failed`, performed exclusively by the tightly-scoped attempt-recording service (renewal worker or webhook processor). A retry is always a **new** row; terminal results are never overwritten, history is never rewritten, and no API surface may expose mutation of an existing attempt.
 
 Related constraints:
 - `OrganizationSubscription` period advancement must never be treated as equivalent to successful payment — the renewal flow is CLAIM CAS → attempt → charge → FINALIZE CAS (see `SubscriptionRenewalService` state model; a finalize conflict after a successful charge is an operator-visible reconciliation incident, never an automatic retry).
-- `JuspayPaymentAttempt` carries a denormalized scalar `channelId` (ADR-003 scalar-only exception); all ledger queries must scope by it — a bare `repository.find()` is a BUG-031-class channel-isolation bug.
-- Webhook-derived attempt results must reconcile the existing `initiated` attempt for that billing period, never create a parallel one.
+- `SubscriptionBillingAttempt` carries a denormalized scalar `channelId` (ADR-003 scalar-only exception); all ledger queries must scope by it — a bare `repository.find()` is a BUG-031-class channel-isolation bug.
+- Provider webhook events must reconcile the existing `initiated` attempt for that billing period, never create a parallel one. Provider-specific attempt facts (e.g. the legacy `JuspayPaymentAttempt`) remain recorded as retained-provider financial records but may not replace the provider-neutral Saa9vi attempt ledger.
 
-**Rejection criterion:** Any code path that updates a `JuspayPaymentAttempt` row already in a terminal state (`succeeded`/`failed`), collapses retries into an existing row, advances the subscription period without a successful payment finalize, or queries the ledger without channel scoping is rejected.
+**Rejection criterion:** Any code path that updates a `SubscriptionBillingAttempt` row already in a terminal state (`succeeded`/`failed`), collapses retries into an existing row, advances the subscription period without a successful payment finalize, or queries the ledger without channel scoping is rejected.
 
 ---
 

@@ -6,6 +6,16 @@
 
 ### New
 
+- **BBB session-provisioning state machine — gate complete (`964f01c`, `8c85263`):**
+  - Session `LIVE` is now a **provisioning-success state**, not a provisioning-request state: `startScheduledSession` links a Pending meeting and stays SCHEDULED; `BbbSessionProvisioningListener` transitions SCHEDULED → LIVE on `MeetingProvisionedEvent` (the sole LIVE transition) and LIVE → FINISHED on `MeetingCompletedEvent`, with a startup reconciliation pass for orphaned LIVE sessions.
+  - Single provisioning consumer: `BbbMeetingService` is enqueue-only; `BbbProvisioningWorkerService` is the sole queue consumer and implementation (duplicate ~170-line path removed).
+  - Atomic org-capacity reservation (`reserveProvisioningCapacity`): pessimistic org lock + `PROVISIONING+ACTIVE` count + promote in one transaction — concurrent promotions can never exceed `concurrentMeetingLimit`.
+  - `BbbScheduledSession` transaction boundary: shop `startScheduledSession` is `@Transaction()`-decorated so `assertCanCreateMeeting`'s pessimistic lock + count shares the transaction with the meeting insert (TOCTOU closed).
+  - Entitlement channel stamping: `createBbbEntitlement` persists `channelId=ctx.channelId` (admin-created entitlements were invisible to channel-scoped `hasAccess()`).
+  - Retry relink: `retryBbbMeeting` repoints `session.activeMeeting` to the new meeting.
+  - E2E: `bbb-meeting-concurrency.e2e-spec.ts` (real Postgres, 3 concurrent promotions vs limit=2 — exactly 2 PROVISIONING, ≥1 PENDING).
+  - Open external gap: `getMeetingInfo error.forbidden` from `meeting.saa9vi.com` — tracked as BBB-INT-001 in `known-bugs.md`.
+
 - **Razorpay subscription provider (ADR-038) — accepted 2026-09-12:**
   - Provider-neutral webhook inbox: `ProviderWebhookEvent` (immutable, UNIQUE(provider, providerEventId))
   - Razorpay adapter: `RazorpayWebhookProcessor`, `RazorpaySubscriptionProvider`, `RazorpayWebhookController`
