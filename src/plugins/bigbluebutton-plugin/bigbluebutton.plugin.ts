@@ -59,6 +59,7 @@ import { BbbProvisioningWorkerService } from "./services/bbb-provisioning-worker
 import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.listener";
 import { BbbSubscriptionListener } from "./listeners/bbb-subscription.listener";
 import { BbbSessionProvisioningListener } from "./listeners/bbb-session-provisioning.listener";
+import { BbbTenantProvisioningListener } from "./listeners/bbb-tenant-provisioning.listener";
 
 import { PlatformTracingModule } from "../../platform/tracing/platform-tracing.module";
 import { CorrelationInterceptor } from "../../platform/tracing/correlation-interceptor";
@@ -146,6 +147,7 @@ import {
     BbbOrderFulfillmentListener,
     BbbSubscriptionListener,
     BbbSessionProvisioningListener,
+    BbbTenantProvisioningListener,
   ],
 
   adminApiExtensions: {

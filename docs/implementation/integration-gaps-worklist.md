@@ -74,6 +74,30 @@ A tenant created through the supported GraphQL registration flow has a documente
 
 ## B-2 — Implement tenant hostname provisioning
 
+**Status:** IMPLEMENTED 2026-09-15 (build-verified, runtime-unverified) — G2 acceptance test below not yet executed.
+Audit fixes applied same day (B-2.1–B-2.4): (1) tenantSlug allocation is **platform-global** —
+collision checks use `connection.rawConnection` (documented as the one sanctioned channel-bypassing
+read) and save is **concurrency-safe** (unique-violation → next `-N` suffix → retry; explicit slugs
+never auto-renamed); (2) failed Redis seed is recoverable via `ensureTenantHostnameMapping()`
+invoked on every profile save; (3) `tenantSlug` mutation now **throws** (`IllegalOperationError`)
+instead of being silently discarded; (4) G1 doc amended — TTL re-affirmation explicitly deferred
+from B-2 as a separate operational decision.
+
+Implemented per the G1 decision (`docs/implementation/g1-hostname-contract-decision.md`):
+`TenantProfile.tenantSlug` (unique, immutable, derived from businessName) + migration
+`1789484583008-add-tenant-slug.ts` (Vendure CLI-generated); hostname mapping seeded at registration
+via the existing `DomainChannelResolverService.setMapping()` (`channel-token:{tenantSlug}.{TENANT_PLATFORM_DOMAIN}` → Channel.token, one writer, no new resolver); `TenantRegisteredEvent` consumed by
+`BbbTenantProvisioningListener` to auto-provision `BbbOrganization.slug === tenantSlug` in a
+channel-scoped ctx. Redis TTL (7-day expiry vs persistent Channel) deliberately unchanged —
+separate operational decision required (see G1 doc §Impacts).
+**Consistency model:** the registration mutation commits tenant identity (Seller/Channel/
+TenantProfile); the Redis hostname mapping is written inline but is not atomic with it, and
+`BbbOrganization` provisioning is **asynchronous and eventually consistent** via
+`TenantRegisteredEvent` — the GraphQL registration response may arrive before the BBB listener
+finishes. G2 acceptance must tolerate this ordering (poll/assert after a short delay), and
+`registerNewTenant` intentionally carries no `@Transaction()` decorator, so slug-retry saves
+autocommit (with SAVEPOINT fallback if a transactional caller is ever introduced).
+
 **Priority:** P1 — **Depends on:** B-1
 
 Implement the selected hostname contract using the existing domain/channel infrastructure where appropriate. Cline must verify whether `TenantProfile.customDomain`, `DomainChannelResolverService`, the Redis channel-token mapping, Caddy, and Next.js `resolve-channel` can safely support the selected contract.

@@ -54,7 +54,7 @@ Custom domain:       TenantProfile.customDomain (explicitly configured, existing
 
 * Registration (B-2) must call `DomainChannelResolverService.setMapping('{tenantSlug}.saa9vi.com', channel.token)` — the **existing** mechanism, same prefix, same TTL/refresh semantics. No new mapping store, no second resolution mechanism.
 * Subdomain mappings and customDomain mappings coexist in one map; deletion/teardown must remove both (`removeMapping`).
-* Note the 7-day TTL: refreshed on profile update; B-2 must ensure a re-affirmation strategy (registration write alone will expire for idle tenants while their Channel persists).
+* Note the 7-day TTL: refreshed on profile update. **Re-affirmation was explicitly deferred from B-2** (amended 2026-09-15 during implementation): registration seeds the mapping, and `TenantProfileService.ensureTenantHostnameMapping()` (invoked on every `TenantProfileService.update()` save — not on arbitrary repository-level saves elsewhere) provides update-path recovery — but the scheduled re-affirmation/reconciliation strategy for idle tenants is a **separate operational decision**, tracked in `integration-gaps-worklist.md`, not a B-2 deliverable.
 
 ## 7. Impact on Caddy/TLS
 
@@ -81,5 +81,5 @@ None — the existing `customDomain` create/update/delete Redis sync is preserve
 2. Derive + persist `tenantSlug` at registration (slugified `businessName`, uniqueness retry) and seed the subdomain Redis mapping via `DomainChannelResolverService`.
 3. Sync `BbbOrganization.slug` from `tenantSlug` (org auto-provision or reconciliation step).
 4. Registration acceptance test: Tenant A/B via GraphQL → `channel-token:{slug}.saa9vi.com` present in Redis → `resolve-channel?hostname=` returns the correct tokens. No manual Redis/DB writes.
-5. Mapping-TTL re-affirmation strategy decided during B-2.
+5. ~~Mapping-TTL re-affirmation strategy decided during B-2.~~ **Amended 2026-09-15:** TTL re-affirmation was explicitly deferred from B-2 and is tracked as a separate operational decision (see the TTL note above). B-2 delivers the registration seed plus update-path recovery only.
 6. Caddy wildcard/on-demand TLS and B-6 fail-closed behavior are explicitly **out of B-2 scope** (G10 / B-6).
