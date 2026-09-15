@@ -35,6 +35,8 @@ Seller (Vendure core — Phase 3)
 
 **Rule:** `BbbUsageLedger` rows are never updated. Never deleted. The source of billing truth is always `SUM(consumedMinutes) WHERE organizationId = X AND period`. Meeting state columns (`BbbMeeting.durationMinutes`) are operational convenience fields, never the authoritative billing source.
 
+**Concurrency rule:** Ledger creation must be concurrency-safe and database-idempotent. The idempotency decision must be made by the database write itself (`INSERT ... ON CONFLICT DO NOTHING` + `RETURNING`, winning insert ⇒ grant increment), never by check-then-insert. Check-then-insert is prohibited for billing facts: two concurrent workers can both pass a read guard and race. The grant increment and `GrantConsumedEvent.remainingMinutes` must derive from committed post-increment values (`UPDATE ... RETURNING`), never from a pre-transaction entity read. Billing failure after a meeting reaches `COMPLETED` is recovered by the scheduled `reconcilePendingBilling()` scan (COMPLETED + no ledger row + persisted grantId → replay billing).
+
 **Extended to:**
 - `AdSpendLedger` (INV-010)
 - `AdWalletLedger`

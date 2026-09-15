@@ -340,10 +340,12 @@ export class BbbMeetingService implements OnModuleInit {
     try {
       await this.reconciliationService.consumeGrantHours(ctx, meeting);
       this.metrics.recordBillingSuccess();
-      // consumedHours is 0 here — GrantConsumedEvent carries the accurate
-      // billing amount. The two events are emitted sequentially:
-      // MeetingCompletedEvent first, then GrantConsumedEvent after
-      // consumeGrantHours() resolves.
+      // Causal order (documented): the meeting terminal fact is established,
+      // billing is performed synchronously, and MeetingCompletedEvent is
+      // published only after billing succeeds — listeners can assume the
+      // ledger fact exists. If billing fails, reconciliation
+      // (reconcilePendingBilling) replays it; the event is not published for
+      // a failed-billing completion.
       this.eventBus.publish(
         new MeetingCompletedEvent(
           ctx,

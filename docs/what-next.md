@@ -95,7 +95,7 @@ Acceptance criteria (idempotency mirrors the Razorpay webhook gates):
 3. `BbbScheduledSession` → FINISHED (via `MeetingCompletedEvent`)
 4. Exactly one immutable `BbbUsageLedger` row (INV-002); billing uses the meeting's **persisted `grantId`** (immutable linkage), never a recomputed "current" grant
 5. `consumedMinutes` increases exactly once
-6. Duplicate webhook / worker retry / concurrent processing are all harmless
+6. Duplicate webhook / worker retry / concurrent processing are all harmless. **The ledger idempotency decision must be made by the database write (`INSERT ... ON CONFLICT DO NOTHING` + `RETURNING` — winning insert ⇒ grant increment), never by check-then-insert.** `GrantConsumedEvent.remainingMinutes` derives from committed post-increment values (`UPDATE ... RETURNING`). Billing failure after `COMPLETED` is recovered by `reconcilePendingBilling()` (COMPLETED + no ledger row + persisted grantId → replay).
 7. Channel isolation holds throughout
 8. Reconciliation path is idempotent
 

@@ -18,6 +18,7 @@ import { GrantReaderService } from "./grant-reader.service";
 import {
   GrantConsumedEvent,
   CapacityExhaustedEvent,
+  MeetingCompletedEvent,
 } from "../events/bbb-events";
 import { MEETING_STATE } from "../constants";
 import { BBB_PLUGIN_OPTIONS } from "../constants";
@@ -274,41 +275,55 @@ export class BbbReconciliationService {
 
     const sourceType = grantEntity.sourceType;
 
-    // Transactional: ledger + grant update must succeed or fail together
+    // Transactional: ledger + grant update must succeed or fail together.
+    // IDEMPOTENCY (INV-002): the database INSERT itself is the idempotency
+    // decision — INSERT ... ON CONFLICT (meetingId, grantId) DO NOTHING
+    // (via .orIgnore()) + RETURNING tells us whether this worker won the
+    // right to bill. Check-then-insert is prohibited: two concurrent workers
+    // could both pass a findOne() guard and race past it.
+    let billingWon = false;
+    let committed: {
+      consumedMinutes: number;
+      grantedMinutes: number;
+      exhausted: boolean;
+    } | null = null;
+
     await this.connection.rawConnection.transaction(
       async (em: EntityManager) => {
-        const existing = await em.getRepository(BbbUsageLedger).findOne({
-          where: {
-            meeting: { id: meeting.id as string } as any,
-            grant: { id: grantEntity.id as string } as any,
-          },
-        });
+        const insertResult = await em
+          .createQueryBuilder()
+          .insert()
+          .into(BbbUsageLedger)
+          .values({
+            meeting: { id: meeting.id as any },
+            grant: { id: grantEntity.id as any },
+            consumedMinutes: durationMinutes,
+            startedAt: provisionedAt,
+            completedAt: endedAt,
+          })
+          .orIgnore()
+          .returning("id")
+          .execute();
 
-        if (existing) {
+        if (!insertResult.raw?.length) {
+          // Lost the insert race: another worker already billed this
+          // (meeting, grant) pair. No economic side effect is allowed.
           Logger.warn(
-            `Meeting ${meeting.id}: billing ledger entry already exists. Skipping duplicate.`,
+            `Meeting ${meeting.id}: billing ledger row already exists (insert-on-conflict lost race). Skipping duplicate.`,
             loggerCtx,
           );
           return;
         }
-
-        await em.getRepository(BbbUsageLedger).save(
-          new BbbUsageLedger({
-            meeting,
-            grant: grantEntity,
-            consumedMinutes: durationMinutes,
-            startedAt: provisionedAt,
-            completedAt: endedAt,
-          }),
-        );
+        billingWon = true;
 
         // internal_overhead grants: write ledger row only, skip exhaustion logic
         if (sourceType === "internal_overhead") {
           return;
         }
 
-        // Atomic increment on minutes columns
-        await em
+        // Atomic increment on minutes columns; RETURNING gives the committed
+        // post-increment values so downstream events never see stale data.
+        const updateResult = await em
           .getRepository(BbbCapacityGrant)
           .createQueryBuilder()
           .update()
@@ -319,12 +334,32 @@ export class BbbReconciliationService {
           })
           .where("id = :id", { id: grantEntity.id as string })
           .setParameters({ increment: durationMinutes })
+          .returning(["consumedMinutes", "grantedMinutes", "exhausted"])
           .execute();
+
+        const row = (updateResult.raw?.[0] ?? {}) as Record<string, any>;
+        committed = {
+          consumedMinutes: Number(row.consumedMinutes ?? 0),
+          grantedMinutes: Number(row.grantedMinutes ?? 0),
+          exhausted: Boolean(row.exhausted),
+        };
       },
     );
 
+    if (!billingWon) {
+      return;
+    }
+
+    const committedState = committed as {
+      consumedMinutes: number;
+      grantedMinutes: number;
+      exhausted: boolean;
+    } | null;
+    const committedConsumed =
+      committedState?.consumedMinutes ?? grantEntity.consumedMinutes + durationMinutes;
+    const committedGranted = committedState?.grantedMinutes ?? grantEntity.grantedMinutes;
     Logger.info(
-      `Billed meeting ${meeting.id}: ${durationMinutes}min consumed${meeting.billingCapped ? " (CAPPED)" : ""} (${(grantEntity.consumedMinutes ?? 0) + durationMinutes}/${grantEntity.grantedMinutes}min)`,
+      `Billed meeting ${meeting.id}: ${durationMinutes}min consumed${meeting.billingCapped ? " (CAPPED)" : ""} (${committedConsumed}/${committedGranted}min)`,
       loggerCtx,
     );
 
@@ -333,8 +368,7 @@ export class BbbReconciliationService {
       return;
     }
 
-    const remainingMinutes =
-      (grantEntity.grantedMinutes ?? 0) - ((grantEntity.consumedMinutes ?? 0) + durationMinutes);
+    const remainingMinutes = committedGranted - committedConsumed;
     this.eventBus.publish(
       new GrantConsumedEvent(
         grantEntity.id as string,
@@ -346,7 +380,66 @@ export class BbbReconciliationService {
     );
   }
 
-  // ─── 4. Reconcile Room State Drift ──────────────────────────────────────────
+  // ─── 4. Reconcile Pending Billing (COMPLETED without ledger row) ────────────
+  // Recovery loop: if billing failed after a meeting reached COMPLETED (e.g.
+  // transient DB error, worker crash), the webhook may already be marked
+  // PROCESSED. This scan guarantees every COMPLETED meeting eventually gets
+  // exactly one billing fact. consumeGrantHours() is safe to replay because
+  // the ledger INSERT ... ON CONFLICT DO NOTHING is the idempotency decision.
+  //
+  // The recovered meeting must also re-emit MeetingCompletedEvent, because the
+  // original completion suppressed it (billing threw before publication) and
+  // session FINISHED is driven solely by that event. Re-publication is safe:
+  // the scan filter (ledger.id IS NULL) prevents repeats, and the listener
+  // no-ops unless the linked session is still LIVE.
+
+  async reconcilePendingBilling(): Promise<number> {
+    const ctx = await this.ctxService.create({ apiType: "admin" });
+    const repo = this.connection.getRepository(ctx, BbbMeeting);
+
+    const completedWithoutLedger = await repo
+      .createQueryBuilder("meeting")
+      .leftJoinAndSelect("meeting.organization", "organization")
+      .leftJoin(BbbUsageLedger, "ledger", "ledger.meetingId = meeting.id")
+      .where("meeting.state = :state", { state: MEETING_STATE.COMPLETED })
+      .andWhere("ledger.id IS NULL")
+      .andWhere("meeting.grantId IS NOT NULL")
+      .getMany();
+
+    let billed = 0;
+    for (const meeting of completedWithoutLedger) {
+      try {
+        await this.consumeGrantHours(ctx, meeting);
+        billed++;
+        Logger.info(
+          `[reconcilePendingBilling] Recovered billing for completed meeting ${meeting.id}`,
+          loggerCtx,
+        );
+
+        // Re-establish the lifecycle fact that the failed completion suppressed,
+        // so the linked session can leave LIVE. Idempotent by design.
+        this.eventBus.publish(
+          new MeetingCompletedEvent(
+            ctx,
+            meeting.id as string,
+            meeting.roomId ?? null,
+            meeting.organization?.id as string,
+            "reconciliation",
+            0,
+          ),
+        );
+      } catch (err: any) {
+        Logger.error(
+          `[reconcilePendingBilling] Billing recovery failed for meeting ${meeting.id}: ${err.message} ` +
+            `(MeetingCompletedEvent not re-published; session remains LIVE until recovery succeeds)`,
+          loggerCtx,
+        );
+      }
+    }
+    return billed;
+  }
+
+  // ─── 5. Reconcile Room State Drift ──────────────────────────────────────────
 
   async reconcileRooms(): Promise<number> {
     const ctx = await this.ctxService.create({ apiType: "admin" });
