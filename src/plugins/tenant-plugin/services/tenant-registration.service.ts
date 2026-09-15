@@ -70,17 +70,26 @@ export interface RegisterTenantResult {
  * a crash mid-orchestration is auditable and recoverable rather than silently
  * losing the request.
  *
- * CAUTION — not yet safe to expose publicly:
- *   - No rate limiting. SEC-004 (rate limiting on public mutations) is listed
- *     in platform-adr.md as an outstanding Phase-1 blocker specifically
- *     because of endpoints like this one. Without it, an unauthenticated
- *     caller can mint unlimited Channels, Sellers and Administrators.
- *   - No email verification. Vendure's own multivendor-plugin guide flags
- *     this same gap in its example ("leaves out ... email verification").
- *     The Administrator is usable immediately on the password supplied in
- *     the mutation; consider gating activation behind a verify step before
- *     shipping this to production, the same way registerCustomerAccount /
- *     verifyCustomerAccount works on the Shop API today.
+ * CAUTION — public-exposure readiness (corrected 2026-09-15 to match current code;
+ * the original "no rate limiting / no email verification" claims are stale):
+ *
+ *   RESOLVED — Rate limiting: `rate-limiter.middleware.ts` applies
+ *     `shopApiRateLimiter` to `registerNewTenant` (5/hour per IP) per
+ *     SEC-003 (see docs/architecture/security.md).
+ *
+ *   RESOLVED — Email verification (Phase 1.5): the Administrator user is
+ *     created UNVERIFIED with a verification token set, and
+ *     AccountRegistrationEvent is published so the EmailPlugin sends the
+ *     verification email; the admin cannot log in until the link is clicked
+ *     (mirrors registerCustomerAccount / verifyCustomerAccount on the Shop API).
+ *
+ *   REMAINING — see docs/implementation/integration-gaps-worklist.md before
+ *     treating self-serve onboarding as production-complete:
+ *     - Hostname provisioning / storefront reachability: registration creates
+ *       the Channel and TenantProfile but does not assign the platform hostname
+ *       ({academySlug}.saa9vi.com) or seed the domain→channel mapping (B-1/B-2).
+ *     - Production custom-domain routing via Caddy/TLS remains open (B-5/G10;
+ *       roadmap "Tenant storefront onboarding" + "Custom domain routing" items).
  */
 @Injectable()
 export class TenantRegistrationService {

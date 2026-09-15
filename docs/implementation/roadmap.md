@@ -109,6 +109,8 @@ Juspay → Razorpay routing was **rejected** by Razorpay (ticket #20876157). Dir
 
 **Status:** Complete (2026-09-04; reconciliation closed 2026-09-07). All attribution, commission, and reconciliation work shipped and e2e-verified.
 
+> **Scope note (2026-09-15):** Phase 3B refers to the **backend** attribution/commission subsystem, which is E2E-verified (see cases above). The subsequent marketplace → tenant storefront deep-link and browser `marketplaceRef` transport integration is tracked separately in `docs/implementation/integration-gaps-worklist.md` (A-1–A-5) and remains **runtime-unverified** until the live storefront/ES/Vendure verification gates pass.
+
 - [x] **Attribution ADR-021 + signed `marketplaceRef` mechanism** — shipped (`750da49`); resource referred to (session/academy/result), validity window, navigation persistence (marketplace → academy → different session), precedence vs existing direct/referral attribution, order vs order-line attachment, replay prevention, verification without exposing signing secrets to Next.js; contract settled in ADR-021 addendum.
 - [x] **`Order.customFields.orderSource`** — `'marketplace' | 'direct' | 'referral'`, stamped **server-side** by Vendure from a signed referrer signal (INV-008; storefront never classifies). Governed migration applied.
 - [x] **`CommissionLedger` $0-row pattern** (DL-030) — entity, service, listener, `MARKETPLACE_COMMISSION_PERCENT` env var, append-only; governed migration with UNIQUE constraints on `marketplaceRef` and `orderId`. Even at 0% commission, a row is written with `commissionAmountInPaise: 0` so GMV history survives rate changes.
