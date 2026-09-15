@@ -172,7 +172,9 @@ export class BbbChannelAccessService {
     }
 
     if (meeting.organization) {
-      if (meeting.organization.channelId !== channelId) {
+      // Coerce to string: ctx.channelId may arrive as number depending on
+      // strategy/context, and the denormalized column stores a string.
+      if (String(meeting.organization.channelId) !== String(channelId)) {
         throw new ForbiddenError();
       }
     } else {

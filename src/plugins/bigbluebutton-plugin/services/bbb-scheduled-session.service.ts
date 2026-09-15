@@ -129,8 +129,11 @@ export class BbbScheduledSessionService {
       throw new EntityNotFoundError("BbbOrganizationMember", input.trainerId);
     }
 
-    // Set channelId from the request context for tenant isolation
-    const channelId = ctx.channelId as string | undefined;
+    // Channel=Tenant (INV-001): the session's tenant scope is derived from the
+    // authoritative channel-scoped aggregate (the organization), NOT from the
+    // request context. This prevents a superadmin (or cross-channel operator)
+    // from creating a session whose tenant scope disagrees with its organization.
+    const channelId = (org.channelId as string | undefined) ?? (ctx.channelId as string | undefined);
 
     const session = new BbbScheduledSession({
       organization: org,

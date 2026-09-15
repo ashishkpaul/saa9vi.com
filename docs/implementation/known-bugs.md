@@ -18,7 +18,29 @@
 
 | ID | Severity | Component | Description | Status |
 |---|---|---|---|---|
-| BBB-INT-001 | Medium | BBB provisioning/join integration | Provisioning-created meetings return `getMeetingInfo error.forbidden` during literal BBB verification against `meeting.saa9vi.com`. Application state machine (SCHEDULED→LIVE→FINISHED, capacity reservation, retry relink) is proven correct; external BBB credential / server configuration / meeting-lifecycle compatibility remains unresolved. Existence validator fails open on this ambiguous error (only explicit `notFound` blocks). | 🔴 Open |
+The BBB provisioning/join integration investigation (BBB-INT-001) is **resolved** — the reported `getMeetingInfo error.forbidden` was a stale-meeting artifact, not a defect.
+
+## Closed: BBB-INT-001 (stale-meeting artifact)
+
+| ID | Severity | Component | Description | Status |
+| --- | --- | --- | --- | --- |
+| BBB-INT-001 | Medium | BBB provisioning/join integration | Reported `getMeetingInfo error.forbidden` on provisioning-created meetings. **Resolved:** manual BBB control meeting (create/getMeetingInfo/join) and fresh Saa9vi-provisioned meetings (`bbb-10`) both return `getMeetingInfo SUCCESS` at t+0/1s/3s/10s. Expired/stale meetings correctly return `notFound`. No checksum, API-secret, endpoint, or provisioning defect reproduced. The existence validator's fail-open handling of ambiguous errors remains a reasonable availability measure; Saa9vi authorization gates (entitlement + LIVE + Active meeting) are unaffected. | ✅ Closed (2026-09-15) |
+
+Diagnostic evidence: `scripts/diagnostics/bbb_diag.mjs` (read-only BBB protocol replica; diagnostic-only — it reads PostgreSQL directly and is **not** an application data-access pattern; application code must use Vendure services + `RequestContext`).
+
+## Related fix (same-day): session channel stamping
+
+`BbbScheduledSessionService.create()` stamped `channelId` from the request context instead of the organization. A superadmin creating a session for a channel-14 org under a channel-15 token produced a channel-mismatched session (FORBIDDEN at `startScheduledSession`). Fixed: the session's tenant scope is now derived from `organization.channelId` (INV-001 authoritative aggregate).
+
+## Fixed (same-day): join-URL generation `error.forbidden` (type coercion)
+
+| ID | Severity | Description | Fix |
+| --- | --- | --- | --- |
+| BBB-BUG-002 | High | `getJoinUrl` for an entitled learner in the meeting's own channel threw `ForbiddenError` (`error.forbidden`): `assertMeetingAccess` compared `meeting.organization.channelId !== ctx.channelId` with strict `!==` — numeric ctx channelId vs string denormalized column never matched. `assertSessionAccess`/`assertRoomAccess` already coerced with `String()`; `assertMeetingAccess` did not. | Normalized both sides with `String()` in `assertMeetingAccess`. Proven: learner dashboard now returns `canJoin=true, ctaAction=join, joinUrl != null` and the join URL redirects into BBB's HTML5 client (session token issued). |
+
+## Clarified (same-day): unjoined meetings → BBB auto-destroy → Stale
+
+BBB destroys meetings that are never joined after a server-side timeout. `BbbReconciliationService` correctly detects this (`getMeetingInfo` → `notFound`) and marks the meeting `Stale` (terminal, no usage ledger). The learner dashboard then correctly returns `ctaAction=none, joinUrl=null` for the affected session. This is **correct defense-in-depth behavior**, not a defect: fresh meetings return `getMeetingInfo SUCCESS` immediately after provisioning (t+0/1s/3s/10s proven).
 
 ---
 
