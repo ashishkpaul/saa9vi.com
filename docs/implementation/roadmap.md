@@ -77,7 +77,7 @@ Juspay → Razorpay routing was **rejected** by Razorpay (ticket #20876157). Dir
 - [x] **R2-A through R2-E** — Razorpay test plan, webhook config, subscription creation, authorization
 - [x] **R2-F — Durable processing** — BullMQ inbox worker, channel resolution, idempotency
 - [x] **R2-G — Failure semantics + concurrent idempotency** — `pending` → `retry` → `failed`, UNIQUE constraint
-- [ ] **R3 — ADR-038 freeze** — All evidence captured; awaiting formal acceptance decision
+- [x] **R3 — ADR-038 freeze** — ADR-038 formally ACCEPTED 2026-09-12 (see `docs/what-next.md` Gate R3 and `docs/architecture/adr-038-direct-razorpay-provider.md`)
 
 ### Remaining Phase 2 product/platform work
 

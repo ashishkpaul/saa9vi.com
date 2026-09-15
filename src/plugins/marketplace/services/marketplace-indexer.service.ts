@@ -15,6 +15,12 @@ import { SponsoredBoostConfigService } from './sponsored-boost-config.service';
 export interface MarketplaceSessionDocument {
   id: string;
   productVariantId: string | null;
+  /**
+   * Deep-link support (storefront audit B-1/B-3): the tenant-storefront product
+   * path this session is purchasable at (/product/{productSlug}). Null when the
+   * session has no productVariantId or the variant's product has no slug.
+   */
+  productSlug: string | null;
   channelToken: string;
   channelId: string;
   title: string;
@@ -108,6 +114,27 @@ export class MarketplaceIndexerService {
     await this.ensureInstructorsIndex();
     // 3D.2: widen pre-existing instructor indices with the refinement fields
     await this.ensureSearchRefinementMapping();
+    // Storefront deep-link support: widen pre-existing session indices with
+    // productSlug (additive PUT mapping, ES mappings only ever widen).
+    await this.ensureProductSlugMapping();
+  }
+
+  /**
+   * Ensure the sessions index has the productSlug mapping (deep-link support).
+   * Same additive strategy as ensureBaselineVersionMapping(): PUT mapping on
+   * existing indices; creation-time mapping covers new indices.
+   */
+  async ensureProductSlugMapping(): Promise<void> {
+    const exists = await this.client.indices.exists({ index: this.sessionsIndex });
+    if (exists) {
+      await this.client.indices.putMapping({
+        index: this.sessionsIndex,
+        properties: {
+          productSlug: { type: 'keyword' },
+        },
+      });
+      this.logger.log(`Updated ES mapping: added productSlug to ${this.sessionsIndex}`);
+    }
   }
 
   private async ensureSessionsIndex(): Promise<void> {
@@ -119,6 +146,7 @@ export class MarketplaceIndexerService {
           properties: {
             id: { type: 'keyword' },
             productVariantId: { type: 'keyword' },
+            productSlug: { type: 'keyword' },
             channelToken: { type: 'keyword' },
             channelId: { type: 'keyword' },
             title: { type: 'text', fields: { keyword: { type: 'keyword' } } },
@@ -256,15 +284,23 @@ export class MarketplaceIndexerService {
     }
 
     // ─── Gap 3: Price from ProductVariant.price ─────────────────────────────
+    // Deep-link support: the same variant fetch resolves the parent product's
+    // slug so session documents are directly deep-linkable from the marketplace
+    // storefront (/product/{productSlug}?ref=...).
     let priceInPaise = 0;
+    let productSlug: string | null = null;
     if (session.productVariantId) {
       try {
         const { ProductVariant } = require('@vendure/core');
         const variant = await this.connection.rawConnection
           .getRepository(ProductVariant)
-          .findOne({ where: { id: this.toPk(session.productVariantId) as any } });
+          .findOne({
+            where: { id: this.toPk(session.productVariantId) as any },
+            relations: ['product'],
+          });
         if (variant) {
           priceInPaise = (variant as any).price ?? 0;
+          productSlug = (variant as any).product?.slug ?? null;
         }
       } catch (err: any) {
         this.logger.warn(`Failed to fetch ProductVariant price for ${session.productVariantId}: ${err.message}`);
@@ -306,6 +342,7 @@ export class MarketplaceIndexerService {
     const doc: MarketplaceSessionDocument = {
       id: this.toPublicId(session.id),
       productVariantId: session.productVariantId,
+      productSlug,
       channelToken,
       channelId: session.channelId ?? '',
       title: session.title,

@@ -4,6 +4,17 @@ export const shopApiExtensions = gql`
   type MarketplaceSession {
     id: ID!
     productVariantId: ID
+    """
+    Tenant-storefront product path for deep linking (/product/{productSlug}).
+    Null when the session has no purchasable product variant.
+    """
+    productSlug: String
+    """
+    Opaque, HMAC-signed attribution reference minted per search result (INV-008:
+    the client only carries it; validity is re-verified server-side at apply
+    time and again at order placement). Null for non-purchasable sessions.
+    """
+    marketplaceRef: String
     channelId: String!
     channelToken: String!
     title: String!

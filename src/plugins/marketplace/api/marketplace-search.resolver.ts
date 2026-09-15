@@ -2,6 +2,7 @@ import { Args, Query, Resolver } from '@nestjs/graphql';
 import { Client } from '@elastic/elasticsearch';
 import { Ctx, RequestContext, Allow, Permission, Logger } from '@vendure/core';
 import { MarketplaceIndexerService } from '../services/marketplace-indexer.service';
+import { MarketplaceAttributionService } from '../services/marketplace-attribution.service';
 
 const loggerCtx = 'MarketplaceSearchResolver';
 
@@ -28,6 +29,7 @@ export class MarketplaceSearchResolver {
 
   constructor(
     private readonly indexerService: MarketplaceIndexerService,
+    private readonly attributionService: MarketplaceAttributionService,
   ) {
     const node = process.env.ELASTICSEARCH_NODE || process.env.ELASTICSEARCH_URL || 'http://localhost:9200';
     const password = process.env.ELASTICSEARCH_PASSWORD;
@@ -158,9 +160,36 @@ export class MarketplaceSearchResolver {
     });
 
     return {
-      hits: result.hits.hits.map((h: any) => h._source),
+      hits: result.hits.hits.map((h: any) => this.withMarketplaceRef(h._source)),
       total: typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value ?? 0,
     };
+  }
+
+  /**
+   * Attribution bridge (storefront audit B-2): mint an opaque, HMAC-signed
+   * marketplaceRef per session result so the storefront can carry it into the
+   * tenant storefront and apply it to the order via applyMarketplaceReference.
+   * STATELESS + fail-closed: the ref is an issued claim only — validity is
+   * re-verified server-side at apply time (HMAC + TTL + channel binding) and
+   * again at order placement (3B.3 listener). The client can never select
+   * orderSource (INV-008). Sessions without a productVariantId (not purchasable)
+   * carry no ref — the storefront then renders a plain academy link.
+   */
+  private withMarketplaceRef(source: any): any {
+    if (!source || !source.productVariantId || !source.channelId) return source;
+    try {
+      return {
+        ...source,
+        marketplaceRef: this.attributionService.issueRef({
+          resourceType: 'session',
+          resourceId: String(source.productVariantId),
+          channelId: String(source.channelId),
+        }),
+      };
+    } catch (err: any) {
+      Logger.warn(`Failed to issue marketplaceRef for session ${source?.id}: ${err.message}`, loggerCtx);
+      return source;
+    }
   }
 
   private async searchInstructors(
