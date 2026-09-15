@@ -1,6 +1,6 @@
 # What Next — Saa9vi Platform
 
-**Updated:** 2026-09-12
+**Updated:** 2026-09-15
 
 ---
 
@@ -23,7 +23,7 @@
 | **R2 — Razorpay Contract Verification** | ✅ Complete | All sub-gates proven (see below) |
 | **R3 — ADR-038 Freeze** | ✅ Complete | ADR-038 ACCEPTED 2026-09-12 (R2-F + R2-G evidence, INV-018 channel-scoped worker ctx) |
 | **I1-I3 — Implementation** | ✅ Complete | Razorpay live on `main` |
-| **V1 — Production hardening** | ⏳ Next | Baseline: `71dc27e` (ADR-038 acceptance). Checklist below — **first action: rotate exposed Razorpay secrets** |
+| **V1 — Production hardening** | ⏳ Next | Baseline: `954cd40` (Gate 3 closure). Checklist below — **first action: rotate exposed Razorpay secrets (V1.1)** |
 
 ---
 
@@ -79,31 +79,44 @@ The inbox worker is implemented with:
 
 ---
 
-## Gate: BBB meeting-ended → immutable usage ledger ⏳ NEXT
+## Gate: BBB meeting-ended → immutable usage ledger ✅ COMPLETE (2026-09-15, `954cd40`)
 
-**The immediate engineering milestone** — the core education-commerce loop is not finished until a real BBB session completes end-to-end:
+**Closed.** The core education-commerce loop is proven end-to-end against real PostgreSQL:
 
 ```text
 SCHEDULED → LIVE → learner joins → BBB ends → FINISHED
     → immutable BbbUsageLedger fact → grant consumedMinutes
 ```
 
-Acceptance criteria (idempotency mirrors the Razorpay webhook gates):
+Acceptance criteria (idempotency mirrors the Razorpay webhook gates) — **all 8 proven**:
 
-1. BBB `MEETING_ENDED` received → `BbbWebhookEvent` persisted **first** (INV-004)
-2. BullMQ → `BbbWebhookProcessor` → meeting reaches terminal state
-3. `BbbScheduledSession` → FINISHED (via `MeetingCompletedEvent`)
-4. Exactly one immutable `BbbUsageLedger` row (INV-002); billing uses the meeting's **persisted `grantId`** (immutable linkage), never a recomputed "current" grant
-5. `consumedMinutes` increases exactly once
-6. Duplicate webhook / worker retry / concurrent processing are all harmless. **The ledger idempotency decision must be made by the database write (`INSERT ... ON CONFLICT DO NOTHING` + `RETURNING` — winning insert ⇒ grant increment), never by check-then-insert.** `GrantConsumedEvent.remainingMinutes` derives from committed post-increment values (`UPDATE ... RETURNING`). Billing failure after `COMPLETED` is recovered by `reconcilePendingBilling()` (COMPLETED + no ledger row + persisted grantId → replay).
-7. Channel isolation holds throughout
-8. Reconciliation path is idempotent
+1. ✅ BBB `MEETING_ENDED` received → `BbbWebhookEvent` persisted **first** (INV-004)
+2. ✅ BullMQ → `BbbWebhookProcessor` → meeting reaches terminal state
+3. ✅ `BbbScheduledSession` → FINISHED (via `MeetingCompletedEvent`)
+4. ✅ Exactly one immutable `BbbUsageLedger` row (INV-002); billing uses the meeting's **persisted `grantId`** (immutable linkage), never a recomputed "current" grant
+5. ✅ `consumedMinutes` increases exactly once
+6. ✅ Duplicate webhook / worker retry / concurrent processing are all harmless. **The ledger idempotency decision is made by the database write (`INSERT ... ON CONFLICT DO NOTHING` + `RETURNING` — winning insert ⇒ grant increment), never by check-then-insert.** `GrantConsumedEvent.remainingMinutes` derives from committed post-increment values (`UPDATE ... RETURNING`). Billing failure after `COMPLETED` is recovered by `reconcilePendingBilling()` (COMPLETED + no ledger row + persisted grantId → replay).
+7. ✅ Channel isolation holds throughout
+8. ✅ Reconciliation path is idempotent
 
-Then proceed to **V1 — Production Hardening**.
+### Evidence
 
-## V1 — Production Hardening
+- **`8670eed`** — database-native billing idempotency and pending-billing recovery (`consumeGrantHours` ON CONFLICT winner-only billing; atomic grant increment with RETURNING; `reconcilePendingBilling()` + reconciliation task scan; INV-002 extended: check-then-insert prohibited for billing facts)
+- **`954cd40`** — Gate 3 E2E (`src/plugins/bigbluebutton-plugin/e2e/bbb-usage-ledger.e2e-spec.ts`), **5/5 passed** against real PostgreSQL:
+  - **G3-A** happy path: one ledger row, grant incremented, session LIVE → FINISHED
+  - **G3-B** duplicate completion = no-op (no second ledger row / increment)
+  - **G3-C** `reconcilePendingBilling()` recovery + idempotent second scan
+  - **G3-D** 6-way concurrent `consumeGrantHours()` → ONE ledger row, ONE increment
+  - **G3-E** persisted grant A billed; org B's grant (own Vendure channel) untouched — cross-channel isolation
+- Existing BBB concurrency regression spec: **1/1 passed**
+- `npm run build` passed; `HEAD == origin/main == 954cd40`, working tree clean
+- **Do not reopen for redesign.** `MeetingCompletedEvent.consumedHours` (0) vs authoritative `GrantConsumedEvent` semantics is documented in code comments and intentionally unchanged.
 
-**Baseline: `71dc27e` (ADR-038 acceptance, 2026-09-12).** From here the goal is proving the accepted design remains safe under production failure, retries, credentials, and operational conditions — no further architectural redesign.
+---
+
+## V1 — Production Hardening ⏳ SOLE IMMEDIATE MILESTONE
+
+**Baseline: `954cd40` (Gate 3 closure).** From here the goal is proving the accepted design remains safe under production failure, retries, credentials, and operational conditions — no further architectural redesign.
 
 Order matters: secrets first, then perimeter + observability, then failure-boundary tests, then live mode.
 
