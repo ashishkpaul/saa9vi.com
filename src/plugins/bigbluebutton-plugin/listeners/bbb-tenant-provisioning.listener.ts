@@ -19,7 +19,9 @@ const loggerCtx = "BbbTenantProvisioningListener";
  *
  * This makes BbbOrganization.slug a synchronized projection of the tenant
  * slug (never an independent identity source), so the marketplace academySlug
- * and the platform hostname `{tenantSlug}.saa9vi.com` can never diverge.
+ * and the platform hostname `{tenantSlug}.saa9vi.com` to remain synchronized
+ * (asynchronous/eventual consistency — the listener reconciles slug FROM
+ * TenantProfile.tenantSlug).
  *
  * Idempotent for repeated sequential delivery: creation is skipped if an org
  * already exists for the channel (BbbOrganizationService.create throws on an

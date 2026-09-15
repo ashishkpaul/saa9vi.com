@@ -70,6 +70,14 @@ export class TenantProfileService {
 
   /** Detect a PostgreSQL unique-violation specifically on tenantSlug. */
   private isUniqueSlugViolation(e: any): boolean {
+    // Prefer the machine-readable SQLSTATE (23505 = unique_violation),
+    // narrowed to the tenantSlug index so a customDomain violation is not
+    // misattributed; fall back to the human-readable message for drivers
+    // that lose the code/constraint metadata.
+    if (e?.code === '23505') {
+      const meta = String(e?.constraint || '') + String(e?.detail || '');
+      return !meta || /tenantslug/i.test(meta);
+    }
     const msg = String(e?.message || '') + String(e?.detail || '');
     return /duplicate key/i.test(msg) && msg.includes('tenantSlug');
   }

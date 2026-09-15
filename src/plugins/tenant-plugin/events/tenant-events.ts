@@ -38,7 +38,9 @@ export class TenantProfileUpdatedEvent extends VendureEvent {
  * Published once when a TenantProfile with a tenantSlug is created during
  * self-serve registration (G1/B-2). The BBB plugin consumes this to
  * auto-provision the channel's BbbOrganization with slug === tenantSlug, so
- * the marketplace academySlug and the platform hostname can never diverge.
+ * the marketplace academySlug and the platform hostname are intended to
+ * remain synchronized: provisioning is asynchronous (eventual consistency)
+ * and the listener reconciles BbbOrganization.slug FROM TenantProfile.tenantSlug.
  * Consumers must be idempotent-friendly: creation is skipped if an org
  * already exists for the channel (BbbOrganizationService.create enforces
  * one org per channel).
