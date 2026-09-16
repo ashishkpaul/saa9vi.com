@@ -1,6 +1,6 @@
 # Implementation Plan — ADR-039 Provider-Wired Subscription Lifecycle
 
-**Status:** Proposed — execute only after ADR-039 approval. **No code or migration written yet.**
+**Status:** Accepted (2026-09-16) — Step 1 unblocked. Step 2 gated on the input-contract corrections below.
 
 ## Step 1 — Schema (Vendure CLI migration only)
 
@@ -9,6 +9,22 @@
 3. Generate migration: `npx vendure migrate` (never hand-written). Register nothing manually — plugin-scoped entities are picked up by the CLI.
 
 ## Step 2 — Provider wiring in `SubscriptionService.subscribeToPlan`
+
+**Step 2 gate — adapter input-contract corrections (REQUIRED before wiring, per 2026-09-16 review):**
+
+The exact request sent to `POST /v1/subscriptions` must contain only documented schema fields:
+
+| Field | Source | Notes |
+|---|---|---|
+| `plan_id` | `SubscriptionPlan.providerPlanId` | the only pricing/frequency carrier |
+| `total_count` | explicit; Saa9vi adapter local default `12` when omitted (application default — the API has none; required unless `end_at`) | |
+| `quantity` | `1` | |
+| `customer_notify` | explicit boolean | documented field; governs Razorpay-side notifications |
+| `start_at` / `expire_by` | optional | `total_count` XOR `end_at` |
+| `notes` | `channelId`, `tenantProfileId`, `planId` | correlation only — `customerId`/`organizationId` keys dropped (no Saa9vi/Razorpay customer object exists) |
+| ~~`notify_info`~~ | **REMOVED** | Create Subscription *Link* API field, not Create Subscription; the live API schema 400-rejects undocumented fields |
+
+`CreateRecurringSubscriptionInput` is slimmed accordingly (`planId`, `totalCount?`, `startAt?`, `expireBy?`, `channelId`); `customerEmail`/`customerPhone`/`customerId`/`organizationId`/`amount`/`currency`/`frequency` leave the required contract. `billingCustomerId` on `OrganizationSubscription` remains legacy Juspay-oriented and is NOT assigned Razorpay semantics.
 
 1. Resolve `plan.providerPlanId`; fail closed with a clear error when unset (no silent local-only fallback).
 2. Resolve customer contact (email/phone) and `organizationId` from the channel's organization/customer records — no new mutation inputs.
