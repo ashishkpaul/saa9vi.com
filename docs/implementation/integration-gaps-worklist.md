@@ -154,6 +154,46 @@ SSR bytes were identical between the base host and a tenant host, which is expec
 `search-results.tsx` is client-rendered, so that probe was inconclusive rather than negative.
 A server-rendered channel-scoped probe belongs to G3 proper.
 
+### G3 application-level isolation — PASSED 2026-09-16 (live stack, sequential probes)
+
+Continued from the pre-flight with the same G3 tenants. Stock fixture was set via the **Admin API
+`updateProductVariant` mutation only** (live-schema introspection confirmed `stockOnHand: Int` on
+`UpdateProductVariantInput` before any mutation; PostgreSQL touched read-only).
+
+**Probe-error corrections found along the way (recorded so they are not rediscovered):**
+
+1. Vendure's default channel-token header is **`vendure-token`**, not `x-vendure-token`. The first
+   visibility probes used the wrong header name and silently fell back to the default channel,
+   which made it look like both tenants saw both products. With the correct header, isolation held.
+2. The reverse proxy must inject `x-saa9vi-channel-token` for SSR pages to be channel-scoped.
+   When the tenant header is absent/unresolved, `src/proxy.ts` has no tenant identity and the
+   downstream storefront falls back to the **default-channel token**, so the tenant's own product
+   renders "Not Found". The reference `deploy/nginx/saa9vi-storefront.conf` implements tenant-header
+   injection via an nginx njs subrequest to `/api/resolve-channel`; the local nginx site (a) lacked
+   `libnginx-mod-http-js` and (b) did not inject the tenant header, so SSR pages under tenant
+   hostnames rendered the default/fallback path. **No cross-tenant data exposure was observed** —
+   this is a deployment/configuration gap, and B-6 default-channel-fallback hardening remains open.
+3. Vendure refuses `removeProductsFromChannel` for the default channel, so the default channel
+   cannot be used as a tenant-isolated fixture channel. Tenant isolation relies on correct
+   per-request channel tokens; the default channel is not an isolation boundary.
+
+| Test | Result |
+|---|---|
+| G3-A visibility: A token → search | ✅ Alpha visible, Beta **absent** |
+| G3-A visibility: B token → search | ✅ Beta visible, Alpha **absent** |
+| G3-B cart: A hostname/token adds Alpha | ✅ order created; read-only DB verification confirmed `order.channelId` = A (20) |
+| G3-C cart: B hostname/token adds Beta | ✅ distinct cart/order; read-only DB verification confirmed `order.channelId` = B (21) |
+| G3-D cross-tenant: A adds Beta | ✅ rejected — Beta is not visible in A's channel (visibility failure, not stock failure) |
+| G3-D cross-tenant: B adds Alpha | ✅ rejected likewise |
+| Unknown hostname SSR | ⚠️ default-channel fallback; no cross-tenant content observed in this probe; B-6 remains open |
+
+**Remaining for full B-3 closure (deployment, not application code):** install
+`libnginx-mod-http-js` and adopt `deploy/nginx/saa9vi-storefront.conf` (njs `resolve_channel.js`
+subrequest injecting `x-saa9vi-channel-token`) on the local nginx vhost, then re-run the SSR
+product-detail probe to prove channel-scoped page rendering through the full chain. Cart/API-level
+isolation (the stronger half of B-3) is already proven above.
+
+
 **Priority:** P1 — **Depends on:** B-1
 
 Implement the selected hostname contract using the existing domain/channel infrastructure where appropriate. Cline must verify whether `TenantProfile.customDomain`, `DomainChannelResolverService`, the Redis channel-token mapping, Caddy, and Next.js `resolve-channel` can safely support the selected contract.
