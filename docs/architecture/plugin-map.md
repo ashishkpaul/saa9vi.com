@@ -21,12 +21,14 @@
 | MediaResource | `media_resource` | Yes |
 | TenantRegistrationLog | `tenant_registration_log` | No |
 
-### Publishes
+### Publishes (key cross-plugin events — not an exhaustive inventory; see `src/plugins/tenant-plugin/events/tenant-events.ts` for the full set)
 
 | Event | Subscribers |
 |---|---|
 | `InstructorProfileCreatedEvent` | MarketplaceIndexerPlugin |
 | `InstructorProfileUpdatedEvent` | MarketplaceIndexerPlugin |
+| `TenantProfileUpdatedEvent` | MarketplaceIndexerPlugin (bulk channel reindex) |
+| `TenantRegisteredEvent` | BigBlueButtonPlugin (BBB org provisioning / slug sync — G1/B-2 architecture) |
 
 ### Consumes
 
@@ -81,7 +83,7 @@ None.
 | BbbServer | `bbb_server` | No |
 | BbbPlatformCapacityPolicy | `bbb_platform_capacity_policy` | No |
 
-### Publishes
+### Publishes (key cross-plugin events — not an exhaustive inventory; see `src/plugins/bigbluebutton-plugin/events/bbb-events.ts` for the full set)
 
 | Event | Subscribers |
 |---|---|
@@ -331,7 +333,7 @@ None (extends `orderOptions.process` with `customerStatusOrderProcess` to block 
 | Property | Value |
 |---|---|
 | **Directory** | `src/plugins/subscription/` |
-| **Status** | Razorpay integrated (live on `main`); Juspay retained as coexisting provider |
+| **Status** | **Razorpay is the sole active recurring-billing provider** (per ADR-038; provider factory resolves `razorpay` — and defaults an omitted provider to Razorpay — while other explicit provider values are rejected; `vendure-config.ts` sets `provider: 'razorpay'`). Juspay implementation code is **retained/dormant** (`providers/juspay/`, legacy entities/services) for historical/reference and provider-boundary reasons — it is **not selectable** via the current factory and `JuspayWebhookController` is not registered by `SubscriptionPlugin`. |
 | **Purpose** | Subscription billing bounded context — plans, organization subscriptions, provider-neutral billing, webhooks, dunning FSM, renewal reconciliation. |
 
 ### Owns
@@ -386,7 +388,7 @@ HMAC-SHA256 signature verification (raw body bytes)
     ↓
 Persist ProviderWebhookEvent { status: 'pending' } (immutable inbox)
     ↓
-Return 201 immediately
+Return 200 immediately
     ↓
 BullMQ: provider-webhook-processing queue
     ↓

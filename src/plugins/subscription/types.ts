@@ -3,6 +3,19 @@
  * The plugin can be configured using the following options:
  */
 
+/**
+ * @description
+ * Recurring-billing provider selection.
+ *
+ * Per ADR-038, **Razorpay is the sole active provider**: the provider factory
+ * resolves `razorpay` (and defaults an omitted provider to Razorpay); other
+ * explicit provider values are rejected. `vendure-config.ts` configures
+ * `provider: 'razorpay'`.
+ * `"juspay"` remains in the type union solely because the dormant/retained
+ * Juspay implementation (`providers/juspay/`) shares this bounded context's
+ * types; it is NOT selectable at runtime and must not be treated as an
+ * active provider identity.
+ */
 export type BillingProvider = "razorpay" | "juspay";
 
 export interface RazorpayWebhookConfig {

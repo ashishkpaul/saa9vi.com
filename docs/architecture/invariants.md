@@ -84,7 +84,9 @@ BBB:
 
 Payments:
   POST /payments/razorpay/webhook → ProviderWebhookEvent → BullMQ → Razorpay processor
-  POST /payments/juspay/webhook → JuspayWebhookEvent → BullMQ → Juspay processor
+  (The Juspay webhook implementation is retained/dormant under providers/juspay/ and is
+  NOT registered by the current SubscriptionPlugin runtime configuration — ADR-038.
+  Only the Razorpay webhook controller is registered/active.)
 ```
 
 **Rejection criterion:** Any webhook controller that calls a service method before persisting the raw event is rejected.

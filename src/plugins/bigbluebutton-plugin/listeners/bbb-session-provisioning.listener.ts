@@ -26,9 +26,9 @@ const loggerCtx = "BbbSessionProvisioningListener";
  * before the BBB room actually exists.
  *
  * This listener is the single place a session becomes LIVE: it runs on
- * `MeetingProvisionedEvent`, which both provisioning paths (the dedicated
- * `BbbProvisioningWorkerService` queue processor and `BbbMeetingService`'s own
- * processor) publish only after the BBB createMeeting call succeeds.
+ * `MeetingProvisionedEvent`, which the single provisioning path
+ * (`BbbMeetingService` → `BbbProvisioningWorkerService` → BBB API)
+ * publishes only after the BBB createMeeting call succeeds.
  */
 @Injectable()
 export class BbbSessionProvisioningListener implements OnModuleInit {

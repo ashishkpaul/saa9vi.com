@@ -14,7 +14,7 @@
   - Entitlement channel stamping: `createBbbEntitlement` persists `channelId=ctx.channelId` (admin-created entitlements were invisible to channel-scoped `hasAccess()`).
   - Retry relink: `retryBbbMeeting` repoints `session.activeMeeting` to the new meeting.
   - E2E: `bbb-meeting-concurrency.e2e-spec.ts` (real Postgres, 3 concurrent promotions vs limit=2 — exactly 2 PROVISIONING, ≥1 PENDING).
-  - Open external gap: `getMeetingInfo error.forbidden` from `meeting.saa9vi.com` — tracked as BBB-INT-001 in `known-bugs.md`.
+  - **BBB-INT-001 closed 2026-09-15** (see `known-bugs.md`): fresh provisioning-created meetings return `getMeetingInfo SUCCESS`; the earlier `error.forbidden` was traced to a stale/expired meeting artifact, not a checksum/API/provisioning defect.
 
 - **Razorpay subscription provider (ADR-038) — accepted 2026-09-12:**
   - Provider-neutral webhook inbox: `ProviderWebhookEvent` (immutable, UNIQUE(provider, providerEventId))

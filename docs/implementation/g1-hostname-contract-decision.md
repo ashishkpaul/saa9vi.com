@@ -3,6 +3,8 @@
 > **Status:** Decision record (Gate G1 of `integration-gaps-worklist.md`)
 > **Date:** 2026-09-15
 > **Scope:** Inspection/decision only. No DB mutations, no Redis fixture manipulation, no schema migration performed or required.
+>
+> **⚠️ Historical snapshot:** Sections 1–4 record the repository state **as inspected before B-2 implementation (2026-09-15)**. B-2 subsequently implemented the accepted contract — see **Post-B-2 implementation status** at the end of this document.
 
 ## 1. Current code path (verified)
 
@@ -83,3 +85,15 @@ None — the existing `customDomain` create/update/delete Redis sync is preserve
 4. Registration acceptance test: Tenant A/B via GraphQL → `channel-token:{slug}.saa9vi.com` present in Redis → `resolve-channel?hostname=` returns the correct tokens. No manual Redis/DB writes.
 5. ~~Mapping-TTL re-affirmation strategy decided during B-2.~~ **Amended 2026-09-15:** TTL re-affirmation was explicitly deferred from B-2 and is tracked as a separate operational decision (see the TTL note above). B-2 delivers the registration seed plus update-path recovery only.
 6. Caddy wildcard/on-demand TLS and B-6 fail-closed behavior are explicitly **out of B-2 scope** (G10 / B-6).
+
+## 12. Post-B-2 implementation status (2026-09-15)
+
+B-2 was implemented and accepted after this decision record was written:
+
+* `TenantProfile.tenantSlug` is now generated at registration (deterministic slug, platform-global uniqueness with concurrency-safe suffix retry, immutable after provisioning) and persisted via Vendure CLI migration.
+* The platform hostname `{tenantSlug}.{TENANT_PLATFORM_DOMAIN}` is seeded into the **existing** `DomainChannelResolverService` Redis mapping at registration, with update-path mapping recovery.
+* `BbbOrganization.slug` is synchronized from `tenantSlug` via `TenantRegisteredEvent` → BBB provisioning listener (single consumer, async).
+* **G2 hostname→Channel resolution passed** for Tenant A and Tenant B (distinct hostnames → distinct Channel tokens, via GraphQL registration only — no manual Redis/DB writes).
+* Header correction made during G2: the Vendure channel-token header is `vendure-token` (the pre-B-2 snapshot above says `X-Vendure-Token`; the corrected name is authoritative and recorded in `integration-gaps-worklist.md`).
+
+Sections 1–4 above remain as the historical pre-B-2 inspection snapshot and should not be read as the current state.

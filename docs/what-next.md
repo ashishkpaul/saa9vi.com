@@ -1,6 +1,6 @@
 # What Next — Saa9vi Platform
 
-**Updated:** 2026-09-15
+**Updated:** 2026-09-16
 
 ---
 
@@ -19,11 +19,11 @@
 
 | Gate | Status | Notes |
 |------|--------|-------|
-| **R1 — Provider-neutral boundary** | ✅ Complete | Interface + both providers (Razorpay + Juspay) |
+| **R1 — Provider-neutral boundary** | ✅ Complete | `RecurringBillingProvider` interface retained. **Razorpay is the sole active/selectable runtime provider** (per ADR-038; provider factory resolves `razorpay` only, with an omitted provider defaulting to Razorpay). Juspay implementation code is retained/dormant for provider-boundary/reference reasons and is not registered/selectable by the current `SubscriptionPlugin` runtime |
 | **R2 — Razorpay Contract Verification** | ✅ Complete | All sub-gates proven (see below) |
 | **R3 — ADR-038 Freeze** | ✅ Complete | ADR-038 ACCEPTED 2026-09-12 (R2-F + R2-G evidence, INV-018 channel-scoped worker ctx) |
 | **I1-I3 — Implementation** | ✅ Complete | Razorpay live on `main` |
-| **V1 — Production hardening** | ⏳ Next | Baseline: `954cd40` (Gate 3 closure). Checklist below — **first action: rotate exposed Razorpay secrets (V1.1)** |
+| **V1 — Production hardening** | ⏳ Next | Baseline: `c198199` (G3 tenant-isolation evidence; supersedes the `954cd40` Gate-3 baseline for current work). Checklist below — **first action: rotate exposed Razorpay secrets (V1.1)** |
 
 ---
 
@@ -37,7 +37,7 @@
 | **R2-D** Create Subscription | ✅ DONE | `sub_TabaZJZTQzNfWy` via API |
 | **R2-E** Authorization | ✅ DONE | Customer authorized, payment captured |
 | **R2-F** Durable Processing | ✅ Proven | BullMQ inbox worker, single processing path |
-| **R2-F** Channel Resolution | ✅ Proven | Resolved from provider binding (INV-001) |
+| **R2-F** Channel Resolution | ✅ Proven (scoped) | Resolved from an **existing** provider binding (INV-001). First-subscription binding **creation** lifecycle is NOT yet proven — open as **C-1** in `integration-gaps-worklist.md` (queue worker fails closed before the processor's lazy-binding path can run when no binding exists) |
 | **R2-F** Inbox Idempotency | ✅ Proven | UNIQUE(provider, providerEventId) |
 | **R2-F** Processing Idempotency | ✅ Proven | Double-send → single billing attempt |
 | **R2-F** Concurrent Idempotency | ✅ Proven | DB UNIQUE constraint blocks duplicates |
@@ -74,8 +74,8 @@ The inbox worker is implemented with:
 ### Do NOT
 
 - [x] ADR-038 formally accepted (2026-09-12) — see `docs/architecture/adr-038-direct-razorpay-provider.md`
-- ❌ Delete Juspay code yet (still referenced by `providers/juspay/`)
-- ❌ Call Juspay "legacy" yet (still a valid provider implementation)
+- ❌ Delete Juspay code yet (retained under `providers/juspay/` for provider-boundary/reference reasons — ADR-038)
+- ✅ Razorpay is the sole active/selectable recurring-billing provider; the `SubscriptionPlugin` factory resolves only `razorpay` (an omitted provider defaults to Razorpay), so Juspay is **not runtime-selectable** — do not treat it as a valid alternative provider path
 
 ---
 
@@ -116,7 +116,7 @@ Acceptance criteria (idempotency mirrors the Razorpay webhook gates) — **all 8
 
 ## V1 — Production Hardening ⏳ SOLE IMMEDIATE MILESTONE
 
-**Baseline: `954cd40` (Gate 3 closure).** From here the goal is proving the accepted design remains safe under production failure, retries, credentials, and operational conditions — no further architectural redesign.
+**Baseline: `c198199` (G3 tenant-isolation evidence, `fa86f88` hostname chain + `c198199` isolation record).** From here the goal is proving the accepted design remains safe under production failure, retries, credentials, and operational conditions — no further architectural redesign. (The `954cd40` baseline below refers to the earlier Gate-3 record and is retained as history.)
 
 Order matters: secrets first, then perimeter + observability, then failure-boundary tests, then live mode.
 
@@ -249,15 +249,21 @@ CAS locking, idempotent grants, the payment-attempt ledger, and the webhook queu
 
 ### Current provider implementation
 
+> **Status (2026-09-16, post-ADR-038):** Razorpay is the **sole active/selectable runtime provider**.
+> Juspay components below are **retained/dormant** for provider-boundary and historical/reference
+> reasons — not deleted (referenced by migrations/ADR-037 and the `RecurringBillingProvider`
+> boundary), but **not registered as the active runtime provider** and not selectable by the
+> `SubscriptionPlugin` factory.
+
 | Component | Status |
 |-----------|--------|
-| `JuspaySdk` | Current (not legacy) |
-| `JuspayBillingService` | Current (not legacy) |
-| `JuspayPaymentAttempt` | Current entity |
-| `JuspaySubscriptionMandate` | Current entity |
-| `RazorpaySubscriptionProvider` | ✅ Integrated (live on `main`) |
-| `RazorpayWebhookProcessor` | ✅ Integrated (live on `main`) |
-| `RazorpayWebhookController` | ✅ Integrated (live on `main`) |
+| `JuspaySdk` | Retained/dormant |
+| `JuspayBillingService` | Retained/dormant |
+| `JuspayPaymentAttempt` | Retained/dormant entity |
+| `JuspaySubscriptionMandate` | Retained/dormant entity |
+| `RazorpaySubscriptionProvider` | ✅ Active — sole runtime provider (per ADR-038) |
+| `RazorpayWebhookProcessor` | ✅ Active |
+| `RazorpayWebhookController` | ✅ Active (`SubscriptionPlugin` does not register `JuspayWebhookController`) |
 | `ProviderWebhookEvent` | ✅ Immutable inbox (shared by all providers) |
 | `SubscriptionBillingAttempt` | ✅ Provider-neutral billing attempt |
 | `SubscriptionProviderBinding` | ✅ Provider-neutral binding |
@@ -334,6 +340,9 @@ npm run build:all
 
 ```text
 PHASE 2 — SUBSCRIPTION BILLING & CAPACITY POLICY
+> Historical Phase 2 checklist — superseded by ADR-038 and the current
+> implementation-gaps worklist. Unchecked items below are not current tasks
+> unless explicitly reintroduced into the canonical worklist.
 
 [x] SubscriptionPlan / OrganizationSubscription
 [x] BbbPlatformCapacityPolicy
@@ -344,7 +353,8 @@ PHASE 2 — SUBSCRIPTION BILLING & CAPACITY POLICY
 [x] Juspay Steps 0–6 implementation (Dashboard, secret hardening, e2e)
 
 [x] NavigationMenu entity in CMS
-[ ] Juspay provider-contract verification (live sandbox)
+[~] Juspay provider-contract verification (live sandbox)
+    — superseded by ADR-038; Juspay is retained/dormant and not runtime-selectable
 [ ] Production credential rollout and fail-closed verification
 [ ] E2e coverage gaps (sandbox round-trip, mandate lifecycle)
 
