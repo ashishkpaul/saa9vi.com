@@ -187,13 +187,39 @@ Continued from the pre-flight with the same G3 tenants. Stock fixture was set vi
 | G3-D cross-tenant: B adds Alpha | ✅ rejected likewise |
 | Unknown hostname SSR | ⚠️ default-channel fallback; no cross-tenant content observed in this probe; B-6 remains open |
 
-**Remaining for full B-3 closure (deployment, not application code):** install
-`libnginx-mod-http-js` and adopt `deploy/nginx/saa9vi-storefront.conf` (njs `resolve_channel.js`
-subrequest injecting `x-saa9vi-channel-token`) on the local nginx vhost, then re-run the SSR
-product-detail probe to prove channel-scoped page rendering through the full chain.
-Cart/API-level isolation is already proven above; SSR hostname-to-channel
-propagation remains to be verified (the two boundaries test different paths,
-neither universally subsumes the other).
+**B-3 SSR chain — VERIFIED 2026-09-16 (live, njs-free auth_request proxy).** The remaining
+closure item did **not** require installing njs: the local nginx (1.22.1) ships
+`--with-http_auth_request_module`, so the reference proxy contract was implemented without
+it via `auth_request` + `auth_request_set` and adopted as
+`nextjs-starter-vendure/deploy/nginx/saa9vi-storefront-authrequest.conf` (adds a
+`?hostname=$host` auth subrequest to `/api/resolve-channel` and an **unconditional**
+`proxy_set_header x-saa9vi-channel-token` overwrite). Non-root nginx instance on :8091,
+underscores_in_headers on (so client-spoofed headers actually survive ingress and the
+overwrite is provable), storefront :3001 + Vendure :3000 live.
+
+Fixture (read-only SQL): `g3-alpha-course` exists **only** in channel 20 (tenant-a);
+`g3-beta-course` **only** in channel 21 (tenant-b). Product-detail is a channel-scoped
+server component (`getChannelTokenFromHeaders()` → `vendure-token` → `cacheTag(...-token)`).
+
+| Probe (through :8091 proxy) | Result |
+|---|---|
+| tenant-a host → own `g3-alpha-course` | ✅ 200, full SSR product page (128 KB, slug ×13) |
+| tenant-a host → `g3-beta-course` | ✅ "Page Not Found" rendered |
+| tenant-b host → own `g3-beta-course` | ✅ 200, full SSR product page |
+| tenant-b host → `g3-alpha-course` | ✅ "Page Not Found" rendered |
+| tenant-a host + **spoofed** tenant-b token → own product | ✅ still renders tenant-a's page (13×, full) — spoof neutralized |
+| tenant-a host + spoofed tenant-b token → tenant-b product | ✅ Not Found |
+| Control: **direct** :3001 with spoofed token | ⚠️ tenant-b page **renders** (128 KB) — spoof risk is real at the app boundary; the proxy overwrite is what closes it |
+
+**Conclusion:** `hostname → resolve-channel → x-saa9vi-channel-token injection →
+channel-scoped SSR` is now runtime-proven in both directions, with no cross-tenant
+exposure. SSR and cart/API boundaries are both verified; the two use the same
+`/api/resolve-channel` resolution source. **Remaining deployment step (environment,
+not code):** the deployed `/etc/nginx` vhost still (a) strips `X-SaaSvi-Channel-Token`
+— a wrong, non-existent header name ("SaaSvi" vs "saa9vi"), making the strip
+ineffective — and (b) never injects the token. Adopting the reference config (njs) or
+the new auth_request config on the deployed vhost closes it; `/etc/nginx` is
+root-owned and the local sudo requires a password, so that write remains an operator step.
 
 
 **Priority:** P1 — **Depends on:** B-1
@@ -314,9 +340,26 @@ A cached Tenant A response can never be served to Tenant B. Do not modify workin
 ## B-5 — Production proxy trust boundary
 
 **Priority:** P1
-**Status:** PASS subject to deployment verification (code-verified: Caddy `forward_auth` + `copy_headers` and nginx njs overwrite — not trust — the client header; `resolve-channel` always returns the header, `''` = no tenant).
+**Status:** Contract runtime-verified 2026-09-16 (see B-3 SSR chain evidence above); **deployed-vhost gap remains open** (operator step).
 
 Verify: `client → proxy → resolve-channel → x-saa9vi-channel-token → Next.js → Vendure`. The client must not be able to choose its own trusted channel header.
+
+Runtime evidence (2026-09-16, live stack):
+
+* With the auth_request proxy in front (see B-3 evidence), a client-spoofed
+  `x-saa9vi-channel-token: tok_g3-tenant-b_...` sent to a tenant-a hostname is
+  **overwritten** by the proxy's unconditional `proxy_set_header` — the spoofed
+  value cannot select tenant-b's content (own page renders; cross-tenant page
+  renders "Not Found").
+* Control probe — the same spoofed request sent **directly to the storefront
+  :3001** — renders tenant-b's product. This proves the trust boundary lives at
+  the proxy, exactly as the `deploy/Caddyfile` security note states.
+* **Deployed-vhost gap:** the live `/etc/nginx/sites-available/
+  tenant-storefront.meeting.lan` (a) strips `X-SaaSvi-Channel-Token` — a wrong,
+  non-existent header name ("SaaSvi" vs "saa9vi"), so the strip is a no-op — and
+  (b) never injects the token. Until the vhost is replaced with the reference
+  config (njs) or `deploy/nginx/saa9vi-storefront-authrequest.conf`,
+  requests reaching the deployed storefront keep any client-supplied token.
 
 ### Acceptance criterion
 
