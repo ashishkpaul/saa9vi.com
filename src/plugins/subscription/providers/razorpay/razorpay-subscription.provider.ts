@@ -42,6 +42,13 @@ export class RazorpaySubscriptionProvider implements RecurringBillingProvider {
     /**
      * Create a Razorpay Subscription.
      *
+     * Request contract (ADR-039, pinned 2026-09-16 — ONLY documented
+     * Create Subscription schema fields; the API 400-rejects extra fields):
+     *   plan_id, total_count (Saa9vi default 12 — the API has none;
+     *   required unless end_at), quantity, customer_notify, notes.
+     * notify_info is a Subscription-LINK API field and must NOT be sent here.
+     * Pricing/frequency live on the Razorpay plan (plan_id).
+     *
      * Flow:
      * 1. Create subscription at Razorpay
      * 2. Return subscription_id + short_url for customer authorization
@@ -57,16 +64,13 @@ export class RazorpaySubscriptionProvider implements RecurringBillingProvider {
             plan_id: input.planId,
             total_count: input.totalCount || 12,
             quantity: 1,
-            start_at: input.startAt,
-            expire_by: input.expireBy,
-            notify_info: {
-                notify_phone: input.customerPhone,
-                notify_email: input.customerEmail,
-            },
+            customer_notify: false,
+            ...(input.startAt !== undefined ? { start_at: input.startAt } : {}),
+            ...(input.expireBy !== undefined ? { expire_by: input.expireBy } : {}),
             notes: {
-                organizationId: input.organizationId,
-                customerId: input.customerId,
                 channelId: input.channelId,
+                tenantProfileId: input.tenantProfileId,
+                planId: input.planId,
             },
         });
 

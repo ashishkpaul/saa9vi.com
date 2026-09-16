@@ -2,17 +2,21 @@ import { ID } from '@vendure/core';
 
 /**
  * Input for creating a recurring subscription at the provider.
+ *
+ * Slimmed per ADR-039 (2026-09-16 contract review): contains ONLY the fields
+ * the Create Subscription request actually consumes. amount/currency/frequency
+ * are carried by the Razorpay plan (plan_id); contact fields are not part of
+ * the Create Subscription schema (notify_info belongs to the Subscription Link
+ * API and is 400-rejected by the Create Subscription endpoint).
  */
 export interface CreateRecurringSubscriptionInput {
+    /** Saa9vi tenant channel — correlation + notes only. */
     channelId: string;
-    organizationId: string;
-    customerId: string;
-    customerEmail: string;
-    customerPhone: string;
+    /** TenantProfile.id — correlation notes (Channel ↔ TenantProfile is 1:1). */
+    tenantProfileId: string;
+    /** The Razorpay plan_id (SubscriptionPlan.providerPlanId). */
     planId: string;
-    amount: number;
-    currency: string;
-    frequency: 'monthly' | 'yearly';
+    /** Billing cycles. Saa9vi adapter default: 12 (application default — the API has none). */
     totalCount?: number;
     startAt?: number;
     expireBy?: number;

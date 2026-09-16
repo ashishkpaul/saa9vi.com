@@ -88,14 +88,8 @@ async function main(): Promise<void> {
         try {
             const subscription = await provider.createSubscription({
                 channelId: "test_channel",
-                organizationId: "test_org",
-                customerId: "test_customer",
-                customerEmail: "test@example.com",
-                customerPhone: "9999999999",
+                tenantProfileId: "test_tenant_profile",
                 planId: planId,
-                amount: 1.0,
-                currency: "INR",
-                frequency: "monthly",
                 totalCount: 12,
             });
 

@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Inject } from "@nestjs/common";
 import {
   Channel,
   ChannelService,
@@ -11,10 +11,15 @@ import {
   TransactionalConnection,
 } from "@vendure/core";
 
-import { loggerCtx } from "../constants";
+import { loggerCtx, RECURRING_BILLING_PROVIDER } from "../constants";
 import { OrganizationSubscription } from "../entities/organization-subscription.entity";
 import { SubscriptionPlan } from "../entities/subscription-plan.entity";
 import { SubscriptionProviderBinding } from "../entities/subscription-provider-binding.entity";
+import {
+  CreateRecurringSubscriptionInput,
+  RecurringBillingProvider,
+} from "../providers/recurring-billing.provider";
+import { TenantProfile } from "../../tenant-plugin/entities/tenant-profile.entity";
 
 /**
  * Lifecycle service for tenant SaaS subscriptions (Phase 2).
@@ -31,6 +36,10 @@ export class SubscriptionService {
     private readonly listBuilder: ListQueryBuilder,
     private readonly channelService: ChannelService,
     private readonly requestContextService: RequestContextService,
+    // Provider-neutral per ADR-038/INV-019. Null only when the plugin runs
+    // without a configured provider (dev without Redis-style fallbacks).
+    @Inject(RECURRING_BILLING_PROVIDER)
+    private readonly billingProvider: RecurringBillingProvider | null,
   ) {}
 
   async findAllPlans(ctx: RequestContext): Promise<SubscriptionPlan[]> {
@@ -115,13 +124,12 @@ export class SubscriptionService {
   ): Promise<OrganizationSubscription> {
     const repo = this.connection.getRepository(ctx, OrganizationSubscription);
 
-    // 1. Check for existing subscription
+    // ── 1. Validate local prerequisites (no side effects yet — ADR-039) ──
     const existing = await repo.findOne({ where: { channelId } });
     if (existing && existing.status !== "cancelled") {
       throw new Error(`Channel ${channelId} already has an active or trialing subscription`);
     }
 
-    // 2. Resolve plan
     const plan = await this.connection
       .getRepository(ctx, SubscriptionPlan)
       .findOne({ where: { id: planId } });
@@ -129,7 +137,18 @@ export class SubscriptionService {
       throw new Error(`SubscriptionPlan ${planId} not found`);
     }
 
-    // 3. Resolve channel
+    // ADR-039: provider-wired creation; fail closed without a provider plan
+    // mapping (no silent local-only fallback path exists any more).
+    if (!plan.providerPlanId) {
+      throw new Error(
+        `SubscriptionPlan '${plan.name}' has no providerPlanId. ` +
+          `Set it (Razorpay plan_id) via updateSubscriptionPlan before subscribing.`,
+      );
+    }
+    if (!this.billingProvider) {
+      throw new Error(`No recurring billing provider configured; cannot subscribe to plan '${plan.name}'`);
+    }
+
     const channel = await this.connection.rawConnection
       .getRepository(Channel)
       .findOne({ where: { id: channelId } });
@@ -137,18 +156,38 @@ export class SubscriptionService {
       throw new Error(`Channel ${channelId} not found`);
     }
 
+    // TenantProfile is 1:1 with the Channel (INV-001); its id is the
+    // organization correlation reference in provider notes.
+    const tenantProfile = await this.connection.rawConnection
+      .getRepository(TenantProfile)
+      .findOne({ where: { channelId } });
+    if (!tenantProfile) {
+      throw new Error(`No TenantProfile found for channel ${channelId}; cannot correlate organization`);
+    }
+
+    // ── 2. EXTERNAL, non-rollbackable: create the provider subscription ──
+    const providerInput: CreateRecurringSubscriptionInput = {
+      channelId,
+      tenantProfileId: String(tenantProfile.id),
+      planId: plan.providerPlanId,
+    };
+    const providerSub = await this.billingProvider.createSubscription(providerInput);
+
+    // ── 3. Local persistence (inside the mutation's transaction) ──
     const now = new Date();
     const periodEnd = new Date(now);
     periodEnd.setMonth(periodEnd.getMonth() + 1);
 
-    // 4. Create and assign
     const sub = new OrganizationSubscription({
       channelId,
       plan,
-      status: "active",
+      // ADR-039: pre-authorization state; only provider webhooks drive 'active'.
+      status: "pending_provider_auth",
       currentPeriodStart: now,
       currentPeriodEnd: periodEnd,
       version: 1,
+      providerStatus: providerSub.status,
+      providerShortUrl: providerSub.shortUrl,
     });
 
     // Ensure the entity is assigned to the target channel (INV-001)
@@ -159,9 +198,37 @@ export class SubscriptionService {
 
     await this.channelService.assignToCurrentChannel(sub, targetCtx);
 
-    const saved = await repo.save(sub);
+    let saved: OrganizationSubscription;
+    try {
+      saved = await repo.save(sub);
+      // Binding created in the SAME request path, before returning success
+      // (ADR-039: the sole first-binding mechanism; the worker stays
+      // fail-closed and absorbs any webhook that races this commit).
+      await this.createProviderBinding(
+        ctx,
+        channelId,
+        this.billingProvider.providerName,
+        providerSub.providerSubscriptionId,
+        plan.providerPlanId,
+        providerSub.status,
+        { shortUrl: providerSub.shortUrl, tenantProfileId: tenantProfile.id },
+      );
+    } catch (err: unknown) {
+      // External-side-effect model (ADR-039): the provider subscription
+      // sub_XXX remains as a pre-auth orphan — surface its ID for
+      // reconciliation; it never charges without customer authorization.
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Subscription persisted-state failure after provider creation. ` +
+          `ORPHAN provider subscription ${providerSub.providerSubscriptionId} ` +
+          `(channel ${channelId}) must be reconciled/cancelled in the provider ` +
+          `dashboard. Cause: ${msg}`,
+      );
+    }
+
     Logger.info(
-      `Channel ${channelId} ('${channel.code}') subscribed to plan '${plan.name}'`,
+      `Channel ${channelId} ('${channel.code}') subscribed to plan '${plan.name}' ` +
+        `(pending_provider_auth; provider sub ${providerSub.providerSubscriptionId})`,
       loggerCtx,
     );
     return saved;
