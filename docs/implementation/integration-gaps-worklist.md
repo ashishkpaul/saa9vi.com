@@ -348,7 +348,7 @@ The architecture documentation clearly identifies the rotation dependency and pr
 
 ## C-1 — Verify binding creation lifecycle
 
-**Priority:** P1 — **Status:** Open — C-1-A evidence recorded 2026-09-16, C-1-B/C/D remaining.
+**Priority:** P1 — **Status:** Open — C-1-A evidence recorded 2026-09-16; C-1-B/C/D **blocked on ADR-039** (provider-wired subscription creation) — see the Layer-2 amendment below.
 
 Trace the real recurring-payment lifecycle:
 
@@ -370,6 +370,8 @@ Executed against the live stack (GraphQL/HTTP only; SQL inspection read-only):
 5. `subscription_provider_binding` remained **0 rows**. `RazorpayWebhookProcessor` (and its lazy `createProviderBinding()` path) was **never reached**.
 
 **Conclusion (runtime-proven):** the processor's lazy-binding branch is unreachable for the first subscription — the worker's binding-lookup precedes processor invocation, so a brand-new subscription's first webhook can never establish its own binding. The queue worker fails closed *before* the lazy path can run. Fix must occur in the worker's channel-resolution step (e.g., consult authenticated payload `notes.channelId` to seed the binding pre-processor), not in the processor.
+
+**Amended 2026-09-16 (Layer 2) — the conclusion above is superseded by a deeper finding:** there is no production path that creates a Razorpay subscription at all. `RazorpaySubscriptionProvider.createSubscription()` has zero production call sites (only the M1.3 verification script); `subscribeToPlan()` creates a local `OrganizationSubscription` with `status: 'active'` and **no provider interaction**; `SubscriptionPlan` has no `providerPlanId` mapping. Consequently no legitimate runtime path ever produces the `providerSubscriptionId` required for first-binding creation — the fix is **not** a worker-side `notes.channelId` fallback (rejected: moves tenant identity across the webhook trust boundary, contradicting INV-018). The provider-wired subscription-creation design is decided in **ADR-039** (`docs/architecture/adr-039-provider-wired-subscription-lifecycle.md`, Proposed) with an implementation plan at `docs/implementation/adr-039-implementation-plan.md`. C-1-B/C/D are **blocked** pending ADR-039 approval and implementation, which supply the legitimate creation path they must verify.
 
 Minor observations: (a) `attemptCount` accumulates across duplicate-delivery jobs sharing one `providerEventId` (observed 4 for 3 attempts) — accounting quirk, FSM unaffected; (b) duplicate-delivery recovery path (`UNIQUE(provider, providerEventId)` → re-enqueue pending event) verified working at runtime.
 
