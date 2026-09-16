@@ -26,6 +26,7 @@ export const adminApiExtensions = gql`
     whitelabelEnabled: Boolean!
     isActive: Boolean!
     sortOrder: Int!
+    providerPlanId: String
   }
 
   type OrganizationSubscription {
@@ -40,6 +41,8 @@ export const adminApiExtensions = gql`
     cancelAtPeriodEnd: Boolean!
     cancelledAt: DateTime
     billingCustomerId: String
+    providerStatus: String
+    providerShortUrl: String
     version: Int!
   }
 
@@ -54,6 +57,7 @@ export const adminApiExtensions = gql`
     whitelabelEnabled: Boolean
     isActive: Boolean
     sortOrder: Int
+    providerPlanId: String
   }
 
   """

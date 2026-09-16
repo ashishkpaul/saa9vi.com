@@ -58,4 +58,13 @@ export class SubscriptionPlan extends VendureEntity {
 
   @Column({ default: 0 })
   sortOrder: number;
+
+  /**
+   * Razorpay plan_id this tier maps to (ADR-039). Nullable during rollout;
+   * the provider-wired subscribeToPlan flow fails closed when unset.
+   * The Razorpay plan carries amount/currency/frequency server-side —
+   * never duplicated here.
+   */
+  @Column({ nullable: true })
+  providerPlanId: string;
 }

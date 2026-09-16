@@ -4,6 +4,7 @@ import { Column, Entity, Index, JoinTable, ManyToMany, ManyToOne } from "typeorm
 import { SubscriptionPlan } from "./subscription-plan.entity";
 
 export type OrganizationSubscriptionStatus =
+  | "pending_provider_auth"
   | "trialing"
   | "active"
   | "past_due"
@@ -80,6 +81,21 @@ export class OrganizationSubscription extends VendureEntity implements ChannelAw
   /** Juspay customer reference for recurring charges. */
   @Column({ nullable: true })
   billingCustomerId: string;
+
+  /**
+   * Razorpay-side subscription status (ADR-039) — mirrored from provider
+   * webhooks/binding. Null = never provider-wired.
+   */
+  @Column({ nullable: true })
+  providerStatus: string;
+
+  /**
+   * Razorpay short_url for customer authorization (ADR-039). Returned to
+   * the admin caller at subscription creation. Null once activated or if
+   * never provider-wired.
+   */
+  @Column({ nullable: true })
+  providerShortUrl: string;
 
   /**
    * Optimistic-lock token for renewal compare-and-swap.
