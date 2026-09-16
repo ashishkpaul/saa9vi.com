@@ -37,7 +37,10 @@ export class RazorpayWebhookProcessor {
     async processInboxEvent(ctx: RequestContext, inboxEvent: ProviderWebhookEvent): Promise<void> {
         const providerEventId = inboxEvent.providerEventId;
         const event = inboxEvent.eventType;
-        const payload = inboxEvent.rawPayload;
+        // Unwrap the Razorpay envelope: rawPayload is the full webhook body
+        // { event, contains, payload }, while normalizeEvent expects the
+        // inner payload object (C-1-E runtime finding).
+        const payload = inboxEvent.rawPayload?.payload ?? inboxEvent.rawPayload;
 
         // Idempotency check using the authoritative inbox event ID
         if (await this.isEventProcessed(ctx, providerEventId)) {
@@ -102,11 +105,29 @@ export class RazorpayWebhookProcessor {
         planId?: string,
     ): Promise<void> {
         const repo = this.connection.getRepository(ctx, SubscriptionProviderBinding);
-        const binding = await repo.findOne({ where: { providerSubscriptionId: subId } });
+        const binding = await repo.findOne({
+            where: { providerSubscriptionId: subId },
+            relations: ['subscription'],
+        });
         if (binding) {
             binding.providerStatus = status;
             binding.active = active;
             await repo.save(binding);
+            // ADR-039 lifecycle: provider authorization events drive the local
+            // subscription out of pending_provider_auth. Razorpay is the
+            // authoritative activation source (INV-004); CAS on version is
+            // not needed here — this is a one-way pre-auth → active transition
+            // and dunning/renewal own everything after 'active'.
+            if (active && binding.subscription?.status === 'pending_provider_auth') {
+                const subRepo = this.connection.getRepository(ctx, OrganizationSubscription);
+                binding.subscription.status = 'active';
+                await subRepo.save(binding.subscription);
+                Logger.log(
+                    `OrganizationSubscription ${binding.subscription.id} pending_provider_auth → active ` +
+                        `(provider sub ${subId})`,
+                    loggerCtx,
+                );
+            }
         } else if (channelId) {
             // Lazily create the binding on authenticated/activated events
             // where the channelId is known from the Razorpay payload notes.

@@ -348,7 +348,7 @@ The architecture documentation clearly identifies the rotation dependency and pr
 
 ## C-1 — Verify binding creation lifecycle
 
-**Priority:** P1 — **Status:** Open — C-1-A evidence recorded 2026-09-16; C-1-B/C/D **blocked on ADR-039** (provider-wired subscription creation) — see the Layer-2 amendment below.
+**Priority:** P1 — **Status:** CLOSED 2026-09-16 — all sub-gates (C-1-A/B/C/C-idempotency/D/E) runtime-verified; see evidence below.
 
 Trace the real recurring-payment lifecycle:
 
@@ -384,6 +384,20 @@ The API entrypoint (`src/index.ts`) called only `bootstrap(config)`. In Vendure 
 A real Razorpay subscription creates exactly one valid `SubscriptionProviderBinding` with the correct provider, provider subscription ID, and Saa9vi subscription/channel association.
 
 Remaining C-1 sub-gates: C-1-B (`channels[]` join + scalar `channelId` persistence after `bindingRepo.save()`), C-1-C (idempotency: same provider+ID repeat vs `providerSubscriptionId`-only pre-lookup vs `(provider, providerSubscriptionId)` unique index), C-1-D (cross-channel binding visibility isolation).
+
+### C-1-B/C/C-idempotency/D/E runtime evidence (2026-09-16) — ALL PASSED, C-1 CLOSED
+
+Executed via Admin GraphQL + signed HTTP webhooks only; SQL inspection read-only. Razorpay test account (`plan_TaMGQbDDQn7Tir`, from the M1.3 acceptance).
+
+* **Setup:** plan `c1-probe-growth` (id 2) created via `createSubscriptionPlan` with `providerPlanId=plan_TaMGQbDDQn7Tir` (GraphQL field exposed by Step 1).
+* **C-1-B PASS:** `subscribeToPlan(channelId:16, planId:2)` → real Razorpay subscription `sub_Tcg6cxI0UPBuji` created; local subscription persisted as **`pending_provider_auth`** with `providerStatus='created'` + `providerShortUrl`; exactly **1** binding; scalar `channelId=16` AND `channels[]` join contains 16 (plus the platform default channel 1 — admin context; tenant-scoped read for another tenant matches nothing).
+* **C-1-C (local duplicate) PASS:** repeat `subscribeToPlan` rejected by the per-channel guard; still exactly 1 binding. The `providerSubscriptionId`-only pre-lookup vs composite unique index question is now moot at runtime for the single-provider regime (Juspay dormant); the composite-tightening remains available if a second provider is ever reintroduced.
+* **Third runtime defect found and fixed — Razorpay envelope unwrapping:** real Razorpay webhooks deliver `{ event, contains, payload: { subscription: { entity } } }`, but the worker and processor read `rawPayload.subscription...` one level too shallow — **every authentic webhook would have failed channel resolution** (probe events 11/14 terminal-`failed` before the fix). Fixed in both `resolveChannelFromBinding` and `normalizeEvent` (`rawPayload.payload ?? rawPayload`).
+* **C-1-E PASS (full first-subscription lifecycle):** signed `subscription.authenticated` (event 15) → `processed` on attempt 1, channel 16 resolved **from the persisted binding**, binding `providerStatus='authenticated'`, still 1 binding. Then `subscription.activated` (event 18) → `processed`, binding `active=true`, and the ADR-039 transition **`pending_provider_auth → active`** fired on the local subscription (processor-side, logged).
+* **Idempotency PASS:** duplicate delivery of the same `X-Razorpay-Event-Id` (controller: already-received, no re-enqueue); same `providerSubscriptionId` under a different event ID → processed, no duplicate binding (`total=1, dup=1`).
+* **C-1-D PASS (structural + runtime):** binding `channels[]` = {16, 1}; tenant B's channel (17) has no join row — a channel-scoped read for 17 matches nothing. Cross-channel binding isolation holds at the read boundary.
+
+**Residual (documented, non-blocking):** `OrganizationSubscription.providerStatus` retains the creation-time value (`created`) while the binding mirrors later webhook statuses — mirroring the subscription field on lifecycle events is a cosmetic follow-up; the authoritative state (`binding.active`, `subscription.status`) is correct. Late-orphan-provider-subscription behavior (ADR-039 residual risk) remains covered by the C-1-C/D scope recorded above.
 
 # Track D — Existing BBB/Razorpay — Verification Only
 

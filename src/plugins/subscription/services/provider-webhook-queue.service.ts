@@ -184,7 +184,11 @@ export class ProviderWebhookQueueService implements OnModuleInit {
      *   - Database error → throws (must not be silently converted to "no binding")
      */
     private async resolveChannelFromBinding(ctx: any, event: ProviderWebhookEvent): Promise<string | null> {
-        const payload = event.rawPayload as any;
+        // Razorpay delivers { event, contains, payload: { subscription: { entity } } }.
+        // The inbox stores the full body; unwrap the inner payload envelope when
+        // present (C-1-E runtime finding: shallow reads failed every real webhook).
+        const body = event.rawPayload as any;
+        const payload = body?.payload ?? body;
         const subscriptionId = payload?.subscription?.entity?.id
             || payload?.subscription_id
             || payload?.entity?.id;
