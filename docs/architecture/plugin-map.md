@@ -359,7 +359,7 @@ None (extends `orderOptions.process` with `customerStatusOrderProcess` to block 
 | Event / Input | Source |
 |---|---|
 | Razorpay webhooks | `POST /payments/razorpay/webhook` (`RazorpayWebhookController`, HMAC-SHA256, raw body) |
-| Juspay webhooks | `POST /payments/juspay/webhook/:token` (`JuspayWebhookController`, fail-closed Basic Auth + HMAC, AES-256-GCM secret) |
+| ~~Juspay webhooks~~ | `POST /payments/juspay/webhook/:token` (`JuspayWebhookController`, fail-closed Basic Auth + HMAC, AES-256-GCM secret) — **retained/dormant: source retained but the controller is NOT registered by the current `SubscriptionPlugin` runtime configuration (ADR-038); the route is not live** |
 | Scheduled tasks | `subscriptionRenewalTask` (every 10 min), `subscriptionDunningTask` |
 
 ### API Surfaces
