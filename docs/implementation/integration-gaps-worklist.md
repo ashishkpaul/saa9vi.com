@@ -190,8 +190,10 @@ Continued from the pre-flight with the same G3 tenants. Stock fixture was set vi
 **Remaining for full B-3 closure (deployment, not application code):** install
 `libnginx-mod-http-js` and adopt `deploy/nginx/saa9vi-storefront.conf` (njs `resolve_channel.js`
 subrequest injecting `x-saa9vi-channel-token`) on the local nginx vhost, then re-run the SSR
-product-detail probe to prove channel-scoped page rendering through the full chain. Cart/API-level
-isolation (the stronger half of B-3) is already proven above.
+product-detail probe to prove channel-scoped page rendering through the full chain.
+Cart/API-level isolation is already proven above; SSR hostname-to-channel
+propagation remains to be verified (the two boundaries test different paths,
+neither universally subsumes the other).
 
 
 **Priority:** P1 — **Depends on:** B-1

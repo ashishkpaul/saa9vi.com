@@ -209,7 +209,7 @@ This pattern does **not** apply to Stream 1 (`BbbUsageLedger`) or Stream 3 (`AdS
 
 ## INV-019: Subscription Payment Attempts Are Independently Recorded Financial Facts.
 
-**Status:** Live (registered 2026-08-30 with the recurring billing foundation; semantics decided in the Step 2 review as the "stateful attempt record" model). **Provider-neutral per ADR-038:** Razorpay is the active provider; Juspay remains a retained provider implementation.
+**Status:** Live (registered 2026-08-30 with the recurring billing foundation; semantics decided in the Step 2 review as the "stateful attempt record" model). **Provider-neutral per ADR-038:** Razorpay is the sole active/selectable provider; the Juspay implementation code remains retained/dormant and is not runtime-selectable.
 
 **Rule:** Every recurring billing attempt against an `OrganizationSubscription` is recorded as a `SubscriptionBillingAttempt` row **before** provider execution. The only permitted mutation of an attempt row is the single lifecycle transition `initiated → succeeded | failed`, performed exclusively by the tightly-scoped attempt-recording service (renewal worker or webhook processor). A retry is always a **new** row; terminal results are never overwritten, history is never rewritten, and no API surface may expose mutation of an existing attempt.
 
