@@ -122,6 +122,38 @@ Not covered by this run (explicitly out of B-2 scope): Next.js `/api/resolve-cha
 same Redis map; storefront not part of this stack), Caddy wildcard/on-demand TLS (G10), and the
 7-day TTL re-affirmation strategy (separate operational decision).
 
+### G3 pre-flight — storefront hostname chain verified 2026-09-16 (meeting.lan)
+
+The Next.js link of the chain was exercised against the local `meeting.lan` stack
+(nginx wildcard TLS → Next.js :3001 → `/api/resolve-channel` → Redis :6479) with **fresh tenants
+created only through `registerNewTenant`** — no manual PostgreSQL or Redis writes.
+
+| Assertion | Result |
+|---|---|
+| `TENANT_PLATFORM_DOMAIN` respected at registration | ✅ registering with `.env` = `meeting.lan` produced `channel-token:g3-tenant-a.meeting.lan` → `tok_g3-tenant-a_vufbkz`, `g3-tenant-b.meeting.lan` → `tok_g3-tenant-b_iw8l6l` |
+| Existing G2 fixtures untouched | ✅ `*.saa9vi.com` keys and rows unchanged |
+| Resolution through nginx HTTPS | ✅ `https://g3-tenant-{a,b}.meeting.lan/api/resolve-channel?hostname=…` returned each tenant's own token; unknown hostname → `null` |
+| Not a default-channel echo | ✅ asking host A for hostname B returned **B**'s token |
+| Header contract intact | ✅ `x-saa9vi-channel-token` always set (empty on no-match) — spoof-stripping preserved |
+| Storefront consumes the header | ✅ code-verified precedence in `src/lib/vendure/api.ts`: explicit arg → `x-saa9vi-channel-token` (tenant) → `VENDURE_CHANNEL_TOKEN` env (dev fallback) |
+
+**Environment-alignment defect found (documentation gap):** the storefront `.env` had
+`REDIS_PORT=6379` while Redis is exposed on **6479** (backend `.env`), so `/api/resolve-channel`
+returned `null` for *every* hostname — including mappings that demonstrably existed. The resolver
+fails closed by design (`redis.on('error')` → null), which made the misconfiguration silent. Both
+services must resolve the **same** Redis instance/port; this is now recorded here because it was not
+stated anywhere in the repo.
+
+**Test-methodology notes (for future runs):** `/api/resolve-channel` **requires** `?hostname=`
+(the bare URL returns `null` by design), the storefront listens on **3001** (3000 is Vendure), and
+`g3-tenant-*.meeting.lan` hostnames were exercised via `curl --resolve` rather than `/etc/hosts`
+(entries would need sudo; the wildcard TLS vhost already accepts them).
+
+**Not yet demonstrated:** tenant-specific *page data* on a server-rendered surface — `/en/search`
+SSR bytes were identical between the base host and a tenant host, which is expected because
+`search-results.tsx` is client-rendered, so that probe was inconclusive rather than negative.
+A server-rendered channel-scoped probe belongs to G3 proper.
+
 **Priority:** P1 — **Depends on:** B-1
 
 Implement the selected hostname contract using the existing domain/channel infrastructure where appropriate. Cline must verify whether `TenantProfile.customDomain`, `DomainChannelResolverService`, the Redis channel-token mapping, Caddy, and Next.js `resolve-channel` can safely support the selected contract.
