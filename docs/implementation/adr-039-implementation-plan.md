@@ -16,7 +16,7 @@
 4. Create the local `OrganizationSubscription` with `status: 'pending_provider_auth'` (retiring unconditional `'active'`), assign to channel (existing INV-001 pattern).
 5. Call `createProviderBinding(ctx, channelId, 'razorpay', providerSubscriptionId, plan.providerPlanId, providerStatus, { source: 'subscription-creation' })` **in the same request path**.
 6. Persist `providerStatus` + `providerShortUrl` on the subscription; return both to the admin caller.
-7. Failure semantics: any provider error aborts the mutation atomically (no binding-less subscription rows); retry-safe via the per-channel guard.
+7. Failure semantics: **external-side-effect model per ADR-039** — validate locally first, provider call second, persistence third; a local-persist failure after provider success surfaces the orphan `providerSubscriptionId` + correlation notes in the mutation error (orphan pre-auth subs never charge and expire; reconciled via dashboard). No claim of cross-system atomicity.
 
 ## Step 3 — Webhook side (no change)
 

@@ -61,7 +61,9 @@ subscribeToPlan
 
 * `subscribeToPlan` retains its existing single-active-subscription-per-channel guard.
 * Binding creation reuses `createProviderBinding()`; its DB authority is the existing `UNIQUE(provider, providerSubscriptionId)` index. The C-1-C finding (pre-lookup on `providerSubscriptionId` alone vs the composite unique index) is resolved as part of C-1-C verification: the lookup is tightened to `{ provider, providerSubscriptionId }` **only if** runtime evidence shows cross-provider ID collision is a real scenario; otherwise the stricter index already covers the actual single-provider runtime.
-* Provider API failure during `subscribeToPlan` → the mutation fails; no local subscription row is committed without its binding (transactional consistency; retry is safe via the per-channel guard and provider notes idempotency).
+* Provider API failure during `subscribeToPlan` → **external-side-effect failure model** (see Preflight section): the Razorpay call is NOT transactional and cannot be rolled back by PostgreSQL. Failure semantics are explicit below.
+* **Preflight result (2026-09-16, code-verified against actual entities/SDK):** `organizationId` derives from the Channel ↔ TenantProfile ↔ BbbOrganization 1:1 chain (all keyed by `channelId`; `TenantProfile.id` serves as the organization reference in `notes`). `customerEmail` derives from the mandatory `TenantProfile.contactEmail`. **No phone field exists anywhere** — `notify_info` is optional in the Razorpay SDK and phone is omitted (`notify_email` only; webhooks, not Razorpay notifications, drive our lifecycle). `amount`/`currency`/`frequency` are **not inputs to `subscriptions.create`** — the Razorpay plan (`plan_id`) carries them server-side; `total_count` defaults to 12. Provider response supplies `subscription.id` + `short_url` ✅. The Razorpay Subscriptions API has **no idempotency-key mechanism on create** — correlation is app-side via `notes` (`channelId`, `tenantProfileId`) plus the DB partial-unique guard; orphan provider subscriptions (local persist failing after provider success) are surfaced in the error and reconcilable via Razorpay dashboard notes.
+* `OrganizationSubscription.status` is a varchar (no DB enum) — adding `'pending_provider_auth'` to the TS union is a type-only change, no migration for the status itself.
 
 ### Invariants preserved
 
@@ -69,6 +71,27 @@ subscribeToPlan
 * **INV-004** (persist-first webhooks): unchanged; webhooks remain the sole driver of payment lifecycle.
 * **INV-018** (channel-scoped processing): worker unchanged — still resolves from the persisted binding, still fails closed.
 * **INV-019** (provider-neutral bindings): binding creation remains through the provider-neutral `createProviderBinding()`.
+
+## Failure semantics — external-side-effect model (required correction, 2026-09-16)
+
+Razorpay is an external system: a PostgreSQL rollback cannot undo a Razorpay subscription creation, and vice versa. The sequence is ordered to minimize and surface orphans rather than pretend atomicity:
+
+```text
+1. Validate all local prerequisites (channel, plan, providerPlanId, tenant
+   profile/contact, active-subscription guard)  — no side effects yet
+2. Create Razorpay subscription                — EXTERNAL, non-rollbackable
+3. Persist local subscription + binding        — in the existing mutation transaction
+4. If (3) fails:
+   → the local transaction rolls back
+   → the provider subscription sub_XXX REMAINS (orphan, pre-authorization)
+   → the mutation error MUST surface providerSubscriptionId + correlation notes
+     for ops reconciliation (Razorpay dashboard; orphan subs never activate
+     without customer authorization and expire per plan settings)
+```
+
+Idempotency/correlation on retry: Razorpay offers no create-time idempotency key for subscriptions, so the local partial-unique index (`channelId` WHERE status != 'cancelled') remains the authoritative anti-duplicate guard, and `notes` (`channelId`, `tenantProfileId`) tag every created provider subscription for correlation. A retry after a step-3 failure intentionally creates a NEW provider subscription (the old one is an abandoned pre-auth sub) — acceptable because pre-auth subscriptions carry no charge and expire; duplication of an *activated* subscription cannot occur because activation requires a webhook, and the binding unique index admits only one binding per provider subscription ID.
+
+The provider HTTP call must not sit inside an open DB transaction longer than necessary — validation first, provider call second, persistence third (the resolver's `@Transaction()` wrapper governs step 3).
 
 ## Consequences
 
