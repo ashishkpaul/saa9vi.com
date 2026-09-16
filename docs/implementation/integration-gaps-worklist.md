@@ -348,7 +348,7 @@ The architecture documentation clearly identifies the rotation dependency and pr
 
 ## C-1 — Verify binding creation lifecycle
 
-**Priority:** P1 — **Status:** Open.
+**Priority:** P1 — **Status:** Open — C-1-A evidence recorded 2026-09-16, C-1-B/C/D remaining.
 
 Trace the real recurring-payment lifecycle:
 
@@ -359,9 +359,29 @@ checkout → Razorpay subscription/payment → provider response/webhook
 
 Determine whether the binding is created automatically, by webhook processing, by checkout, or is currently missing. Do not add a second binding mechanism until the existing lifecycle is understood.
 
+### C-1-A runtime evidence (2026-09-16) — first-subscription lifecycle FAILS CLOSED
+
+Executed against the live stack (GraphQL/HTTP only; SQL inspection read-only):
+
+1. Signed `subscription.activated` webhook (`sub_C1PROBE001`, `notes.channelId` present in payload) delivered via HTTP to `POST /payments/razorpay/webhook` with a valid HMAC signature and unique `X-Razorpay-Event-Id` (bad-signature control correctly rejected 401; missing event-ID header correctly rejected 401).
+2. `ProviderWebhookEvent` persisted first (INV-004): `pending`, raw payload + hash stored. Webhook returns **HTTP 201** (controller has no explicit `@HttpCode`).
+3. Worker: `resolveChannelFromBinding()` consults **only** the DB binding lookup — it ignores `notes.channelId` in the payload. With no pre-existing binding it returns `null`.
+4. Worker fails closed (INV-018): `Could not resolve channel for webhook event 11; refusing to process with generic context` — 3 attempts (BullMQ exponential backoff), then terminal `failed` + `failedAt`.
+5. `subscription_provider_binding` remained **0 rows**. `RazorpayWebhookProcessor` (and its lazy `createProviderBinding()` path) was **never reached**.
+
+**Conclusion (runtime-proven):** the processor's lazy-binding branch is unreachable for the first subscription — the worker's binding-lookup precedes processor invocation, so a brand-new subscription's first webhook can never establish its own binding. The queue worker fails closed *before* the lazy path can run. Fix must occur in the worker's channel-resolution step (e.g., consult authenticated payload `notes.channelId` to seed the binding pre-processor), not in the processor.
+
+Minor observations: (a) `attemptCount` accumulates across duplicate-delivery jobs sharing one `providerEventId` (observed 4 for 3 attempts) — accounting quirk, FSM unaffected; (b) duplicate-delivery recovery path (`UNIQUE(provider, providerEventId)` → re-enqueue pending event) verified working at runtime.
+
+### C-1 infrastructural finding — job-queue worker was never started (fixed 2026-09-16)
+
+The API entrypoint (`src/index.ts`) called only `bootstrap(config)`. In Vendure 3, `bootstrap()` does **not** start job-queue consumption; that requires a worker process or an explicit `JobQueueService.start()`. Consequence: all BullMQ jobs (provider webhooks, marketplace indexing, subscription renewals, BBB webhooks) were stranded in the shared `bull:vendure-job-queue` wait list — 25+ jobs since 2026-09-15 evening, while the API server otherwise served normally. Fixed by explicitly calling `JobQueueService.start()` in `src/index.ts` after bootstrap (merged-worker mode); verified by live backlog drain and worker failure logs. Any runtime verification that depends on async jobs must re-check this behavior after server restarts.
+
 ### Acceptance criterion
 
 A real Razorpay subscription creates exactly one valid `SubscriptionProviderBinding` with the correct provider, provider subscription ID, and Saa9vi subscription/channel association.
+
+Remaining C-1 sub-gates: C-1-B (`channels[]` join + scalar `channelId` persistence after `bindingRepo.save()`), C-1-C (idempotency: same provider+ID repeat vs `providerSubscriptionId`-only pre-lookup vs `(provider, providerSubscriptionId)` unique index), C-1-D (cross-channel binding visibility isolation).
 
 # Track D — Existing BBB/Razorpay — Verification Only
 

@@ -388,7 +388,8 @@ HMAC-SHA256 signature verification (raw body bytes)
     ↓
 Persist ProviderWebhookEvent { status: 'pending' } (immutable inbox)
     ↓
-Return 200 immediately
+Return 201 immediately (persisted + enqueued; controller has no explicit
+@HttpCode override)
     ↓
 BullMQ: provider-webhook-processing queue
     ↓

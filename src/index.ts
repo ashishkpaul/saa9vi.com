@@ -92,7 +92,22 @@ async function start() {
     // webhook HMAC verification over the raw body (a plugin-layer json()
     // middleware cannot work — Nest's global parser consumes the stream
     // before any Nest middleware runs).
-    await bootstrap(config, { nestApplicationOptions: { rawBody: true } });
+    const app = await bootstrap(config, { nestApplicationOptions: { rawBody: true } });
+
+    // Start job queue consumption. In Vendure 3, bootstrap() does NOT start
+    // job queues — consumption requires a separate worker process or an
+    // explicit JobQueueService.start(). Without this, all BullMQ jobs
+    // (provider webhooks, marketplace indexing, subscription renewals, BBB
+    // webhooks) remain stranded in the shared `bull:vendure-job-queue` wait
+    // list indefinitely (C-1 runtime finding, 2026-09-16: 25 jobs stranded
+    // since 2026-09-15 evening while the API server otherwise served
+    // normally). Merged-worker mode: the API process consumes its own queues.
+    const { JobQueueService } = await import('@vendure/core');
+    const jobQueueService = app.get(JobQueueService);
+    if (!jobQueueService.started) {
+        await jobQueueService.start();
+        console.log('Job queues started (merged-worker mode).');
+    }
 }
 
 start().catch(err => {
