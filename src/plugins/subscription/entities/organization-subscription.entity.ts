@@ -18,8 +18,11 @@ export type OrganizationSubscriptionStatus =
  * the organization via the 1:1 Channel ↔ TenantProfile ↔ BbbOrganization
  * chain, so no separate organizationId column is needed.
  *
- * Status FSM (legacy ADR §AC-004):
- *   trialing → active → past_due → cancelled
+ * Status FSM (ADR-039 supersedes the legacy ADR §AC-004 shape):
+ *   pending_provider_auth → active → past_due → cancelled
+ *   (trialing retained for non-provider flows)
+ * Only provider webhooks drive pending_provider_auth → active;
+ * Razorpay is the authoritative activation source (INV-004).
  * Dunning/retry mechanics reuse RFC-001 §4.2 patterns at org level.
  */
 @Entity("organization_subscription")
@@ -36,9 +39,9 @@ export class OrganizationSubscription extends VendureEntity implements ChannelAw
   /**
    * Dual channels[] + scalar channelId per ADR-003.
    *
-   * ⚠️ BUG-004 shape: when the create path lands, populate BOTH the join table
-   * (channelService.assignToCurrentChannel) AND the scalar — see
-   * BbbOrganizationService.create() precedent where only the scalar was set.
+   * ✅ BUG-004 shape implemented (ADR-039 create path): subscribeToPlan()
+   * populates BOTH the join table (channels[] membership, saved inside the
+   * explicit local transaction) AND the scalar channelId.
    */
   @ManyToMany(() => Channel)
   @JoinTable()
@@ -91,8 +94,9 @@ export class OrganizationSubscription extends VendureEntity implements ChannelAw
 
   /**
    * Razorpay short_url for customer authorization (ADR-039). Returned to
-   * the admin caller at subscription creation. Null once activated or if
-   * never provider-wired.
+   * the admin caller at subscription creation. Null if never provider-wired.
+   * Note: not automatically cleared on activation (documented residual —
+   * the authoritative post-auth state is `status` + the binding).
    */
   @Column({ nullable: true })
   providerShortUrl: string;

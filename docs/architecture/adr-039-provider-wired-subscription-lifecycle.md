@@ -1,6 +1,6 @@
 # ADR-039: Provider-Wired Subscription Creation Lifecycle
 
-**Status:** Accepted (2026-09-16 — approved with corrections; external-side-effect failure model and input-contract preflight applied). Implementation not yet started at acceptance; see `docs/implementation/adr-039-implementation-plan.md`.
+**Status:** Accepted and implemented (2026-09-16). C-1 runtime verification closed 2026-09-16 (all sub-gates passed live — see `integration-gaps-worklist.md`); Dashboard visibility (UI-1) shipped in `91ca476`. Implementation record: `docs/implementation/adr-039-implementation-plan.md` (all steps COMPLETE).
 **Date:** 2026-09-16
 **Supersedes:** none
 **Related:** ADR-038 (direct Razorpay provider), ADR-037 (recurring billing foundation), INV-001 (Channel = Tenant), INV-004 (persist-first webhooks), INV-018 (channel-scoped processing), INV-019 (provider-neutral bindings)

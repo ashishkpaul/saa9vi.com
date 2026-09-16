@@ -451,3 +451,132 @@ Pending → Provisioning → Active → Completed → Archived
 - No rows for `orderSource = 'direct'` or `'referral'`
 
 > **ⓘ Attribution dependency:** Commission rows depend on `Order.customFields.orderSource` being stamped correctly at checkout. The classification mechanism is settled in the ADR-021 addendum: the storefront passes a raw `referrerCode`/`utm_source`; Vendure-side `OrderProcess` logic classifies (INV-008). MarketplaceAttributionService shipped (`750da49`, issue/verify: HMAC + TTL + channel); CommissionLedger entity+sub shipped (`584530b`); Phase 3B ongoing.
+
+---
+
+## SubscriptionPlan ✅ Implemented
+
+| Property | Value |
+|---|---|
+| **Plugin** | SubscriptionPlugin (`src/plugins/subscription`) |
+| **Table** | `subscription_plan` |
+| **ChannelAware** | No — platform-global (portal) catalogue |
+| **Purpose** | Tenant SaaS tier catalogue (Starter / Growth / Enterprise) with capacity/feature limits. |
+
+**Relationships:**
+- 1:N with OrganizationSubscription (each tenant subscribes to exactly one plan)
+- Referenced by BbbPlatformCapacityPolicy via `subscriptionPlanId` (ADR-031)
+
+**Lifecycle:**
+- Created/updated by Portal Admin (SuperAdmin) via `createSubscriptionPlan`
+- Stored once; subscribed to by many tenants
+
+**Fields:** `name`, `slug` (unique), `description`, `monthlyPriceInPaise`, `includedBbbMinutes`, `maxStudents`, `customDomainEnabled`, `whitelabelEnabled`, `isActive`, `sortOrder`, `providerPlanId`
+
+**Invariants:**
+- Deliberately NOT channel-scoped — plans are global (INV-001 applies to subscription *state*, not the catalogue).
+- `providerPlanId` (Razorpay `plan_id`, ADR-039) is nullable during rollout; the provider-wired subscribe flow fails closed when unset.
+- Razorpay plan carries amount/currency/frequency server-side — never duplicated here.
+- Capacity limits are NOT stored here; they live in `BbbPlatformCapacityPolicy` (ADR-031).
+
+---
+
+## OrganizationSubscription ✅ Implemented
+
+| Property | Value |
+|---|---|
+| **Plugin** | SubscriptionPlugin |
+| **Table** | `organization_subscription` |
+| **ChannelAware** | Yes — dual `channels[]` + scalar `channelId` (ADR-003) |
+| **Purpose** | A tenant academy's subscription to a SaaS tier. One row per tenant. |
+
+**Relationships:**
+- N:1 with SubscriptionPlan (via `plan`)
+- 1:1 with Channel (via `channelId`; the channel uniquely identifies the organization through Channel ↔ TenantProfile ↔ BbbOrganization — no separate `organizationId` column)
+- 1:N with SubscriptionBillingAttempt
+
+**Lifecycle (FSM — ADR-039):**
+- `pending_provider_auth` → `active` → `past_due` → `cancelled`
+- `trialing` retained for non-provider flows
+- Only provider webhooks drive `pending_provider_auth` → `active`; Razorpay is the authoritative activation source (INV-004).
+
+**Fields:** `plan`, `channels`, `channelId`, `status`, `currentPeriodStart`, `currentPeriodEnd`, `cancelAtPeriodEnd`, `cancelledAt`, `dunningRetryCount`, `lastDunningAttemptAt`, `billingCustomerId` (legacy Juspay-only), `providerStatus`, `providerShortUrl`, `version`
+
+**Invariants:**
+- `UNIQUE(channelId) WHERE status != 'cancelled'` — at most one non-cancelled subscription per tenant.
+- `pending_provider_auth` occupies the one-active-subscription slot (provider authorization must not be bypassed by a second subscribe).
+- `providerShortUrl` is returned to the admin caller at creation; it is not automatically cleared on activation (documented residual — authoritative post-auth state is `status` + the binding).
+- `version` is a plain CAS token for renewal compare-and-swap (NOT auto-locking); the worker must check affected-rows === 1 before charging.
+- Status column is `varchar`, so adding FSM values is not a DB-enum migration.
+
+---
+
+## SubscriptionProviderBinding ✅ Implemented
+
+| Property | Value |
+|---|---|
+| **Plugin** | SubscriptionPlugin |
+| **Table** | `subscription_provider_binding` |
+| **ChannelAware** | Yes — dual `channels[]` + scalar `channelId` (ADR-003) |
+| **Purpose** | Provider-neutral binding of an OrganizationSubscription to a provider subscription (e.g. Razorpay `subscription_id`). |
+
+**Relationships:**
+- N:1 with OrganizationSubscription (via `subscription`)
+
+**Lifecycle:**
+- Created at subscription-creation time inside `subscribeToPlan()` (ADR-039) — the sole first-binding mechanism.
+- Updated by provider webhooks (status/active mirroring).
+
+**Fields:** `subscription`, `channels`, `channelId`, `provider`, `providerSubscriptionId`, `providerPlanId`, `providerStatus`, `active`, `metadata`
+
+**Invariants:**
+- `UNIQUE(provider, providerSubscriptionId)` — provider-qualified subscription identity is the authoritative uniqueness contract.
+- Provider-specific details live in the provider adapter; this entity stays provider-neutral.
+- The worker resolves the tenant channel from this binding before invoking the provider processor and fails closed when no binding exists (INV-018); channel is never taken from arbitrary request context.
+
+---
+
+## SubscriptionBillingAttempt ✅ Implemented
+
+| Property | Value |
+|---|---|
+| **Plugin** | SubscriptionPlugin |
+| **Table** | `subscription_billing_attempt` |
+| **ChannelAware** | No ORM relationship — denormalized scalar `channelId` (ADR-003 scalar-only exception) |
+| **Purpose** | Provider-neutral record of a single billing attempt against a subscription (retries create new rows). |
+
+**Relationships:**
+- N:1 with OrganizationSubscription (via `subscription`)
+
+**Lifecycle:** `initiated` → `succeeded` | `failed` (terminal results are never overwritten)
+
+**Fields:** `subscription`, `channelId`, `provider`, `providerSubscriptionId`, `providerPaymentId`, `providerInvoiceId`, `providerEventId`, `invoiceId`, `providerAttemptId`, `amountPaise`, `currency`, `billingPeriodStart`, `status`, `failureReason`, `attemptedAt`
+
+**Invariants:**
+- Append-only per attempt — terminal results are never overwritten.
+- `UNIQUE(provider, providerEventId)` provides webhook idempotency.
+- Replaces the legacy `JuspayPaymentAttempt`.
+
+---
+
+## ProviderWebhookEvent ✅ Implemented
+
+| Property | Value |
+|---|---|
+| **Plugin** | SubscriptionPlugin |
+| **Table** | `provider_webhook_event` |
+| **ChannelAware** | No ORM relationship — denormalized scalar `channelId` (ADR-003 scalar-only exception) |
+| **Purpose** | Immutable inbox recording that a provider webhook was received (authoritative receipt). |
+
+**Relationships:**
+- Logical reference to the resolved SubscriptionProviderBinding (binding → `channelId`)
+
+**Lifecycle:** `pending` → `processed` | `failed` (terminal). Intermediate retry failures leave status `pending`; `attemptCount` tracks retries.
+
+**Fields:** `channelId` (nullable at ingress), `provider`, `providerEventId`, `eventType`, `payloadHash`, `rawPayload`, `receivedAt`, `verifiedAt`, `processedAt`, `failedAt`, `processingStatus`, `attemptCount`, `errorMessage`
+
+**Invariants:**
+- Events are append-only — never updated except processing/verification timestamps and retry counters.
+- `UNIQUE(provider, providerEventId)` prevents duplicate processing.
+- `channelId` is NULL at ingress and resolved by the worker from the provider binding — the authoritative channel comes from the binding, not arbitrary request context (INV-018).
+- Juspay webhook entities (`juspay_webhook_event`, `juspay_webhook_endpoint`, etc.) remain retained/dormant alongside the dormant Juspay provider (ADR-038).

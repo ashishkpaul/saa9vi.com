@@ -129,9 +129,12 @@ export class RazorpayWebhookProcessor {
                 );
             }
         } else if (channelId) {
-            // Lazily create the binding on authenticated/activated events
-            // where the channelId is known from the Razorpay payload notes.
-            // Previously this silently no-op'd, breaking the webhook→subscription link.
+            // ⚠️ LEGACY / UNREACHABLE (ADR-039): binding creation at subscription
+            // creation time (subscribeToPlan) is the SOLE first-binding mechanism.
+            // This lazy branch predates that decision and cannot be reached via
+            // the production worker — the queue fails closed (C-1-A runtime
+            // evidence) before the processor runs when no binding exists.
+            // Retained as defensive compat only; do not rely on it.
             try {
                 await this.subscriptionService.createProviderBinding(
                     ctx,

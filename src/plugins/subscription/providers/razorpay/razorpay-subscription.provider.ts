@@ -22,6 +22,9 @@ export class RazorpaySubscriptionProvider implements RecurringBillingProvider {
     private readonly keyId: string;
     private readonly keySecret: string;
 
+    /** Saa9vi application default for billing cycles (the API has none). */
+    private static readonly DEFAULT_TOTAL_COUNT = 12;
+
     constructor(private configService: ConfigService) {
         this.keyId = process.env.RAZORPAY_KEY_ID || '';
         this.keySecret = process.env.RAZORPAY_KEY_SECRET || '';
@@ -45,7 +48,8 @@ export class RazorpaySubscriptionProvider implements RecurringBillingProvider {
      * Request contract (ADR-039, pinned 2026-09-16 — ONLY documented
      * Create Subscription schema fields; the API 400-rejects extra fields):
      *   plan_id, total_count (Saa9vi default 12 — the API has none;
-     *   required unless end_at), quantity, customer_notify, notes.
+     *   required unless end_at; non-positive caller values are rejected),
+     *   quantity, customer_notify, notes.
      * notify_info is a Subscription-LINK API field and must NOT be sent here.
      * Pricing/frequency live on the Razorpay plan (plan_id).
      *
@@ -60,9 +64,20 @@ export class RazorpaySubscriptionProvider implements RecurringBillingProvider {
     ): Promise<ProviderSubscription> {
         const client = this.getClient();
 
+        // Billing cycles: Saa9vi application default (the API has none; the
+        // field is required unless end_at is used). Fail closed on a
+        // caller-supplied non-positive value rather than silently normalizing
+        // it to the default — the API rejects total_count <= 0.
+        if (input.totalCount !== undefined && input.totalCount <= 0) {
+            throw new Error(
+                `${loggerCtx}: totalCount must be greater than zero (received ${input.totalCount})`,
+            );
+        }
+        const totalCount = input.totalCount ?? RazorpaySubscriptionProvider.DEFAULT_TOTAL_COUNT;
+
         const subscription = await client.subscriptions.create({
             plan_id: input.planId,
-            total_count: input.totalCount || 12,
+            total_count: totalCount,
             quantity: 1,
             customer_notify: false,
             ...(input.startAt !== undefined ? { start_at: input.startAt } : {}),

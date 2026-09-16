@@ -162,7 +162,11 @@ export class SubscriptionAdminResolver {
     return this.subscriptionService.updatePlan(ctx, id, input);
   }
 
-  @Transaction()
+  // ADR-039 external-side-effect ordering: deliberately NOT @Transaction().
+  // The resolver-level transaction would hold a DB transaction open across
+  // the external Razorpay HTTP call. Instead: validate (no tx) → provider
+  // call (no tx) → one explicit narrow transaction for the local atomic
+  // unit (OrganizationSubscription + SubscriptionProviderBinding).
   @Mutation()
   @Allow(Permission.SuperAdmin)
   async subscribeToPlan(

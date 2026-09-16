@@ -1,6 +1,6 @@
 # Storefront Subscription UI Audit (2026-09-16, post-ADR-039)
 
-> Scratch audit record - to be folded into the canonical worklist when the actor-model decision is made.
+> **STATUS: HISTORICAL — decision made.** The actor-model decision was recorded in the canonical worklist (`UI-1`, commit `7d80854`): **option (b) — Portal Admin subscribes tenants via the Admin API** for the current phase. Dashboard subscription visibility subsequently shipped in `91ca476`. Storefront subscription mutations remain deferred; Shop-API self-service requires a new ADR. This document is retained as the discovery evidence behind that decision.
 
 Audited `nextjs-starter-vendure` against the post-ADR-039 schema. Findings:
 

@@ -1,6 +1,15 @@
-# Implementation Plan — ADR-039 Provider-Wired Subscription Lifecycle
+# Implementation Record — ADR-039 Provider-Wired Subscription Lifecycle
 
-**Status:** Accepted (2026-09-16) — Step 1 unblocked. Step 2 gated on the input-contract corrections below.
+**Status: COMPLETED (2026-09-16).** All steps executed and runtime-verified. Retained below as the implementation record (original plan structure preserved).
+
+| Step | Status | Evidence |
+|---|---|---|
+| 1 — Schema (CLI migration) | ✅ COMPLETE | migration `1789549563835-add-provider-subscription-fields` (3 nullable columns); commit `c79e6ca` |
+| 2 — Provider wiring in `subscribeToPlan` | ✅ COMPLETE | commit `801588e`; transaction boundary corrected to ADR-039 ordering (no `@Transaction()` on the mutation; provider call outside any DB tx; one explicit narrow transaction for subscription + binding) |
+| 3 — Webhook side | ✅ COMPLETE | envelope unwrapping fix + `pending_provider_auth → active` transition; commit `30d38e1` |
+| 4 — Runtime verification | ✅ COMPLETE — C-1 CLOSED | C-1-A/B/C/C-idempotency/D/E all passed live; evidence in `integration-gaps-worklist.md` |
+| UI-1 — Dashboard visibility | ✅ COMPLETE | commit `91ca476` |
+
 
 ## Step 1 — Schema (Vendure CLI migration only)
 

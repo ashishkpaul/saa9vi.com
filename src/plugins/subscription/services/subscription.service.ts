@@ -1,13 +1,11 @@
 import { Injectable, Inject } from "@nestjs/common";
 import {
   Channel,
-  ChannelService,
   DeepPartial,
   ID,
   ListQueryBuilder,
   Logger,
   RequestContext,
-  RequestContextService,
   TransactionalConnection,
 } from "@vendure/core";
 
@@ -22,20 +20,20 @@ import {
 import { TenantProfile } from "../../tenant-plugin/entities/tenant-profile.entity";
 
 /**
- * Lifecycle service for tenant SaaS subscriptions (Phase 2).
+ * Lifecycle service for tenant SaaS subscriptions.
  *
- * Scope of this increment: plan catalogue CRUD (Portal Admin) and
- * channel-scoped subscription reads. Renewal/dunning jobs and the Juspay
- * integration land in subsequent increments — this service is intentionally
- * the seam they will plug into.
+ * Owns: plan catalogue CRUD (Portal Admin), channel-scoped subscription
+ * reads, provider-wired subscription creation (ADR-039: Razorpay
+ * subscription + SubscriptionProviderBinding in one request path), and
+ * the binding seam consumed by provider webhook processing.
+ * Renewal/dunning live in SubscriptionRenewalService; the provider
+ * is Razorpay (sole active provider — ADR-038).
  */
 @Injectable()
 export class SubscriptionService {
   constructor(
     private readonly connection: TransactionalConnection,
     private readonly listBuilder: ListQueryBuilder,
-    private readonly channelService: ChannelService,
-    private readonly requestContextService: RequestContextService,
     // Provider-neutral per ADR-038/INV-019. Null only when the plugin runs
     // without a configured provider (dev without Redis-style fallbacks).
     @Inject(RECURRING_BILLING_PROVIDER)
@@ -114,8 +112,13 @@ export class SubscriptionService {
   }
 
   /**
-   * Subscribes a channel to a plan (INV-001/ADR-003).
-   * Populates both the join table (assignToCurrentChannel) and the scalar channelId.
+   * Subscribes a channel to a plan (INV-001/ADR-039).
+   *
+   * Channel assignment follows the ADR-036 house policy: tenant-scoped entities
+   * are assigned to the TENANT channel only. The generic Vendure
+   * `assignToCurrentChannel()` helper also joins the default channel, which
+   * would leak the tenant's subscription onto the platform channel (BUG-031).
+   * Assignment is therefore done inline (`channels = [channel]`).
    */
   async subscribeToPlan(
     ctx: RequestContext,
@@ -173,47 +176,48 @@ export class SubscriptionService {
     };
     const providerSub = await this.billingProvider.createSubscription(providerInput);
 
-    // ── 3. Local persistence (inside the mutation's transaction) ──
+    // ── 3. Local persistence: ONE explicit narrow transaction covering the
+    // atomic unit (OrganizationSubscription + SubscriptionProviderBinding).
+    // A failure here rolls back BOTH rows; the provider subscription sub_XXX
+    // remains as a pre-auth orphan and is surfaced for reconciliation
+    // (ADR-039 external-side-effect model).
     const now = new Date();
     const periodEnd = new Date(now);
     periodEnd.setMonth(periodEnd.getMonth() + 1);
 
-    const sub = new OrganizationSubscription({
-      channelId,
-      plan,
-      // ADR-039: pre-authorization state; only provider webhooks drive 'active'.
-      status: "pending_provider_auth",
-      currentPeriodStart: now,
-      currentPeriodEnd: periodEnd,
-      version: 1,
-      providerStatus: providerSub.status,
-      providerShortUrl: providerSub.shortUrl,
-    });
-
-    // Ensure the entity is assigned to the target channel (INV-001)
-    const targetCtx = await this.requestContextService.create({
-      apiType: "admin",
-      channelOrToken: channel,
-    });
-
-    await this.channelService.assignToCurrentChannel(sub, targetCtx);
-
-    let saved: OrganizationSubscription;
-    try {
-      saved = await repo.save(sub);
-      // Binding created in the SAME request path, before returning success
-      // (ADR-039: the sole first-binding mechanism; the worker stays
-      // fail-closed and absorbs any webhook that races this commit).
-      await this.createProviderBinding(
-        ctx,
+    const saved = await this.connection.rawConnection.transaction(async (em) => {
+      const sub = new OrganizationSubscription({
         channelId,
-        this.billingProvider.providerName,
-        providerSub.providerSubscriptionId,
-        plan.providerPlanId,
-        providerSub.status,
-        { shortUrl: providerSub.shortUrl, tenantProfileId: tenantProfile.id },
-      );
-    } catch (err: unknown) {
+        plan,
+        // ADR-039: pre-authorization state; only provider webhooks drive 'active'.
+        status: "pending_provider_auth",
+        currentPeriodStart: now,
+        currentPeriodEnd: periodEnd,
+        version: 1,
+        providerStatus: providerSub.status,
+        providerShortUrl: providerSub.shortUrl,
+      });
+      // INV-001 dual pattern: join-table membership + scalar channelId.
+      sub.channels = [channel];
+      await em.save(sub);
+
+      // Binding created in the SAME request path and SAME transaction as the
+      // subscription (ADR-039: the sole first-binding mechanism; the worker
+      // stays fail-closed and absorbs any webhook that races this commit).
+      const binding = new SubscriptionProviderBinding({
+        subscription: sub,
+        channelId,
+        provider: this.billingProvider!.providerName,
+        providerSubscriptionId: providerSub.providerSubscriptionId,
+        providerPlanId: plan.providerPlanId,
+        providerStatus: providerSub.status,
+        active: false,
+        metadata: { shortUrl: providerSub.shortUrl, tenantProfileId: String(tenantProfile.id) },
+      });
+      binding.channels = [channel];
+      await em.save(binding);
+      return sub;
+    }).catch((err: unknown) => {
       // External-side-effect model (ADR-039): the provider subscription
       // sub_XXX remains as a pre-auth orphan — surface its ID for
       // reconciliation; it never charges without customer authorization.
@@ -224,7 +228,7 @@ export class SubscriptionService {
           `(channel ${channelId}) must be reconciled/cancelled in the provider ` +
           `dashboard. Cause: ${msg}`,
       );
-    }
+    });
 
     Logger.info(
       `Channel ${channelId} ('${channel.code}') subscribed to plan '${plan.name}' ` +
@@ -239,9 +243,13 @@ export class SubscriptionService {
    * to a provider-specific subscription. This is the seam that connects the
    * domain subscription to the provider's webhook events.
    *
-   * Called by RazorpayWebhookProcessor when the first subscription lifecycle
-   * event arrives (authenticated/activated), ensuring webhook lookups succeed
-   * rather than silently no-op'ing.
+   * Primary caller: `subscribeToPlan()` (ADR-039) — binding creation at
+   * subscription-creation time is the SOLE first-binding mechanism.
+   *
+   * Legacy caller: `RazorpayWebhookProcessor.updateBinding()` retains a
+   * lazy-creation branch for pre-ADR-039 compat, but that branch is
+   * unreachable through the production worker (the queue fails closed
+   * before invoking the processor when no binding exists — C-1-A evidence).
    */
   async createProviderBinding(
     ctx: RequestContext,
@@ -254,9 +262,13 @@ export class SubscriptionService {
   ): Promise<SubscriptionProviderBinding> {
     const bindingRepo = this.connection.getRepository(ctx, SubscriptionProviderBinding);
 
-    // Idempotency: return existing binding if one already exists
+    // Idempotency lookup keyed on the SAME tuple as the entity's uniqueness
+    // contract: @Index(['provider', 'providerSubscriptionId'], { unique: true }).
+    // Looking up providerSubscriptionId alone would conflate identical provider
+    // IDs issued by different providers (the entity is deliberately
+    // provider-neutral — INV-019).
     const existing = await bindingRepo.findOne({
-      where: { providerSubscriptionId },
+      where: { provider, providerSubscriptionId },
     });
     if (existing) {
       return existing;
@@ -293,12 +305,11 @@ export class SubscriptionService {
       metadata,
     });
 
-    // Assign to channel (INV-001: Channel = Tenant)
-    const targetCtx = await this.requestContextService.create({
-      apiType: "admin",
-      channelOrToken: channel,
-    });
-    await this.channelService.assignToCurrentChannel(binding, targetCtx);
+    // ADR-036 house policy (INV-001: Channel = Tenant): tenant-scoped entities
+    // are assigned to the TENANT channel only. Deliberately NOT
+    // `assignToCurrentChannel()`, which also joins the default channel and would
+    // leak the binding onto the platform channel (BUG-031).
+    binding.channels = [channel];
 
     const saved = await bindingRepo.save(binding);
     Logger.info(
