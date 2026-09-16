@@ -74,7 +74,7 @@ A tenant created through the supported GraphQL registration flow has a documente
 
 ## B-2 — Implement tenant hostname provisioning
 
-**Status:** IMPLEMENTED 2026-09-15 (build-verified, runtime-unverified) — G2 acceptance test below not yet executed.
+**Status:** IMPLEMENTED 2026-09-15 — **G2 acceptance PASSED at the Vendure layer** (live stack; see §G2 acceptance below). Build/migration/code-review verified; hostname→Channel resolution proven for four tenants. Next.js `resolve-channel` consumer and production Caddy/TLS remain unverified (out of B-2 scope).
 Audit fixes applied same day (B-2.1–B-2.4): (1) tenantSlug allocation is **platform-global** —
 collision checks use `connection.rawConnection` (documented as the one sanctioned channel-bypassing
 read) and save is **concurrency-safe** (unique-violation → next `-N` suffix → retry; explicit slugs
@@ -97,6 +97,30 @@ TenantProfile); the Redis hostname mapping is written inline but is not atomic w
 finishes. G2 acceptance must tolerate this ordering (poll/assert after a short delay), and
 `registerNewTenant` intentionally carries no `@Transaction()` decorator, so slug-retry saves
 autocommit (with SAVEPOINT fallback if a transactional caller is ever introduced).
+
+### G2 acceptance — PASSED 2026-09-15 (Vendure layer, live stack)
+
+Executed against the running server (`npm run start`, built `dist`) with Postgres + Redis:
+four tenants registered via the supported `registerNewTenant` Shop-API mutation (two pairs sharing
+a business name to exercise collision suffixing). All assertions are **read-only** afterwards — no
+manual PostgreSQL or Redis writes.
+
+| Assertion | Result |
+|---|---|
+| `TenantProfile.tenantSlug` derived | ✅ `g2-vertex-learning`, duplicate-name tenant → `g2-vertex-learning-2` |
+| Redis mapping per hostname | ✅ `channel-token:{slug}.saa9vi.com` → that channel's token, all 4 distinct |
+| Hostname → correct Channel (Vendure) | ✅ `Host:` per tenant returned its own token; `localhost` and an unknown hostname fall back to the default channel |
+| `BbbOrganization.slug === tenantSlug` | ✅ all 4 orgs, async listener completed (polled) |
+| BBB org per channel | ✅ one org per channel, distinct channelIds |
+
+**Blocker found and fixed during G2:** `domainChannelMiddleware` wrote the resolved token to
+`x-vendure-token`, but Vendure's `apiOptions.channelTokenKey` defaults to **`vendure-token`** — so
+hostname-based channel resolution silently fell back to the default channel for every request.
+Fixed in `domain-channel.middleware.ts` (header name corrected); re-verified on the production build.
+
+Not covered by this run (explicitly out of B-2 scope): Next.js `/api/resolve-channel` (reads the
+same Redis map; storefront not part of this stack), Caddy wildcard/on-demand TLS (G10), and the
+7-day TTL re-affirmation strategy (separate operational decision).
 
 **Priority:** P1 — **Depends on:** B-1
 

@@ -61,8 +61,12 @@ export function domainChannelMiddleware(
   r.get(`${keyPrefix}${hostname}`)
     .then((channelToken) => {
       if (channelToken) {
-        // Set the channel token header for Vendure to pick up
-        req.headers["x-vendure-token"] = channelToken;
+        // Set the channel token header for Vendure to pick up.
+        // Vendure's apiOptions.channelTokenKey defaults to 'vendure-token'
+        // — the previous 'x-vendure-token' header name was never read by
+        // Vendure, so hostname-based resolution silently fell back to the
+        // default channel (found during G2 acceptance, 2026-09-15).
+        req.headers["vendure-token"] = channelToken;
       }
       next();
     })
