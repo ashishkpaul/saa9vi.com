@@ -544,7 +544,41 @@ Verify all of the following against the actual runtime:
 
 ### Current status
 
-**NOT COMPLETE**
+**NOT COMPLETE — runtime half outstanding.**
+
+The **migration** half of this gate is now evidenced (below). The **runtime**
+half is not: there is no post-refactor proof of real PostgreSQL/Redis
+connection, no proof the pg-mem / default-queue fallbacks stayed inactive, and
+no evidence of a queue job executing against commit `9a31beb`.
+
+#### Migration reconciliation sub-evidence (2026-09-19)
+
+The deployed schema was reconciled with the provider-neutral entity model by
+`src/migrations/1789797901115-subscription-reconciliation-and-legacy-cleanup.ts`
+(ADR-040):
+
+``` bash
+npx vendure migrate -r
+# Successfully ran 1 migrations
+
+npx vendure migrate -r      # convergence check
+# No pending migrations found
+```
+
+| Object                                  | Before | After               |
+| --------------------------------------- | ------ | ------------------- |
+| `subscription_reconciliation_required`  | absent | present (PK + FK)   |
+| `juspay_*` tables                       | 6 (all 0 rows) | 0           |
+
+Rollback was exercised rather than assumed: `npx vendure migrate --revert`
+restored all six legacy tables — including the partial unique index on
+`juspay_subscription_mandate` and the join-table foreign keys — and re-apply
+returned to the converged state. Full evidence in ADR-040.
+
+This sub-evidence closes the **migration** half only. R2-A stays open because
+the runtime half has not been re-captured against `9a31beb`; the startup log on
+record predates the refactor and is therefore not admissible as post-refactor
+runtime evidence.
 
 ### Required evidence
 
