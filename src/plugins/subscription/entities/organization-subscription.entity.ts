@@ -81,7 +81,7 @@ export class OrganizationSubscription extends VendureEntity implements ChannelAw
   @Column({ type: "timestamp", nullable: true })
   lastDunningAttemptAt: Date | null;
 
-  /** Juspay customer reference for recurring charges. */
+    /** Provider customer reference for recurring charges (e.g. Razorpay customer_id). */
   @Column({ nullable: true })
   billingCustomerId: string;
 
@@ -112,7 +112,7 @@ export class OrganizationSubscription extends VendureEntity implements ChannelAw
    *    WHERE id = ? AND version = ?
    * and the worker must check affected-rows === 1 before proceeding to charge.
    * A worker that fails the CAS must re-read and retry, never double-renew.
-   * (RFC-001 §2.2 applied at org level; billing money via Juspay — no
+      * (RFC-001 §2.2 applied at org level; billing money via provider — no
    * DL-026-style grace tolerance applies here.)
    */
   @Column({ default: 1 })

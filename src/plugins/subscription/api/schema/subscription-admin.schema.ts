@@ -65,13 +65,13 @@ export const adminApiExtensions = gql`
   Mirrors entity fields but exposes no mutations (mandates are created via the
   provider checkout flow, not the admin API).
   """
-  type ProviderMandate {
+      type ProviderMandate {
     id: ID!
     createdAt: DateTime!
     updatedAt: DateTime!
     channelId: String!
     subscriptionId: ID!
-    juspayCustomerId: String!
+    providerCustomerId: String
     mandateId: String
     status: String!
     activatedAt: DateTime
@@ -91,8 +91,8 @@ export const adminApiExtensions = gql`
     billingPeriodStart: String!
     amountPaise: Int!
     status: String!
-    juspayOrderId: String
-    juspayTransactionId: String
+    providerOrderId: String
+    providerTransactionId: String
     failureReason: String
     attemptedAt: DateTime!
   }
@@ -108,7 +108,7 @@ export const adminApiExtensions = gql`
     channelId: String!
     subscriptionId: ID!
     invoiceId: String!
-    juspayOrderId: String!
+    providerOrderId: String!
     detectedAt: DateTime!
     resolutionNote: String
     status: ReconciliationIncidentStatus!

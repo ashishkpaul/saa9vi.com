@@ -4,6 +4,8 @@ import { ProviderWebhookEvent } from '../entities/provider-webhook-event.entity'
 import { SubscriptionProviderBinding } from '../entities/subscription-provider-binding.entity';
 import { RazorpayWebhookProcessor } from '../providers/razorpay/razorpay-webhook.processor';
 import { SubscriptionService } from './subscription.service';
+import { SubscriptionBillingAttemptService } from './subscription-billing-attempt.service';
+import { SubscriptionRenewalService } from './subscription-renewal.service';
 
 const loggerCtx = 'ProviderWebhookQueueService';
 const QUEUE_NAME = 'provider-webhook-processing';
@@ -40,11 +42,13 @@ export interface ProviderWebhookJobData {
 export class ProviderWebhookQueueService implements OnModuleInit {
     private jobQueue!: JobQueue<ProviderWebhookJobData>;
 
-    constructor(
+        constructor(
         private readonly jobQueueService: JobQueueService,
         private readonly connection: TransactionalConnection,
         private readonly requestContextService: RequestContextService,
         private readonly subscriptionService: SubscriptionService,
+        private readonly attemptService: SubscriptionBillingAttemptService,
+        private readonly renewalService: SubscriptionRenewalService,
     ) {}
 
     async onModuleInit(): Promise<void> {
@@ -133,7 +137,7 @@ export class ProviderWebhookQueueService implements OnModuleInit {
                     // default-channel context (INV-018).
                     throw new Error(`Could not resolve channel for webhook event ${eventId}; refusing to process with generic context`);
                 }
-                const processor = new RazorpayWebhookProcessor(this.connection, this.subscriptionService);
+                                const processor = new RazorpayWebhookProcessor(this.connection, this.subscriptionService, this.attemptService, this.renewalService);
                 await processor.processInboxEvent(processingCtx, event);
             } else {
                 Logger.warn(`Unknown provider: ${event.provider}`, loggerCtx);

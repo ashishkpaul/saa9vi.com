@@ -11,7 +11,7 @@ const GET_CHANNELS = `
 const GET_MANDATES = `
   query GetBillingMandates($channelId: String!, $filter: ProviderMandateFilter) {
     providerMandates(channelId: $channelId, filter: $filter) {
-      items { id channelId juspayCustomerId mandateId status activatedAt revokedAt }
+      items { id channelId providerCustomerId mandateId status activatedAt revokedAt }
       total
     }
   }
@@ -97,7 +97,7 @@ export function MandatesList() {
               {mandates.map((m: any) => (
                 <TableRow key={m.id}>
                   <TableCell className="font-mono text-sm">{m.mandateId ?? '—'}</TableCell>
-                  <TableCell className="font-mono text-sm">{m.juspayCustomerId}</TableCell>
+                  <TableCell className="font-mono text-sm">{m.providerCustomerId}</TableCell>
                   <TableCell><Badge variant={STATUS_VARIANT[m.status] ?? 'secondary'}>{m.status}</Badge></TableCell>
                   <TableCell className="text-sm">{fmtDate(m.activatedAt)}</TableCell>
                   <TableCell className="text-sm">{fmtDate(m.revokedAt)}</TableCell>

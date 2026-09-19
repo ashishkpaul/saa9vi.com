@@ -8,7 +8,7 @@ import { OrganizationSubscription } from './organization-subscription.entity';
  * This is the provider-neutral binding: Saa9vi's subscription domain
  * references this entity, never the provider directly.
  *
- * Provider-specific details (Razorpay subscription_id, Juspay mandate_id, etc.)
+ * Provider-specific details (e.g. Razorpay subscription_id, provider mandate_id)
  * live in the provider adapter, not here.
  */
 @Entity('subscription_provider_binding')
@@ -31,7 +31,7 @@ export class SubscriptionProviderBinding extends VendureEntity implements Channe
     @Column()
     channelId: string;
 
-    /** Provider identifier: 'razorpay', 'juspay', etc. */
+    /** Provider identifier (e.g. 'razorpay'). */
     @Column()
     provider: string;
 

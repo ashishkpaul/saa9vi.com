@@ -8,7 +8,7 @@ import {
 } from "@vendure/core";
 import { OrganizationSubscription } from "../entities/organization-subscription.entity";
 import { SubscriptionBillingAttempt } from "../entities/subscription-billing-attempt.entity";
-import { RenewalPaymentReconciliationRequired } from "../entities/juspay-reconciliation-required.entity";
+import { RenewalPaymentReconciliationRequired } from "../entities/renewal-reconciliation-required.entity";
 import { SubscriptionRenewedEvent, SubscriptionInvoicePaidEvent } from "../events/subscription.events";
 import { SubscriptionRenewalQueueService } from "./subscription-renewal-queue.service";
 import { SubscriptionBillingAttemptService } from "./subscription-billing-attempt.service";
@@ -25,7 +25,7 @@ const loggerCtx = "SubscriptionRenewalService";
  * - processRenewals(): Discovery of pending renewals (ScheduledTask entry point).
  * - executeRenewal(): Execution of a single renewal (JobQueue worker entry point).
  *
- * Provider-neutral: depends on RecurringBillingProvider interface, not Juspay.
+ * Provider-neutral: depends on RecurringBillingProvider interface, not any specific provider.
  * Razorpay owns recurring execution. Saa9vi owns business state.
  */
 @Injectable()
@@ -48,7 +48,7 @@ export class SubscriptionRenewalService {
    * ("initiated") charge attempt "abandoned" and re-discovering the
    * subscription for a retry charge.
    *
-   * Default is 1 hour — well beyond normal Juspay webhook latency (seconds
+   * Default is 1 hour — well beyond normal provider webhook latency (seconds
    * to a few minutes). This is the subscription-billing equivalent of
    * BbbReconciliationService.stuckProvisioningTimeoutMs (5 min for BBB).
    * Configurable via SUBSCRIPTION_CHARGE_ABANDON_TIMEOUT_MS.
@@ -170,7 +170,7 @@ export class SubscriptionRenewalService {
      *   Phase 2 ATTEMPT (INV-019): a SubscriptionBillingAttempt row records the
      *     charge attempt. In the Razorpay model, the provider owns recurring
      *     execution — Saa9vi records the attempt and waits for the webhook.
-     *   Phase 3 CHARGE: the Juspay call (currently simulated).
+     *   Phase 3 CHARGE: the provider call (currently simulated).
      *   Phase 4 FINALIZE CAS: period advancement + status, guarded on the
      *     claimed version, ONLY after payment success.
      *
@@ -208,12 +208,10 @@ export class SubscriptionRenewalService {
       invoiceId,
       billingPeriodStart,
       amountPaise: sub.plan.monthlyPriceInPaise,
-      provider: "juspay",
+      provider: "razorpay",
       providerAttemptId: orderId,
     });
 
-    // Note: In the Razorpay model, charges are NOT initiated by Saa9vi.
-    // This method records the attempt and waits for the provider webhook.
     // Note: In the Razorpay model, charges are NOT initiated by Saa9vi.
     // This method records the attempt and waits for the provider webhook.
     // The chargeSubscription() call has been removed — Razorpay owns recurring execution.
@@ -403,7 +401,7 @@ export class SubscriptionRenewalService {
       ),
     );
 
-    // 2. Publish Invoice Paid Event (Future-proofing for accounting/tax/Juspay reconciliation)
+    // 2. Publish Invoice Paid Event (Future-proofing for accounting/tax/provider reconciliation)
     this.eventBus.publish(
       new SubscriptionInvoicePaidEvent(
         ctx,

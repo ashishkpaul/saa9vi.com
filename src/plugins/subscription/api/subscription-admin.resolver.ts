@@ -3,9 +3,9 @@ import { Allow, Ctx, ID, Permission, RequestContext, TransactionalConnection, Tr
 
 import { OrganizationSubscription } from "../entities/organization-subscription.entity";
 import { SubscriptionPlan } from "../entities/subscription-plan.entity";
-import { JuspaySubscriptionMandate } from "../entities/juspay-subscription-mandate.entity";
-import { JuspayPaymentAttempt } from "../entities/juspay-payment-attempt.entity";
-import { RenewalPaymentReconciliationRequired } from "../entities/juspay-reconciliation-required.entity";
+import { SubscriptionProviderBinding } from "../entities/subscription-provider-binding.entity";
+import { SubscriptionBillingAttempt } from "../entities/subscription-billing-attempt.entity";
+import { RenewalPaymentReconciliationRequired } from "../entities/renewal-reconciliation-required.entity";
 import { SubscriptionService } from "../services/subscription.service";
 
 @Resolver()
@@ -41,9 +41,9 @@ export class SubscriptionAdminResolver {
     @Args("filter", { nullable: true }) filter?: { status?: string; subscriptionId?: ID },
     @Args("sort", { nullable: true }) sort?: { field: string; direction: "ASC" | "DESC" },
     @Args("pagination", { nullable: true }) pagination?: { skip?: number; take?: number },
-  ): Promise<{ items: JuspaySubscriptionMandate[]; total: number }> {
+    ): Promise<{ items: SubscriptionProviderBinding[]; total: number }> {
     const qb = this.connection.rawConnection
-      .getRepository(JuspaySubscriptionMandate)
+      .getRepository(SubscriptionProviderBinding)
       .createQueryBuilder("mandate")
       .where("mandate.channelId = :channelId", { channelId });
 
@@ -78,9 +78,9 @@ export class SubscriptionAdminResolver {
     @Args("filter", { nullable: true }) filter?: { status?: string; invoiceId?: string; subscriptionId?: ID; billingPeriodStart?: string },
     @Args("sort", { nullable: true }) sort?: { field: string; direction: "ASC" | "DESC" },
     @Args("pagination", { nullable: true }) pagination?: { skip?: number; take?: number },
-  ): Promise<{ items: JuspayPaymentAttempt[]; total: number }> {
+    ): Promise<{ items: SubscriptionBillingAttempt[]; total: number }> {
     const qb = this.connection.rawConnection
-      .getRepository(JuspayPaymentAttempt)
+      .getRepository(SubscriptionBillingAttempt)
       .createQueryBuilder("attempt")
       .where("attempt.channelId = :channelId", { channelId });
 
@@ -123,7 +123,7 @@ export class SubscriptionAdminResolver {
     @Args("pagination", { nullable: true }) pagination?: { skip?: number; take?: number },
   ): Promise<{ items: RenewalPaymentReconciliationRequired[]; total: number }> {
     const qb = this.connection.rawConnection
-      .getRepository(RenewalPaymentReconciliationRequired)
+            .getRepository(RenewalPaymentReconciliationRequired)
       .createQueryBuilder("incident");
 
     if (channelId) {

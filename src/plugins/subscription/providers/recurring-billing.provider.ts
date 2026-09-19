@@ -47,7 +47,7 @@ export interface CancelSubscriptionOptions {
  * This is the abstraction boundary: Saa9vi's subscription domain
  * talks to this interface, never to a specific provider directly.
  *
- * Implementations: RazorpaySubscriptionProvider, JuspaySubscriptionProvider (legacy)
+  * Implementations: RazorpaySubscriptionProvider (active, ADR-038)
  */
 export interface RecurringBillingProvider {
     readonly providerName: string;

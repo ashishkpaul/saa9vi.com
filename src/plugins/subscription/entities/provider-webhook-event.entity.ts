@@ -27,7 +27,7 @@ export class ProviderWebhookEvent extends VendureEntity {
     @Column({ type: 'varchar', nullable: true })
     channelId: string | null;
 
-    /** Provider identifier: 'razorpay', 'juspay', etc. */
+    /** Provider identifier (e.g. 'razorpay'). */
     @Column()
     provider: string;
 

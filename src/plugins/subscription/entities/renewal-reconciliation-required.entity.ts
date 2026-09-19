@@ -6,7 +6,7 @@ import { OrganizationSubscription } from "./organization-subscription.entity";
 /**
  * Operator-visible reconciliation incident record (Step 4D).
  *
- * Records the dangerous window: a Juspay charge SUCCEEDED but the renewal
+ * Records the dangerous window: a provider charge SUCCEEDED but the renewal
  * FINALIZE CAS lost (e.g. a second worker claimed between CLAIM and FINALIZE,
  * or manual state edit). Money moved but the subscription period did not
  * advance. This MUST be manual-reconciled — never auto-retried (a retry
@@ -20,9 +20,9 @@ import { OrganizationSubscription } from "./organization-subscription.entity";
  * It has a controlled PENDING → RESOLVED workflow (an operator resolves it
  * after verifying the payment and manually advancing the period if needed).
  * INV-002 (immutable ledger rows) applies to financial facts like
- * JuspayPaymentAttempt — not to this incident-tracking record.
+ * SubscriptionBillingAttempt — not to this incident-tracking record.
  */
-@Entity("juspay_payment_reconciliation_required")
+@Entity("subscription_reconciliation_required")
 @Index(["channelId"])
 @Index(["status"])
 export class RenewalPaymentReconciliationRequired extends VendureEntity {
@@ -37,11 +37,11 @@ export class RenewalPaymentReconciliationRequired extends VendureEntity {
     channelId: string;
 
     /**
-     * The Juspay order id whose charge succeeded. Used by an operator to
+     * The provider order id whose charge succeeded. Used by an operator to
      * locate the corresponding attempt/transaction.
      */
     @Column()
-    juspayOrderId: string;
+    providerOrderId: string;
 
     @Column()
     invoiceId: string;

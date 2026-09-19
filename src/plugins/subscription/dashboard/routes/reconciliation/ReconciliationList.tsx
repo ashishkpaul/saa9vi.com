@@ -5,7 +5,7 @@ import { api, Badge, Card, Skeleton, Table, TableBody, TableCell, TableHead, Tab
 const GET_INCIDENTS = `
   query GetReconciliationIncidents($channelId: String, $status: ReconciliationIncidentStatus) {
     reconciliationIncidents(channelId: $channelId, status: $status) {
-      items { id channelId subscriptionId invoiceId juspayOrderId detectedAt status resolutionNote }
+      items { id channelId subscriptionId providerOrderId invoiceId detectedAt status resolutionNote }
       total
     }
   }
@@ -72,7 +72,7 @@ export function ReconciliationList() {
                   </TableCell>
                   <TableCell className="text-sm">{inc.channelId}</TableCell>
                   <TableCell className="font-mono text-sm">{inc.subscriptionId}</TableCell>
-                  <TableCell className="font-mono text-xs">{inc.juspayOrderId}</TableCell>
+                  <TableCell className="font-mono text-xs">{inc.providerOrderId}</TableCell>
                   <TableCell className="font-mono text-sm">{inc.invoiceId}</TableCell>
                   <TableCell className="text-sm">{fmtDate(inc.detectedAt)}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{inc.resolutionNote ?? '—'}</TableCell>

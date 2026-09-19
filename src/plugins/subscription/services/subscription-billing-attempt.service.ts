@@ -1,13 +1,14 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { TransactionalConnection, ID } from "@vendure/core";
-import { SubscriptionBillingAttempt } from "../entities/subscription-billing-attempt.entity";
+import { SubscriptionBillingAttempt, BillingAttemptStatus } from "../entities/subscription-billing-attempt.entity";
+
+const loggerCtx = "SubscriptionBillingAttemptService";
 
 /**
  * Provider-neutral billing attempt service.
  *
- * Replaces the old JuspayPaymentAttemptService. This is the ONLY service
- * allowed to mutate a SubscriptionBillingAttempt. Both the renewal worker
- * and the webhook processor use exactly these methods.
+ * This is the ONLY service allowed to mutate a SubscriptionBillingAttempt.
+ * Both the renewal worker and the webhook processor use exactly these methods.
  *
  * The terminal transition (initiated → succeeded | failed) is a CAS-guarded
  * UPDATE so it wins exactly once regardless of writer:
@@ -99,5 +100,98 @@ export class SubscriptionBillingAttemptService {
             .where("id = :id AND status = 'initiated'", { id: attemptId })
             .execute();
         return result.affected === 1;
+    }
+
+    /**
+     * Reconciliation lookup for the webhook processor.
+     *
+     * Finds an 'initiated' attempt created by the renewal worker for the
+     * given provider subscription ID, so the webhook can transition it
+     * to its terminal state via the CAS-guarded methods above.
+     *
+     * INV-019: only 'initiated' attempts are returned — terminal results
+     * are never overwritten.
+     */
+    async findInitiatedAttemptByProviderSubscriptionId(
+        channelId: string,
+        providerSubscriptionId: string,
+    ): Promise<SubscriptionBillingAttempt | null> {
+        const repo = this.connection.rawConnection.getRepository(SubscriptionBillingAttempt);
+        return await repo.findOne({
+            where: {
+                channelId,
+                providerSubscriptionId,
+                status: "initiated",
+            },
+            relations: ["subscription"],
+        });
+    }
+
+    /**
+     * Reconciliation lookup by provider payment ID.
+     *
+     * Returns an attempt (in any state) that already carries the given
+     * provider-issued payment ID. Used by the webhook processor to detect
+     * duplicate deliveries — if a terminal attempt already exists for this
+     * payment ID, the webhook's recordAttempt is a safe no-op.
+     */
+    async findAttemptByProviderPaymentId(
+        channelId: string,
+        providerPaymentId: string,
+    ): Promise<SubscriptionBillingAttempt | null> {
+        const repo = this.connection.rawConnection.getRepository(SubscriptionBillingAttempt);
+        return await repo.findOne({
+            where: {
+                channelId,
+                providerPaymentId,
+            },
+            relations: ["subscription"],
+        });
+    }
+
+    /**
+     * Direct terminal-attempt creation from the webhook processor.
+     *
+     * This path is used when the webhook carries a charge event for which
+     * no 'initiated' attempt was pre-created by the renewal worker — e.g.
+     * the Razorpay 'subscription.activated' initial-payment event that
+     * fires outside the renewal scan window.
+     *
+     * The attempt is created directly in its terminal state with all
+     * provider identifiers populated, so downstream reconciliation
+     * (by providerPaymentId or providerEventId) succeeds on replay.
+     */
+    async recordAttemptFromWebhook(params: {
+        subscriptionId: ID;
+        channelId: string;
+        invoiceId: string;
+        billingPeriodStart: string;
+        amountPaise: number;
+        provider: string;
+        providerSubscriptionId: string;
+        providerPaymentId?: string;
+        providerInvoiceId?: string;
+        providerEventId?: string;
+        status: BillingAttemptStatus;
+        failureReason?: string;
+    }): Promise<SubscriptionBillingAttempt> {
+        const repo = this.connection.rawConnection.getRepository(SubscriptionBillingAttempt);
+        const created = (await repo.save(
+            repo.create({
+                subscription: { id: params.subscriptionId } as any,
+                channelId: params.channelId,
+                invoiceId: params.invoiceId,
+                billingPeriodStart: params.billingPeriodStart,
+                amountPaise: params.amountPaise,
+                provider: params.provider,
+                providerSubscriptionId: params.providerSubscriptionId,
+                providerPaymentId: params.providerPaymentId,
+                providerInvoiceId: params.providerInvoiceId,
+                providerEventId: params.providerEventId,
+                status: params.status,
+                failureReason: params.failureReason,
+            } as any),
+        )) as unknown as SubscriptionBillingAttempt;
+        return Array.isArray(created) ? created[0] : created;
     }
 }

@@ -11,7 +11,7 @@ const GET_CHANNELS = `
 const GET_ATTEMPTS = `
   query GetProviderPaymentAttempts($channelId: String!, $filter: ProviderPaymentAttemptFilter) {
     providerPaymentAttempts(channelId: $channelId, filter: $filter) {
-      items { id invoiceId billingPeriodStart amountPaise status juspayOrderId juspayTransactionId failureReason attemptedAt }
+      items { id invoiceId billingPeriodStart amountPaise status providerOrderId providerTransactionId failureReason attemptedAt }
       total
     }
   }
@@ -106,8 +106,8 @@ export function PaymentAttemptsList() {
                   <TableCell className="font-mono text-sm">{a.invoiceId}</TableCell>
                   <TableCell className="text-sm">{a.billingPeriodStart}</TableCell>
                   <TableCell>₹{toRupees(a.amountPaise)}</TableCell>
-                  <TableCell className="font-mono text-xs">{a.juspayOrderId ?? '—'}</TableCell>
-                  <TableCell className="font-mono text-xs">{a.juspayTransactionId ?? '—'}</TableCell>
+                  <TableCell className="font-mono text-xs">{a.providerOrderId ?? '—'}</TableCell>
+                  <TableCell className="font-mono text-xs">{a.providerTransactionId ?? '—'}</TableCell>
                   <TableCell className="text-sm text-red-500">{a.failureReason ?? '—'}</TableCell>
                   <TableCell className="text-sm">{fmtDate(a.attemptedAt)}</TableCell>
                 </TableRow>

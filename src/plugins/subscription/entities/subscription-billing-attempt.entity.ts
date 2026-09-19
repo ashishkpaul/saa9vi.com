@@ -7,7 +7,7 @@ export type BillingAttemptStatus = 'initiated' | 'succeeded' | 'failed';
 /**
  * Provider-neutral billing attempt record.
  *
- * Replaces the old JuspayPaymentAttempt. Each row is a single billing attempt
+  * Each row is a single billing attempt
  * against a subscription. Retries create new rows — terminal results are never
  * overwritten.
  *
@@ -29,7 +29,7 @@ export class SubscriptionBillingAttempt extends VendureEntity {
     @Column()
     channelId: string;
 
-    /** Provider identifier: 'razorpay', 'juspay', etc. */
+    /** Provider identifier (e.g. 'razorpay'). */
     @Column()
     provider: string;
 
@@ -53,7 +53,7 @@ export class SubscriptionBillingAttempt extends VendureEntity {
     @Column({ nullable: true })
     invoiceId: string;
 
-    /** Provider's attempt ID (e.g., merchant order ID for Juspay). */
+    /** Provider's attempt ID (e.g., Razorpay attempt reference). */
     @Column({ nullable: true })
     providerAttemptId: string;
 

@@ -3,13 +3,10 @@ import { PluginCommonModule, RuntimeVendureConfig, Type, VendurePlugin, ConfigSe
 import { SUBSCRIPTION_PLUGIN_OPTIONS, RAZORPAY_SUBSCRIPTION_PROVIDER, RECURRING_BILLING_PROVIDER } from './constants';
 import { OrganizationSubscription } from './entities/organization-subscription.entity';
 import { SubscriptionPlan } from './entities/subscription-plan.entity';
-import { JuspaySubscriptionMandate } from './entities/juspay-subscription-mandate.entity';
-import { JuspayPaymentAttempt } from './entities/juspay-payment-attempt.entity';
-import { JuspayWebhookEvent } from './entities/juspay-webhook-event.entity';
-import { JuspayWebhookEndpoint } from './entities/juspay-webhook-endpoint.entity';
-import { RenewalPaymentReconciliationRequired } from './entities/juspay-reconciliation-required.entity';
 import { SubscriptionProviderBinding } from './entities/subscription-provider-binding.entity';
 import { SubscriptionBillingAttempt } from './entities/subscription-billing-attempt.entity';
+import { ProviderWebhookEvent } from './entities/provider-webhook-event.entity';
+import { RenewalPaymentReconciliationRequired } from './entities/renewal-reconciliation-required.entity';
 import { SubscriptionAdminResolver } from './api/subscription-admin.resolver';
 import { adminApiExtensions } from './api/schema/subscription-admin.schema';
 import { SubscriptionService } from './services/subscription.service';
@@ -24,21 +21,16 @@ import { RazorpayWebhookController } from './providers/razorpay/razorpay-webhook
 import { subscriptionRenewalTask } from './jobs/subscription-renewal.task';
 import { subscriptionDunningTask } from './jobs/subscription-dunning.task';
 import { PluginInitOptions } from './types';
-import { ProviderWebhookEvent } from './entities/provider-webhook-event.entity';
 
 @VendurePlugin({
     imports: [PluginCommonModule],
     entities: [
         SubscriptionPlan,
         OrganizationSubscription,
-        JuspaySubscriptionMandate,
-        JuspayPaymentAttempt,
-        JuspayWebhookEvent,
-        JuspayWebhookEndpoint,
-        RenewalPaymentReconciliationRequired,
         SubscriptionProviderBinding,
         SubscriptionBillingAttempt,
         ProviderWebhookEvent,
+        RenewalPaymentReconciliationRequired,
     ],
     providers: [
         { provide: SUBSCRIPTION_PLUGIN_OPTIONS, useFactory: () => SubscriptionPlugin.options },
