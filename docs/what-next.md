@@ -21,7 +21,7 @@
 |------|--------|-------|
 | **R1 — Provider-neutral boundary** | ✅ Complete | `RecurringBillingProvider` interface retained. **Razorpay is the sole runtime provider** (per ADR-038; provider factory resolves `razorpay` only, with an omitted provider defaulting to Razorpay). **Razorpay is the sole active recurring-billing provider.** The Juspay runtime implementation and legacy Juspay entities were removed (`9a31beb`), and the legacy `juspay_*` tables were dropped (`466a4ef`, **ADR-040**). Historical Juspay migration files remain as immutable migration history. All active source, checked-in GraphQL schemas (`schema.graphql`, `schema-shop.graphql`), and BBB `generated-*-types.ts` have been regenerated/verified Juspay-free; the only remaining `src/` mentions are historical migration files and an ADR historical note in `vendure-config.ts`. |
 | **R2 — Razorpay Contract Verification** | ⚠️ Conditional | Contract-level sub-gates below were captured against Razorpay Test mode (see table below). **Gate closure is withheld** per `production-readiness.md`: R2-E/F/G must be re-captured post-refactor (`9a31beb`+) — the webhook processor was reworked (billing-attempt writes delegated to `SubscriptionBillingAttemptService`; `subscription.pending`/`halted` now bridge the Saa9vi subscription to `past_due` for dunning) and that behavior has no post-refactor runtime evidence yet. R2-A infrastructure evidence is current; the remaining R2-A item (post-restart job execution) closes via R2-E. |
-| **R3 — ADR-038 Freeze** | ✅ Complete | ADR-038 ACCEPTED 2026-09-12 (R2-F + R2-G evidence, INV-018 channel-scoped worker ctx) |
+| **ADR-038 — Provider Freeze** | ✅ Complete | ADR-038 ACCEPTED 2026-09-12 (R2-F + R2-G evidence, INV-018 channel-scoped worker ctx). **Not to be confused with the R3 gate** below — "R3" is reserved for one-time commerce (`production-readiness.md`: `dummyPaymentHandler` still registered, OPEN) |
 | **I1-I3 — Implementation** | ✅ Complete | Razorpay live on `main` |
 | **V1 — Production hardening** | ⏳ Next | Baseline: `c198199` (G3 tenant-isolation evidence; supersedes the `954cd40` Gate-3 baseline for current work). Checklist below — **first action: rotate exposed Razorpay secrets (V1.1)** |
 
@@ -43,11 +43,17 @@
 | **R2-F** Concurrent Idempotency | ✅ Proven | DB UNIQUE constraint blocks duplicates |
 | **R2-G** Failure Semantics | ⚠️ Proven (pre-refactor) | pending → retry → failed (terminal), `failedAt` — captured pre-refactor. Post-refactor the processor additionally bridges `subscription.pending`/`subscription.halted` → Saa9vi `past_due` (dunning entry point, RFC-001 §4.2) and `subscription.cancelled` → `cancelled`; this FSM bridge is **CODE VERIFIED, not RUNTIME VERIFIED** — capture during R2-E/R2-G re-verification |
 | **R2-G** Channel Isolation | ✅ Proven | Cross-tenant events stay isolated |
-| **R3** ADR-038 Freeze | ✅ Complete | Accepted 2026-09-12 |
+| **ADR-038** Provider Freeze | ✅ Complete | Accepted 2026-09-12. (Gate id "R3" is reserved for one-time commerce — see `production-readiness.md` evidence ledger) |
 
 ---
 
-## Gate: R3 — ADR-038 Freeze ✅ COMPLETE
+## Gate: ADR-038 — Provider Freeze ✅ COMPLETE
+
+> **Naming note:** this completed gate was previously labelled "R3 — ADR-038
+> Freeze". "R3" now refers exclusively to **one-time commerce** (Razorpay
+> `PaymentMethodHandler`), per the evidence ledger in
+> `production-readiness.md`. This section covers only the ADR-038 acceptance,
+> which is distinct from and a prerequisite to R3.
 
 ADR-038 was formally **ACCEPTED on 2026-09-12** after all R2 evidence was captured:
 - **Failure path**: `pending` → `pending` → `failed` (3 attempts, `failedAt` populated)

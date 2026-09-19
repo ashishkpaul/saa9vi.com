@@ -483,7 +483,7 @@ export class SubscriptionRenewalService {
       );
       return;
     }
-    await this.connection.rawConnection
+    const result = await this.connection.rawConnection
       .createQueryBuilder()
       .update(OrganizationSubscription)
       .set({ status: "past_due" })
@@ -492,6 +492,17 @@ export class SubscriptionRenewalService {
         version: sub.version,
       })
       .execute();
+    if (result.affected !== 1) {
+      // CAS lost: a concurrent writer (e.g. finalizeAfterPayment) changed the
+      // subscription version between load and update. Treat as a no-op —
+      // do NOT log success, do NOT retry (per the CAS discipline in
+      // SubscriptionBillingAttemptService.transition).
+      Logger.warn(
+        `markPastDueFromWebhook: CAS lost for subscription ${subscriptionId} (expected version ${sub.version}) — concurrent state change, no-op`,
+        loggerCtx,
+      );
+      return;
+    }
     Logger.info(
       `Subscription ${sub.id} (channel ${sub.channelId}) marked past_due from provider webhook failure state`,
       loggerCtx,
@@ -515,7 +526,7 @@ export class SubscriptionRenewalService {
     if (sub.status === "cancelled") {
       return;
     }
-    await this.connection.rawConnection
+    const result = await this.connection.rawConnection
       .createQueryBuilder()
       .update(OrganizationSubscription)
       .set({ status: "cancelled" })
@@ -524,6 +535,13 @@ export class SubscriptionRenewalService {
         version: sub.version,
       })
       .execute();
+    if (result.affected !== 1) {
+      Logger.warn(
+        `markCancelledFromWebhook: CAS lost for subscription ${subscriptionId} (expected version ${sub.version}) — concurrent state change, no-op`,
+        loggerCtx,
+      );
+      return;
+    }
     Logger.info(
       `Subscription ${sub.id} (channel ${sub.channelId}) marked cancelled from provider webhook`,
       loggerCtx,
