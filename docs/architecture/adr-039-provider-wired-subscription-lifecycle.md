@@ -35,7 +35,7 @@ Consequence: no legitimate runtime path ever produces the `providerSubscriptionI
 
 ### API surface — evolve `subscribeToPlan` (chosen) vs new mutation (rejected)
 
-`subscribeToPlan` is extended rather than replaced: a new dedicated mutation would fork subscription-creation semantics and leave the legacy path dangling. The existing admin mutation gains provider wiring; its signature is unchanged (`channelId`, `planId`) — all provider inputs are resolved server-side from the plan and channel context. Customer contact data (`customerEmail`, `customerPhone`) comes from the channel's organization/customer records, not from caller input.
+`subscribeToPlan` is extended rather than replaced: a new dedicated mutation would fork subscription-creation semantics and leave the legacy path dangling. The existing admin mutation gains provider wiring; its signature is unchanged (`channelId`, `planId`) — all provider inputs are resolved server-side from the plan and channel context. Customer email/phone are **not** inputs to Create Subscription at all: Razorpay's Create Subscription API takes no customer contact data, and no Saa9vi customer-contact source is consulted.
 
 ### Schema additions (Vendure CLI migration only)
 

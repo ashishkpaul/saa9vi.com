@@ -480,7 +480,7 @@ Verify the existing payment/subscription implementation against the current prov
 
 ## D-5 — Dunning recovery after Razorpay `halted`
 
-**Gap (identified in the post-`e204d72` audit, 2026-09-19):** the
+**Gap (identified in the post-refactor audit, 2026-09-19):** the
 `subscription.pending`/`subscription.halted` → `past_due` bridge makes
 failed subscriptions discoverable by the dunning task, but once Razorpay
 reaches `halted` (retries exhausted) Razorpay performs **no automatic
@@ -512,7 +512,7 @@ actually recovered.
 
 A `halted` Razorpay subscription whose customer completes recovery
 produces a provider webhook that reconciles a billing attempt and
-finalizes the Saa9vi period — end-to-end, post-`e204d72`.
+finalizes the Saa9vi period — end-to-end, post-refactor.
 
 
 # Track E — Documentation Consistency

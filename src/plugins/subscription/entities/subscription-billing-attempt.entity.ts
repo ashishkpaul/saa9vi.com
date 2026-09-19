@@ -17,6 +17,21 @@ export type BillingAttemptStatus = 'initiated' | 'succeeded' | 'failed';
 @Index(['channelId'])
 @Index(['subscription', 'attemptedAt'])
 @Index(['provider', 'providerEventId'], { unique: true })
+// Concurrent-payment idempotency: at most one attempt row per
+// (provider, providerPaymentId), provider-qualified per the provider-neutral
+// architecture. Partial unique — NULLs (renewal-created initiated rows,
+// pre-terminal) are exempt; blocks the check-then-insert race where two
+// different provider event IDs reference the same payment.
+//
+// Declared at class level deliberately: TypeORM's @Index used as a *property*
+// decorator silently discards an explicit columns array and uses only the
+// decorated property name (typeorm/decorator/Index.js:
+// `columns: propertyName ? [propertyName] : fields`), which would silently
+// degrade this to a single-column index.
+@Index('UQ_billing_attempt_provider_payment', ['provider', 'providerPaymentId'], {
+    unique: true,
+    where: '"providerPaymentId" IS NOT NULL',
+})
 export class SubscriptionBillingAttempt extends VendureEntity {
     constructor(input?: DeepPartial<SubscriptionBillingAttempt>) {
         super(input);
@@ -41,16 +56,6 @@ export class SubscriptionBillingAttempt extends VendureEntity {
     @Column({ nullable: true })
     providerEventId: string;
 
-    /**
-     * Concurrent-payment idempotency: at most one attempt row per
-     * (provider, providerPaymentId). Partial unique — NULLs (renewal-created
-     * initiated rows, pre-terminal) are exempt. Blocks the check-then-insert
-     * race where two different provider event IDs reference the same payment.
-     */
-    @Index("UQ_billing_attempt_provider_payment", ["providerPaymentId"], {
-        unique: true,
-        where: '"providerPaymentId" IS NOT NULL',
-    })
     @Column({ nullable: true })
     providerPaymentId: string;
 

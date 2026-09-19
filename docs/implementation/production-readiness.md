@@ -157,14 +157,16 @@ must remain independently attributable.
                           post-refactor            PONG, 7 live conns, BullMQ
                           evidence                 keys (Section 8)
 
-  pg-mem fallback absent  **VERIFIED (R2-A)        no pgmem in src; DB-backed
-                                                   shop query returns persisted
-                                                   data; synchronize: false
+  pg-mem fallback         **VERIFIED (R2-A)         src/index.ts contains a pg-mem fallback,
+                          inactive at runtime       but it did NOT activate; the verified runtime
+                                                    used real PostgreSQL; DB-backed shop query
+                                                    returns persisted data; `synchronize: false`.
 
-  Default in-process      **VERIFIED (R2-A)        config selects
-  queue fallback absent                            BullMQJobQueuePlugin when
-                                                   REDIS_HOST set; merged-worker
-                                                   startup log
+  Default in-process      **VERIFIED (R2-A)         src/index.ts and `vendure-config.ts` contain a
+                          queue fallback            `DefaultJobQueuePlugin` fallback, but it did NOT
+                          inactive at runtime       activate; config selects `BullMQJobQueuePlugin`
+                                                    when `REDIS_HOST` is set; merged-worker queue
+                                                    start log.
 
   Migration state         **VERIFIED (R2-A)        55 applied migrations;
                           post-refactor            `npx vendure migrate -r` →
@@ -225,7 +227,7 @@ instance.
 ### Evidence required
 
 -   startup log showing successful PostgreSQL connection
--   no pg-mem fallback
+-   no pg-mem fallback activated (the real PostgreSQL connection is used)
 -   migration command executed against the intended database
 -   migration state established
 
@@ -563,8 +565,8 @@ Verify all of the following against the actual runtime:
 
 -   real PostgreSQL
 -   real Redis
--   no pg-mem fallback
--   no default queue fallback
+-   no pg-mem fallback activated
+-   no default queue fallback activated
 -   migrations applied
 -   application and worker operational
 -   queue job can execute
@@ -739,7 +741,7 @@ persistence to `SubscriptionBillingAttemptService`
 (`recordAttemptSuccess` / `recordAttemptFailure` /
 `recordAttemptFromWebhook`). Provider-issued identifiers are persisted in
 the same atomic CAS UPDATE as the terminal status — there is no separate
-metadata pre-write (crash-consistency, post-`72961d6`).
+metadata pre-write (crash-consistency, post-refactor).
 
 ### Required correction
 

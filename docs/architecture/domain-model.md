@@ -555,6 +555,7 @@ Pending → Provisioning → Active → Completed → Archived
 **Invariants:**
 - Append-only per attempt — terminal results are never overwritten.
 - `UNIQUE(provider, providerEventId)` provides webhook idempotency.
+- `UNIQUE(provider, providerPaymentId) WHERE providerPaymentId IS NOT NULL` (named index `UQ_billing_attempt_provider_payment`) is the database-level guard against two concurrent webhook workers independently persisting the same provider payment; a unique-violation loser converges through the shared terminal-attempt reconciliation helper.
 - Supersedes the legacy `juspay_payment_attempt` table, which was dropped in 466a4ef (ADR-040).
 
 ---

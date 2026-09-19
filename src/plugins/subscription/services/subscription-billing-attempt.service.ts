@@ -109,6 +109,24 @@ export class SubscriptionBillingAttemptService {
     }
 
     /**
+     * Lookup by provider event ID (any status).
+     *
+     * Used by the webhook processor's replay boundary: a TERMINAL attempt
+     * carrying this event ID does NOT by itself mean "done" — for a
+     * 'succeeded' attempt the finalization may not have completed (crash
+     * between terminal write and finalize). The processor must replay the
+     * finalize in that case rather than short-circuiting.
+     */
+    async findAttemptByProviderEventId(providerEventId: string): Promise<SubscriptionBillingAttempt | null> {
+        if (!providerEventId) return null;
+        const repo = this.connection.rawConnection.getRepository(SubscriptionBillingAttempt);
+        return await repo.findOne({
+            where: { providerEventId },
+            relations: ["subscription"],
+        });
+    }
+
+    /**
      * Reconciliation lookup for the webhook processor.
      *
      * Finds the 'initiated' attempt created by the renewal worker for the

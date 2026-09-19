@@ -279,6 +279,41 @@ export class SubscriptionRenewalService {
      * (V+2). Only one wins; the loser gets affected=0 and records a
      * reconciliation incident.
      */
+    /**
+     * TERMINAL-STATE GUARD (out-of-order webhook protection) — the exact
+     * mirror of the guard in markPastDueFromWebhook().
+     *
+     * Razorpay does not guarantee webhook ordering. A late successful-charge
+     * event (subscription.charged / subscription.activated) can arrive AFTER
+     * subscription.cancelled has already terminated the subscription:
+     *
+     *   subscription.cancelled → status='cancelled', version V→V+1
+     *   late subscription.charged → loads version V+1 (the CURRENT version)
+     *                             → CAS below WINS
+     *                             → status='active'   ← RESURRECTED
+     *
+     * The CAS guards only on `version`, and the late event reads the version
+     * that markCancelledFromWebhook() already bumped — so the CAS cannot
+     * detect the ordering problem. 'cancelled' is terminal in Saa9vi
+     * (RFC-001): a terminated subscription must never be silently
+     * resurrected. Refuse the finalize and leave the terminal state intact.
+     *
+     * We return SUCCESS (not CAS_CONFLICT) deliberately: the charge itself is
+     * not a lost-CAS anomaly needing an incident row, and recording one would
+     * also fire on every idempotent webhook replay for a cancelled row. The
+     * WARN below carries the operator signal instead (a charge that landed
+     * against an already-terminated subscription may warrant a refund review).
+     */
+    if (sub.status === "cancelled") {
+      Logger.warn(
+        `Subscription ${sub.id}: finalize skipped — subscription is 'cancelled' (terminal). ` +
+          `A successful-charge event arrived after cancellation (out-of-order delivery, or a charge ` +
+          `against a terminated mandate). Period NOT advanced; review for refund/reconciliation.`,
+        loggerCtx,
+      );
+      return RenewalResult.SUCCESS;
+    }
+
     const oldVersion = sub.version;
     const oldPeriodEnd = sub.currentPeriodEnd;
 
@@ -352,6 +387,22 @@ export class SubscriptionRenewalService {
       const reloaded = await this.connection.rawConnection
         .getRepository(OrganizationSubscription)
         .findOne({ where: { id: sub.id as any } });
+      /**
+       * Race counterpart of the terminal-state guard above: subscription.cancelled
+       * won the version CAS between our load and this update (it bumped the
+       * version, so our CAS lost). Only the WRITER that lost the race can see
+       * this — and a deliberate cancellation must not be reported as a
+       * reconciliation incident (the charge was not lost to a bug; the
+       * subscription was terminated).
+       */
+      if (reloaded && reloaded.status === "cancelled") {
+        Logger.warn(
+          `Subscription ${sub.id}: finalize CAS lost to a concurrent cancellation (status='cancelled', terminal) — ` +
+            `period NOT advanced; review for refund/reconciliation.`,
+          loggerCtx,
+        );
+        return RenewalResult.SUCCESS;
+      }
       if (reloaded && reloaded.currentPeriodEnd >= newPeriodEnd) {
         Logger.info(
           `Finalize replay for subscription ${sub.id}: period already advanced to ${reloaded.currentPeriodEnd.toISOString()} — idempotent no-op`,
@@ -498,6 +549,22 @@ export class SubscriptionRenewalService {
     if (sub.status !== "active" && sub.status !== "trialing") {
       Logger.info(
         `Subscription ${subscriptionId} status='${sub.status}' — past_due transition not applicable`,
+        loggerCtx,
+      );
+      return;
+    }
+    // OUT-OF-ORDER EVENT GUARD: Razorpay does not guarantee webhook ordering.
+    // A late subscription.pending/halted event can arrive AFTER a successful
+    // charge already finalized a NEW period (currentPeriodEnd moved into the
+    // future). A successful finalization supersedes older failure states —
+    // an event describing a failed charge for a period that has since been
+    // paid must not downgrade the subscription back to past_due. If a genuine
+    // new failure occurs for the CURRENT period, the provider will deliver a
+    // fresh pending/halted event with a newer charge attempt.
+    if (sub.currentPeriodEnd > new Date()) {
+      Logger.info(
+        `Subscription ${subscriptionId}: currentPeriodEnd (${sub.currentPeriodEnd.toISOString()}) is in the future — ` +
+          `failure-state event is OUT-OF-ORDER (stale relative to a finalized successful charge), skipping past_due transition`,
         loggerCtx,
       );
       return;

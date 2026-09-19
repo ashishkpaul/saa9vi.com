@@ -61,38 +61,44 @@ export const adminApiExtensions = gql`
   }
 
   """
-  Read-only view of a provider subscription mandate for the Portal Admin ledger.
-  Mirrors entity fields but exposes no mutations (mandates are created via the
-  provider checkout flow, not the admin API).
+  Read-only view of a provider subscription binding for the Portal Admin ledger.
+  Mirrors SubscriptionProviderBinding entity fields; exposes no mutations
+  (bindings are created via the provider checkout flow, not the admin API).
   """
-      type ProviderMandate {
+  type ProviderMandate {
     id: ID!
     createdAt: DateTime!
     updatedAt: DateTime!
     channelId: String!
     subscriptionId: ID!
-    providerCustomerId: String
-    mandateId: String
-    status: String!
-    activatedAt: DateTime
-    revokedAt: DateTime
+    provider: String!
+    providerSubscriptionId: String!
+    providerPlanId: String
+    providerStatus: String!
+    active: Boolean!
   }
 
   """
   Read-only view of a provider payment attempt for the Portal Admin ledger.
-  INV-002: immutable financial fact — no mutations exposed.
+  Mirrors SubscriptionBillingAttempt entity fields.
+  INV-019: immutable financial fact — no mutations exposed.
   """
   type ProviderPaymentAttempt {
     id: ID!
     createdAt: DateTime!
+    updatedAt: DateTime!
     channelId: String!
     subscriptionId: ID!
-    invoiceId: String!
+    provider: String!
+    providerSubscriptionId: String
+    providerPaymentId: String
+    providerInvoiceId: String
+    providerEventId: String
+    providerAttemptId: String
+    invoiceId: String
     billingPeriodStart: String!
     amountPaise: Int!
     status: String!
-    providerOrderId: String
-    providerTransactionId: String
     failureReason: String
     attemptedAt: DateTime!
   }
@@ -131,8 +137,7 @@ export const adminApiExtensions = gql`
 
   enum ProviderMandateSortField {
     createdAt
-    activatedAt
-    status
+    providerStatus
   }
 
   input ProviderPaymentAttemptFilter {

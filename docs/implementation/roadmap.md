@@ -75,7 +75,7 @@ Juspay → Razorpay routing was **rejected** by Razorpay (ticket #20876157). Dir
 
 - [x] **R1 — Provider-neutral boundary** — `RecurringBillingProvider` interface, both Razorpay + Juspay providers
 - [x] **R2-A through R2-E** — Razorpay test plan, webhook config, subscription creation, authorization
-- [x] **R2-F — Durable processing** — BullMQ inbox worker, channel resolution, idempotency *(runtime evidence pre-refactor; post-`72961d6`→`c9f4a1c` code hardening done, runtime recapture pending — see `production-readiness.md`)*
+- [x] **R2-F — Durable processing** — BullMQ inbox worker, channel resolution, idempotency *(runtime evidence pre-refactor; post-refactor code hardening done, runtime recapture pending — see `production-readiness.md`)*
 - [x] **R2-G — Failure semantics + concurrent idempotency** — `pending` → `retry` → `failed`, UNIQUE constraint *(pre-refactor runtime evidence; post-refactor failure-state bridge is CODE VERIFIED, runtime pending, halted-recovery open as D-5)*
 - [x] **ADR-038 — Provider freeze** — ADR-038 formally ACCEPTED 2026-09-12 (see `docs/what-next.md` and `docs/architecture/adr-038-direct-razorpay-provider.md`). *Note: the gate id "R3" refers exclusively to one-time commerce, not this freeze.*
 

@@ -48,13 +48,20 @@ export class SubscriptionAdminResolver {
       .where("mandate.channelId = :channelId", { channelId });
 
     if (filter?.status) {
-      qb.andWhere("mandate.status = :status", { status: filter.status });
+      // Entity field is providerStatus (provider-neutral binding).
+      qb.andWhere("mandate.providerStatus = :status", { status: filter.status });
     }
     if (filter?.subscriptionId) {
       qb.andWhere("mandate.subscriptionId = :subscriptionId", { subscriptionId: filter.subscriptionId });
     }
 
     if (sort?.field) {
+      // Whitelist sortable fields (ProviderMandateSortField) — never interpolate
+      // raw client input into ORDER BY.
+      const sortable = ["createdAt", "providerStatus"] as const;
+      if (!(sortable as readonly string[]).includes(sort.field)) {
+        throw new Error(`Unsupported sort field: ${sort.field}`);
+      }
       qb.orderBy(`mandate.${sort.field}`, sort.direction ?? "DESC");
     }
 
@@ -98,6 +105,11 @@ export class SubscriptionAdminResolver {
     }
 
     if (sort?.field) {
+      // Whitelist sortable fields (ProviderPaymentAttemptSortField).
+      const sortable = ["attemptedAt", "amountPaise", "status"] as const;
+      if (!(sortable as readonly string[]).includes(sort.field)) {
+        throw new Error(`Unsupported sort field: ${sort.field}`);
+      }
       qb.orderBy(`attempt.${sort.field}`, sort.direction ?? "DESC");
     }
 

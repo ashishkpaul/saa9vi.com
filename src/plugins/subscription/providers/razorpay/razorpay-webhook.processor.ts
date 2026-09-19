@@ -46,9 +46,16 @@ export class RazorpayWebhookProcessor {
         // inner payload object (C-1-E runtime finding).
         const payload = inboxEvent.rawPayload?.payload ?? inboxEvent.rawPayload;
 
-        // Idempotency check using the authoritative inbox event ID
-        if (await this.isEventProcessed(ctx, providerEventId)) {
-            Logger.log(`Event ${providerEventId} already processed`, loggerCtx);
+        // REPLAY BOUNDARY (crash consistency): a TERMINAL attempt carrying
+        // this event ID does NOT mean "done". For a 'succeeded' attempt the
+        // finalization may not have completed (crash between the terminal
+        // write and finalizeAfterPayment) — the finalize MUST be replayed
+        // (it is replay-idempotent). Only a 'failed' terminal attempt is
+        // fully complete. Handling this HERE (not inside recordAttempt)
+        // guarantees the same-event retry path reaches the replay logic.
+        const existingByEvent = await this.attemptService.findAttemptByProviderEventId(providerEventId);
+        if (existingByEvent && existingByEvent.status !== 'initiated') {
+            await this.reconcileTerminalAttempt(existingByEvent, `event ${providerEventId} replay`);
             return;
         }
 
@@ -214,36 +221,14 @@ export class RazorpayWebhookProcessor {
         const now = new Date();
         const billingPeriodStart = now.toISOString().split('T')[0];
 
-        // Idempotency: if a terminal attempt already exists for this payment ID.
-        // CRITICAL (replay safety): a TERMINAL SUCCEEDED attempt does NOT prove
-        // finalization completed — a crash between the terminal insert (webhook-
-        // only path) and finalizeAfterPayment() would otherwise leave the
-        // subscription unfinalized forever, because the replay would stop here.
-        // Therefore: for a terminal succeeded attempt, ALWAYS re-invoke
-        // finalizeAfterPayment — it is replay-idempotent (period-already-advanced
-        // → SUCCESS no-op) and CAS-guarded (exactly-once period advance).
-        // For a terminal failed attempt there is nothing to finalize — no-op.
+        // Cross-event idempotency: a terminal attempt already exists for this
+        // payment ID (a different event ID referencing the same payment).
+        // Reconciliation is delegated to the shared helper so this path and
+        // the same-event replay path cannot diverge.
         if (ne.providerPaymentId) {
             const existing = await this.attemptService.findAttemptByProviderPaymentId(channelId, ne.providerPaymentId);
             if (existing && existing.status !== 'initiated') {
-                if (existing.status === 'succeeded') {
-                    Logger.log(
-                        `Event ${ne.providerEventId} matches terminal attempt ${existing.id} — replaying finalize (idempotent)`,
-                        loggerCtx,
-                    );
-                    const result = await this.renewalService.finalizeAfterPayment(existing.id as string);
-                    if (result !== 'SUCCESS') {
-                        Logger.warn(
-                            `Finalize replay for attempt ${existing.id} returned ${result} — manual reconciliation may be required`,
-                            loggerCtx,
-                        );
-                    }
-                } else {
-                    Logger.log(
-                        `Event ${ne.providerEventId} matches terminal attempt ${existing.id} (status=${existing.status}) — no-op`,
-                        loggerCtx,
-                    );
-                }
+                await this.reconcileTerminalAttempt(existing, `payment ${ne.providerPaymentId} duplicate`);
                 return;
             }
         }
@@ -324,10 +309,20 @@ export class RazorpayWebhookProcessor {
                 attemptId = created.id as string;
             } catch (err: any) {
                 if (err?.code === '23505' || String(err?.message || '').includes('UQ_billing_attempt_provider_payment')) {
+                    // Lost the concurrent-insert race: another worker created
+                    // the terminal attempt for this payment. CONVERGE (do not
+                    // just return): look up the winning attempt and run the
+                    // shared reconciliation — a succeeded winner may still
+                    // need its finalize replayed (the winner could itself
+                    // crash before finalizing).
                     Logger.log(
-                        `Webhook-only attempt for payment ${ne.providerPaymentId} lost the concurrent-insert race (UNIQUE provider payment) — benign no-op for event ${ne.providerEventId}`,
+                        `Webhook-only attempt for payment ${ne.providerPaymentId} lost the concurrent-insert race (UNIQUE provider payment) — reconciling winner`,
                         loggerCtx,
                     );
+                    const winner = await this.attemptService.findAttemptByProviderPaymentId(channelId, ne.providerPaymentId!);
+                    if (winner) {
+                        await this.reconcileTerminalAttempt(winner, `unique-race loser for payment ${ne.providerPaymentId}`);
+                    }
                     return;
                 }
                 throw err;
@@ -348,25 +343,39 @@ export class RazorpayWebhookProcessor {
     }
 
     /**
-     * Idempotency check: has this provider event ALREADY reached a terminal
-     * billing attempt?
+     * Shared terminal-attempt reconciliation.
      *
-     * A match is only "processed" when the attempt carrying the event ID is
-     * TERMINAL (succeeded | failed). Since 72961d6 the event ID is persisted
-     * in the same atomic CAS UPDATE as the terminal status, so an initiated
-     * attempt can never carry a providerEventId — but the terminal-status
-     * guard is kept as defense-in-depth: a merely-initiated match must fall
-     * through to the reconciliation path so the charge can still finalize.
+     * SINGLE authority for "this charge already has a terminal attempt":
+     *   terminal succeeded → finalization may be incomplete (crash between
+     *     terminal write and finalize) → replay finalizeAfterPayment, which
+     *     is replay-idempotent (period already advanced → SUCCESS no-op) and
+     *     CAS-guarded (exactly-once period advance).
+     *   terminal failed → fully complete, nothing to finalize.
+     *
+     * Used by ALL three convergence paths — same-event replay (the
+     * processInboxEvent replay boundary), cross-event duplicate (payment-ID
+     * lookup), and the concurrent-insert UNIQUE violation — so they cannot
+     * diverge.
      */
-    private async isEventProcessed(ctx: RequestContext, eventId: string): Promise<boolean> {
-        if (!eventId) return false;
-        const repo = this.connection.getRepository(ctx, SubscriptionBillingAttempt);
-        return !!(await repo.findOne({
-            where: [
-                { providerEventId: eventId, status: 'succeeded' },
-                { providerEventId: eventId, status: 'failed' },
-            ],
-        }));
+    private async reconcileTerminalAttempt(attempt: SubscriptionBillingAttempt, via: string): Promise<void> {
+        if (attempt.status === 'succeeded') {
+            Logger.log(
+                `Terminal succeeded attempt ${attempt.id} (${via}) — replaying finalize (idempotent)`,
+                loggerCtx,
+            );
+            const result = await this.renewalService.finalizeAfterPayment(attempt.id as string);
+            if (result !== 'SUCCESS') {
+                Logger.warn(
+                    `Finalize replay for attempt ${attempt.id} (${via}) returned ${result} — manual reconciliation may be required`,
+                    loggerCtx,
+                );
+            }
+            return;
+        }
+        Logger.log(
+            `Terminal attempt ${attempt.id} (status=${attempt.status}) (${via}) — fully complete, no-op`,
+            loggerCtx,
+        );
     }
 
     /**

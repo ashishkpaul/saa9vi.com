@@ -423,7 +423,7 @@ attempt 3 fails → failed, attemptCount=3, failedAt populated (terminal)
 
 > ⚠️ **R2-G status (current):** the failure-path and concurrent-idempotency e2e
 > specs listed below prove the **pre-refactor** processing semantics
-> (`pending` → `retry` → `failed`, UNIQUE constraint). Since `72961d6`→`c9f4a1c`
+> (`pending` → `retry` → `failed`, UNIQUE constraint). Since the provider-neutral
 > the failure-state bridge (`subscription.pending`/`halted` → Saa9vi
 > `past_due`; `cancelled` → `cancelled`), terminal-only idempotency, and
 > replay-safe finalization are **CODE VERIFIED but RUNTIME UNVERIFIED**, and
