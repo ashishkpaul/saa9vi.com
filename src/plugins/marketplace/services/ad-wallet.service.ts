@@ -11,7 +11,7 @@ export interface CreditWalletInput {
   /** Positive amount in minor units. */
   amountInPaise: number;
   type: 'topup' | 'refund';
-  /** Caller-supplied idempotency key (e.g. the Juspay order id for a topup). */
+  /** Caller-supplied idempotency key (e.g. the payment-provider order id for a topup). */
   reference?: string | null;
   orderId?: string | null;
 }

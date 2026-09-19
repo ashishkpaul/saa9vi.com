@@ -255,10 +255,11 @@ export class MarketplaceAdvertisingService {
   //
   // Wallet credit is NOT exposed through the self-serve Admin API.
   // topUpWallet is a financial-origin operation: credit must be backed
-  // by a verified Juspay payment settlement, not by a permission-gated
+  // by a verified payment settlement, not by a permission-gated
   // GraphQL mutation. The flow is:
   //
-  //   Juspay payment → verified settlement → server-side decision
+  //   Provider payment (e.g. Razorpay) → verified settlement →
+  //     server-side decision
   //     → AdWalletService.creditWallet() → AdWalletLedger
   //
   // Exposing creditWallet() behind MarketplaceAdvertising.Create would

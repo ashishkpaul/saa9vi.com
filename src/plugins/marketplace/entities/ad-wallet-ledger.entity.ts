@@ -19,10 +19,10 @@ import { Column, Entity, Index } from 'typeorm';
  * AdWalletLedgerImmutableSubscriber at the TypeORM service boundary).
  *
  * Idempotency: `reference` is an optional caller-supplied unique key (e.g. the
- * Juspay order id for a top-up, or `campaign:{id}:{eventId}` for a spend). A
+ * provider order id for a top-up, or `campaign:{id}:{eventId}` for a spend). A
  * UNIQUE index on it makes retried writes safe at the DB level (23505 →
- * duplicate). `orderId` links a top-up to its Juspay order; `campaignId`
- * attributes a spend (or refund) to a campaign.
+ * duplicate). `orderId` links a top-up to its payment-provider order;
+ * `campaignId` attributes a spend (or refund) to a campaign.
  */
 @Entity('ad_wallet_ledger')
 export class AdWalletLedger extends VendureEntity {
@@ -49,7 +49,7 @@ export class AdWalletLedger extends VendureEntity {
   @Column({ type: 'varchar', nullable: true })
   campaignId: string | null;
 
-  /** Juspay order id backing a topup; null otherwise. */
+  /** Payment-provider order id backing a topup; null otherwise. */
   @Column({ type: 'varchar', nullable: true })
   orderId: string | null;
 

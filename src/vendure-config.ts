@@ -33,11 +33,11 @@ import { AdSpendLedgerImmutableSubscriber } from './plugins/marketplace/ad-spend
 import { CommissionLedgerImmutableSubscriber } from './plugins/marketplace/commission-ledger-immutable.subscriber';
 import { AdWalletLedgerImmutableSubscriber } from './plugins/marketplace/ad-wallet-ledger-immutable.subscriber';
 import { SubscriptionPlugin } from './plugins/subscription/subscription.plugin';
-// NOTE: resolveBillingConfig (Juspay) is intentionally NOT imported/used here.
-// ADR-038: Razorpay is the active provider; the Juspay implementation is
-// retained under src/plugins/subscription/providers/juspay/ but must not be
-// eagerly resolved at config-evaluation time (it also executes during the
-// Dashboard Vite build, where the Juspay production sandbox guard throws).
+// ADR-038: Razorpay is the sole recurring-billing provider. The former Juspay
+// implementation was removed in 9a31beb and its legacy tables dropped in
+// 466a4ef (ADR-040). Billing credentials are resolved eagerly at config time
+// (this also executes during the Dashboard Vite build), so only the Razorpay
+// provider is configured here.
 
 /**
  * Security headers middleware enforcing HTTP header hardening for production safety.
@@ -290,11 +290,8 @@ apiOptions: {
         webhook: {
             // HMAC-SHA256 secret for X-Razorpay-Signature verification.
             // Fail-closed: when empty, the verifier rejects ALL webhook traffic.
-            // Juspay configuration is NOT resolved here: the Juspay provider
-            // implementation is retained under providers/juspay/ (per ADR-038)
-            // but is not the active runtime provider, and eagerly resolving its
-            // credentials breaks Dashboard compilation via the production
-            // Juspay sandbox guard.
+            // Razorpay is the sole billing provider (ADR-038/ADR-040): there is
+            // no legacy provider config to resolve.
             hmacSecret: process.env.RAZORPAY_WEBHOOK_SECRET ?? '',
         },
     }),

@@ -19,7 +19,7 @@
 
 | Gate | Status | Notes |
 |------|--------|-------|
-| **R1 — Provider-neutral boundary** | ✅ Complete | `RecurringBillingProvider` interface retained. **Razorpay is the sole active/selectable runtime provider** (per ADR-038; provider factory resolves `razorpay` only, with an omitted provider defaulting to Razorpay). Juspay implementation code is retained/dormant for provider-boundary/reference reasons and is not registered/selectable by the current `SubscriptionPlugin` runtime |
+| **R1 — Provider-neutral boundary** | ✅ Complete | `RecurringBillingProvider` interface retained. **Razorpay is the sole runtime provider** (per ADR-038; provider factory resolves `razorpay` only, with an omitted provider defaulting to Razorpay). **Razorpay is the sole active recurring-billing provider.** The Juspay runtime implementation and legacy Juspay entities were removed (`9a31beb`), and the legacy `juspay_*` tables were dropped (`466a4ef`, **ADR-040**). Historical Juspay migration files remain as immutable migration history. All active source, checked-in GraphQL schemas (`schema.graphql`, `schema-shop.graphql`), and BBB `generated-*-types.ts` have been regenerated/verified Juspay-free; the only remaining `src/` mentions are historical migration files and an ADR historical note in `vendure-config.ts`. |
 | **R2 — Razorpay Contract Verification** | ✅ Complete | All sub-gates proven (see below) |
 | **R3 — ADR-038 Freeze** | ✅ Complete | ADR-038 ACCEPTED 2026-09-12 (R2-F + R2-G evidence, INV-018 channel-scoped worker ctx) |
 | **I1-I3 — Implementation** | ✅ Complete | Razorpay live on `main` |
@@ -74,8 +74,8 @@ The inbox worker is implemented with:
 ### Do NOT
 
 - [x] ADR-038 formally accepted (2026-09-12) — see `docs/architecture/adr-038-direct-razorpay-provider.md`
-- ❌ Delete Juspay code yet (retained under `providers/juspay/` for provider-boundary/reference reasons — ADR-038)
-- ✅ Razorpay is the sole active/selectable recurring-billing provider; the `SubscriptionPlugin` factory resolves only `razorpay` (an omitted provider defaults to Razorpay), so Juspay is **not runtime-selectable** — do not treat it as a valid alternative provider path
+- [x] Juspay code removal — **completed** in `9a31beb`; legacy `juspay_*` tables dropped in `466a4ef` (**ADR-040**). ADR-038's "retain Juspay as reference" clause is **superseded by ADR-040**.
+- ✅ Razorpay is the sole recurring-billing provider; the `SubscriptionPlugin` factory resolves only `razorpay` (an omitted provider defaults to Razorpay). Do not reintroduce a second provider path or a second payment-attempt model.
 
 ---
 
@@ -189,7 +189,7 @@ Full chain on production Razorpay: subscription create/authorize → recurring l
 ### Explicitly out of scope for V1
 
 - Refactoring remaining `setImmediate()` hits (BBB subsystem / `reference/` material — unrelated)
-- Removing Juspay classes (provider-neutral boundary intentionally preserves them; see ADR-038)
+- *(The previously-listed "Removing Juspay classes" item is **complete** — `9a31beb` + `466a4ef`, ADR-040 — and is no longer outstanding.)*
 
 ---
 
@@ -249,21 +249,20 @@ CAS locking, idempotent grants, the payment-attempt ledger, and the webhook queu
 
 ### Current provider implementation
 
-> **Status (2026-09-16, post-ADR-038):** Razorpay is the **sole active/selectable runtime provider**.
-> Juspay components below are **retained/dormant** for provider-boundary and historical/reference
-> reasons — not deleted (referenced by migrations/ADR-037 and the `RecurringBillingProvider`
-> boundary), but **not registered as the active runtime provider** and not selectable by the
-> `SubscriptionPlugin` factory.
+> **Status (2026-09-19, post-ADR-040):** Razorpay is the **sole runtime provider**.
+> The Juspay implementation was **deleted** in `9a31beb` and its legacy `juspay_*` tables were
+> **dropped** in `466a4ef` (**ADR-040**). No Juspay code, entity, migration seam or schema remains
+> in the active runtime. ADR-038's "retain Juspay as reference" clause is **superseded by ADR-040**.
 
 | Component | Status |
 |-----------|--------|
-| `JuspaySdk` | Retained/dormant |
-| `JuspayBillingService` | Retained/dormant |
-| `JuspayPaymentAttempt` | Retained/dormant entity |
-| `JuspaySubscriptionMandate` | Retained/dormant entity |
+| `JuspaySdk` | ❌ Removed (`9a31beb`) |
+| `JuspayBillingService` |  Removed (`9a31beb`) |
+| `JuspayPaymentAttempt` | ❌ Removed entity + legacy table dropped (`466a4ef`) |
+| `JuspaySubscriptionMandate` | ❌ Removed entity + legacy table dropped (`466a4ef`) |
 | `RazorpaySubscriptionProvider` | ✅ Active — sole runtime provider (per ADR-038) |
 | `RazorpayWebhookProcessor` | ✅ Active |
-| `RazorpayWebhookController` | ✅ Active (`SubscriptionPlugin` does not register `JuspayWebhookController`) |
+| `RazorpayWebhookController` | ✅ Active |
 | `ProviderWebhookEvent` | ✅ Immutable inbox (shared by all providers) |
 | `SubscriptionBillingAttempt` | ✅ Provider-neutral billing attempt |
 | `SubscriptionProviderBinding` | ✅ Provider-neutral binding |
@@ -397,13 +396,13 @@ Planned work remains white-label theming, TimescaleDB analytics, AI features, mu
 Do not create a second billing engine or second payment-attempt model. The current recurring-billing architecture is:
 
 ```text
-Provider webhook (Razorpay/Juspay)
+Provider webhook (Razorpay — sole provider per ADR-038/ADR-040)
         ↓
 Immutable inbox (ProviderWebhookEvent)
         ↓
 BullMQ worker
         ↓
-Provider processor (RazorpayWebhookProcessor / JuspayWebhookProcessor)
+Provider processor (RazorpayWebhookProcessor)
         ↓
 SubscriptionProviderBinding → channel resolution (INV-001)
         ↓
