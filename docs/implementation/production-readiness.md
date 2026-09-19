@@ -149,19 +149,26 @@ must remain independently attributable.
   --------------------------------------------------------------------------
   Area                    Status                  Evidence
   ----------------------- ----------------------- --------------------------
-  Real PostgreSQL runtime **NOT VERIFIED**        Runtime evidence required
+  Real PostgreSQL runtime **VERIFIED (R2-A)         postgres:16.8 container, live
+                          post-refactor            TCP conn from server pid
+                          evidence                 (Section 8)
 
-  Real Redis runtime      **NOT VERIFIED**        Runtime evidence required
+  Real Redis runtime      **VERIFIED (R2-A)         redis:6.2 container, PING →
+                          post-refactor            PONG, 7 live conns, BullMQ
+                          evidence                 keys (Section 8)
 
-  pg-mem fallback absent  **NOT VERIFIED**        Runtime startup evidence
-                                                  required
+  pg-mem fallback absent  **VERIFIED (R2-A)        no pgmem in src; DB-backed
+                                                   shop query returns persisted
+                                                   data; synchronize: false
 
-  Default in-process      **NOT VERIFIED**        Runtime startup evidence
-  queue fallback absent                           required
+  Default in-process      **VERIFIED (R2-A)        config selects
+  queue fallback absent                            BullMQJobQueuePlugin when
+                                                   REDIS_HOST set; merged-worker
+                                                   startup log
 
-  Migration state         **NOT VERIFIED**        `npx vendure migrate -r`
-  verified against                                evidence required
-  runtime DB
+  Migration state         **VERIFIED (R2-A)        55 applied migrations;
+                          post-refactor            `npx vendure migrate -r` →
+                          evidence                 "No pending migrations found"
 
   Production secrets      **OPEN — runtime env    Source allows insecure
   hardened                check needed**           defaults if env vars are
@@ -185,8 +192,9 @@ must remain independently attributable.
   Backup/restore drill    **NOT VERIFIED**        Operational drill not yet
                                                   evidenced
 
-  R2 recurring            **OPEN**                R2-A prerequisite not yet
-  subscriptions                                   closed
+  R2 recurring            **OPEN**                R2-A evidenced; R2-E/F/G
+  subscriptions                                   runtime evidence pending
+
 
   R3 one-time commerce    **OPEN**                Current payment handler is
                                                   not production-ready
@@ -223,11 +231,13 @@ instance.
 
 ### Current status
 
-**NOT VERIFIED / BLOCKED**
+**VERIFIED for runtime connectivity — one observation pending (R2-E)**
 
-The current application contains a fail-open development fallback to
-pg-mem when PostgreSQL is unavailable. Therefore a successful process
-start alone is not evidence of real PostgreSQL health.
+Post-refactor runtime evidence (Section 8, commit `b4afad9` baseline): real
+PostgreSQL 16.8 connection from the server process, DB-backed shop query
+returning persisted data (no pg-mem involvement), `synchronize: false`.
+The remaining item — an observed post-restart job execution — is captured
+naturally via R2-E (webhook → enqueue → process).
 
 ------------------------------------------------------------------------
 
@@ -247,10 +257,14 @@ and use the intended BullMQ configuration.
 
 ### Current status
 
-**NOT VERIFIED / BLOCKED**
+**VERIFIED for runtime connectivity — one observation pending (R2-E)**
 
-The current application has a fallback path when Redis is unavailable.
-Runtime evidence is therefore mandatory.
+Post-refactor runtime evidence (Section 8, commit `b4afad9` baseline): real
+Redis 6.2 connection (`PING` → `PONG`), 7 live TCP connections from the server
+pid, `bull:vendure-job-queue:*` keys present, `BullMQJobQueuePlugin` selected
+by config (no DefaultJobQueuePlugin fallback), merged-worker queue start with
+all 10 queues. The remaining item — an observed post-restart job execution —
+is captured naturally via R2-E.
 
 ------------------------------------------------------------------------
 
@@ -575,10 +589,13 @@ restored all six legacy tables — including the partial unique index on
 `juspay_subscription_mandate` and the join-table foreign keys — and re-apply
 returned to the converged state. Full evidence in ADR-040.
 
-This sub-evidence closes the **migration** half only. R2-A stays open because
-the runtime half has not been re-captured against `9a31beb`; the startup log on
-record predates the refactor and is therefore not admissible as post-refactor
-runtime evidence.
+~~This sub-evidence closes the **migration** half only. R2-A stays open because
+the runtime half has not been re-captured against `9a31beb`...~~
+
+*Superseded by the runtime sub-evidence below (2026-09-19, commit `b4afad9`
+baseline): the runtime half was subsequently re-captured post-refactor and is
+admissible. R2-A now remains open only for the post-restart observed
+queue-execution item, which closes via R2-E.*
 
 ### Required evidence
 #### Runtime sub-evidence (2026-09-19, post-refactor commit `b4afad9`)
@@ -642,9 +659,11 @@ Verify a real Razorpay Test Mode subscription authorization flow.
 
 ### Current status
 
-**NOT COMPLETE**
+**OPEN — code prerequisites resolved**
 
-R2-A must be closed before R2-E is declared complete.
+R2-A is evidenced except for the post-restart queue-execution observation, which
+is captured naturally as part of R2-E. Once R2-E runtime evidence exists, R2-A
+closes with it.
 
 ------------------------------------------------------------------------
 
@@ -701,12 +720,19 @@ This is a confirmed code-level invariant violation.
 The webhook path must use the authoritative billing-attempt service
 rather than bypassing it.
 
+### Code status
+
+**Resolved** in the provider-neutral refactor (9a31beb, commit b4afad9):
+`RazorpayWebhookProcessor` now delegates billing-attempt persistence to
+`SubscriptionBillingAttemptService` (INV-019 authority boundary) and calls
+`finalizeAfterPayment()` after successful payment.
+
 ### Current status
 
-**BLOCKED / NOT COMPLETE**
+**OPEN — runtime evidence pending**
 
-Do not mark R2-F complete until the writer path is corrected and the
-real webhook lifecycle is evidenced.
+The writer path is corrected; R2-F remains open only until the real signed
+webhook lifecycle is evidenced.
 
 ------------------------------------------------------------------------
 
@@ -726,9 +752,11 @@ subscription.halted
 
 ### Known code blocker
 
-The current webhook processor does not explicitly handle
-`subscription.pending`; unhandled events fall through to warning/log
-behavior.
+**Resolved** in the provider-neutral refactor (9a31beb): the webhook processor
+now explicitly handles `subscription.pending`, `subscription.authenticated`,
+`subscription.activated`, `subscription.charged`, `subscription.halted`,
+`subscription.cancelled`, `payment.failed`, and `payment.charge_failed`.
+Previously `subscription.pending` fell through to warning/log behavior.
 
 Therefore the provider failure state is not yet demonstrated to produce
 the intended Saa9vi domain transition.
@@ -747,10 +775,10 @@ For each failure event:
 
 ### Current status
 
-**BLOCKED / NOT COMPLETE**
+**OPEN — runtime evidence pending**
 
-R2-G cannot be complete while `subscription.pending` remains unhandled
-or while the intended state transition is not evidenced.
+The `subscription.pending` handling code path exists; R2-G remains open only
+until the intended Saa9vi state transition is evidenced at runtime.
 
 ------------------------------------------------------------------------
 
@@ -1015,17 +1043,22 @@ Then verify the actual changed files.
 
   P0-J              Backup/restore      NOT VERIFIED      Restore drill
 
-  R2-A              Migration/runtime   **NOT COMPLETE**  Real Postgres/Redis +
-                    prerequisite                          migration evidence
+  R2-A              Migration/runtime   EVIDENCED*        Real Postgres/Redis +
+                    prerequisite                          migration evidence; *
+                    `provider-webhook-processing` execution post-restart observed
+                    via R2-E
 
-  R2-E              Authorization       NOT STARTED       R2-A
-
-  R2-F              Webhook lifecycle   BLOCKED           Attempt-service bypass +
-                                                          runtime evidence
-
-  R2-G              Failure semantics   BLOCKED           `subscription.pending`
-                                                          handling + runtime
+  R2-E              Authorization       OPEN              Test-mode authorization
                                                           evidence
+
+  R2-F              Webhook lifecycle   OPEN              Code blockers resolved
+                                                          (9a31beb); runtime
+                                                          lifecycle evidence
+
+  R2-G              Failure semantics   OPEN              `subscription.pending`
+                                                          handled (9a31beb);
+                                                          runtime failure
+                                                          lifecycle evidence
 
   R3                One-time commerce   OPEN              `dummyPaymentHandler` /
                                                           full payment evidence
@@ -1041,7 +1074,11 @@ Then verify the actual changed files.
 
 # 15. Immediate next action
 
-The next action is **R2-A**, not R2-E, R2-F, or R2-G.
+R2-A is now **evidenced** (post-refactor: real Postgres, real Redis/BullMQ,
+53→55 migrations, merged-worker operational; see Section 8 and the
+`provider-webhook-processing` sub-evidence). The next action is **R2-E**
+(Razorpay Test-Mode authorization), which also captures the final post-restart
+queue-execution observation that closes R2-A fully.
 
 Run against the actual Saa9vi runtime:
 

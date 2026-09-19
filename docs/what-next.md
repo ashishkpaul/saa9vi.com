@@ -309,7 +309,7 @@ git status --short
 npm run build:all
 ```
 
-**`npm run build:all` (not `npm run build`) is the mandatory truth-rule build.** Proven 2026-09-12: `npm run build` (tsc only) reported green while the production Dashboard was NOT buildable — because the Dashboard Vite plugin executes `vendure-config.ts` at build time, and the then-active SubscriptionPlugin config eagerly resolved Juspay credentials, tripping the production `JUSPAY_SANDBOX` fail-closed guard. Fix: the active config now explicitly selects `provider: 'razorpay'` and never resolves Juspay config (Juspay implementation remains retained under `providers/juspay/`, per ADR-038 — retained source ≠ active runtime configuration).
+**`npm run build:all` (not `npm run build`) is the mandatory truth-rule build.** Proven 2026-09-12: `npm run build` (tsc only) reported green while the production Dashboard was NOT buildable — because the Dashboard Vite plugin executes `vendure-config.ts` at build time, and the then-active SubscriptionPlugin config eagerly resolved Juspay credentials, tripping the production `JUSPAY_SANDBOX` fail-closed guard. Fix: the active config now explicitly selects `provider: 'razorpay'` and never resolves Juspay config (the legacy Juspay implementation has since been **fully removed** in `9a31beb` and its legacy tables dropped in `466a4ef`, **ADR-040** superseding ADR-038's retention clause).
 
 ## S0–S3 Verification Gates (post-ADR-038 UX audit)
 
@@ -353,7 +353,7 @@ PHASE 2 — SUBSCRIPTION BILLING & CAPACITY POLICY
 
 [x] NavigationMenu entity in CMS
 [~] Juspay provider-contract verification (live sandbox)
-    — superseded by ADR-038; Juspay is retained/dormant and not runtime-selectable
+    — moot: Juspay implementation fully removed (`9a31beb`), legacy tables dropped (`466a4ef`, ADR-040)
 [ ] Production credential rollout and fail-closed verification
 [ ] E2e coverage gaps (sandbox round-trip, mandate lifecycle)
 

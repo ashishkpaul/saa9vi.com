@@ -25,7 +25,7 @@
 | **Marketplace** | Cross-channel discovery layer. Platform-level Elasticsearch indices for sessions and instructors. Does not transact — redirects to tenant storefronts. |
 | **Marketplace Commission** | Stream 2 revenue. A percentage of marketplace-originated orders, controlled by `MARKETPLACE_COMMISSION_PERCENT` env var. |
 | **CommissionLedger** | Append-only ledger for marketplace commission rows. Always writes a row per marketplace order, even at 0% ($0-row pattern). |
-| **AdWallet** | Prepaid advertising wallet per tenant. Topped up via Juspay. |
+| **AdWallet** | Prepaid advertising wallet per tenant. Top-up intentionally not exposed; payment-origin mechanism TBD pending R3 (one-time commerce). |
 | **AdSpendLedger** | Append-only ledger for ad spend events (impression, click, conversion). |
 | **Stream 1** | Tenant billing — BBB usage + portal/hosting. Usage-driven via `BbbCapacityGrant`/`BbbUsageLedger`. Always on. |
 | **Stream 2** | Marketplace commission — percentage of marketplace orders. Controlled by `MARKETPLACE_COMMISSION_PERCENT`. |

@@ -500,7 +500,7 @@ Pending → Provisioning → Active → Completed → Archived
 - `trialing` retained for non-provider flows
 - Only provider webhooks drive `pending_provider_auth` → `active`; Razorpay is the authoritative activation source (INV-004).
 
-**Fields:** `plan`, `channels`, `channelId`, `status`, `currentPeriodStart`, `currentPeriodEnd`, `cancelAtPeriodEnd`, `cancelledAt`, `dunningRetryCount`, `lastDunningAttemptAt`, `billingCustomerId` (legacy Juspay-only), `providerStatus`, `providerShortUrl`, `version`
+**Fields:** `plan`, `channels`, `channelId`, `status`, `currentPeriodStart`, `currentPeriodEnd`, `cancelAtPeriodEnd`, `cancelledAt`, `dunningRetryCount`, `lastDunningAttemptAt`, `billingCustomerId` (provider-neutral customer reference, e.g. Razorpay `customer_id`), `providerStatus`, `providerShortUrl`, `version`
 
 **Invariants:**
 - `UNIQUE(channelId) WHERE status != 'cancelled'` — at most one non-cancelled subscription per tenant.
@@ -555,7 +555,7 @@ Pending → Provisioning → Active → Completed → Archived
 **Invariants:**
 - Append-only per attempt — terminal results are never overwritten.
 - `UNIQUE(provider, providerEventId)` provides webhook idempotency.
-- Replaces the legacy `JuspayPaymentAttempt`.
+- Supersedes the legacy `juspay_payment_attempt` table, which was dropped in 466a4ef (ADR-040).
 
 ---
 
@@ -579,4 +579,4 @@ Pending → Provisioning → Active → Completed → Archived
 - Events are append-only — never updated except processing/verification timestamps and retry counters.
 - `UNIQUE(provider, providerEventId)` prevents duplicate processing.
 - `channelId` is NULL at ingress and resolved by the worker from the provider binding — the authoritative channel comes from the binding, not arbitrary request context (INV-018).
-- Juspay webhook entities (`juspay_webhook_event`, `juspay_webhook_endpoint`, etc.) remain retained/dormant alongside the dormant Juspay provider (ADR-038).
+- The legacy Juspay webhook entities (`juspay_webhook_event`, `juspay_webhook_endpoint`, etc.) were dropped in 466a4ef (ADR-040) after the provider-neutral refactor (9a31beb); the unified `provider_webhook_event` inbox is the sole webhook record (ADR-038).

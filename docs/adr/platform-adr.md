@@ -95,7 +95,8 @@ Saa9vi is a **multi-tenant education commerce platform** targeting Indian coachi
 | Admin UI | Vendure React Dashboard (`@vendure/dashboard`) |
 | Storefront | Next.js |
 | Live classes | BigBlueButton (self-hosted) |
-| Payments | Juspay |
+| Recurring SaaS billing | Razorpay Subscriptions (ADR-038; legacy Juspay removed — ADR-040) |
+| One-time commerce (R3) | Razorpay `PaymentMethodHandler` — not yet implemented; `dummyPaymentHandler` still registered |
 
 ### Plugin Inventory (current)
 
@@ -461,7 +462,7 @@ export class OrganizationSubscription extends VendureEntity implements ChannelAw
   @Column() currentPeriodStart: Date;
   @Column() currentPeriodEnd: Date;
   @Column({ default: false }) cancelAtPeriodEnd: boolean;
-  @Column({ nullable: true }) billingCustomerId: string | null;   // Juspay ref
+  @Column({ nullable: true }) billingCustomerId: string | null;   // provider customer ref (e.g. Razorpay customer_id)
   @ManyToMany(() => Channel) @JoinTable() channels: Channel[];
   @Column() channelId: string;
 }
@@ -1469,9 +1470,10 @@ BBB_WEBHOOK_SECRET=...
 BBB_ENCRYPTION_KEY=...           # AES-256-GCM key, base64
 BBB_ENCRYPTION_KEY_VERSION=1
 
-# Juspay
-JUSPAY_API_KEY=...
-JUSPAY_MERCHANT_ID=...
+# Razorpay (recurring subscription billing — ADR-038)
+RAZORPAY_KEY_ID=...
+RAZORPAY_KEY_SECRET=...
+RAZORPAY_WEBHOOK_SECRET=...
 
 # Elasticsearch
 ELASTICSEARCH_URL=http://...
@@ -1676,7 +1678,7 @@ Deliverables:
 - `SubscriptionPlan` and `OrganizationSubscription` entities
 - `BbbCapacityGrant.sourceType` discriminator
 - Monthly invoice generation job
-- Juspay recurring billing integration
+- Razorpay recurring billing integration (ADR-038; legacy Juspay tables dropped — ADR-040)
 - Tenant onboarding flow in storefront
 - `NavigationMenu` entity in CMS
 - Banner BullMQ scheduling (CMS-002)
@@ -1712,7 +1714,7 @@ Deliverables:
 *Advertising (Stream 3)*
 
 - **FEAT-003:** `MarketplaceAdCampaign` + `AdSpendLedger` entities (see INV-010)
-- **FEAT-003:** `AdWallet` + `AdWalletLedger` — prepaid wallet per academy, top-up via Juspay
+- **FEAT-003:** `AdWallet` + `AdWalletLedger` — prepaid wallet per academy. Wallet top-up is a financial-origin operation whose payment/settlement mechanism is **not yet implemented** (pending R3 one-time payment; provider = Razorpay per ADR-038 — do NOT assume this is live).
 - **FEAT-004:** `Banner.scope: 'tenant' | 'marketplace'` discriminator + `MarketplaceBannerService`
 - Elasticsearch bid-boost for sponsored sessions (see INV-009)
 - Self-serve campaign dashboard (admin UI extension)

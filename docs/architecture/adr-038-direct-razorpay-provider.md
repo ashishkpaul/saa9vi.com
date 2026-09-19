@@ -11,7 +11,7 @@ All acceptance criteria are verified:
 |---|-----------|--------|----------|
 | 1 | M1.3 — Razorpay Test Plan + Test Subscription | ✅ | `plan_TaMGQbDDQn7Tir`, `sub_TabaZJZTQzNfWy` |
 | 2 | M1.4 — Webhook lifecycle captured | ✅ | HMAC-SHA256, persist-first, 2xx |
-| 3 | R1 — Provider-neutral boundary complete | ✅ | `RecurringBillingProvider` interface retained; at acceptance time both provider implementations existed. **Post-acceptance status:** Razorpay is the sole active/selectable runtime provider; Juspay implementation remains retained but dormant |
+| 3 | R1 — Provider-neutral boundary complete | ✅ | `RecurringBillingProvider` interface retained; at acceptance time both provider implementations existed. **Post-acceptance status:** Razorpay is the sole active/selectable runtime provider; legacy Juspay implementation and entities removed (Commit B, migration `1789797901115`, ADR-040) |
 | 4 | R2-F — Durable processing | ✅ | BullMQ inbox worker, single path |
 | 5 | R2-G — Failure semantics | ✅ | pending → retry → failed, `failedAt` |
 | 6 | R2-G — Concurrent idempotency | ✅ | UNIQUE(provider, providerEventId) |
@@ -111,7 +111,7 @@ CAS transition → Entitlement update
 
 ## Consequences
 
-- Juspay implementation code is **retained/dormant** for provider-boundary and historical/reference reasons (referenced by ADR-037 and existing migrations); it is **not selectable by the current SubscriptionPlugin runtime configuration** — the provider factory resolves only `razorpay`, and `JuspayWebhookController` is not registered. Deleted only if/when the retained-boundary decision is explicitly revisited.
+- Legacy Juspay implementation code and entities were **removed** in the provider-neutral refactor (9a31beb) and the legacy tables dropped (466a4ef, migration `1789797901115`, ADR-040). Razorpay is the sole active/selectable provider — the provider factory resolves only `razorpay`. Historical Juspay migrations remain in place for migration-history integrity.
 - New provider-neutral entities: SubscriptionProviderBinding, SubscriptionBillingAttempt
 - Razorpay adapter: RazorpaySubscriptionProvider, RazorpayWebhookProcessor
 - Migration required for new entities

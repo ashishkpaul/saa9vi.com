@@ -408,7 +408,7 @@ The client carries a signed reference but **cannot** choose `orderSource = 'mark
 ### Decision 6 — Replay prevention
 - The reference is **single-use per (resource, customer, reference)** for commission purposes. Once a valid `marketplaceRef` has been consumed by a successful marketplace order, **reuse of the same reference for a second order classifies it as `orderSource = 'direct'`** (no commission), recorded as a duplicate/replay event rather than silently granting a second attribution.
 - The replay guard is keyed on the reference **nonce/id**, not on the customer, so a node re-sending the same checkout mutation in a retried request does not create a second marketplace order.
-- **Interplay with retries:** a retried checkout that carries the same reference and resolves to the *same* order is idempotent (safe); a retried checkout that resolves to a *new* order with an already-consumed reference is reclassified to `direct`. This matches the project's webhook-idempotency discipline (`JuspayProcessedEvent`, BBB proposal-variant idempotency).
+- **Interplay with retries:** a retried checkout that carries the same reference and resolves to the *same* order is idempotent (safe); a retried checkout that resolves to a *new* order with an already-consumed reference is reclassified to `direct`. This matches the project's webhook-idempotency discipline (provider-webhook-event inbox idempotency, BBB proposal-variant idempotency).
 
 ### Decision 7 — Verification without exposing the signing secret
 - `marketplaceRef` is an **HMAC-signed token** issued by a Vendure-owned signing service. The signing secret (e.g. a `MARKETPLACE_REF_SIGNING_SECRET` env var) is known **only to Vendure** — never to the Next.js storefront, browser, or any external party.
