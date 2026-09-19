@@ -170,7 +170,8 @@ export class SubscriptionRenewalService {
      *   Phase 2 ATTEMPT (INV-019): a SubscriptionBillingAttempt row records the
      *     charge attempt. In the Razorpay model, the provider owns recurring
      *     execution — Saa9vi records the attempt and waits for the webhook.
-     *   Phase 3 CHARGE: the provider call (currently simulated).
+     *   Phase 3 CHARGE: NO Saa9vi-side call. Razorpay executes the recurring
+     *     charge autonomously; the outcome arrives as a webhook.
      *   Phase 4 FINALIZE CAS: period advancement + status, guarded on the
      *     claimed version, ONLY after payment success.
      *
@@ -301,7 +302,6 @@ export class SubscriptionRenewalService {
   /**
    * Shared Phase 4 FINALIZE CAS handler — advances the billing period on a
    * successfully charged subscription. Called by both:
-   * - executeRenewal() (synchronous simulation path), and
    * - finalizeAfterPayment() (async webhook-driven path).
    *
    * WHY SHARED: the worker and webhook paths were previously duplicated here
@@ -445,6 +445,91 @@ export class SubscriptionRenewalService {
       loggerCtx,
     );
   }
+  /**
+   * Webhook-driven failure-state bridge (R2-G).
+   *
+   * Maps provider failure states onto the Saa9vi subscription FSM so the
+   * dunning job can discover them:
+   *
+   *   subscription.pending  → OrganizationSubscription.status = 'past_due'
+   *   subscription.halted   → OrganizationSubscription.status = 'past_due'
+   *
+   * Razorpay semantics: 'pending' = payments are failing and retries are
+   * in progress; 'halted' = retry threshold exhausted and the subscription
+   * is suspended. Both represent dunning situations on the Saa9vi side
+   * (RFC-001 §4.2) — the dunning task discovers subscriptions with
+   * status = 'past_due', so WITHOUT this bridge the documented dunning
+   * path has no entry point.
+   *
+   * Uses CAS on version to avoid clobbering concurrent state changes
+   * (e.g. a concurrent successful payment finalization).
+   * Idempotent no-op when the subscription is already past_due/cancelled.
+   *
+   * The billing period is NOT advanced — dunning retry with a new attempt
+   * row handles recovery.
+   */
+  async markPastDueFromWebhook(subscriptionId: string): Promise<void> {
+    const repo = this.connection.rawConnection.getRepository(OrganizationSubscription);
+    const sub = await repo.findOne({ where: { id: subscriptionId as any } });
+    if (!sub) {
+      Logger.warn(`markPastDueFromWebhook: subscription ${subscriptionId} not found`, loggerCtx);
+      return;
+    }
+    // Only active/trialing subscriptions can transition to past_due.
+    if (sub.status !== "active" && sub.status !== "trialing") {
+      Logger.info(
+        `Subscription ${subscriptionId} status='${sub.status}' — past_due transition not applicable`,
+        loggerCtx,
+      );
+      return;
+    }
+    await this.connection.rawConnection
+      .createQueryBuilder()
+      .update(OrganizationSubscription)
+      .set({ status: "past_due" })
+      .where("id = :id AND version = :version", {
+        id: sub.id,
+        version: sub.version,
+      })
+      .execute();
+    Logger.info(
+      `Subscription ${sub.id} (channel ${sub.channelId}) marked past_due from provider webhook failure state`,
+      loggerCtx,
+    );
+  }
+
+  /**
+   * Webhook-driven cancellation bridge (R2-G).
+   *
+   *   subscription.cancelled → OrganizationSubscription.status = 'cancelled'
+   *
+   * CAS on version; no-op if the subscription is already terminal.
+   */
+  async markCancelledFromWebhook(subscriptionId: string): Promise<void> {
+    const repo = this.connection.rawConnection.getRepository(OrganizationSubscription);
+    const sub = await repo.findOne({ where: { id: subscriptionId as any } });
+    if (!sub) {
+      Logger.warn(`markCancelledFromWebhook: subscription ${subscriptionId} not found`, loggerCtx);
+      return;
+    }
+    if (sub.status === "cancelled") {
+      return;
+    }
+    await this.connection.rawConnection
+      .createQueryBuilder()
+      .update(OrganizationSubscription)
+      .set({ status: "cancelled" })
+      .where("id = :id AND version = :version", {
+        id: sub.id,
+        version: sub.version,
+      })
+      .execute();
+    Logger.info(
+      `Subscription ${sub.id} (channel ${sub.channelId}) marked cancelled from provider webhook`,
+      loggerCtx,
+    );
+  }
+
   /**
    * Marks a subscription as past_due after a failed charge. The period is
    * NOT advanced — the next renewal scan will retry with a new attempt.

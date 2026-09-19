@@ -291,10 +291,23 @@ against the actual production/staging PostgreSQL target.
 
 ### Current status
 
-**NOT VERIFIED**
+**VERIFIED (R2-A, post-refactor runtime evidence, 2026-09-19)**
 
-Migration source files exist, but source existence does not prove that
-the migrations have been applied to the actual runtime database.
+`npx vendure migrate -r` was executed against the actual runtime PostgreSQL
+target (postgres:16.8 container) as part of the R2-A migration/runtime
+reconciliation:
+
+-   `npx vendure migrate -r` → "Successfully ran 1 migrations"
+    (`1789797901115-subscription-reconciliation-and-legacy-cleanup`, ADR-040)
+-   convergence check: `npx vendure migrate -r` → "No pending migrations found"
+-   rollback round-trip exercised: `--revert` restored the six legacy tables,
+    re-apply returned to the converged state (full evidence in ADR-040)
+-   application starts against the same database (`node ./dist/index.js`,
+    `/health` → 200, DB-backed shop query returns persisted data)
+-   `synchronize: false` in config; no schema synchronization used as repair
+
+See Section 8 (R2-A runtime sub-evidence) for the full command output and
+connection evidence.
 
 ------------------------------------------------------------------------
 
@@ -1014,13 +1027,21 @@ Then verify the actual changed files.
   ----------------------------------------------------------------------------------
   Gate              Requirement         Current status    Blocking evidence
   ----------------- ------------------- ----------------- --------------------------
-  P0-A              Real PostgreSQL     NOT VERIFIED      Runtime connection
-                                                          evidence
+  P0-A              Real PostgreSQL     VERIFIED (R2-A)   postgres:16.8 container,
+                                                          live TCP conn from server
+                                                          pid; DB-backed shop query
+                                                          (Section 8)
 
-  P0-B              Real Redis/BullMQ   NOT VERIFIED      Runtime connection + queue
-                                                          evidence
+  P0-B              Real Redis/BullMQ   VERIFIED (R2-A)   redis:6.2 container,
+                                                          PING → PONG, 7 live
+                                                          conns, BullMQ keys
+                                                          (Section 8)
 
-  P0-C              Migration health    NOT VERIFIED      `npx vendure migrate -r`
+  P0-C              Migration health    VERIFIED (R2-A)   `npx vendure migrate -r` →
+                                                          converged, "No pending
+                                                          migrations found"; 55
+                                                          applied migrations
+                                                          (P0-C section)
 
   P0-D              Worker topology     OPEN              Deployment/runtime
                                                           evidence
@@ -1057,8 +1078,11 @@ Then verify the actual changed files.
 
   R2-G              Failure semantics   OPEN              `subscription.pending`
                                                           handled (9a31beb);
-                                                          runtime failure
-                                                          lifecycle evidence
+                                                          pending/halted → `past_due`
+                                                          dunning bridge added (CODE
+                                                          VERIFIED, this commit);
+                                                          runtime failure lifecycle
+                                                          evidence still required
 
   R3                One-time commerce   OPEN              `dummyPaymentHandler` /
                                                           full payment evidence

@@ -59,35 +59,69 @@ export class SubscriptionBillingAttemptService {
     }
 
     /**
-     * Stores the provider-issued payment ID on an existing attempt. Called by the
+     * Stores provider-issued identifiers on an existing attempt. Called by the
      * webhook processor to match the incoming payment event to this attempt.
+     *
+     * providerEventId/providerInvoiceId are persisted here so that the
+     * renewal-created → webhook-reconciled path produces a COMPLETE ledger
+     * fact, identical in provenance to the webhook-only path (where
+     * recordAttemptFromWebhook stores them at creation time).
      *
      * This is a metadata-only update on an attempt that is still in 'initiated'
      * state — it does NOT perform the terminal transition.
      */
-    async recordProviderPaymentId(attemptId: ID, providerPaymentId: string): Promise<void> {
+    async recordProviderPaymentId(
+        attemptId: ID,
+        providerPaymentId: string,
+        providerEventId?: string,
+        providerInvoiceId?: string,
+    ): Promise<void> {
         await this.connection.rawConnection
             .createQueryBuilder()
             .update(SubscriptionBillingAttempt)
-            .set({ providerPaymentId })
+            .set({
+                providerPaymentId,
+                ...(providerEventId ? { providerEventId } : {}),
+                ...(providerInvoiceId ? { providerInvoiceId } : {}),
+            })
             .where("id = :id AND status = 'initiated'", { id: attemptId })
             .execute();
     }
 
     /** Guards the initiated → succeeded transition. Returns false if it lost the CAS. */
-    async recordAttemptSuccess(attemptId: ID, providerPaymentId?: string): Promise<boolean> {
-        return this.transition(attemptId, "succeeded", { providerPaymentId });
+    async recordAttemptSuccess(
+        attemptId: ID,
+        providerPaymentId?: string,
+        providerEventId?: string,
+        providerInvoiceId?: string,
+    ): Promise<boolean> {
+        return this.transition(attemptId, "succeeded", {
+            providerPaymentId,
+            providerEventId,
+            providerInvoiceId,
+        });
     }
 
     /** Guards the initiated → failed transition. Returns false if it lost the CAS. */
-    async recordAttemptFailure(attemptId: ID, reason: string, providerPaymentId?: string): Promise<boolean> {
-        return this.transition(attemptId, "failed", { providerPaymentId, failureReason: reason });
+    async recordAttemptFailure(
+        attemptId: ID,
+        reason: string,
+        providerPaymentId?: string,
+        providerEventId?: string,
+        providerInvoiceId?: string,
+    ): Promise<boolean> {
+        return this.transition(attemptId, "failed", {
+            providerPaymentId,
+            providerEventId,
+            providerInvoiceId,
+            failureReason: reason,
+        });
     }
 
     private async transition(
         attemptId: ID,
         target: "succeeded" | "failed",
-        opts: { providerPaymentId?: string; failureReason?: string },
+        opts: { providerPaymentId?: string; failureReason?: string; providerEventId?: string; providerInvoiceId?: string },
     ): Promise<boolean> {
         const result = await this.connection.rawConnection
             .createQueryBuilder()
@@ -95,6 +129,8 @@ export class SubscriptionBillingAttemptService {
             .set({
                 status: target,
                 providerPaymentId: opts.providerPaymentId ?? undefined,
+                ...(opts.providerEventId ? { providerEventId: opts.providerEventId } : {}),
+                ...(opts.providerInvoiceId ? { providerInvoiceId: opts.providerInvoiceId } : {}),
                 failureReason: opts.failureReason ?? undefined,
             })
             .where("id = :id AND status = 'initiated'", { id: attemptId })

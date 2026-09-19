@@ -54,13 +54,22 @@ export class RazorpayWebhookProcessor {
 
         const ne = this.normalizeEvent(event, payload, providerEventId);
 
+        let binding: SubscriptionProviderBinding | null = null;
+        let haltedBinding: SubscriptionProviderBinding | null = null;
+        let cancelledBinding: SubscriptionProviderBinding | null = null;
+
         switch (event) {
             case 'subscription.pending':
-                // Pending state: subscription created but not yet active (customer
-                // hasn't authorized). Mirror on the binding; do NOT record a billing
-                // attempt — no charge has occurred yet.
-                await this.updateBinding(ctx, ne.providerSubscriptionId, 'pending', false, ne.channelId, ne.planId);
-                Logger.log(`Subscription ${ne.providerSubscriptionId} is pending provider auth`, loggerCtx);
+                // Razorpay 'pending' = recurring payments are failing and provider
+                // retries are in progress. Mirror on the binding AND bridge the
+                // Saa9vi FSM to past_due so the dunning job can discover it
+                // (RFC-001 §4.2). Do NOT record a billing attempt — no charge
+                // event is attached to this state transition.
+                binding = await this.updateBinding(ctx, ne.providerSubscriptionId, 'pending', false, ne.channelId, ne.planId);
+                if (binding?.subscription?.id) {
+                    await this.renewalService.markPastDueFromWebhook(binding.subscription.id as string);
+                }
+                Logger.log(`Subscription ${ne.providerSubscriptionId} is pending provider retry (dunning)`, loggerCtx);
                 break;
 
             case 'subscription.authenticated':
@@ -81,17 +90,23 @@ export class RazorpayWebhookProcessor {
                 break;
 
             case 'subscription.halted':
-                // Halted = subscription suspended by provider (e.g. past_due,
-                // charge failure threshold reached). The next renewal scan
-                // will retry with a new attempt.
-                await this.updateBinding(ctx, ne.providerSubscriptionId, 'halted', false, ne.channelId, ne.planId);
+                // Halted = retries exhausted, subscription suspended by provider.
+                // Bridge to past_due (dunning recovery path) and record the
+                // charge failure when the event carries payment details.
+                haltedBinding = await this.updateBinding(ctx, ne.providerSubscriptionId, 'halted', false, ne.channelId, ne.planId);
+                if (haltedBinding?.subscription?.id) {
+                    await this.renewalService.markPastDueFromWebhook(haltedBinding.subscription.id as string);
+                }
                 if (ne.providerPaymentId && ne.amountPaise) {
                     await this.recordAttempt(ctx, ne, 'failed');
                 }
                 break;
 
             case 'subscription.cancelled':
-                await this.updateBinding(ctx, ne.providerSubscriptionId, 'cancelled', false, ne.channelId, ne.planId);
+                cancelledBinding = await this.updateBinding(ctx, ne.providerSubscriptionId, 'cancelled', false, ne.channelId, ne.planId);
+                if (cancelledBinding?.subscription?.id) {
+                    await this.renewalService.markCancelledFromWebhook(cancelledBinding.subscription.id as string);
+                }
                 break;
 
             case 'payment.failed':
@@ -126,7 +141,7 @@ export class RazorpayWebhookProcessor {
         active: boolean,
         channelId?: string,
         planId?: string,
-    ): Promise<void> {
+    ): Promise<SubscriptionProviderBinding | null> {
         const bindingRepo = this.connection.getRepository(ctx, SubscriptionProviderBinding);
         const binding = await bindingRepo.findOne({
             where: { providerSubscriptionId: subId },
@@ -136,7 +151,7 @@ export class RazorpayWebhookProcessor {
         if (!binding) {
             // No binding = not a Saa9vi-managed subscription.
             Logger.warn(`No provider binding found for subscription ${subId}`, loggerCtx);
-            return;
+            return null;
         }
 
         binding.providerStatus = status;
@@ -160,6 +175,8 @@ export class RazorpayWebhookProcessor {
                 loggerCtx,
             );
         }
+
+        return binding;
     }
 
     /**
@@ -219,9 +236,22 @@ export class RazorpayWebhookProcessor {
 
         if (existingAttempt) {
             // Reconcile: transition the initiated attempt via the service.
+            // providerEventId/providerInvoiceId are persisted here so the
+            // renewal-created → webhook-reconciled path produces a COMPLETE
+            // ledger fact (same provenance as the webhook-only path).
             if (status === 'succeeded') {
-                await this.attemptService.recordProviderPaymentId(existingAttempt.id, ne.providerPaymentId!);
-                const won = await this.attemptService.recordAttemptSuccess(existingAttempt.id, ne.providerPaymentId);
+                await this.attemptService.recordProviderPaymentId(
+                    existingAttempt.id,
+                    ne.providerPaymentId!,
+                    ne.providerEventId,
+                    ne.providerInvoiceId,
+                );
+                const won = await this.attemptService.recordAttemptSuccess(
+                    existingAttempt.id,
+                    ne.providerPaymentId,
+                    ne.providerEventId,
+                    ne.providerInvoiceId,
+                );
                 if (!won) {
                     Logger.log(
                         `Attempt ${existingAttempt.id} already left 'initiated' — CAS no-op for ${ne.eventType}`,
@@ -235,6 +265,8 @@ export class RazorpayWebhookProcessor {
                     existingAttempt.id,
                     ne.status || 'charge_failed',
                     ne.providerPaymentId,
+                    ne.providerEventId,
+                    ne.providerInvoiceId,
                 );
                 if (!won) {
                     Logger.log(

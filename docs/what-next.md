@@ -20,7 +20,7 @@
 | Gate | Status | Notes |
 |------|--------|-------|
 | **R1 — Provider-neutral boundary** | ✅ Complete | `RecurringBillingProvider` interface retained. **Razorpay is the sole runtime provider** (per ADR-038; provider factory resolves `razorpay` only, with an omitted provider defaulting to Razorpay). **Razorpay is the sole active recurring-billing provider.** The Juspay runtime implementation and legacy Juspay entities were removed (`9a31beb`), and the legacy `juspay_*` tables were dropped (`466a4ef`, **ADR-040**). Historical Juspay migration files remain as immutable migration history. All active source, checked-in GraphQL schemas (`schema.graphql`, `schema-shop.graphql`), and BBB `generated-*-types.ts` have been regenerated/verified Juspay-free; the only remaining `src/` mentions are historical migration files and an ADR historical note in `vendure-config.ts`. |
-| **R2 — Razorpay Contract Verification** | ✅ Complete | All sub-gates proven (see below) |
+| **R2 — Razorpay Contract Verification** | ⚠️ Conditional | Contract-level sub-gates below were captured against Razorpay Test mode (see table below). **Gate closure is withheld** per `production-readiness.md`: R2-E/F/G must be re-captured post-refactor (`9a31beb`+) — the webhook processor was reworked (billing-attempt writes delegated to `SubscriptionBillingAttemptService`; `subscription.pending`/`halted` now bridge the Saa9vi subscription to `past_due` for dunning) and that behavior has no post-refactor runtime evidence yet. R2-A infrastructure evidence is current; the remaining R2-A item (post-restart job execution) closes via R2-E. |
 | **R3 — ADR-038 Freeze** | ✅ Complete | ADR-038 ACCEPTED 2026-09-12 (R2-F + R2-G evidence, INV-018 channel-scoped worker ctx) |
 | **I1-I3 — Implementation** | ✅ Complete | Razorpay live on `main` |
 | **V1 — Production hardening** | ⏳ Next | Baseline: `c198199` (G3 tenant-isolation evidence; supersedes the `954cd40` Gate-3 baseline for current work). Checklist below — **first action: rotate exposed Razorpay secrets (V1.1)** |
@@ -41,7 +41,7 @@
 | **R2-F** Inbox Idempotency | ✅ Proven | UNIQUE(provider, providerEventId) |
 | **R2-F** Processing Idempotency | ✅ Proven | Double-send → single billing attempt |
 | **R2-F** Concurrent Idempotency | ✅ Proven | DB UNIQUE constraint blocks duplicates |
-| **R2-G** Failure Semantics | ✅ Proven | pending → retry → failed (terminal), `failedAt` |
+| **R2-G** Failure Semantics | ⚠️ Proven (pre-refactor) | pending → retry → failed (terminal), `failedAt` — captured pre-refactor. Post-refactor the processor additionally bridges `subscription.pending`/`subscription.halted` → Saa9vi `past_due` (dunning entry point, RFC-001 §4.2) and `subscription.cancelled` → `cancelled`; this FSM bridge is **CODE VERIFIED, not RUNTIME VERIFIED** — capture during R2-E/R2-G re-verification |
 | **R2-G** Channel Isolation | ✅ Proven | Cross-tenant events stay isolated |
 | **R3** ADR-038 Freeze | ✅ Complete | Accepted 2026-09-12 |
 
