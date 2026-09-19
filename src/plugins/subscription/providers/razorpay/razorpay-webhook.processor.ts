@@ -214,14 +214,36 @@ export class RazorpayWebhookProcessor {
         const now = new Date();
         const billingPeriodStart = now.toISOString().split('T')[0];
 
-        // Idempotency: if a terminal attempt already exists for this payment ID, skip.
+        // Idempotency: if a terminal attempt already exists for this payment ID.
+        // CRITICAL (replay safety): a TERMINAL SUCCEEDED attempt does NOT prove
+        // finalization completed — a crash between the terminal insert (webhook-
+        // only path) and finalizeAfterPayment() would otherwise leave the
+        // subscription unfinalized forever, because the replay would stop here.
+        // Therefore: for a terminal succeeded attempt, ALWAYS re-invoke
+        // finalizeAfterPayment — it is replay-idempotent (period-already-advanced
+        // → SUCCESS no-op) and CAS-guarded (exactly-once period advance).
+        // For a terminal failed attempt there is nothing to finalize — no-op.
         if (ne.providerPaymentId) {
             const existing = await this.attemptService.findAttemptByProviderPaymentId(channelId, ne.providerPaymentId);
             if (existing && existing.status !== 'initiated') {
-                Logger.log(
-                    `Event ${ne.providerEventId} matches terminal attempt ${existing.id} (status=${existing.status}) — no-op`,
-                    loggerCtx,
-                );
+                if (existing.status === 'succeeded') {
+                    Logger.log(
+                        `Event ${ne.providerEventId} matches terminal attempt ${existing.id} — replaying finalize (idempotent)`,
+                        loggerCtx,
+                    );
+                    const result = await this.renewalService.finalizeAfterPayment(existing.id as string);
+                    if (result !== 'SUCCESS') {
+                        Logger.warn(
+                            `Finalize replay for attempt ${existing.id} returned ${result} — manual reconciliation may be required`,
+                            loggerCtx,
+                        );
+                    }
+                } else {
+                    Logger.log(
+                        `Event ${ne.providerEventId} matches terminal attempt ${existing.id} (status=${existing.status}) — no-op`,
+                        loggerCtx,
+                    );
+                }
                 return;
             }
         }
@@ -277,23 +299,39 @@ export class RazorpayWebhookProcessor {
         } else {
             // Webhook-only charge (no preceding renewal-worker attempt).
             // Create a terminal attempt directly via the service.
+            // A UNIQUE(provider, providerPaymentId) violation here is a benign
+            // concurrent duplicate (two different provider events referencing
+            // the same payment): the row that won carries the terminal fact;
+            // this replay path will converge via findAttemptByProviderPaymentId
+            // + idempotent finalize replay.
             const invoiceId = ne.providerInvoiceId || `INV-${subscriptionId}-${billingPeriodStart}`;
             const amountPaise = ne.amountPaise || binding.subscription.plan.monthlyPriceInPaise || 0;
-            const created = await this.attemptService.recordAttemptFromWebhook({
-                subscriptionId,
-                channelId,
-                invoiceId,
-                billingPeriodStart,
-                amountPaise,
-                provider: 'razorpay',
-                providerSubscriptionId: ne.providerSubscriptionId,
-                providerPaymentId: ne.providerPaymentId,
-                providerInvoiceId: ne.providerInvoiceId,
-                providerEventId: ne.providerEventId,
-                status,
-                failureReason: status === 'failed' ? (ne.status || 'charge_failed') : undefined,
-            });
-            attemptId = created.id as string;
+            try {
+                const created = await this.attemptService.recordAttemptFromWebhook({
+                    subscriptionId,
+                    channelId,
+                    invoiceId,
+                    billingPeriodStart,
+                    amountPaise,
+                    provider: 'razorpay',
+                    providerSubscriptionId: ne.providerSubscriptionId,
+                    providerPaymentId: ne.providerPaymentId,
+                    providerInvoiceId: ne.providerInvoiceId,
+                    providerEventId: ne.providerEventId,
+                    status,
+                    failureReason: status === 'failed' ? (ne.status || 'charge_failed') : undefined,
+                });
+                attemptId = created.id as string;
+            } catch (err: any) {
+                if (err?.code === '23505' || String(err?.message || '').includes('UQ_billing_attempt_provider_payment')) {
+                    Logger.log(
+                        `Webhook-only attempt for payment ${ne.providerPaymentId} lost the concurrent-insert race (UNIQUE provider payment) — benign no-op for event ${ne.providerEventId}`,
+                        loggerCtx,
+                    );
+                    return;
+                }
+                throw err;
+            }
         }
 
         // On successful charge, finalize the subscription period.

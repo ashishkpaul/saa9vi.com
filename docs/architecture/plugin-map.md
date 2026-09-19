@@ -421,4 +421,11 @@ attempt 2 fails → pending, attemptCount=2
 attempt 3 fails → failed, attemptCount=3, failedAt populated (terminal)
 ```
 
-> ✅ **R2-G verified**: Failure path and concurrent idempotency tested via `webhook-failure-path.e2e-spec.ts` and `webhook-concurrent-idempotency.e2e-spec.ts`.
+> ⚠️ **R2-G status (current):** the failure-path and concurrent-idempotency e2e
+> specs listed below prove the **pre-refactor** processing semantics
+> (`pending` → `retry` → `failed`, UNIQUE constraint). Since `72961d6`→`c9f4a1c`
+> the failure-state bridge (`subscription.pending`/`halted` → Saa9vi
+> `past_due`; `cancelled` → `cancelled`), terminal-only idempotency, and
+> replay-safe finalization are **CODE VERIFIED but RUNTIME UNVERIFIED**, and
+> halted-subscription recovery is an open product gap (**D-5**,
+> `integration-gaps-worklist.md`). See `production-readiness.md` R2-G.

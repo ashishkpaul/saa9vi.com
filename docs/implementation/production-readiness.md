@@ -829,25 +829,15 @@ been directly inspected and re-verified:
 **VERIFIED (source inspection + runtime convergence)** — see the R2-A
 migration reconciliation sub-evidence (`npx vendure migrate -r` → "No
 pending migrations found").
-- Razorpay-specific creation of `subscription_billing_attempt`
-- unique `(provider, providerEventId)` billing-attempt index
 
-The earlier audit's claims remain useful leads, but they are not sufficient evidence under the repository-truth rule.
-
-### Required verification
-
-Inspect the actual migration files on the current `main` revision and confirm:
-
-1. the entities/tables created,
-2. foreign keys/indexes,
-3. the provider-event uniqueness constraint,
-4. the migration names and timestamps.
-
-Then verify separately that the migrations have actually been applied to the runtime PostgreSQL database using:
-
-```bash
-npx vendure migrate -r
-```
+~~The earlier audit's claims remain useful leads, but they are not
+sufficient evidence under the repository-truth rule.~~
+~~Required verification (inspect migration files; run `npx vendure migrate -r`
+against the runtime DB) — **DONE 2026-09-19**: all three files listed above
+were directly inspected and the runtime convergence check passed. The
+ledger additionally gained `1789818205594-add-provider-payment-unique-index`
+(partial UNIQUE on `providerPaymentId` for concurrent-payment idempotency,
+CLI-generated, applied, convergence verified).
 
 ### Evidence distinction
 
@@ -1100,9 +1090,15 @@ Then verify the actual changed files.
   R2-G              Failure semantics   OPEN              `subscription.pending`
                                                           handled (9a31beb);
                                                           pending/halted → `past_due`
-                                                          dunning bridge added (CODE
-                                                          VERIFIED, this commit);
-                                                          runtime failure lifecycle
+                                                          dunning bridge (CODE
+                                                          VERIFIED, CAS now bumps
+                                                          `version` — real optimistic
+                                                          concurrency); runtime
+                                                          evidence required incl.
+                                                          OUT-OF-ORDER webhook test
+                                                          (Razorpay: event order not
+                                                          guaranteed); halted
+                                                          recovery open as D-5
                                                           evidence still required
 
   R3                One-time commerce   OPEN              `dummyPaymentHandler` /

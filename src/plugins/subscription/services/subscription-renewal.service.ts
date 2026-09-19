@@ -341,6 +341,25 @@ export class SubscriptionRenewalService {
 
     if (finalizeResult.affected !== 1) {
       /**
+       * Replay-safety: distinguish "finalization already completed" from a
+       * genuine lost CAS. If the period has ALREADY advanced to (or past) the
+       * target end, this call is an idempotent replay of a finalize that a
+       * previous writer already won (e.g. a replayed webhook after a crash
+       * between terminal-attempt write and finalization) — a no-op success,
+       * NOT a reconciliation incident. A concurrent writer moving the period
+       * somewhere else still records the incident below.
+       */
+      const reloaded = await this.connection.rawConnection
+        .getRepository(OrganizationSubscription)
+        .findOne({ where: { id: sub.id as any } });
+      if (reloaded && reloaded.currentPeriodEnd >= newPeriodEnd) {
+        Logger.info(
+          `Finalize replay for subscription ${sub.id}: period already advanced to ${reloaded.currentPeriodEnd.toISOString()} — idempotent no-op`,
+          loggerCtx,
+        );
+        return RenewalResult.SUCCESS;
+      }
+      /**
        * DANGEROUS WINDOW HIT (Step 4D): the charge succeeded but the finalize
        * CAS lost (another worker finalized between phases, or manual state edit).
        * Money has moved; the period has not advanced. Record an operator-visible
@@ -486,7 +505,7 @@ export class SubscriptionRenewalService {
     const result = await this.connection.rawConnection
       .createQueryBuilder()
       .update(OrganizationSubscription)
-      .set({ status: "past_due" })
+      .set({ status: "past_due", version: sub.version + 1 })
       .where("id = :id AND version = :version", {
         id: sub.id,
         version: sub.version,
@@ -529,7 +548,7 @@ export class SubscriptionRenewalService {
     const result = await this.connection.rawConnection
       .createQueryBuilder()
       .update(OrganizationSubscription)
-      .set({ status: "cancelled" })
+      .set({ status: "cancelled", version: sub.version + 1 })
       .where("id = :id AND version = :version", {
         id: sub.id,
         version: sub.version,

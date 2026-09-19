@@ -74,7 +74,7 @@ subscribeToPlan
 
 ### Invariants preserved
 
-* **INV-001** (Channel = Tenant): binding + subscription both assigned to the target channel via `assignToCurrentChannel` (existing pattern in both `subscribeToPlan` and `createProviderBinding`).
+* **INV-001** (Channel = Tenant): binding + subscription both assigned to the target channel. **Correction (post-implementation, ADR-036 tenant-only policy):** the original `assignToCurrentChannel` pattern was **not** used — `assignToCurrentChannel()` also joins the default channel, violating tenant-only assignment. Assignment is done inline (`channels = [channel]`) in both `subscribeToPlan` and `createProviderBinding`.
 * **INV-004** (persist-first webhooks): unchanged; webhooks remain the sole driver of payment lifecycle.
 * **INV-018** (channel-scoped processing): worker unchanged — still resolves from the persisted binding, still fails closed.
 * **INV-019** (provider-neutral bindings): binding creation remains through the provider-neutral `createProviderBinding()`.
@@ -98,7 +98,7 @@ Razorpay is an external system: a PostgreSQL rollback cannot undo a Razorpay sub
 
 Idempotency/correlation on retry: Razorpay offers no create-time idempotency key for subscriptions, so the local partial-unique index (`channelId` WHERE status != 'cancelled') remains the authoritative anti-duplicate guard for **local** rows, and `notes` (`channelId`, `tenantProfileId`, `planId`) tag every created provider subscription for correlation. **The local guard cannot prevent multiple provider-side subscriptions across an external-success/local-persistence failure boundary**: if local persistence fails after `sub_A` was created and the flow retries, `sub_B` is created while `sub_A` persists provider-side. `sub_A` is *expected* to be abandoned (pre-auth, expires per plan settings), but expiry is not impossibility — if its `short_url` is completed before expiry, `sub_A` can become authenticated. Residual-risk handling: orphan reconciliation via the dashboard correlation notes (cancel abandoned pre-auth subs), and C-1-C verification must confirm that a late webhook for an orphan `providerSubscriptionId` cannot corrupt the channel's local subscription state (the binding unique index admits a second binding for a different provider subscription ID — this scenario is explicitly part of C-1-C/D evidence).
 
-The provider HTTP call must not sit inside an open DB transaction longer than necessary — validation first, provider call second, persistence third (the resolver's `@Transaction()` wrapper governs step 3).
+The provider HTTP call must not sit inside an open DB transaction longer than necessary — validation first, provider call second, persistence third. **Correction (post-implementation):** the resolver's `@Transaction()` wrapper was **removed**; persistence is governed by an explicit `rawConnection.transaction()` inside `subscribeToPlan`, which atomically creates both `OrganizationSubscription` and `SubscriptionProviderBinding` after the provider call returns (see `adr-039-implementation-plan.md` for the implementation record).
 
 ## Consequences
 

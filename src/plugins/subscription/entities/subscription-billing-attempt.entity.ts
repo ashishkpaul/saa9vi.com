@@ -37,17 +37,26 @@ export class SubscriptionBillingAttempt extends VendureEntity {
     @Column({ nullable: true })
     providerSubscriptionId: string;
 
-    /** Provider's payment ID (e.g., Razorpay payment_id). */
+    /** Provider event ID for idempotency (e.g., Razorpay event_id). */
+    @Column({ nullable: true })
+    providerEventId: string;
+
+    /**
+     * Concurrent-payment idempotency: at most one attempt row per
+     * (provider, providerPaymentId). Partial unique — NULLs (renewal-created
+     * initiated rows, pre-terminal) are exempt. Blocks the check-then-insert
+     * race where two different provider event IDs reference the same payment.
+     */
+    @Index("UQ_billing_attempt_provider_payment", ["providerPaymentId"], {
+        unique: true,
+        where: '"providerPaymentId" IS NOT NULL',
+    })
     @Column({ nullable: true })
     providerPaymentId: string;
 
     /** Provider's invoice ID (e.g., Razorpay invoice_id). */
     @Column({ nullable: true })
     providerInvoiceId: string;
-
-    /** Provider event ID for idempotency (e.g., Razorpay event_id). */
-    @Column({ nullable: true })
-    providerEventId: string;
 
     /** Invoice ID for this attempt (matches SubscriptionInvoicePaidEvent.invoiceId). */
     @Column({ nullable: true })
