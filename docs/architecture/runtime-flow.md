@@ -104,7 +104,8 @@ bbb-webhook-processor job
 Razorpay POST /payments/razorpay/webhook
   │
   ├─ Verify HMAC-SHA256 signature (raw body bytes)
-  ├─ Persist ProviderWebhookEvent { status: 'pending' } (immutable inbox)
+  ├─ Persist ProviderWebhookEvent { status: 'pending' } (webhook receipt is
+  │    immutable; processing metadata is mutable — see INV-004)
   ├─ Enqueue eventId to BullMQ: provider-webhook-processing
   └─ Return { status: 'ok' } immediately (201)
 
@@ -112,17 +113,29 @@ provider-webhook-processing job
   │
   ├─ Load ProviderWebhookEvent by id
   ├─ Increment attemptCount
-  ├─ Resolve channel from SubscriptionProviderBinding (INV-001)
+  ├─ Resolve channel from SubscriptionProviderBinding (INV-001) — inside the
+  │    try/catch, so a DB exception during resolution follows the same
+  │    terminal-failure/retry bookkeeping as any other worker failure
   ├─ Route to RazorpayWebhookProcessor.processInboxEvent()
-  │    ├─ Idempotency: isEventProcessed(providerEventId) → check SubscriptionBillingAttempt
+  │    ├─ Idempotency: isEventProcessed(providerEventId) → true only when a
+  │    │    TERMINAL (succeeded|failed) attempt carries the event ID
   │    ├─ Normalize event → handle by type:
+  │    │    ├─ subscription.pending → updateBinding() + markPastDueFromWebhook()
   │    │    ├─ subscription.authenticated → updateBinding()
   │    │    ├─ subscription.activated → updateBinding() + recordAttempt()
   │    │    ├─ subscription.charged → recordAttempt()
-  │    │    ├─ subscription.halted → updateBinding() + recordAttempt()
-  │    │    ├─ subscription.cancelled → updateBinding()
-  │    │    └─ payment.failed → recordAttempt()
-  │    └─ Create SubscriptionBillingAttempt (UNIQUE(provider, providerEventId))
+  │    │    ├─ subscription.halted → updateBinding() + markPastDueFromWebhook()
+  │    │    │    + recordAttempt() (when payment details present)
+  │    │    ├─ subscription.cancelled → updateBinding() + markCancelledFromWebhook()
+  │    │    └─ payment.failed / payment.charge_failed → recordAttempt()
+  │    └─ Attempt persistence (INV-019, all via SubscriptionBillingAttemptService):
+  │         ├─ Existing 'initiated' attempt (FIFO on attemptedAt) →
+  │         │    recordAttemptSuccess/recordAttemptFailure — provider-issued
+  │         │    IDs persisted in the SAME atomic CAS UPDATE as the status
+  │         └─ No initiated attempt → recordAttemptFromWebhook() creates
+  │              exactly ONE terminal webhook-only attempt
+  │         On success → finalizeAfterPayment() advances the period
+  │         (CAS, exactly once)
   ├─ Mark ProviderWebhookEvent { status: 'processed', processedAt }
   │
   ├─ On failure + attempts left:

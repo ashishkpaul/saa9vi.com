@@ -35,12 +35,12 @@
 | **R2-B** Webhook Config | ✅ DONE | 11 events, `webhook.saa9vi.com`, Test mode |
 | **R2-C** Webhook Ingress | ✅ Proven | HMAC-SHA256, idempotency, persist-first, 2xx |
 | **R2-D** Create Subscription | ✅ DONE | `sub_TabaZJZTQzNfWy` via API |
-| **R2-E** Authorization | ✅ DONE | Customer authorized, payment captured |
-| **R2-F** Durable Processing | ✅ Proven | BullMQ inbox worker, single processing path |
+| **R2-E** Authorization | ⚠️ Proven (pre-refactor) | Customer authorized, payment captured (`sub_TabaZJZTQzNfWy`) — captured **before** the webhook/ledger refactor. Post-refactor recapture (authorization + binding + queue execution + finalize-once) is required; see `production-readiness.md` R2-E |
+| **R2-F** Durable Processing | ⚠️ Proven (pre-refactor) | BullMQ inbox worker, single processing path — processor write path materially changed in `72961d6`/`e204d72` (service-delegated attempts, atomic CAS + provider IDs). Post-refactor runtime recapture required |
 | **R2-F** Channel Resolution | ✅ Proven (scoped) | Resolved from an **existing** provider binding (INV-001). First-subscription binding **creation** lifecycle is NOT yet proven — open as **C-1** in `integration-gaps-worklist.md` (queue worker fails closed before the processor's lazy-binding path can run when no binding exists) |
-| **R2-F** Inbox Idempotency | ✅ Proven | UNIQUE(provider, providerEventId) |
-| **R2-F** Processing Idempotency | ✅ Proven | Double-send → single billing attempt |
-| **R2-F** Concurrent Idempotency | ✅ Proven | DB UNIQUE constraint blocks duplicates |
+| **R2-F** Inbox Idempotency | ✅ Proven | UNIQUE(provider, providerEventId) — inbox-level, unaffected by the processor refactor |
+| **R2-F** Processing Idempotency | ⚠️ Proven (pre-refactor) | Double-send → single billing attempt — **recapture required**: `isEventProcessed()` now requires a TERMINAL attempt match (post-`e204d72`) and the success path is a single atomic CAS transition |
+| **R2-F** Concurrent Idempotency | ⚠️ Proven (pre-refactor) | DB UNIQUE constraint blocks duplicates — recapture alongside the R2-F runtime lifecycle |
 | **R2-G** Failure Semantics | ⚠️ Proven (pre-refactor) | pending → retry → failed (terminal), `failedAt` — captured pre-refactor. Post-refactor the processor additionally bridges `subscription.pending`/`subscription.halted` → Saa9vi `past_due` (dunning entry point, RFC-001 §4.2) and `subscription.cancelled` → `cancelled`; this FSM bridge is **CODE VERIFIED, not RUNTIME VERIFIED** — capture during R2-E/R2-G re-verification |
 | **R2-G** Channel Isolation | ✅ Proven | Cross-tenant events stay isolated |
 | **ADR-038** Provider Freeze | ✅ Complete | Accepted 2026-09-12. (Gate id "R3" is reserved for one-time commerce — see `production-readiness.md` evidence ledger) |

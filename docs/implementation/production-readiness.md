@@ -571,12 +571,20 @@ Verify all of the following against the actual runtime:
 
 ### Current status
 
-**NOT COMPLETE — runtime half outstanding.**
+**EVIDENCED — one final runtime observation outstanding.**
 
-The **migration** half of this gate is now evidenced (below). The **runtime**
-half is not: there is no post-refactor proof of real PostgreSQL/Redis
-connection, no proof the pg-mem / default-queue fallbacks stayed inactive, and
-no evidence of a queue job executing against commit `9a31beb`.
+Component status (all post-refactor, commit `b4afad9` baseline unless noted):
+
+| Component                  | Status |
+| -------------------------- | ------ |
+| Migration half             | ✅ evidenced (below) |
+| Real PostgreSQL            | ✅ (runtime sub-evidence, Section 8) |
+| Real Redis/BullMQ          | ✅ (runtime sub-evidence, Section 8) |
+| pg-mem / default-queue fallbacks inactive | ✅ (runtime sub-evidence) |
+| Post-restart queue execution | ⏳ to be observed during R2-E (webhook → enqueue → process) |
+
+The gate is **pending only the post-restart observed queue-execution item**,
+which closes naturally via R2-E. It is not open for any other reason.
 
 #### Migration reconciliation sub-evidence (2026-09-19)
 
@@ -631,7 +639,7 @@ ss -tnp | grep 50135
 | pg-mem fallback inactive               | DB-backed shop query returns persisted data; `synchronize: false` in config |
 | Real Redis/BullMQ                      | `redis:6.2.17-bookworm` container, `PING` → `PONG`; 7 live conns from server pid; `bull:vendure-job-queue:*` keys present |
 | DefaultJobQueuePlugin fallback inactive | `vendure-config.ts` selects `BullMQJobQueuePlugin` + `RedisCachePlugin` when `REDIS_HOST` is set (it is set in `.env`); startup log shows BullMQ connection ✔ and merged-worker queue start |
-| Migrations applied via Vendure CLI     | `migrations` table: 53 rows; latest `1789797901115-subscription-reconciliation-and-legacy-cleanup`; `npx vendure migrate -r` → "No pending migrations found" |
+| Migrations applied via Vendure CLI     | *Observed 2026-09-19 pre-cleanup-apply snapshot:* `migrations` table 53 rows. *Post-apply (2026-09-19, commit `466a4ef` baseline):* 55 rows; latest `1789797901115-subscription-reconciliation-and-legacy-cleanup`; `npx vendure migrate -r` → "No pending migrations found". The two counts are different observation times of the same converged history, not a discrepancy. |
 | Application + worker operational       | merged-worker mode: single process serving APIs and consuming queues; all 10 queues started |
 | Queue job executes                     | **Partially evidenced.** BullMQ `completed` zset holds 330 jobs; latest observed execution (`provider-webhook-processing` job 2090, finished 2026-09-17) predates the 12:52 restart. No post-restart execution has been triggered/observed yet (queues idle, no inbound events). This is the one remaining R2-A item. |
 
@@ -720,18 +728,24 @@ Evidence should include:
 -   resulting state
 -   idempotent replay behavior
 
-### Known code blocker
+### Historical code blocker — RESOLVED
 
-The current Razorpay webhook processor directly persists a
-`SubscriptionBillingAttempt` rather than going through the authorized
-`SubscriptionBillingAttemptService`.
+*Historical (pre-`9a31beb`):* the Razorpay webhook processor previously
+persisted `SubscriptionBillingAttempt` rows directly, bypassing the
+authorized service.
 
-This is a confirmed code-level invariant violation.
+*Current state (verified in code):* the processor delegates ALL attempt
+persistence to `SubscriptionBillingAttemptService`
+(`recordAttemptSuccess` / `recordAttemptFailure` /
+`recordAttemptFromWebhook`). Provider-issued identifiers are persisted in
+the same atomic CAS UPDATE as the terminal status — there is no separate
+metadata pre-write (crash-consistency, post-`72961d6`).
 
 ### Required correction
 
-The webhook path must use the authoritative billing-attempt service
-rather than bypassing it.
+~~The webhook path must use the authoritative billing-attempt service
+rather than bypassing it.~~ — **DONE.** Runtime lifecycle evidence for the
+corrected path is still required (this gate's remaining work).
 
 ### Code status
 
@@ -797,17 +811,24 @@ until the intended Saa9vi state transition is evidenced at runtime.
 
 # 8. R2 migration evidence
 
-The repository contains a migrations directory and recurring-billing migration activity has been observed in the repository.
+**RESOLVED (2026-09-19, post-refactor verification pass):** the Razorpay
+migration files and the unique `(provider, providerEventId)` index have
+been directly inspected and re-verified:
 
-However, the specific Razorpay migration files and the exact unique `(provider, providerEventId)` index described by earlier audit material have **not been independently re-verified in the current pass**.
+-   `1788941014829-add-razorpay-subscription-entities` — creates
+    `subscription_provider_binding` and related Razorpay structures
+-   `1789180807072-add-unique-provider-event-to-billing-attempt` — creates
+    the UNIQUE(provider, providerEventId) index on
+    `subscription_billing_attempt`
+-   `1789797901115-subscription-reconciliation-and-legacy-cleanup` — creates
+    `subscription_reconciliation_required`, drops the six legacy `juspay_*`
+    tables (ADR-040), with exercised rollback round-trip
 
 ### Current status
 
-**NOT INDEPENDENTLY VERIFIED**
-
-Do not treat the following as currently checked facts until the relevant migration files are directly inspected:
-
-- Razorpay-specific creation of `subscription_provider_binding`
+**VERIFIED (source inspection + runtime convergence)** — see the R2-A
+migration reconciliation sub-evidence (`npx vendure migrate -r` → "No
+pending migrations found").
 - Razorpay-specific creation of `subscription_billing_attempt`
 - unique `(provider, providerEventId)` billing-attempt index
 

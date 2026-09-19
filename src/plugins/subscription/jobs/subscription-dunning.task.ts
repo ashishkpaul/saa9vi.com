@@ -5,7 +5,26 @@ import { SubscriptionRenewalQueueService } from "../services/subscription-renewa
 const loggerCtx = "SubscriptionDunningTask";
 
 /**
- * Dunning job — recovers past_due subscriptions per RFC-001 §4.2.
+ * Dunning job — past_due subscription lifecycle per RFC-001 §4.2.
+ *
+ * SEMANTICS (explicit — do not regress):
+ * This is a Saa9vi-side ORCHESTRATION job, NOT a payment-recovery trigger.
+ *
+ *   - While Razorpay state is `pending` (auto-charge failing, provider
+ *     retries in progress), the enqueued renewal attempt acts as a ledger
+ *     placeholder that an incoming provider webhook can reconcile — the
+ *     provider IS still charging on its own schedule.
+ *
+ *   - Once Razorpay state is `halted` (retries exhausted), Razorpay
+ *     generates invoices but performs NO automatic charge; recovery
+ *     requires a customer payment-method change or an explicit manual
+ *     charge of the outstanding invoice (Razorpay docs). The enqueued
+ *     renewal attempt records intent in the ledger but NO provider
+ *     webhook will arrive from it. Recovery of halted subscriptions is
+ *     an OPEN GAP — see integration-gaps-worklist.md (D-5): either a
+ *     provider recovery operation must be added to RecurringBillingProvider
+ *     (where the Razorpay contract supports it) or the dunning flow must
+ *     surface a customer-facing payment-update path.
  *
  * Discovery: finds subscriptions in "past_due" status whose last dunning
  * attempt is older than the retry interval. For each:

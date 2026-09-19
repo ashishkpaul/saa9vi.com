@@ -109,10 +109,15 @@ export class ProviderWebhookQueueService implements OnModuleInit {
         event.attemptCount += 1;
         await repo.save(event);
 
-        // Resolve channel from binding BEFORE processing (INV-001)
-        const resolvedChannelId = await this.resolveChannelFromBinding(ctx, event);
-
         try {
+            // Resolve channel from binding BEFORE processing (INV-001).
+            // Inside the try: a DB/infrastructure exception during channel
+            // resolution must flow through the same terminal-failure/retry
+            // bookkeeping as any other worker failure — the failure state
+            // machine covers the WHOLE worker path, not just business
+            // processing.
+            const resolvedChannelId = await this.resolveChannelFromBinding(ctx, event);
+
             // Route to the appropriate provider processor — validate provider first,
             // then enforce INV-018 channel-scoped context for supported providers.
             if (event.provider === 'razorpay') {

@@ -341,11 +341,11 @@ None (extends `orderOptions.process` with `customerStatusOrderProcess` to block 
 | Entity | Table | ChannelAware |
 |---|---|---|
 | SubscriptionPlan | `subscription_plan` | No (platform-global plan catalogue; unique `slug`, not channel-scoped — scoping happens via `OrganizationSubscription`) |
-| OrganizationSubscription | `organization_subscription` | Yes (= Channel/tenant) |
-| SubscriptionProviderBinding | `subscription_provider_binding` | Yes (scalar `channelId`; provider-neutral binding) |
-| SubscriptionBillingAttempt | `subscription_billing_attempt` | Yes (scalar `channelId`; provider-neutral billing attempt) |
-| ProviderWebhookEvent | `provider_webhook_event` | Yes (scalar `channelId`; immutable inbox, UNIQUE(provider, providerEventId)) |
-| RenewalPaymentReconciliationRequired | `subscription_reconciliation_required` | Yes (scalar `channelId`; operator-visible reconcile-after-charge incidents, ADR-040) |
+| OrganizationSubscription | `organization_subscription` | Yes — **implements `ChannelAware`** (= Channel/tenant) |
+| SubscriptionProviderBinding | `subscription_provider_binding` | Yes — **implements `ChannelAware`** (provider-neutral binding) |
+| SubscriptionBillingAttempt | `subscription_billing_attempt` | Tenant-scoped via scalar `channelId` only (ADR-003 exception); provider-neutral billing attempt |
+| ProviderWebhookEvent | `provider_webhook_event` | Tenant-scoped via scalar `channelId` only (ADR-003 exception); webhook receipt, UNIQUE(provider, providerEventId) |
+| RenewalPaymentReconciliationRequired | `subscription_reconciliation_required` | Tenant-scoped via scalar `channelId` only (ADR-003 exception); operator-visible reconcile-after-charge incidents, ADR-040 |
 
 ### Publishes
 
@@ -383,7 +383,10 @@ Razorpay POST /payments/razorpay/webhook
     ↓
 HMAC-SHA256 signature verification (raw body bytes)
     ↓
-Persist ProviderWebhookEvent { status: 'pending' } (immutable inbox)
+Persist ProviderWebhookEvent { status: 'pending' } (webhook receipt:
+provider/providerEventId/eventType/payloadHash/rawPayload are immutable;
+attemptCount/channelId/processingStatus/processedAt/failedAt/errorMessage
+are mutable processing metadata)
     ↓
 Return 201 immediately (persisted + enqueued; controller has no explicit
 @HttpCode override)
@@ -394,9 +397,18 @@ Resolve channel from SubscriptionProviderBinding (INV-001)
     ↓
 RazorpayWebhookProcessor.processInboxEvent()
     ↓
-Idempotency: isEventProcessed(providerEventId) → check SubscriptionBillingAttempt
+Idempotency: isEventProcessed(providerEventId) → returns true only when a
+    TERMINAL (succeeded|failed) attempt carries the event ID
     ↓
-Create SubscriptionBillingAttempt (UNIQUE(provider, providerEventId))
+Reconcile existing 'initiated' attempt (FIFO on attemptedAt) via
+    recordAttemptSuccess/recordAttemptFailure — OR, if none exists,
+    create exactly one terminal webhook-only attempt via
+    recordAttemptFromWebhook (INV-019)
+    ↓
+On success: finalizeAfterPayment() advances the period (CAS, exactly once)
+On subscription.pending / halted: binding updated AND
+    OrganizationSubscription → past_due (dunning discovery)
+On subscription.cancelled: OrganizationSubscription → cancelled
     ↓
 Mark ProviderWebhookEvent { status: 'processed', processedAt }
 ```

@@ -60,7 +60,14 @@ Seller (Vendure core — Phase 3)
 
 ## INV-004: External Webhooks Are Persisted Before Processing
 
-**Rule:** All external webhooks follow this persist-first pattern:
+**Rule:** All external webhooks follow this persist-first pattern. The
+persisted inbox row is an **immutable webhook receipt plus mutable
+processing metadata**: the receipt fields (`provider`, `providerEventId`,
+`eventType`, `payloadHash`, `rawPayload`, `receivedAt`, `verifiedAt`) are
+never modified after insert, while processing metadata (`channelId`,
+`attemptCount`, `processingStatus`, `processedAt`, `failedAt`,
+`errorMessage`) is updated by the worker as the event moves through its
+processing lifecycle.
 
 ```
 POST /webhook
@@ -216,7 +223,7 @@ This pattern does **not** apply to Stream 1 (`BbbUsageLedger`) or Stream 3 (`AdS
 Related constraints:
 - `OrganizationSubscription` period advancement must never be treated as equivalent to successful payment — the renewal flow is CLAIM CAS → attempt → charge → FINALIZE CAS (see `SubscriptionRenewalService` state model; a finalize conflict after a successful charge is an operator-visible reconciliation incident, never an automatic retry).
 - `SubscriptionBillingAttempt` carries a denormalized scalar `channelId` (ADR-003 scalar-only exception); all ledger queries must scope by it — a bare `repository.find()` is a BUG-031-class channel-isolation bug.
-- Provider webhook events must reconcile the existing `initiated` attempt for that billing period, never create a parallel one. Attempts must only be written via the provider-neutral `SubscriptionBillingAttemptService` — no provider-specific parallel attempt ledger may exist.
+- Provider webhook events must reconcile an existing `initiated` attempt for the matching provider charge (oldest first, FIFO on `attemptedAt`) and must never create a parallel attempt while one exists. When NO initiated attempt exists (e.g. the initial `subscription.activated` payment outside the renewal scan window), the webhook creates **exactly one** terminal webhook-only attempt via `recordAttemptFromWebhook()`. Attempts must only be written via the provider-neutral `SubscriptionBillingAttemptService` — no provider-specific parallel attempt ledger may exist. Provider-issued identifiers (`providerPaymentId`, `providerEventId`, `providerInvoiceId`) are persisted in the same atomic CAS UPDATE as the terminal status — never via a separate pre-write — so a crash between metadata write and terminal transition cannot cause a replayed event to be swallowed while the attempt remains `initiated`.
 
 **Rejection criterion:** Any code path that updates a `SubscriptionBillingAttempt` row already in a terminal state (`succeeded`/`failed`), collapses retries into an existing row, advances the subscription period without a successful payment finalize, or queries the ledger without channel scoping is rejected.
 

@@ -236,16 +236,13 @@ export class RazorpayWebhookProcessor {
 
         if (existingAttempt) {
             // Reconcile: transition the initiated attempt via the service.
-            // providerEventId/providerInvoiceId are persisted here so the
-            // renewal-created → webhook-reconciled path produces a COMPLETE
-            // ledger fact (same provenance as the webhook-only path).
+            // CRITICAL (crash-consistency): providerEventId/providerInvoiceId are
+            // persisted in the SAME atomic CAS UPDATE as the terminal status —
+            // there is NO separate metadata pre-write. A crash between "event id
+            // visible" and "terminal" would otherwise let a replayed webhook be
+            // swallowed by isEventProcessed() while the attempt stays initiated
+            // and the subscription never finalizes.
             if (status === 'succeeded') {
-                await this.attemptService.recordProviderPaymentId(
-                    existingAttempt.id,
-                    ne.providerPaymentId!,
-                    ne.providerEventId,
-                    ne.providerInvoiceId,
-                );
                 const won = await this.attemptService.recordAttemptSuccess(
                     existingAttempt.id,
                     ne.providerPaymentId,
@@ -313,15 +310,25 @@ export class RazorpayWebhookProcessor {
     }
 
     /**
-     * Idempotency check: has this provider payment ID already been recorded?
-     * This guards against duplicate webhook deliveries that pass inbox-level
-     * idempotency (e.g. retried deliveries for events whose inbox record was
-     * somehow lost or in an unresolved state).
+     * Idempotency check: has this provider event ALREADY reached a terminal
+     * billing attempt?
+     *
+     * A match is only "processed" when the attempt carrying the event ID is
+     * TERMINAL (succeeded | failed). Since 72961d6 the event ID is persisted
+     * in the same atomic CAS UPDATE as the terminal status, so an initiated
+     * attempt can never carry a providerEventId — but the terminal-status
+     * guard is kept as defense-in-depth: a merely-initiated match must fall
+     * through to the reconciliation path so the charge can still finalize.
      */
     private async isEventProcessed(ctx: RequestContext, eventId: string): Promise<boolean> {
         if (!eventId) return false;
         const repo = this.connection.getRepository(ctx, SubscriptionBillingAttempt);
-        return !!(await repo.findOne({ where: { providerEventId: eventId } }));
+        return !!(await repo.findOne({
+            where: [
+                { providerEventId: eventId, status: 'succeeded' },
+                { providerEventId: eventId, status: 'failed' },
+            ],
+        }));
     }
 
     /**

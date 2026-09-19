@@ -478,6 +478,43 @@ Verify the existing `raw body → signature verification → event ID → Provid
 
 Verify the existing payment/subscription implementation against the current provider contract (ADR-038, accepted 2026-09-12). Do not create a second payment integration path.
 
+## D-5 — Dunning recovery after Razorpay `halted`
+
+**Gap (identified in the post-`e204d72` audit, 2026-09-19):** the
+`subscription.pending`/`subscription.halted` → `past_due` bridge makes
+failed subscriptions discoverable by the dunning task, but once Razorpay
+reaches `halted` (retries exhausted) Razorpay performs **no automatic
+charge** of outstanding invoices — recovery requires a customer
+payment-method change or an explicit/manual charge of the unpaid invoice
+(Razorpay docs). The current `RecurringBillingProvider`
+(`createSubscription` / `getSubscription` / `cancelSubscription` /
+`pauseSubscription` / `resumeSubscription`) has **no operation that
+triggers recovery of an outstanding halted invoice**, and the dunning task
+explicitly documents that it is orchestration, not a recovery trigger.
+
+Consequence: a `halted`-origin subscription enters `past_due`, dunning
+retries record ledger intent, no provider webhook arrives, and after
+`DUNNING_MAX_RETRIES` the subscription is auto-cancelled. Payment is never
+actually recovered.
+
+### Resolution options (choose one before R2-G can be considered closed)
+
+1. **Provider-driven recovery** — add a `recoverSubscription`/manual-charge
+   operation to `RecurringBillingProvider` where the Razorpay contract
+   supports it (e.g. charging an outstanding invoice), invoked by the
+   dunning task.
+2. **Customer-facing recovery path** — expose a payment-method-update /
+   retry-payment link in the dunning flow (Shop API + storefront) so the
+   customer completes a new authorization; the resulting webhook carries
+   the recovery.
+
+### Acceptance criterion
+
+A `halted` Razorpay subscription whose customer completes recovery
+produces a provider webhook that reconciles a billing attempt and
+finalizes the Saa9vi period — end-to-end, post-`e204d72`.
+
+
 # Track E — Documentation Consistency
 
 After implementation and E2E verification, perform a **bidirectional documentation audit**. For every relevant claim (`Documentation → code`, `Code → documentation`), classify as `CONFIRMED`, `DRIFT`, `UNIMPLEMENTED`, `IMPLEMENTED BUT UNDOCUMENTED`, or `PROPOSED`.

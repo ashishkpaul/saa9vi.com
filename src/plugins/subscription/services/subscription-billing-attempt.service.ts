@@ -58,36 +58,6 @@ export class SubscriptionBillingAttemptService {
         return Array.isArray(created) ? created[0] : created;
     }
 
-    /**
-     * Stores provider-issued identifiers on an existing attempt. Called by the
-     * webhook processor to match the incoming payment event to this attempt.
-     *
-     * providerEventId/providerInvoiceId are persisted here so that the
-     * renewal-created → webhook-reconciled path produces a COMPLETE ledger
-     * fact, identical in provenance to the webhook-only path (where
-     * recordAttemptFromWebhook stores them at creation time).
-     *
-     * This is a metadata-only update on an attempt that is still in 'initiated'
-     * state — it does NOT perform the terminal transition.
-     */
-    async recordProviderPaymentId(
-        attemptId: ID,
-        providerPaymentId: string,
-        providerEventId?: string,
-        providerInvoiceId?: string,
-    ): Promise<void> {
-        await this.connection.rawConnection
-            .createQueryBuilder()
-            .update(SubscriptionBillingAttempt)
-            .set({
-                providerPaymentId,
-                ...(providerEventId ? { providerEventId } : {}),
-                ...(providerInvoiceId ? { providerInvoiceId } : {}),
-            })
-            .where("id = :id AND status = 'initiated'", { id: attemptId })
-            .execute();
-    }
-
     /** Guards the initiated → succeeded transition. Returns false if it lost the CAS. */
     async recordAttemptSuccess(
         attemptId: ID,
@@ -141,9 +111,19 @@ export class SubscriptionBillingAttemptService {
     /**
      * Reconciliation lookup for the webhook processor.
      *
-     * Finds an 'initiated' attempt created by the renewal worker for the
+     * Finds the 'initiated' attempt created by the renewal worker for the
      * given provider subscription ID, so the webhook can transition it
      * to its terminal state via the CAS-guarded methods above.
+     *
+     * DETERMINISM: retries legitimately create multiple initiated rows for
+     * the same (channelId, providerSubscriptionId). The lookup is therefore
+     * FIFO-ordered on attemptedAt — the OLDEST unresolved charge attempt is
+     * reconciled first. This makes reconciliation deterministic instead of
+     * depending on whichever row the database happens to return. Cross-period
+     * correctness is enforced downstream: Razorpay's invoice_id (which is a
+     * provider identifier, NOT our local INV-* id) is persisted on the
+     * attempt for provenance, and finalizeAfterPayment's CAS guarantees the
+     * period advances exactly once regardless of which attempt wins.
      *
      * INV-019: only 'initiated' attempts are returned — terminal results
      * are never overwritten.
@@ -159,6 +139,7 @@ export class SubscriptionBillingAttemptService {
                 providerSubscriptionId,
                 status: "initiated",
             },
+            order: { attemptedAt: "ASC" },
             relations: ["subscription"],
         });
     }
