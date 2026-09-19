@@ -581,6 +581,34 @@ record predates the refactor and is therefore not admissible as post-refactor
 runtime evidence.
 
 ### Required evidence
+#### Runtime sub-evidence (2026-09-19, post-refactor commit `b4afad9`)
+
+The server was rebuilt and restarted against the frozen refactor baseline
+(`node ./dist/index.js`, pid 50135, started 12:52). Live inspection:
+
+``` bash
+curl -s http://localhost:3000/health                 # -> 200
+curl -s -X POST .../shop-api '{"query":"{ products { totalItems } }"}'
+# -> {"data":{"products":{"totalItems":3}}}          # DB-backed query OK
+ss -tnp | grep 50135
+# ESTAB [::1]:37924 -> [::1]:5432  (Postgres, 1 conn)
+# ESTAB [::1]:485xx -> [::1]:6479  (Redis/BullMQ, 7 conns)
+```
+
+| Condition                              | Evidence                                                     |
+| -------------------------------------- | ------------------------------------------------------------ |
+| Real PostgreSQL                        | `postgres:16.8-bookworm` container (`docker ps`), `SHOW server_version` → `16.8`; live TCP conn from server pid |
+| pg-mem fallback inactive               | DB-backed shop query returns persisted data; `synchronize: false` in config |
+| Real Redis/BullMQ                      | `redis:6.2.17-bookworm` container, `PING` → `PONG`; 7 live conns from server pid; `bull:vendure-job-queue:*` keys present |
+| DefaultJobQueuePlugin fallback inactive | `vendure-config.ts` selects `BullMQJobQueuePlugin` + `RedisCachePlugin` when `REDIS_HOST` is set (it is set in `.env`); startup log shows BullMQ connection ✔ and merged-worker queue start |
+| Migrations applied via Vendure CLI     | `migrations` table: 53 rows; latest `1789797901115-subscription-reconciliation-and-legacy-cleanup`; `npx vendure migrate -r` → "No pending migrations found" |
+| Application + worker operational       | merged-worker mode: single process serving APIs and consuming queues; all 10 queues started |
+| Queue job executes                     | **Partially evidenced.** BullMQ `completed` zset holds 330 jobs; latest observed execution (`provider-webhook-processing` job 2090, finished 2026-09-17) predates the 12:52 restart. No post-restart execution has been triggered/observed yet (queues idle, no inbound events). This is the one remaining R2-A item. |
+
+**R2-A status after this sub-evidence: all runtime conditions evidenced except
+a post-restart observed job execution.** Job execution will be observed
+naturally as part of R2-E (webhook → enqueue → process), which satisfies this
+item with end-to-end context; no artificial job is injected here.
 
 At minimum:
 
