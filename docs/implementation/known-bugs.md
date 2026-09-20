@@ -12,15 +12,15 @@
 
 ---
 
-## BUG B — Two-Month Billing-Period Drift (fixed pending runtime verification)
+## BUG B — Two-Month Billing-Period Drift (fixed and runtime-verified 2026-09-20)
 
 | Field | Detail |
 |---|---|
 | **ID** | BUG B |
 | **Severity** | Critical |
-| **Found** | 2026-09-20 (R2-E probe) |
+| **Found** | 2026-09-20 (R2-E probe, pre-ADR-041 code) |
 | **Fixed** | 2026-09-20 (ADR-041 G2–G7) |
-| **Status** | ✅ Code-fixed — pending runtime re-verification (fresh Test-mode subscription required) |
+| **Status** | ✅ Fixed and runtime-verified (R2-E run, subscription 7, 2026-09-20) |
 
 ### Description
 
@@ -49,7 +49,7 @@ The out-of-order failure guard in `markPastDueFromWebhook()` had a related flaw 
 
 The provider cycle (`current_start` / `current_end` from Razorpay's subscription entity) is now the **authoritative identity** of every paid period. No local arithmetic substitutes for it on the provider-driven path.
 
-Key changes (G2–G7, implementation-complete 2026-09-20):
+Key changes (G2–G7, runtime-verified 2026-09-20):
 - `NormalizedBillingEvent` carries `providerPeriodStart`/`providerPeriodEnd`; `assertProviderCyclePresent()` throws fail-closed before any mutation if fields are absent
 - `subscription.charged` cycle validation is **unconditional** — `assertProviderCyclePresent` fires for every charged event regardless of `providerPaymentId` / `amountPaise` truthiness, satisfying INV-020's fail-closed requirement
 - `SubscriptionBillingAttempt` gains nullable `billingPeriodEnd` (migration `1789883158253`); `billingPeriodStart` made nullable (migration `1789885988242`); **uniform NULL semantics** — initiated rows carry `NULL` in both period fields (renewal worker no longer passes a provisional local date); failed attempts without a provider cycle are also `NULL`; the `recordAttemptInitiated()` signature updated to reflect `billingPeriodStart` as optional
@@ -60,9 +60,15 @@ Key changes (G2–G7, implementation-complete 2026-09-20):
 
 See `docs/architecture/adr-041-provider-cycle-billing-period-identity.md` for the full decision record.
 
-### Runtime verification required
+### Runtime verification
 
-The fix is code-complete and compile-verified (`npx tsc --noEmit` ✅, `npm run build` ✅, 6 e2e tests pass). A fresh Razorpay Test-mode subscription run (G12) is required to confirm the correct period is written end-to-end. Do not reuse `sub_TabaZJZTQzNfWy` — it was captured against the pre-fix code.
+The fix is runtime-verified by the R2-E run (2026-09-20):
+- Subscription 7, channel 13, `sub_TeJjWjzzC0dU4W`, payment `pay_TeJk63hHNo32gI`
+- `billingPeriodStart = 2026-09-20` ✅ matches Razorpay `current_start = 1789913044`
+- `billingPeriodEnd = 2026-10-19` ✅ matches Razorpay `current_end = 1792434600`
+- `OrganizationSubscription.status = active` ✅
+- `currentPeriodStart = 2026-09-20T00:00:00.000Z` ✅ from provider cycle, not local arithmetic
+- No +1 month drift ✅
 
 ---
 
