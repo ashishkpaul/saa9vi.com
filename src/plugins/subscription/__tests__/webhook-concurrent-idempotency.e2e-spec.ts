@@ -141,7 +141,12 @@ describe('Webhook concurrent idempotency (R2-G)', () => {
       active: false,
     }));
 
-    // Create a webhook event for subscription.charged (creates a billing attempt)
+    // Create a webhook event for subscription.charged (creates a billing attempt).
+    // ADR-041 G2: the subscription entity must carry current_start / current_end
+    // (Unix epoch seconds) so assertProviderCyclePresent() passes and a billing
+    // attempt is created with the authoritative provider cycle.
+    const cycleStart = Math.floor(new Date('2026-09-20').getTime() / 1000);
+    const cycleEnd   = Math.floor(new Date('2026-10-20').getTime() / 1000);
     const event = await eventRepo.save(eventRepo.create({
       provider: 'razorpay',
       providerEventId: CONCURRENT_EVENT_ID,
@@ -150,7 +155,14 @@ describe('Webhook concurrent idempotency (R2-G)', () => {
       rawPayload: {
         entity: 'event',
         event: 'subscription.charged',
-        subscription: { entity: { id: CONCURRENT_SUB_ID } },
+        subscription: {
+          entity: {
+            id: CONCURRENT_SUB_ID,
+            current_start: cycleStart,
+            current_end: cycleEnd,
+            paid_count: 1,
+          },
+        },
         payment: { entity: { id: 'pay_concurrent_001', amount: 10000, currency: 'INR' } },
       },
       processingStatus: 'pending',
@@ -176,6 +188,9 @@ describe('Webhook concurrent idempotency (R2-G)', () => {
     expect(attempts[0].amountPaise).toBe(10000);
     expect(attempts[0].status).toBe('succeeded');
     expect(attempts[0].channelId).toBe('1');
+    // ADR-041 G3: billingPeriodStart/End come from provider cycle, not wall clock
+    expect(attempts[0].billingPeriodStart).toBe('2026-09-20');
+    expect(attempts[0].billingPeriodEnd).toBe('2026-10-20');
 
     // Verify the inbox event was marked as processed
     const processedEvent = await eventRepo.findOne({ where: { id: event.id } });

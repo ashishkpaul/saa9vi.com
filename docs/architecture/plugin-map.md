@@ -368,11 +368,11 @@ None (extends `orderOptions.process` with `customerStatusOrderProcess` to block 
 
 | Service | Purpose |
 |---|---|
-| `RazorpayWebhookProcessor` | Razorpay webhook dispatch / reconciliation (uses `providerEventId` for idempotency); delegates billing-attempt persistence to `SubscriptionBillingAttemptService` |
+| `RazorpayWebhookProcessor` | Razorpay webhook dispatch / reconciliation (provider-qualified `findAttemptByProviderEventId` for replay boundary; ADR-041 G2–G7 provider-cycle model); delegates billing-attempt persistence to `SubscriptionBillingAttemptService` |
 | `ProviderWebhookQueueService` | Persist-then-process webhook queue (INV-004), BullMQ-backed, `MAX_ATTEMPTS=3` |
 | `RazorpaySubscriptionProvider` | Razorpay Subscriptions API adapter (implements `RecurringBillingProvider`) |
 | `SubscriptionBillingAttemptService` | Authorized CLAIM→CHARGE→FINALIZE billing-attempt ledger writer (the only permitted writer of `SubscriptionBillingAttempt`, INV-019) |
-| `SubscriptionRenewalService` | Renewal discovery, CLAIM/FINALIZE CAS, period advance, reconcile-after-charge incidents |
+| `SubscriptionRenewalService` | Renewal discovery, cycle-monotonic FINALIZE CAS (ADR-041), bounded retry (MAX 3), reconcile-after-charge incidents |
 | `SubscriptionRenewalQueueService` | BullMQ-backed `subscription-renewal` queue |
 | `SubscriptionService` | Plan/enrollment lifecycle (depends on `RecurringBillingProvider` interface) |
 
@@ -388,8 +388,7 @@ provider/providerEventId/eventType/payloadHash/rawPayload are immutable;
 attemptCount/channelId/processingStatus/processedAt/failedAt/errorMessage
 are mutable processing metadata)
     ↓
-Return 201 immediately (persisted + enqueued; controller has no explicit
-@HttpCode override)
+Return 201 immediately (persisted + enqueued)
     ↓
 BullMQ: provider-webhook-processing queue
     ↓
@@ -397,20 +396,70 @@ Resolve channel from SubscriptionProviderBinding (INV-001)
     ↓
 RazorpayWebhookProcessor.processInboxEvent()
     ↓
-Idempotency: isEventProcessed(providerEventId) → returns true only when a
-    TERMINAL (succeeded|failed) attempt carries the event ID
+REPLAY BOUNDARY: findAttemptByProviderEventId('razorpay', providerEventId)
+    Terminal 'succeeded' attempt → reconcileTerminalAttempt()
+        → replay finalizeAfterPayment() [cycle-monotonic CAS → idempotent]
+    Terminal 'failed' attempt → no-op
+    No terminal attempt / only 'initiated' → continue
     ↓
-Reconcile existing 'initiated' attempt (FIFO on attemptedAt) via
-    recordAttemptSuccess/recordAttemptFailure — OR, if none exists,
-    create exactly one terminal webhook-only attempt via
-    recordAttemptFromWebhook (INV-019)
+normalizeEvent() → NormalizedBillingEvent
+    including providerPeriodStart / providerPeriodEnd
+    from Razorpay current_start / current_end (Unix seconds → Date, UTC)
     ↓
-On success: finalizeAfterPayment() advances the period (CAS, exactly once)
-On subscription.pending / halted: binding updated AND
-    OrganizationSubscription → past_due (dunning discovery)
-On subscription.cancelled: OrganizationSubscription → cancelled
+Handle by event type:
+    subscription.pending / subscription.halted:
+        requireProviderCycleForFailure() — throws MissingProviderCycleError if absent
+        updateBinding() [atomic transaction: binding + subscription.providerStatus]
+        markPastDueFromWebhook(subscriptionId, providerCycleStart)
+            cycle-identity guard: providerCycleStart <= localPeriodStart → stale, no-op
+    subscription.authenticated:
+        updateBinding() [atomic]
+    subscription.activated (charge-bearing):
+        assertProviderCyclePresent() — throws MissingProviderCycleError BEFORE any mutation
+        updateBinding() [atomic]
+        recordAttempt() → finalizeAfterPayment()
+    subscription.charged:
+        assertProviderCyclePresent() — throws BEFORE any mutation
+        recordAttempt() → finalizeAfterPayment()
+    subscription.cancelled:
+        updateBinding() [atomic]
+        markCancelledFromWebhook()
+    payment.failed / payment.charge_failed:
+        recordAttempt('failed')
+    ↓
+Attempt persistence (INV-019, all via SubscriptionBillingAttemptService):
+    Existing 'initiated' attempt (FIFO on attemptedAt):
+        recordAttemptSuccess / recordAttemptFailure
+        billingPeriodStart / billingPeriodEnd written in SAME atomic CAS UPDATE
+        as terminal status (INV-020):
+          succeeded:             both = authoritative provider cycle (YYYY-MM-DD, UTC)
+          failed + cycle known:  both = confirmed provider failure cycle
+          failed + no cycle:     both = NULL (cleared by CAS — INV-020: cycle identity only)
+    No initiated attempt:
+        recordAttemptFromWebhook() — billingPeriodStart/End = provider cycle,
+        or NULL for failed attempts without provider cycle (INV-020)
+    ↓
+finalizeAfterPayment(attemptId) — on succeeded attempt:
+    Reads billingPeriodStart / billingPeriodEnd from attempt row (no payload re-parse)
+    billingPeriodEnd = NULL → reconciliation incident (INV-020 fail-closed)
+    finalizeRenewalPeriod():
+        cycle-monotonic CAS:
+            WHERE version = :v
+              AND (currentPeriodStart IS NULL OR currentPeriodStart < :targetStart)
+        CAS success → publishFinalizeEvents() [awaited eventBus.publish()]
+        CAS fail → reload with 'plan' relation + classify:
+            cancelled            → SUCCESS (terminal guard)
+            cycle already met    → SUCCESS (idempotent replay)
+            version race, target still ahead → retry (max 3, reload includes plan)
+            retry exhausted      → reconciliation incident
     ↓
 Mark ProviderWebhookEvent { status: 'processed', processedAt }
+    ↓
+On MissingProviderCycleError or any exception + attempts left:
+    Keep status: 'pending', rethrow for BullMQ retry
+    ↓
+On exception + MAX_ATTEMPTS exhausted:
+    Mark ProviderWebhookEvent { status: 'failed', failedAt } (terminal)
 ```
 
 ### Failure Semantics
@@ -421,11 +470,7 @@ attempt 2 fails → pending, attemptCount=2
 attempt 3 fails → failed, attemptCount=3, failedAt populated (terminal)
 ```
 
-> ⚠️ **R2-G status (current):** the failure-path and concurrent-idempotency e2e
-> specs listed below prove the **pre-refactor** processing semantics
-> (`pending` → `retry` → `failed`, UNIQUE constraint). Since the provider-neutral
-> the failure-state bridge (`subscription.pending`/`halted` → Saa9vi
-> `past_due`; `cancelled` → `cancelled`), terminal-only idempotency, and
-> replay-safe finalization are **CODE VERIFIED but RUNTIME UNVERIFIED**, and
-> halted-subscription recovery is an open product gap (**D-5**,
-> `integration-gaps-worklist.md`). See `production-readiness.md` R2-G.
+> ⚠️ **R2-G status (current):** ADR-041 G2–G7 provider-cycle redesign is CODE COMPLETE.
+> Runtime re-verification against a fresh Razorpay Test subscription is required before
+> closing R2-E/F/G. Halted-subscription recovery (D-5) remains an open product gap.
+> See `production-readiness.md`.

@@ -58,10 +58,27 @@ export enum RenewalResult {
 
 /**
  * Expected Razorpay webhook payload shape (subset we consume).
- * All identifiers are provider-issued (subscription_id, payment_id) —
- * the processor NEVER trusts payload-declared billing periods or amounts
- * for reconciliation; it establishes the relationship through these
- * provider identifiers against existing Saa9vi rows.
+ *
+ * ADR-041 G2: the subscription entity's `current_start` and `current_end`
+ * fields are the **authoritative source of the provider billing cycle** for
+ * charge-bearing events (`subscription.charged`, `subscription.activated`).
+ * `paid_count` is mirrored for audit/reconciliation.
+ *
+ * The earlier note "the processor NEVER trusts payload-declared billing periods"
+ * described the pre-G2 model, which avoided provider cycle fields entirely and
+ * derived the period from local `currentPeriodEnd + 1 month`. That model
+ * produced BUG B (two-month drift). Under ADR-041:
+ *
+ *   current_start / current_end → authoritative provider billing cycle
+ *   payment.entity.amount / currency → amount (unchanged; still provider-issued)
+ *
+ * Provider identifiers (`subscription.id`, `payment.id`) continue to be the
+ * reconciliation keys; the processor does not trust arbitrary payload fields
+ * for subscription membership or entitlement. The cycle fields specifically
+ * are trusted for period identity (INV-020).
+ *
+ * Razorpay documents current_start and current_end as Unix epoch seconds
+ * representing the current billing cycle start/end.
  */
 export interface RazorpayWebhookPayload {
   event?: string;
@@ -72,12 +89,19 @@ export interface RazorpayWebhookPayload {
         id?: string;
         status?: string;
         notes?: { channelId?: string; planId?: string };
+        /** ADR-041 G2: provider billing-cycle start (Unix epoch seconds). */
+        current_start?: number;
+        /** ADR-041 G2: provider billing-cycle end (Unix epoch seconds). */
+        current_end?: number;
+        /** ADR-041 G2: number of billing cycles already charged. */
+        paid_count?: number;
       };
     };
     payment?: {
       entity?: {
         id?: string;
         order_id?: string;
+        invoice_id?: string;
         txn_id?: string;
         amount?: number;
         currency?: string;

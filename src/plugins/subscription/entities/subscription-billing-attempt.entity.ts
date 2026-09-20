@@ -78,9 +78,44 @@ export class SubscriptionBillingAttempt extends VendureEntity {
     @Column()
     currency: string;
 
-    /** Billing period this attempt covers (ISO date, e.g., '2026-08-01'). */
-    @Column({ length: 10 })
-    billingPeriodStart: string;
+    /**
+     * Billing period start this attempt covers (ISO date YYYY-MM-DD, UTC).
+     *
+     * ADR-041 G3 / INV-020: uniform semantics across all terminal states:
+     *
+     *   NULL
+     *     → cycle identity unknown / not applicable.
+     *       Renewal-worker-initiated rows carry NULL until the terminal CAS;
+     *       failed terminal rows without an authoritative provider cycle are
+     *       also NULL (cleared by the terminal CAS, not left as a provisional
+     *       estimate).
+     *
+     *   YYYY-MM-DD (UTC)
+     *     → authoritative provider cycle start from Razorpay `current_start`
+     *       (Unix seconds → UTC date). Present on succeeded attempts and on
+     *       failed attempts where the provider supplied a failure cycle.
+     *
+     * The field is cycle identity, not a generic audit timestamp. A value that
+     * does not originate from an authoritative provider cycle MUST NOT be stored
+     * here (INV-020 prohibition on manufactured period identity).
+     */
+    @Column({ type: 'varchar', length: 10, nullable: true })
+    billingPeriodStart: string | null;
+
+    /**
+     * Billing period end this attempt covers (ISO date, e.g., '2026-10-20').
+     *
+     * ADR-041 (G3): the durable carrier of the provider cycle end date.
+     * Set from the provider's `current_end` field on webhook-created attempts.
+     * Null for renewal-worker-initiated attempts (unknown until the webhook
+     * arrives) and for all pre-G2 legacy rows.
+     *
+     * `finalizeAfterPayment()` reads this column to reconstruct the
+     * authoritative provider cycle on replay without re-parsing the original
+     * webhook payload.
+     */
+    @Column({ type: 'varchar', length: 10, nullable: true })
+    billingPeriodEnd: string | null;
 
     @Column({ type: 'varchar', default: 'initiated' })
     status: BillingAttemptStatus;

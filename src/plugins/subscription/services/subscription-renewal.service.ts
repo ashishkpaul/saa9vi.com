@@ -154,12 +154,6 @@ export class SubscriptionRenewalService {
 
     const oldVersion = sub.version;
     const claimedVersion = oldVersion + 1;
-    const oldPeriodEnd = sub.currentPeriodEnd;
-    
-    // Default to a 1-month billing cycle.
-    const newPeriodStart = new Date(oldPeriodEnd);
-    const newPeriodEnd = new Date(oldPeriodEnd);
-    newPeriodEnd.setMonth(newPeriodEnd.getMonth() + 1);
 
     /**
      * STATE MODEL (corrected in Step 2 review — do NOT regress):
@@ -199,15 +193,33 @@ export class SubscriptionRenewalService {
     }
 
     // Phase 2 — ATTEMPT record (INV-019 stateful attempt semantics).
-    const billingPeriodStart = newPeriodStart.toISOString().slice(0, 10);
-    const invoiceId = `INV-${sub.id}-${billingPeriodStart}`;
-    const orderId = `saa9vi-${sub.id}-${billingPeriodStart}`;
+    //
+    // ADR-041 G3 / uniform-NULL decision:
+    // The renewal worker does NOT know the authoritative provider billing cycle
+    // at initiation time — Razorpay owns recurring execution and only reveals
+    // current_start / current_end in the charge webhook. A provisional local
+    // date would violate INV-020 (billingPeriodStart is provider cycle identity,
+    // not a local arithmetic estimate).
+    //
+    // billingPeriodStart = NULL  →  cycle identity unknown (awaiting webhook)
+    // billingPeriodEnd   = NULL  →  (not passed → NULL by service default)
+    //
+    // The terminal CAS in recordAttemptSuccess() overwrites both fields with the
+    // authoritative values from the webhook. The terminal CAS in
+    // recordAttemptFailure() clears both fields to NULL (failed attempts without
+    // a provider cycle carry NULL period, not a manufactured date).
+    const invoiceId = `INV-${sub.id}-${Date.now()}`;
+    const orderId = `saa9vi-${sub.id}-${Date.now()}`;
 
     const attempt = await this.attemptService.recordAttemptInitiated({
       subscriptionId: sub.id,
       channelId: sub.channelId,
       invoiceId,
-      billingPeriodStart,
+      // ADR-041 G3 / uniform-NULL: billingPeriodStart and billingPeriodEnd are
+      // intentionally omitted here. NULL is the correct value for an initiated
+      // attempt — the authoritative provider cycle is only known when the
+      // subscription.charged webhook arrives and the terminal CAS fires.
+      // Passing a provisional local date here would violate INV-020.
       amountPaise: sub.plan.monthlyPriceInPaise,
       // No provider payload exists yet on the renewal path (Razorpay owns
       // recurring execution), so the attempt carries the platform currency.
@@ -230,21 +242,27 @@ export class SubscriptionRenewalService {
   }
 
   /**
-   * Finalizes the subscription period after confirmed payment success.
-   * Called by the webhook processor (not the renewal worker) in the Razorpay model.
-   * Uses CAS on version to avoid clobbering concurrent state changes.
-   */
-
-  /**
    * Finalizes a subscription renewal after a successful payment reconciliation.
    * Called by the webhook processor after the attempt has been moved to
    * 'succeeded' via the shared INV-019 CAS primitive.
    *
-   * This is the webhook-path equivalent of Phase 4 (FINALIZE CAS) in
-   * executeRenewal(). It advances the subscription period and publishes the
-   * renewal events, but ONLY if the finalize CAS wins — a lost CAS means
-   * another worker already finalized, and this event is a no-op (terminal
-   * protection against double-advancement).
+   * ADR-041 G4/G5: reads the authoritative provider cycle from the attempt row
+   * (billingPeriodStart / billingPeriodEnd, set by the webhook processor from
+   * Razorpay's current_start / current_end). Passes these to finalizeRenewalPeriod()
+   * which applies the cycle-monotonic CAS:
+   *
+   *   UPDATE … WHERE version = :v AND (currentPeriodStart IS NULL OR currentPeriodStart < :targetStart)
+   *
+   * This makes the finalization idempotent across any number of replays and
+   * concurrent workers — only a strictly newer provider cycle can advance the
+   * local state.
+   *
+   * Pre-G2 / missing-cycle rows (billingPeriodEnd = null):
+   *   These are NOT auto-finalized. A reconciliation incident is recorded and
+   *   the method returns CAS_CONFLICT so the operator can reprocess the original
+   *   webhook (which will supply the provider cycle and update the attempt row).
+   *   The +1-month arithmetic fallback is explicitly absent — that was the exact
+   *   mechanism behind BUG B (ADR-041 option B, INV-020 prohibition).
    */
   async finalizeAfterPayment(attemptId: string): Promise<RenewalResult> {
     const attempt = await this.connection.rawConnection
@@ -259,53 +277,31 @@ export class SubscriptionRenewalService {
         return RenewalResult.SUBSCRIPTION_NOT_FOUND;
     }
 
+    // INV-019 / INV-020: period advancement requires successful payment.
+    // Guard explicitly so future callers cannot accidentally finalize a
+    // failed or initiated attempt.
+    if (attempt.status !== 'succeeded') {
+        this.logger.error(
+            `Attempt ${attemptId} has status '${attempt.status}' — finalizeAfterPayment requires 'succeeded'. ` +
+                `Period NOT advanced.`,
+            loggerCtx,
+        );
+        return RenewalResult.SUBSCRIPTION_NOT_FOUND;
+    }
+
     const sub = attempt.subscription;
     if (!sub) {
         this.logger.error(`Attempt ${attemptId} has no subscription — cannot finalize`, loggerCtx);
         return RenewalResult.SUBSCRIPTION_NOT_FOUND;
     }
 
-        /**
-     * The renewal worker's Phase 1 CLAIM already incremented `version` from
-     * its original value to original+1. finalizeAfterPayment does NOT perform
-     * its own CLAIM — it must guard on the loaded version (= original+1, the
-     * already-claimed value) and advance it by one (= original+2). Using
-     * `oldVersion + 1` as the guard would produce an off-by-one: the guard
-     * would expect original+2 but the DB actually has original+1 (from CLAIM),
-     * causing the CAS to always fail and triggering false reconciliation
-     * incidents for every webhook-driven finalization.
-     *
-     *   Worker: CLAIM sets V→V+1, then FINALIZE sets V+1→V+2  (guard: V+1)
-     *   Webhook: FINALIZE sets V+1→V+2                       (guard: V+1)
-     *
-     * Both paths converge on the same guard value (V+1) and the same target
-     * (V+2). Only one wins; the loser gets affected=0 and records a
-     * reconciliation incident.
-     */
     /**
-     * TERMINAL-STATE GUARD (out-of-order webhook protection) — the exact
-     * mirror of the guard in markPastDueFromWebhook().
+     * TERMINAL-STATE GUARD (out-of-order webhook protection).
      *
-     * Razorpay does not guarantee webhook ordering. A late successful-charge
-     * event (subscription.charged / subscription.activated) can arrive AFTER
-     * subscription.cancelled has already terminated the subscription:
-     *
-     *   subscription.cancelled → status='cancelled', version V→V+1
-     *   late subscription.charged → loads version V+1 (the CURRENT version)
-     *                             → CAS below WINS
-     *                             → status='active'   ← RESURRECTED
-     *
-     * The CAS guards only on `version`, and the late event reads the version
-     * that markCancelledFromWebhook() already bumped — so the CAS cannot
-     * detect the ordering problem. 'cancelled' is terminal in Saa9vi
-     * (RFC-001): a terminated subscription must never be silently
-     * resurrected. Refuse the finalize and leave the terminal state intact.
-     *
-     * We return SUCCESS (not CAS_CONFLICT) deliberately: the charge itself is
-     * not a lost-CAS anomaly needing an incident row, and recording one would
-     * also fire on every idempotent webhook replay for a cancelled row. The
-     * WARN below carries the operator signal instead (a charge that landed
-     * against an already-terminated subscription may warrant a refund review).
+     * 'cancelled' is terminal in Saa9vi (RFC-001). A late successful-charge
+     * event arriving after cancellation must not resurrect the subscription.
+     * Return SUCCESS (not CAS_CONFLICT) — the charge is not a lost-CAS anomaly,
+     * and the operator WARN is the signal for refund review.
      */
     if (sub.status === "cancelled") {
       Logger.warn(
@@ -318,11 +314,45 @@ export class SubscriptionRenewalService {
     }
 
     const oldVersion = sub.version;
-    const oldPeriodEnd = sub.currentPeriodEnd;
 
-    const newPeriodStart = new Date(oldPeriodEnd);
-    const newPeriodEnd = new Date(oldPeriodEnd);
-    newPeriodEnd.setMonth(newPeriodEnd.getMonth() + 1);
+    // ADR-041 G4: resolve target period from the attempt's provider cycle fields.
+    //
+    // billingPeriodEnd is present  → authoritative provider cycle from the webhook.
+    // billingPeriodEnd is absent   → pre-G2 legacy attempt without authoritative cycle.
+    //
+    // ADR-041 policy (option B): a legacy attempt without an authoritative provider
+    // cycle MUST NOT auto-finalize using +1 month arithmetic — that is the exact
+    // mechanism behind BUG B. Instead, record a reconciliation incident so an
+    // operator can verify the provider cycle and apply the correct period manually.
+    //
+    // This is safer than silently perpetuating the prohibited arithmetic for a
+    // known-bounded set of legacy rows. Any initiated attempt that genuinely needs
+    // finalization and lacks billingPeriodEnd must first be corrected by re-processing
+    // its original webhook (which will update the attempt row with the provider cycle).
+    if (!attempt.billingPeriodStart || !attempt.billingPeriodEnd) {
+        Logger.error(
+            `Attempt ${attemptId}: billingPeriodEnd absent — cannot finalize without authoritative ` +
+                `provider cycle (ADR-041). Recording reconciliation incident. ` +
+                `Re-process the original webhook to supply the provider cycle.`,
+            loggerCtx,
+        );
+        await this.recordReconciliationRequired(
+            sub,
+            sub.channelId,
+            attempt.invoiceId ?? `attempt-${attemptId}`,
+            attempt.providerPaymentId ?? attempt.providerAttemptId ?? attemptId,
+        );
+        return RenewalResult.CAS_CONFLICT;
+    }
+
+    // Authoritative provider cycle.
+    const newPeriodStart = new Date(attempt.billingPeriodStart);
+    const newPeriodEnd   = new Date(attempt.billingPeriodEnd);
+    Logger.info(
+        `Attempt ${attemptId}: using authoritative provider cycle ` +
+            `${attempt.billingPeriodStart} → ${attempt.billingPeriodEnd}`,
+        loggerCtx,
+    );
 
     // FINALIZE CAS: shared handler — both worker and webhook paths delegate
     // to finalizeRenewalPeriod(). The webhook path guards on the loaded
@@ -339,21 +369,40 @@ export class SubscriptionRenewalService {
 
   /**
    * Shared Phase 4 FINALIZE CAS handler — advances the billing period on a
-   * successfully charged subscription. Called by both:
-   * - finalizeAfterPayment() (async webhook-driven path).
+   * successfully charged subscription. Called by finalizeAfterPayment()
+   * (async webhook-driven path).
    *
-   * WHY SHARED: the worker and webhook paths were previously duplicated here
-   * line-for-line, which is exactly the drift pattern that birthed the INV-019
-   * "stateful attempt record" model (see SubscriptionBillingAttemptService.transition).
-   * Both call sites now delegate to this single method to guarantee identical
-   * finalization semantics regardless of which writer wins the CAS.
+   * ADR-041 G4: cycle-monotonic CAS.
    *
-   * The caller passes `guardVersion` — the version it expects to find in the
-   * DB. For the worker this is `claimedVersion` (= V+1 after Phase 1 CLAIM);
-   * for the webhook this is the freshly-loaded `sub.version` (also V+1). Both
-   * advance to V+2. Only one wins; the loser gets affected=0 and a
-   * reconciliation incident is recorded (Step 4D).
+   * The UPDATE only wins when the local cycle is strictly behind the target cycle:
+   *
+   *   WHERE id = :id
+   *     AND version = :guardVersion
+   *     AND (currentPeriodStart IS NULL OR currentPeriodStart < :targetStart)
+   *
+   * This produces the required outcome table:
+   *
+   *   local Sep 19 → provider Sep 20  →  advance     ✓
+   *   local Sep 20 → provider Sep 20  →  no-op       ✓  (same cycle)
+   *   local Nov 16 → provider Sep 20  →  no-op       ✓  (backwards)
+   *   local Sep 20 → provider Oct 20  →  advance     ✓
+   *
+   * ADR-041 G5: bounded retry on version-only CAS loss.
+   *
+   * When the CAS fails, reload the subscription and classify the failure:
+   *
+   *   Case C — cancelled:           SUCCESS (terminal, no incident)
+   *   Case B — cycle already met:   SUCCESS (idempotent replay)
+   *   Case R — version changed, but target cycle still ahead of local:
+   *             retry with fresh version (up to MAX_FINALIZE_RETRIES)
+   *             This handles the normal concurrency case where the renewal
+   *             worker's CLAIM incremented the version between our load and
+   *             this UPDATE. Retrying finalization is safe — it does not
+   *             initiate a new provider charge.
+   *   Case A — retry exhausted or unclassifiable: record reconciliation incident.
    */
+  private static readonly MAX_FINALIZE_RETRIES = 3;
+
   private async finalizeRenewalPeriod(
     sub: OrganizationSubscription,
     guardVersion: number,
@@ -361,7 +410,9 @@ export class SubscriptionRenewalService {
     providerOrderId: string,
     newPeriodStart: Date,
     newPeriodEnd: Date,
+    attempt = 0,
   ): Promise<RenewalResult> {
+    // ADR-041 G4: cycle-monotonic CAS.
     const finalizeResult = await this.connection.rawConnection
       .createQueryBuilder()
       .update(OrganizationSubscription)
@@ -371,90 +422,150 @@ export class SubscriptionRenewalService {
         currentPeriodEnd: newPeriodEnd,
         status: "active",
       })
-      .where("id = :id AND version = :version", {
-        id: sub.id,
-        version: guardVersion,
-      })
+      .where(
+        "id = :id AND version = :version AND (currentPeriodStart IS NULL OR currentPeriodStart < :targetStart)",
+        {
+          id: sub.id,
+          version: guardVersion,
+          targetStart: newPeriodStart,
+        },
+      )
       .execute();
 
-    if (finalizeResult.affected !== 1) {
-      /**
-       * Replay-safety: distinguish "finalization already completed" from a
-       * genuine lost CAS. If the period has ALREADY advanced to (or past) the
-       * target end, this call is an idempotent replay of a finalize that a
-       * previous writer already won (e.g. a replayed webhook after a crash
-       * between terminal-attempt write and finalization) — a no-op success,
-       * NOT a reconciliation incident. A concurrent writer moving the period
-       * somewhere else still records the incident below.
-       */
-      const reloaded = await this.connection.rawConnection
-        .getRepository(OrganizationSubscription)
-        .findOne({ where: { id: sub.id as any } });
-      /**
-       * Race counterpart of the terminal-state guard above: subscription.cancelled
-       * won the version CAS between our load and this update (it bumped the
-       * version, so our CAS lost). Only the WRITER that lost the race can see
-       * this — and a deliberate cancellation must not be reported as a
-       * reconciliation incident (the charge was not lost to a bug; the
-       * subscription was terminated).
-       */
-      if (reloaded && reloaded.status === "cancelled") {
-        Logger.warn(
-          `Subscription ${sub.id}: finalize CAS lost to a concurrent cancellation (status='cancelled', terminal) — ` +
-            `period NOT advanced; review for refund/reconciliation.`,
-          loggerCtx,
-        );
-        return RenewalResult.SUCCESS;
-      }
-      if (reloaded && reloaded.currentPeriodEnd >= newPeriodEnd) {
-        Logger.info(
-          `Finalize replay for subscription ${sub.id}: period already advanced to ${reloaded.currentPeriodEnd.toISOString()} — idempotent no-op`,
-          loggerCtx,
-        );
-        return RenewalResult.SUCCESS;
-      }
-      /**
-       * DANGEROUS WINDOW HIT (Step 4D): the charge succeeded but the finalize
-       * CAS lost (another worker finalized between phases, or manual state edit).
-       * Money has moved; the period has not advanced. Record an operator-visible
-       * reconciliation incident — never an automatic retry (that would
-       * double-charge).
-       */
-      await this.recordReconciliationRequired(sub, sub.channelId, invoiceId, providerOrderId);
-      this.logger.error(
-        `FINALIZE CONFLICT for subscription ${sub.id}: charge ${invoiceId} succeeded but period was not advanced. MANUAL RECONCILIATION REQUIRED.`,
-        loggerCtx,
-      );
-      return RenewalResult.CAS_CONFLICT;
+    if (finalizeResult.affected === 1) {
+      return this.publishFinalizeEvents(sub, invoiceId, newPeriodStart, newPeriodEnd);
     }
 
-    // Resolve the channel for RequestContext creation (BUG-021 fix):
-    // create() expects a token or entity, not a raw ID.
+    // CAS failed — reload and classify.
+    const reloaded = await this.connection.rawConnection
+      .getRepository(OrganizationSubscription)
+      .findOne({ where: { id: sub.id as any } });
+
+    // Case C: cancelled — terminal, not an incident.
+    if (reloaded && reloaded.status === "cancelled") {
+      Logger.warn(
+        `Subscription ${sub.id}: finalize CAS lost to a concurrent cancellation — ` +
+          `period NOT advanced; review for refund/reconciliation.`,
+        loggerCtx,
+      );
+      return RenewalResult.SUCCESS;
+    }
+
+    // ADR-041 G5 case B: cycle already satisfied — idempotent replay.
+    if (reloaded && reloaded.currentPeriodStart >= newPeriodStart) {
+      Logger.info(
+        `Finalize replay for subscription ${sub.id}: ` +
+          `currentPeriodStart (${reloaded.currentPeriodStart?.toISOString()}) ` +
+          `>= targetStart (${newPeriodStart.toISOString()}) — cycle already reached, idempotent no-op`,
+        loggerCtx,
+      );
+      return RenewalResult.SUCCESS;
+    }
+
+    // ADR-041 G5 case R: version changed but target cycle is still ahead of local.
+    // This is normal concurrency — the renewal worker CLAIM or another writer
+    // incremented the version between our load and this UPDATE. Retry with the
+    // fresh version. Retrying is safe: no provider charge is initiated here.
+    //
+    // Blocking issue fix: reload with 'plan' relation so publishFinalizeEvents()
+    // can access sub.plan.includedBbbMinutes / sub.plan.monthlyPriceInPaise on
+    // the retry path. Without this, a CAS win on the retry attempt would fail
+    // with sub.plan === undefined after the period was already advanced.
+    if (reloaded && attempt < SubscriptionRenewalService.MAX_FINALIZE_RETRIES) {
+      const reloadedWithPlan = await this.connection.rawConnection
+        .getRepository(OrganizationSubscription)
+        .findOne({ where: { id: sub.id as any }, relations: ['plan'] });
+      if (!reloadedWithPlan) {
+        // Subscription disappeared between the two reloads — treat as conflict.
+        await this.recordReconciliationRequired(sub, sub.channelId, invoiceId, providerOrderId);
+        this.logger.error(
+          `FINALIZE CONFLICT for subscription ${sub.id}: subscription row not found on retry reload. MANUAL RECONCILIATION REQUIRED.`,
+          loggerCtx,
+        );
+        return RenewalResult.CAS_CONFLICT;
+      }
+      Logger.info(
+        `Finalize version-race for subscription ${sub.id} (attempt ${attempt + 1}/${SubscriptionRenewalService.MAX_FINALIZE_RETRIES}) — ` +
+          `local currentPeriodStart (${reloadedWithPlan.currentPeriodStart?.toISOString() ?? 'null'}) < ` +
+          `targetStart (${newPeriodStart.toISOString()}), retrying with version ${reloadedWithPlan.version}`,
+        loggerCtx,
+      );
+      return this.finalizeRenewalPeriod(
+        reloadedWithPlan,
+        reloadedWithPlan.version,
+        invoiceId,
+        providerOrderId,
+        newPeriodStart,
+        newPeriodEnd,
+        attempt + 1,
+      );
+    }
+
+    // Case A: retry exhausted or no reloaded row — genuine conflict or anomaly.
+    await this.recordReconciliationRequired(sub, sub.channelId, invoiceId, providerOrderId);
+    this.logger.error(
+      `FINALIZE CONFLICT for subscription ${sub.id}: charge ${invoiceId} succeeded but period was not advanced ` +
+        `after ${attempt + 1} attempt(s). MANUAL RECONCILIATION REQUIRED.`,
+      loggerCtx,
+    );
+    return RenewalResult.CAS_CONFLICT;
+  }
+
+  /**
+   * Publish the post-finalization domain events.
+   * Extracted from finalizeRenewalPeriod to keep the retry logic readable.
+   *
+   * P1 reliability: eventBus.publish() is awaited so that handler failures
+   * surface to the caller rather than being silently swallowed. A handler
+   * failure after a successful CAS is a post-finalization event-delivery gap;
+   * the reconciliation incident path handles that case.
+   *
+   * Note: period idempotency (cycle-monotonic CAS) is fully independent of
+   * event delivery. A replay via reconcileTerminalAttempt() will re-enter
+   * finalizeAfterPayment() → finalizeRenewalPeriod() → here, but the CAS
+   * will return case-B (cycle already satisfied) and this method will not
+   * be called again. Full event-delivery recovery requires an explicit
+   * outbox mechanism (tracked as P1 follow-up).
+   */
+  private async publishFinalizeEvents(
+    subIn: OrganizationSubscription,
+    invoiceId: string,
+    newPeriodStart: Date,
+    newPeriodEnd: Date,
+  ): Promise<RenewalResult> {
+    let sub = subIn;
     const channel = await this.connection.rawConnection
       .getRepository(Channel)
       .findOne({ where: { id: sub.channelId } });
 
     if (!channel) {
-      /**
-       * CRITICAL: Channel missing (INV-018 / BUG-021 class). The period WAS
-       * advanced (version incremented), but the event-publishing context
-       * cannot be constructed. This is a reconciliation gap — the subscription
-       * is now in 'active' with an advanced period but no SubscriptionRenewedEvent
-       * was emitted (so BBB minutes were not granted). The next scan will NOT
-       * reprocess this (currentPeriodEnd is in the future), so this requires
-       * an operator-visible reconciliation incident.
-       */
-      await this.recordReconciliationRequired(
-        sub,
-        sub.channelId,
-        invoiceId,
-        providerOrderId,
-      );
+      await this.recordReconciliationRequired(sub, sub.channelId, invoiceId, sub.id as string);
       this.logger.error(
-        `Channel ${sub.channelId} not found for subscription ${sub.id} AFTER finalize CAS won — period advanced but events not published. MANUAL RECONCILIATION REQUIRED.`,
+        `Channel ${sub.channelId} not found for subscription ${sub.id} AFTER finalize CAS won — ` +
+          `period advanced but events not published. MANUAL RECONCILIATION REQUIRED.`,
         loggerCtx,
       );
       return RenewalResult.CHANNEL_NOT_FOUND;
+    }
+
+    // Ensure plan relation is loaded — the retry path reloads with 'plan', but
+    // the first-attempt path loads from finalizeAfterPayment which includes 'plan'
+    // via its findOne(relations: ['subscription', 'subscription.plan']). Defensive
+    // check in case the object arrives without plan populated.
+    if (!sub.plan) {
+      const withPlan = await this.connection.rawConnection
+        .getRepository(OrganizationSubscription)
+        .findOne({ where: { id: sub.id as any }, relations: ['plan'] });
+      if (!withPlan?.plan) {
+        await this.recordReconciliationRequired(sub, sub.channelId, invoiceId, sub.id as string);
+        this.logger.error(
+          `Plan not found for subscription ${sub.id} AFTER finalize CAS won — ` +
+            `period advanced but events not published. MANUAL RECONCILIATION REQUIRED.`,
+          loggerCtx,
+        );
+        return RenewalResult.CHANNEL_NOT_FOUND;
+      }
+      sub = withPlan;
     }
 
     const ctx = await this.requestContextService.create({
@@ -462,8 +573,8 @@ export class SubscriptionRenewalService {
       channelOrToken: channel,
     });
 
-    // 1. Publish Renewed Event (Triggers BbbSubscriptionListener → minutes grant)
-    this.eventBus.publish(
+    // P1: awaited so handler failures surface to the caller.
+    await this.eventBus.publish(
       new SubscriptionRenewedEvent(
         ctx,
         sub,
@@ -474,8 +585,7 @@ export class SubscriptionRenewalService {
       ),
     );
 
-    // 2. Publish Invoice Paid Event (Future-proofing for accounting/tax/provider reconciliation)
-    this.eventBus.publish(
+    await this.eventBus.publish(
       new SubscriptionInvoicePaidEvent(
         ctx,
         sub,
@@ -485,7 +595,8 @@ export class SubscriptionRenewalService {
     );
 
     Logger.info(
-      `Finalized renewal for subscription ${sub.id} for channel ${sub.channelId} (New Period: ${newPeriodStart.toISOString()} -> ${newPeriodEnd.toISOString()})`,
+      `Finalized renewal for subscription ${sub.id} channel ${sub.channelId} ` +
+        `(${newPeriodStart.toISOString()} → ${newPeriodEnd.toISOString()})`,
       loggerCtx,
     );
 
@@ -534,14 +645,31 @@ export class SubscriptionRenewalService {
    * status = 'past_due', so WITHOUT this bridge the documented dunning
    * path has no entry point.
    *
-   * Uses CAS on version to avoid clobbering concurrent state changes
-   * (e.g. a concurrent successful payment finalization).
+   * ADR-041 G6: cycle-identity freshness guard.
+   *
+   * The old guard compared currentPeriodEnd > new Date() (wall clock), which
+   * is not a valid provider-cycle freshness rule. The new guard compares the
+   * incoming event's provider cycle start against the locally finalized cycle:
+   *
+   *   providerCycleStart <= localCurrentPeriodStart
+   *       → failure event is for a cycle that is already finalized (or in progress)
+   *       → stale, no-op
+   *
+   *   providerCycleStart > localCurrentPeriodStart
+   *       → failure event describes a genuinely newer unpaid cycle
+   *       → eligible for past_due transition
+   *
+   * providerCycleStart is optional: when absent (legacy callers or non-charge
+   * failure events without a cycle), the guard is skipped and the CAS proceeds.
+   * This preserves the previous behaviour for events that have no cycle context.
+   *
+   * Uses CAS on version to avoid clobbering concurrent state changes.
    * Idempotent no-op when the subscription is already past_due/cancelled.
    *
    * The billing period is NOT advanced — dunning retry with a new attempt
    * row handles recovery.
    */
-  async markPastDueFromWebhook(subscriptionId: string): Promise<void> {
+  async markPastDueFromWebhook(subscriptionId: string, providerCycleStart?: Date): Promise<void> {
     const repo = this.connection.rawConnection.getRepository(OrganizationSubscription);
     const sub = await repo.findOne({ where: { id: subscriptionId as any } });
     if (!sub) {
@@ -556,22 +684,24 @@ export class SubscriptionRenewalService {
       );
       return;
     }
-    // OUT-OF-ORDER EVENT GUARD: Razorpay does not guarantee webhook ordering.
-    // A late subscription.pending/halted event can arrive AFTER a successful
-    // charge already finalized a NEW period (currentPeriodEnd moved into the
-    // future). A successful finalization supersedes older failure states —
-    // an event describing a failed charge for a period that has since been
-    // paid must not downgrade the subscription back to past_due. If a genuine
-    // new failure occurs for the CURRENT period, the provider will deliver a
-    // fresh pending/halted event with a newer charge attempt.
-    if (sub.currentPeriodEnd > new Date()) {
-      Logger.info(
-        `Subscription ${subscriptionId}: currentPeriodEnd (${sub.currentPeriodEnd.toISOString()}) is in the future — ` +
-          `failure-state event is OUT-OF-ORDER (stale relative to a finalized successful charge), skipping past_due transition`,
-        loggerCtx,
-      );
-      return;
+
+    // ADR-041 G6: cycle-identity freshness guard.
+    // A failure event whose provider cycle start is at or before the locally
+    // finalized period start is stale — a successful charge for this cycle
+    // has already been finalized. Only apply past_due for a genuinely newer
+    // unpaid cycle.
+    if (providerCycleStart && sub.currentPeriodStart) {
+      if (providerCycleStart <= sub.currentPeriodStart) {
+        Logger.info(
+          `Subscription ${subscriptionId}: failure event cycle start ` +
+            `(${providerCycleStart.toISOString()}) <= local currentPeriodStart ` +
+            `(${sub.currentPeriodStart.toISOString()}) — stale failure event, skipping past_due transition`,
+          loggerCtx,
+        );
+        return;
+      }
     }
+
     const result = await this.connection.rawConnection
       .createQueryBuilder()
       .update(OrganizationSubscription)
@@ -582,10 +712,6 @@ export class SubscriptionRenewalService {
       })
       .execute();
     if (result.affected !== 1) {
-      // CAS lost: a concurrent writer (e.g. finalizeAfterPayment) changed the
-      // subscription version between load and update. Treat as a no-op —
-      // do NOT log success, do NOT retry (per the CAS discipline in
-      // SubscriptionBillingAttemptService.transition).
       Logger.warn(
         `markPastDueFromWebhook: CAS lost for subscription ${subscriptionId} (expected version ${sub.version}) — concurrent state change, no-op`,
         loggerCtx,

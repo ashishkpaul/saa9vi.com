@@ -12,6 +12,60 @@
 
 ---
 
+## BUG B — Two-Month Billing-Period Drift (fixed pending runtime verification)
+
+| Field | Detail |
+|---|---|
+| **ID** | BUG B |
+| **Severity** | Critical |
+| **Found** | 2026-09-20 (R2-E probe) |
+| **Fixed** | 2026-09-20 (ADR-041 G2–G7) |
+| **Status** | ✅ Code-fixed — pending runtime re-verification (fresh Test-mode subscription required) |
+
+### Description
+
+The R2-E authorization probe demonstrated a concrete billing defect: one real ₹100 Razorpay Test payment produced a local subscription period **two months** in the future.
+
+```
+Razorpay provider cycle:  2026-09-20 → 2026-10-20
+Saa9vi local result:      2026-11-16 → 2026-12-16   ← wrong by ~2 months
+```
+
+### Root cause
+
+`finalizeAfterPayment()` computed the new billing period by arithmetic on the local `currentPeriodEnd`:
+
+```ts
+// PROHIBITED — the exact mechanism behind the drift
+const newPeriodEnd = new Date(sub.currentPeriodEnd);
+newPeriodEnd.setMonth(newPeriodEnd.getMonth() + 1);
+```
+
+Because the local `currentPeriodEnd` had drifted from the provider cycle during the initial authorization flow, this arithmetic produced a period two months ahead of the actual provider cycle. The same mechanism made replay non-idempotent: a replayed webhook would advance the period a second time.
+
+The out-of-order failure guard in `markPastDueFromWebhook()` had a related flaw — it compared `currentPeriodEnd > new Date()` (wall clock) rather than comparing the provider cycle identity.
+
+### Fix — ADR-041 G2–G7 (2026-09-20)
+
+The provider cycle (`current_start` / `current_end` from Razorpay's subscription entity) is now the **authoritative identity** of every paid period. No local arithmetic substitutes for it on the provider-driven path.
+
+Key changes (G2–G7, implementation-complete 2026-09-20):
+- `NormalizedBillingEvent` carries `providerPeriodStart`/`providerPeriodEnd`; `assertProviderCyclePresent()` throws fail-closed before any mutation if fields are absent
+- `subscription.charged` cycle validation is **unconditional** — `assertProviderCyclePresent` fires for every charged event regardless of `providerPaymentId` / `amountPaise` truthiness, satisfying INV-020's fail-closed requirement
+- `SubscriptionBillingAttempt` gains nullable `billingPeriodEnd` (migration `1789883158253`); `billingPeriodStart` made nullable (migration `1789885988242`); **uniform NULL semantics** — initiated rows carry `NULL` in both period fields (renewal worker no longer passes a provisional local date); failed attempts without a provider cycle are also `NULL`; the `recordAttemptInitiated()` signature updated to reflect `billingPeriodStart` as optional
+- `finalizeAfterPayment()` reads `billingPeriodStart`/`billingPeriodEnd` from the attempt row; absent `billingPeriodEnd` → reconciliation incident (no fallback)
+- Cycle-monotonic CAS (`currentPeriodStart < :targetStart`) enforces monotonic progression
+- `markPastDueFromWebhook()` uses cycle-identity freshness guard (`providerCycleStart <= localCurrentPeriodStart` → stale no-op)
+- `updateBinding()` transactional; binding lookup provider-qualified
+
+See `docs/architecture/adr-041-provider-cycle-billing-period-identity.md` for the full decision record.
+
+### Runtime verification required
+
+The fix is code-complete and compile-verified (`npx tsc --noEmit` ✅, `npm run build` ✅, 6 e2e tests pass). A fresh Razorpay Test-mode subscription run (G12) is required to confirm the correct period is written end-to-end. Do not reuse `sub_TabaZJZTQzNfWy` — it was captured against the pre-fix code.
+
+---
+
 ## Active Integration Gaps
 
 **Confirmed external-dependency mismatches that are not application bugs.** These block a production gate but the Saa9vi-side state machine is verified correct; the external dependency's configuration/behavior compatibility remains unresolved.

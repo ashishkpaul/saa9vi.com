@@ -10,6 +10,21 @@ import { SubscriptionBillingAttempt, BillingAttemptStatus } from '../../entities
 
 const loggerCtx = 'RazorpayWebhookProcessor';
 
+/**
+ * ADR-041: Provider-cycle billing period identity.
+ *
+ * providerPeriodStart / providerPeriodEnd carry the Razorpay subscription
+ * entity's current_start / current_end Unix timestamps converted to Date.
+ * These are the authoritative source of truth for which billing cycle the
+ * payment belongs to — local period arithmetic is explicitly prohibited for
+ * provider-originated charge events.
+ *
+ * Saa9vi models recurring billing cycles at UTC calendar-date granularity;
+ * provider timestamps are normalised to YYYY-MM-DD (UTC) before storage.
+ *
+ * providerPaidCount mirrors paid_count from the subscription entity;
+ * useful for audit / reconciliation but not used in period identity logic.
+ */
 export interface NormalizedBillingEvent {
     eventType: string;
     providerEventId: string;
@@ -21,7 +36,30 @@ export interface NormalizedBillingEvent {
     status: string;
     channelId?: string;
     planId?: string;
+    /** ADR-041 G2: provider billing cycle start (current_start → Date, UTC). */
+    providerPeriodStart?: Date;
+    /** ADR-041 G2: provider billing cycle end (current_end → Date, UTC). */
+    providerPeriodEnd?: Date;
+    /** ADR-041 G2: provider paid_count for audit/reconciliation. */
+    providerPaidCount?: number;
     rawPayload: any;
+}
+
+/**
+ * Thrown when a charge-bearing webhook event is missing the required
+ * provider billing-cycle fields (current_start / current_end).
+ *
+ * Throwing (not returning false) is critical: the queue worker treats a
+ * normal return as success and marks the ProviderWebhookEvent as
+ * 'processed'. A missing cycle must instead activate the existing
+ * retry / terminal-failure machinery so the event is re-queued and
+ * ultimately surfaced as a failed inbox event requiring manual attention.
+ */
+export class MissingProviderCycleError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'MissingProviderCycleError';
+    }
 }
 
 @Injectable()
@@ -53,17 +91,13 @@ export class RazorpayWebhookProcessor {
         // (it is replay-idempotent). Only a 'failed' terminal attempt is
         // fully complete. Handling this HERE (not inside recordAttempt)
         // guarantees the same-event retry path reaches the replay logic.
-        const existingByEvent = await this.attemptService.findAttemptByProviderEventId(providerEventId);
+        const existingByEvent = await this.attemptService.findAttemptByProviderEventId('razorpay', providerEventId);
         if (existingByEvent && existingByEvent.status !== 'initiated') {
             await this.reconcileTerminalAttempt(existingByEvent, `event ${providerEventId} replay`);
             return;
         }
 
         const ne = this.normalizeEvent(event, payload, providerEventId);
-
-        let binding: SubscriptionProviderBinding | null = null;
-        let haltedBinding: SubscriptionProviderBinding | null = null;
-        let cancelledBinding: SubscriptionProviderBinding | null = null;
 
         switch (event) {
             case 'subscription.pending':
@@ -72,47 +106,83 @@ export class RazorpayWebhookProcessor {
                 // Saa9vi FSM to past_due so the dunning job can discover it
                 // (RFC-001 §4.2). Do NOT record a billing attempt — no charge
                 // event is attached to this state transition.
-                binding = await this.updateBinding(ctx, ne.providerSubscriptionId, 'pending', false, ne.channelId, ne.planId);
-                if (binding?.subscription?.id) {
-                    await this.renewalService.markPastDueFromWebhook(binding.subscription.id as string);
+                //
+                // ADR-041 G6: assertProviderCyclePresent throws before any domain
+                // mutation if the failure cycle is absent, keeping the inbox event
+                // in the retry queue.
+                this.requireProviderCycleForFailure(ne, event);
+                {
+                    const b = await this.updateBinding(ctx, ne.providerSubscriptionId, 'razorpay', 'pending', false);
+                    if (b?.subscription?.id) {
+                        await this.renewalService.markPastDueFromWebhook(
+                            b.subscription.id as string,
+                            ne.providerPeriodStart,
+                        );
+                    }
                 }
                 Logger.log(`Subscription ${ne.providerSubscriptionId} is pending provider retry (dunning)`, loggerCtx);
                 break;
 
             case 'subscription.authenticated':
-                await this.updateBinding(ctx, ne.providerSubscriptionId, 'authenticated', false, ne.channelId, ne.planId);
+                await this.updateBinding(ctx, ne.providerSubscriptionId, 'razorpay', 'authenticated', false);
                 break;
 
             case 'subscription.activated':
-                await this.updateBinding(ctx, ne.providerSubscriptionId, 'active', true, ne.channelId, ne.planId);
+                // ADR-041 fix: validate BEFORE any domain mutation.
+                // If the activated event carries payment details, it is a
+                // charge-bearing activation — the provider cycle is required.
+                // Only then update the binding and record the attempt.
+                //
+                // Razorpay distinguishes authorization-only activations (future-start
+                // subscriptions that produce 'authenticated' then later 'activated')
+                // from immediately charged activations. The cycle guard only fires
+                // when payment details are present (charge-bearing path).
+                if (ne.providerPaymentId && ne.amountPaise) {
+                    // Throws MissingProviderCycleError before any mutation if
+                    // current_start / current_end are absent or invalid.
+                    this.assertProviderCyclePresent(ne, event);
+                }
+                await this.updateBinding(ctx, ne.providerSubscriptionId, 'razorpay', 'active', true);
                 if (ne.providerPaymentId && ne.amountPaise) {
                     await this.recordAttempt(ctx, ne, 'succeeded');
                 }
                 break;
 
             case 'subscription.charged':
-                if (ne.providerPaymentId && ne.amountPaise) {
-                    await this.recordAttempt(ctx, ne, 'succeeded');
-                }
+                // ADR-041: validate cycle BEFORE any mutation.
+                // subscription.charged always carries a payment and always requires
+                // an authoritative provider cycle — the guard is unconditional.
+                // Conditioning on providerPaymentId && amountPaise would allow a
+                // malformed charged event to slip through without cycle validation,
+                // violating INV-020's fail-closed requirement.
+                this.assertProviderCyclePresent(ne, event);
+                await this.recordAttempt(ctx, ne, 'succeeded');
                 break;
 
             case 'subscription.halted':
                 // Halted = retries exhausted, subscription suspended by provider.
-                // Bridge to past_due (dunning recovery path) and record the
-                // charge failure when the event carries payment details.
-                haltedBinding = await this.updateBinding(ctx, ne.providerSubscriptionId, 'halted', false, ne.channelId, ne.planId);
-                if (haltedBinding?.subscription?.id) {
-                    await this.renewalService.markPastDueFromWebhook(haltedBinding.subscription.id as string);
-                }
-                if (ne.providerPaymentId && ne.amountPaise) {
-                    await this.recordAttempt(ctx, ne, 'failed');
+                // ADR-041 G6: fail closed if cycle absent.
+                this.requireProviderCycleForFailure(ne, event);
+                {
+                    const hb = await this.updateBinding(ctx, ne.providerSubscriptionId, 'razorpay', 'halted', false);
+                    if (hb?.subscription?.id) {
+                        await this.renewalService.markPastDueFromWebhook(
+                            hb.subscription.id as string,
+                            ne.providerPeriodStart,
+                        );
+                    }
+                    if (ne.providerPaymentId && ne.amountPaise) {
+                        await this.recordAttempt(ctx, ne, 'failed');
+                    }
                 }
                 break;
 
             case 'subscription.cancelled':
-                cancelledBinding = await this.updateBinding(ctx, ne.providerSubscriptionId, 'cancelled', false, ne.channelId, ne.planId);
-                if (cancelledBinding?.subscription?.id) {
-                    await this.renewalService.markCancelledFromWebhook(cancelledBinding.subscription.id as string);
+                {
+                    const cb = await this.updateBinding(ctx, ne.providerSubscriptionId, 'razorpay', 'cancelled', false);
+                    if (cb?.subscription?.id) {
+                        await this.renewalService.markCancelledFromWebhook(cb.subscription.id as string);
+                    }
                 }
                 break;
 
@@ -135,96 +205,194 @@ export class RazorpayWebhookProcessor {
     }
 
     /**
+     * ADR-041 G2: Assert that a charge-bearing event carries a valid provider cycle.
+     *
+     * THROWS MissingProviderCycleError (not returns false) so the queue worker's
+     * retry/terminal-failure machinery activates. A normal return would cause the
+     * queue to mark the ProviderWebhookEvent as 'processed', silently losing the
+     * event. The throw ensures the inbox event is re-queued and eventually surfaces
+     * as a failed event requiring operator attention.
+     *
+     * Called BEFORE any domain mutation (binding update, attempt creation) so that
+     * a malformed payload cannot produce partial state changes.
+     */
+    private assertProviderCyclePresent(ne: NormalizedBillingEvent, event: string): void {
+        if (!ne.providerPeriodStart || !ne.providerPeriodEnd) {
+            throw new MissingProviderCycleError(
+                `${event} for subscription ${ne.providerSubscriptionId} is missing ` +
+                    `provider cycle (current_start / current_end). ` +
+                    `ADR-041: cannot finalize without authoritative billing period. ` +
+                    `Event ${ne.providerEventId} requires manual reconciliation.`,
+            );
+        }
+        if (ne.providerPeriodEnd <= ne.providerPeriodStart) {
+            throw new MissingProviderCycleError(
+                `${event} for subscription ${ne.providerSubscriptionId} has invalid cycle: ` +
+                    `current_end (${ne.providerPeriodEnd.toISOString()}) ` +
+                    `<= current_start (${ne.providerPeriodStart.toISOString()}). ` +
+                    `Event ${ne.providerEventId} requires manual reconciliation.`,
+            );
+        }
+    }
+
+    /**
+     * ADR-041 G6: Fail closed for provider failure events (pending / halted)
+     * that arrive without cycle data.
+     *
+     * Only `providerPeriodStart` (Razorpay `current_start`) is required here.
+     * G6's freshness guard compares cycle ordering:
+     *
+     *   providerCycleStart <= localCurrentPeriodStart → stale, no-op
+     *   providerCycleStart >  localCurrentPeriodStart → newer unpaid cycle
+     *
+     * `providerPeriodEnd` is NOT required for this decision — the guard only
+     * needs to know which cycle the failure belongs to, not when the cycle ends.
+     * Contrast with G2/assertProviderCyclePresent which requires both fields
+     * because it is establishing a billing period to finalize.
+     *
+     * Throws rather than returning so the inbox event stays in the retry queue.
+     */
+    private requireProviderCycleForFailure(ne: NormalizedBillingEvent, event: string): void {
+        if (!ne.providerPeriodStart) {
+            throw new MissingProviderCycleError(
+                `${event} for subscription ${ne.providerSubscriptionId} is missing ` +
+                    `provider cycle start (current_start). ` +
+                    `ADR-041 G6: cannot evaluate cycle freshness without provider cycle. ` +
+                    `Event ${ne.providerEventId} requires manual reconciliation.`,
+            );
+        }
+    }
+
+    /**
      * Update the SubscriptionProviderBinding status + active flag.
      *
-     * This is the canonical binding mutation seam — all status transitions
-     * from the webhook go through here so the binding always reflects the
-     * provider's authoritative state.
+     * ADR-041 G7: also persists providerStatus on the OrganizationSubscription
+     * atomically in the same application-level transaction, so the subscription
+     * mirror cannot diverge from the binding under any crash scenario.
+     *
+     * The binding lookup is provider-qualified (provider + providerSubscriptionId)
+     * to match the UNIQUE(provider, providerSubscriptionId) index and the
+     * provider-neutral architecture contract. Razorpay is the only active provider
+     * today, but qualifying the lookup keeps the contract internally consistent.
      */
     private async updateBinding(
         ctx: RequestContext,
         subId: string,
+        provider: string,
         status: string,
         active: boolean,
-        channelId?: string,
-        planId?: string,
     ): Promise<SubscriptionProviderBinding | null> {
-        const bindingRepo = this.connection.getRepository(ctx, SubscriptionProviderBinding);
-        const binding = await bindingRepo.findOne({
-            where: { providerSubscriptionId: subId },
-            relations: ['subscription'],
-        });
+        // ADR-041 G7: wrap both writes in one application transaction so that
+        // binding.providerStatus and subscription.providerStatus are either
+        // both updated or both left unchanged. This eliminates the drift found
+        // by the R2-E probe (binding = active, subscription = created).
+        return this.connection.withTransaction(ctx, async (tCtx) => {
+            const bindingRepo = this.connection.getRepository(tCtx, SubscriptionProviderBinding);
+            // Fix 11: provider-qualified lookup to match the composite unique index.
+            const binding = await bindingRepo.findOne({
+                where: { provider, providerSubscriptionId: subId },
+                relations: ['subscription'],
+            });
 
-        if (!binding) {
-            // No binding = not a Saa9vi-managed subscription.
-            Logger.warn(`No provider binding found for subscription ${subId}`, loggerCtx);
-            return null;
-        }
+            if (!binding) {
+                Logger.warn(
+                    `No provider binding found for provider=${provider} subscription=${subId}`,
+                    loggerCtx,
+                );
+                return null;
+            }
 
-        binding.providerStatus = status;
-        binding.active = active;
-        await bindingRepo.save(binding);
+            binding.providerStatus = status;
+            binding.active = active;
+            await bindingRepo.save(binding);
 
-        Logger.log(`Binding ${binding.id} for subscription ${subId} → status=${status}, active=${active}`, loggerCtx);
-
-        // ADR-039: binding creation at subscription-creation time is the SOLE
-        // first-binding mechanism. This lazy branch predates that decision and
-        // is unreachable via the production worker (the queue fails closed
-        // before the processor runs when no binding exists). Retained as
-        // defensive compat only; do not rely on it.
-        if (active && binding.subscription?.status === 'pending_provider_auth') {
-            const subRepo = this.connection.getRepository(ctx, OrganizationSubscription);
-            binding.subscription.status = 'active';
-            await subRepo.save(binding.subscription);
             Logger.log(
-                `OrganizationSubscription ${binding.subscription.id} pending_provider_auth → active ` +
-                    `(provider sub ${subId})`,
+                `Binding ${binding.id} for subscription ${subId} → status=${status}, active=${active}`,
                 loggerCtx,
             );
-        }
 
-        return binding;
+            // ADR-041 G7: mirror providerStatus onto OrganizationSubscription
+            // in the SAME transaction as the binding save.
+            if (binding.subscription) {
+                const subRepo = this.connection.getRepository(tCtx, OrganizationSubscription);
+                binding.subscription.providerStatus = status;
+                await subRepo.save(binding.subscription);
+                Logger.log(
+                    `OrganizationSubscription ${binding.subscription.id} providerStatus → ${status}`,
+                    loggerCtx,
+                );
+            }
+
+            // ADR-039: first-binding activation (defensive compat only — see below).
+            if (active && binding.subscription?.status === 'pending_provider_auth') {
+                const subRepo = this.connection.getRepository(tCtx, OrganizationSubscription);
+                binding.subscription.status = 'active';
+                await subRepo.save(binding.subscription);
+                Logger.log(
+                    `OrganizationSubscription ${binding.subscription.id} pending_provider_auth → active ` +
+                        `(provider sub ${subId})`,
+                    loggerCtx,
+                );
+            }
+
+            return binding;
+        });
     }
 
     /**
      * Record a billing attempt result from a provider webhook event.
      *
-     * R2-F authority boundary: this method delegates ALL persistence to
-     * SubscriptionBillingAttemptService — it never calls attemptRepo.create()
-     * or attemptRepo.save() directly.
+     * R2-F authority boundary: delegates ALL persistence to
+     * SubscriptionBillingAttemptService — never calls attemptRepo directly.
      *
      * Reconciliation pattern (INV-019):
-     *   1. Look for an existing 'initiated' attempt created by the renewal worker
-     *      (matched by providerSubscriptionId + channelId).
-     *   2. If found → transition it to terminal state via the service's CAS-guarded
-     *      recordAttemptSuccess/recordAttemptFailure (wins exactly once).
-     *   3. If not found → create a terminal attempt directly via recordAttemptFromWebhook
-     *      (for charges that fire outside the renewal scan window, e.g. the initial
-     *      payment on subscription.activated).
+     *   1. Look for an existing 'initiated' attempt (renewal worker).
+     *   2. If found → CAS-guarded terminal transition.
+     *   3. If not found → create terminal attempt via recordAttemptFromWebhook.
      *
-     * After a successful charge, finalizeAfterPayment() is called on the renewal
-     * service to advance the subscription period.
+     * ADR-041 G3: providerPeriodStart / providerPeriodEnd are threaded into the
+     * attempt row so finalizeAfterPayment() can reconstruct the provider cycle
+     * on any replay without re-parsing the original payload.
+     *
+     * G3 failure semantics (ADR-041 §5):
+     *   - For a succeeded attempt: cycle is always present (assertProviderCyclePresent
+     *     already threw before reaching here if absent).
+     *   - For a failed attempt transitioning an existing initiated row: pass
+     *     undefined for both period fields so the terminal CAS explicitly stores
+     *     NULL. No provisional local billing period is preserved — NULL is the
+     *     correct uniform state for a failed attempt without provider-cycle identity.
+     *   - For a webhook-only failed attempt with no cycle: omit billingPeriodStart/End
+     *     entirely so the attempt does not carry a manufactured period identity.
      */
     private async recordAttempt(ctx: RequestContext, ne: NormalizedBillingEvent, status: BillingAttemptStatus): Promise<void> {
         const bindingRepo = this.connection.getRepository(ctx, SubscriptionProviderBinding);
+        // Provider-qualified lookup (fix 11).
         const binding = await bindingRepo.findOne({
-            where: { providerSubscriptionId: ne.providerSubscriptionId },
+            where: { provider: 'razorpay', providerSubscriptionId: ne.providerSubscriptionId },
             relations: ['subscription'],
         });
         if (!binding) {
-            Logger.warn(`No provider binding for subscription ${ne.providerSubscriptionId} — cannot record attempt`, loggerCtx);
+            Logger.warn(
+                `No provider binding for razorpay subscription ${ne.providerSubscriptionId} — cannot record attempt`,
+                loggerCtx,
+            );
             return;
         }
 
         const channelId = ne.channelId || binding.channelId;
         const subscriptionId = binding.subscription.id;
-        const now = new Date();
-        const billingPeriodStart = now.toISOString().split('T')[0];
 
-        // Cross-event idempotency: a terminal attempt already exists for this
-        // payment ID (a different event ID referencing the same payment).
-        // Reconciliation is delegated to the shared helper so this path and
-        // the same-event replay path cannot diverge.
+        // ADR-041 G3: derive billing period from provider cycle.
+        // For succeeded attempts, the cycle is always present (guard already fired).
+        // For failed attempts, the cycle may be absent — handle below per path.
+        const billingPeriodStart = ne.providerPeriodStart
+            ? ne.providerPeriodStart.toISOString().split('T')[0]
+            : undefined;
+        const billingPeriodEnd = ne.providerPeriodEnd
+            ? ne.providerPeriodEnd.toISOString().split('T')[0]
+            : undefined;
+
+        // Cross-event idempotency: terminal attempt already exists for this payment.
         if (ne.providerPaymentId) {
             const existing = await this.attemptService.findAttemptByProviderPaymentId(channelId, ne.providerPaymentId);
             if (existing && existing.status !== 'initiated') {
@@ -242,19 +410,20 @@ export class RazorpayWebhookProcessor {
         let attemptId: string;
 
         if (existingAttempt) {
-            // Reconcile: transition the initiated attempt via the service.
-            // CRITICAL (crash-consistency): providerEventId/providerInvoiceId are
-            // persisted in the SAME atomic CAS UPDATE as the terminal status —
-            // there is NO separate metadata pre-write. A crash between "event id
-            // visible" and "terminal" would otherwise let a replayed webhook be
-            // swallowed by isEventProcessed() while the attempt stays initiated
-            // and the subscription never finalizes.
+            // Reconcile: transition the initiated attempt via the CAS-guarded service method.
+            // ADR-041 G3: pass billingPeriodStart/End to overwrite the initiated row's
+            // NULL fields with the authoritative provider cycle inside the same atomic CAS.
+            // For failed attempts without a cycle: pass undefined so the terminal CAS
+            // explicitly stores NULL for both period fields (uniform-NULL rule — no
+            // provisional local date is preserved).
             if (status === 'succeeded') {
                 const won = await this.attemptService.recordAttemptSuccess(
                     existingAttempt.id,
                     ne.providerPaymentId,
                     ne.providerEventId,
                     ne.providerInvoiceId,
+                    billingPeriodStart,
+                    billingPeriodEnd,
                 );
                 if (!won) {
                     Logger.log(
@@ -271,6 +440,8 @@ export class RazorpayWebhookProcessor {
                     ne.providerPaymentId,
                     ne.providerEventId,
                     ne.providerInvoiceId,
+                    billingPeriodStart,  // undefined when no cycle → NULL (uniform-NULL rule)
+                    billingPeriodEnd,
                 );
                 if (!won) {
                     Logger.log(
@@ -283,23 +454,24 @@ export class RazorpayWebhookProcessor {
             }
         } else {
             // Webhook-only charge (no preceding renewal-worker attempt).
-            // Create a terminal attempt directly via the service.
-            // A UNIQUE(provider, providerPaymentId) violation here is a benign
-            // concurrent duplicate (two different provider events referencing
-            // the same payment): the row that won carries the terminal fact;
-            // this replay path will converge via findAttemptByProviderPaymentId
-            // + idempotent finalize replay.
-            const invoiceId = ne.providerInvoiceId || `INV-${subscriptionId}-${billingPeriodStart}`;
+            const invoiceId = ne.providerInvoiceId || (billingPeriodStart
+                ? `INV-${subscriptionId}-${billingPeriodStart}`
+                : `INV-${subscriptionId}-${ne.providerEventId}`);
             const amountPaise = ne.amountPaise || binding.subscription.plan.monthlyPriceInPaise || 0;
             try {
                 const created = await this.attemptService.recordAttemptFromWebhook({
                     subscriptionId,
                     channelId,
                     invoiceId,
-                    billingPeriodStart,
+                    // For a succeeded webhook-only attempt, billingPeriodStart is always
+                    // present (assertProviderCyclePresent fired before reaching here).
+                    // For a failed webhook-only attempt without a provider cycle, pass
+                    // undefined → NULL so the attempt carries no manufactured period
+                    // identity (INV-020: billingPeriodStart is cycle identity, not
+                    // a generic audit timestamp).
+                    billingPeriodStart: billingPeriodStart,
+                    billingPeriodEnd,
                     amountPaise,
-                    // Provider payload is authoritative for currency; the
-                    // service falls back to the platform default when absent.
                     currency: ne.currency,
                     provider: 'razorpay',
                     providerSubscriptionId: ne.providerSubscriptionId,
@@ -312,14 +484,8 @@ export class RazorpayWebhookProcessor {
                 attemptId = created.id as string;
             } catch (err: any) {
                 if (err?.code === '23505' || String(err?.message || '').includes('UQ_billing_attempt_provider_payment')) {
-                    // Lost the concurrent-insert race: another worker created
-                    // the terminal attempt for this payment. CONVERGE (do not
-                    // just return): look up the winning attempt and run the
-                    // shared reconciliation — a succeeded winner may still
-                    // need its finalize replayed (the winner could itself
-                    // crash before finalizing).
                     Logger.log(
-                        `Webhook-only attempt for payment ${ne.providerPaymentId} lost the concurrent-insert race (UNIQUE provider payment) — reconciling winner`,
+                        `Webhook-only attempt for payment ${ne.providerPaymentId} lost the concurrent-insert race — reconciling winner`,
                         loggerCtx,
                     );
                     const winner = await this.attemptService.findAttemptByProviderPaymentId(channelId, ne.providerPaymentId!);
@@ -351,14 +517,8 @@ export class RazorpayWebhookProcessor {
      * SINGLE authority for "this charge already has a terminal attempt":
      *   terminal succeeded → finalization may be incomplete (crash between
      *     terminal write and finalize) → replay finalizeAfterPayment, which
-     *     is replay-idempotent (period already advanced → SUCCESS no-op) and
-     *     CAS-guarded (exactly-once period advance).
+     *     is replay-idempotent via the cycle-monotonic CAS.
      *   terminal failed → fully complete, nothing to finalize.
-     *
-     * Used by ALL three convergence paths — same-event replay (the
-     * processInboxEvent replay boundary), cross-event duplicate (payment-ID
-     * lookup), and the concurrent-insert UNIQUE violation — so they cannot
-     * diverge.
      */
     private async reconcileTerminalAttempt(attempt: SubscriptionBillingAttempt, via: string): Promise<void> {
         if (attempt.status === 'succeeded') {
@@ -384,8 +544,16 @@ export class RazorpayWebhookProcessor {
     /**
      * Normalize a raw Razorpay webhook payload into a common billing event shape.
      *
-     * Razorpay sends: { event, contains, payload: { subscription: { entity }, payment?: { entity } } }
-     * We extract the fields we need for reconciliation and finalization.
+     * ADR-041 G2: extracts current_start / current_end / paid_count from the
+     * Razorpay subscription entity. Razorpay sends these as Unix timestamps
+     * (seconds, epoch). They are the authoritative provider billing cycle.
+     *
+     * UTC date granularity: Saa9vi models billing cycles as YYYY-MM-DD strings
+     * (UTC). The conversion happens here (toISOString().split('T')[0]) so all
+     * downstream code operates on the same granularity assumption.
+     *
+     * Razorpay sends:
+     *   { event, contains, payload: { subscription: { entity }, payment?: { entity } } }
      */
     private normalizeEvent(event: string, payload: any, eventId: string): NormalizedBillingEvent {
         const subscriptionEntity = payload?.subscription?.entity ?? payload?.subscription ?? {};
@@ -394,18 +562,23 @@ export class RazorpayWebhookProcessor {
 
         const subId: string | undefined = subscriptionEntity.id;
 
-        // Extract payment ID: from the payment entity or the charge result
         const paymentId: string | undefined = paymentEntity.id || charge?.id;
-
-        // Extract invoice ID
         const invoiceId: string | undefined = paymentEntity.invoice_id || charge?.invoice_id;
-
-        // Amount in paise and currency
         const amountPaise: number | undefined = charge?.amount || paymentEntity.amount;
         const currency: string | undefined = charge?.currency || paymentEntity.currency;
-
-        // Status: Razorpay payment object has 'status' field
         const status: string = charge?.status || paymentEntity.status || 'unknown';
+
+        // ADR-041 G2: extract provider billing cycle.
+        // current_start = 0 is not a valid billing cycle start.
+        const rawStart: number | undefined = subscriptionEntity.current_start;
+        const rawEnd: number | undefined = subscriptionEntity.current_end;
+
+        const providerPeriodStart: Date | undefined =
+            rawStart && rawStart > 0 ? new Date(rawStart * 1000) : undefined;
+        const providerPeriodEnd: Date | undefined =
+            rawEnd && rawEnd > 0 ? new Date(rawEnd * 1000) : undefined;
+
+        const providerPaidCount: number | undefined = subscriptionEntity.paid_count;
 
         return {
             eventType: event,
@@ -418,6 +591,9 @@ export class RazorpayWebhookProcessor {
             status,
             channelId: subscriptionEntity.notes?.channelId,
             planId: subscriptionEntity.notes?.planId,
+            providerPeriodStart,
+            providerPeriodEnd,
+            providerPaidCount,
             rawPayload: payload,
         };
     }

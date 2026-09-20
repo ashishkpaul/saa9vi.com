@@ -252,3 +252,33 @@ Related constraints:
 | Session enrollment | How many students can attend a session | Tenant Admin (capped by policy) | `BbbScheduledSession.maxAttendees` |
 
 **Rejection criterion (future):** Any code path that allows a tenant administrator to set `BbbRoom.maxParticipants` or `BbbOrganization.maxParticipantsPerMeeting` above the `BbbPlatformCapacityPolicy.maxRoomCapacity` limit is rejected.
+
+---
+
+## INV-020: Provider-Cycle Is the Identity of a Paid Period (ADR-041)
+
+**Status:** Live (registered 2026-09-20, ADR-041).
+
+**Rule:** A provider-originated successful billing event (Razorpay `subscription.charged` or charge-bearing `subscription.activated`) MUST finalize the exact provider billing cycle represented by that event (`current_start` → `current_end`). Local period arithmetic (`currentPeriodEnd + 1 month`) MUST NOT be used as the source of truth for period advancement on the provider-driven path.
+
+**Corollary — monotonic progression:** The local `currentPeriodStart` may only advance to a provider cycle start that is strictly greater than its current value. A duplicate, stale, or out-of-order provider cycle cannot advance the local state. The finalization CAS expresses this as:
+
+```sql
+WHERE id = :id
+  AND version = :guardVersion
+  AND (currentPeriodStart IS NULL OR currentPeriodStart < :targetStart)
+```
+
+**Corollary — durable cycle carrier:** `SubscriptionBillingAttempt.billingPeriodStart` and `billingPeriodEnd` (YYYY-MM-DD UTC, both nullable) are the durable carrier of the provider cycle. Uniform semantics: `NULL` = cycle identity unknown/not applicable (initiated rows; failed rows without authoritative cycle). A date value = authoritative provider cycle start/end. `finalizeAfterPayment()` reads them from the attempt row on every call without re-parsing the original webhook payload.
+
+**Corollary — failure-cycle guard requires only `current_start`:** G6's freshness comparison (`providerCycleStart <= localCurrentPeriodStart` → stale) requires only the cycle start. `current_end` is not required for cycle ordering. Contrast with G2 charge events where both fields are required to establish a billing period to finalize.
+
+**Corollary — UTC date granularity:** Saa9vi models recurring billing cycles at UTC calendar-date granularity. Provider Unix timestamps are normalised to `YYYY-MM-DD` (UTC) before storage. This is an explicit design choice for monthly plans; sub-day timestamp precision is not preserved.
+
+**Corollary — fail closed:** A charge-bearing webhook event that does not carry valid `current_start` / `current_end` fields MUST throw an error (not return silently) so the queue retry/terminal-failure machinery activates. Silent return would cause the inbox event to be marked `processed`, permanently losing the event.
+
+**Corollary — no +1-month fallback:** A pre-G2 legacy attempt row lacking `billingPeriodEnd` MUST NOT be auto-finalized using `+1 month` arithmetic. A reconciliation incident is recorded instead so an operator can verify the correct provider cycle and apply it manually.
+
+**Related invariants:** INV-017 (CAS optimistic locking), INV-019 (attempt record lifecycle).
+
+**Rejection criterion:** Any code path that derives a provider-originated billing period from `new Date(currentPeriodEnd).setMonth(+1)`, or that allows a charge webhook with missing `current_start`/`current_end` to be marked `processed` without operator intervention, is rejected.

@@ -117,31 +117,85 @@ provider-webhook-processing job
   │    try/catch, so a DB exception during resolution follows the same
   │    terminal-failure/retry bookkeeping as any other worker failure
   ├─ Route to RazorpayWebhookProcessor.processInboxEvent()
-  │    ├─ Idempotency: isEventProcessed(providerEventId) → true only when a
-  │    │    TERMINAL (succeeded|failed) attempt carries the event ID
-  │    ├─ Normalize event → handle by type:
-  │    │    ├─ subscription.pending → updateBinding() + markPastDueFromWebhook()
-  │    │    ├─ subscription.authenticated → updateBinding()
-  │    │    ├─ subscription.activated → updateBinding() + recordAttempt()
-  │    │    ├─ subscription.charged → recordAttempt()
-  │    │    ├─ subscription.halted → updateBinding() + markPastDueFromWebhook()
-  │    │    │    + recordAttempt() (when payment details present)
-  │    │    ├─ subscription.cancelled → updateBinding() + markCancelledFromWebhook()
-  │    │    └─ payment.failed / payment.charge_failed → recordAttempt()
+  │    │
+  │    ├─ REPLAY BOUNDARY: findAttemptByProviderEventId(providerEventId)
+  │    │    ├─ Terminal 'succeeded' attempt found:
+  │    │    │    └─ reconcileTerminalAttempt() → replay finalizeAfterPayment()
+  │    │    │         (cycle-monotonic CAS makes replay a no-op when already done)
+  │    │    ├─ Terminal 'failed' attempt found:
+  │    │    │    └─ no-op (fully complete)
+  │    │    └─ No terminal attempt / only 'initiated': continue processing
+  │    │
+  │    ├─ normalizeEvent() → NormalizedBillingEvent
+  │    │    including providerPeriodStart / providerPeriodEnd
+  │    │    (from Razorpay current_start / current_end, Unix seconds → Date, UTC)
+  │    │
+  │    ├─ Handle by event type:
+  │    │    ├─ subscription.pending
+  │    │    │    ├─ requireProviderCycleForFailure() — throws if cycle absent
+  │    │    │    ├─ updateBinding() (atomic: binding + subscription providerStatus)
+  │    │    │    └─ markPastDueFromWebhook(subscriptionId, providerCycleStart)
+  │    │    │         cycle-identity guard: providerCycleStart <= localPeriodStart → no-op
+  │    │    │
+  │    │    ├─ subscription.authenticated
+  │    │    │    └─ updateBinding()
+  │    │    │
+  │    │    ├─ subscription.activated (charge-bearing path)
+  │    │    │    ├─ assertProviderCyclePresent() — throws before any mutation if absent
+  │    │    │    ├─ updateBinding() (atomic: binding + subscription providerStatus)
+  │    │    │    └─ recordAttempt() → finalizeAfterPayment()
+  │    │    │
+  │    │    ├─ subscription.charged
+  │    │    │    ├─ assertProviderCyclePresent() — throws before any mutation
+  │    │    │    └─ recordAttempt() → finalizeAfterPayment()
+  │    │    │
+  │    │    ├─ subscription.halted
+  │    │    │    ├─ requireProviderCycleForFailure() — throws if cycle absent
+  │    │    │    ├─ updateBinding() (atomic)
+  │    │    │    ├─ markPastDueFromWebhook(subscriptionId, providerCycleStart)
+  │    │    │    └─ recordAttempt('failed') when payment details present
+  │    │    │
+  │    │    ├─ subscription.cancelled
+  │    │    │    ├─ updateBinding() (atomic)
+  │    │    │    └─ markCancelledFromWebhook()
+  │    │    │
+  │    │    └─ payment.failed / payment.charge_failed
+  │    │         └─ recordAttempt('failed')
+  │    │
   │    └─ Attempt persistence (INV-019, all via SubscriptionBillingAttemptService):
-  │         ├─ Existing 'initiated' attempt (FIFO on attemptedAt) →
-  │         │    recordAttemptSuccess/recordAttemptFailure — provider-issued
-  │         │    IDs persisted in the SAME atomic CAS UPDATE as the status
-  │         └─ No initiated attempt → recordAttemptFromWebhook() creates
-  │              exactly ONE terminal webhook-only attempt
-  │         On success → finalizeAfterPayment() advances the period
-  │         (CAS, exactly once)
+  │         ├─ Existing 'initiated' attempt (FIFO on attemptedAt):
+  │         │    recordAttemptSuccess / recordAttemptFailure — provider IDs AND
+  │         │    billingPeriodStart / billingPeriodEnd written in the SAME atomic
+  │         │    CAS UPDATE as the terminal status (INV-020):
+  │         │      succeeded:             both = authoritative provider cycle (YYYY-MM-DD, UTC)
+  │         │      failed + cycle known:  both = confirmed provider failure cycle
+  │         │      failed + no cycle:     both = NULL (cleared by CAS, not preserved)
+  │         └─ No initiated attempt:
+  │              recordAttemptFromWebhook() creates exactly ONE terminal attempt;
+  │              billingPeriodStart/End = provider cycle dates, or NULL for failed
+  │              attempts without a provider cycle (INV-020: cycle identity only)
+  │
+  │    finalizeAfterPayment(attemptId) — on succeeded attempt:
+  │         ├─ Read billingPeriodStart / billingPeriodEnd from attempt row
+  │         │    (no re-parsing of original webhook payload)
+  │         ├─ Absent billingPeriodEnd → reconciliation incident (INV-020 fail-closed)
+  │         └─ finalizeRenewalPeriod(targetStart, targetEnd):
+  │              cycle-monotonic CAS:
+  │                WHERE version = :v
+  │                  AND (currentPeriodStart IS NULL OR currentPeriodStart < :targetStart)
+  │              CAS success → publish SubscriptionRenewedEvent + SubscriptionInvoicePaidEvent
+  │              CAS fail → reload + classify:
+  │                cancelled            → SUCCESS (terminal guard)
+  │                cycle already met    → SUCCESS (idempotent replay)
+  │                version race, target still ahead → retry (max 3, safe — no charge)
+  │                retry exhausted      → reconciliation incident
+  │
   ├─ Mark ProviderWebhookEvent { status: 'processed', processedAt }
   │
-  ├─ On failure + attempts left:
+  ├─ On exception (including MissingProviderCycleError) + attempts left:
   │    └─ Keep status: 'pending', rethrow for BullMQ retry
   │
-  └─ On failure + MAX_ATTEMPTS exhausted:
+  └─ On exception + MAX_ATTEMPTS exhausted:
        └─ Mark ProviderWebhookEvent { status: 'failed', failedAt } (terminal)
 ```
 

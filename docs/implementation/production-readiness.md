@@ -194,8 +194,12 @@ must remain independently attributable.
   Backup/restore drill    **NOT VERIFIED**        Operational drill not yet
                                                   evidenced
 
-  R2 recurring            **OPEN**                R2-A evidenced; R2-E/F/G
-  subscriptions                                   runtime evidence pending
+  R2 recurring            **CODE HARDENED     R2-A evidenced; ADR-041
+  subscriptions           (ADR-041) /         G2–G7 complete
+                          RUNTIME RE-VERIF    (2026-09-20); R2-E/F/G
+                          REQUIRED**          runtime re-verification
+                                              required; 2 migrations
+                                              pending apply
 
 
   R3 one-time commerce    **OPEN**                Current payment handler is
@@ -682,11 +686,22 @@ Verify a real Razorpay Test Mode subscription authorization flow.
 
 ### Current status
 
-**OPEN — code prerequisites resolved**
+**CODE HARDENED (ADR-041 G2–G7) / RUNTIME RE-VERIFICATION REQUIRED**
 
-R2-A is evidenced except for the post-restart queue-execution observation, which
-is captured naturally as part of R2-E. Once R2-E runtime evidence exists, R2-A
-closes with it.
+The R2-E probe (2026-09-20) ran against the pre-ADR-041 code and found **BUG B** — a
+concrete two-month billing-period drift defect (see `known-bugs.md` BUG B). ADR-041 was
+accepted and all G2–G7 code changes were completed on the same day (2026-09-20). The
+hardened code is compile-clean (`npx tsc --noEmit` ✅, `npm run build` ✅) and passes
+all 6 e2e tests. A **fresh Test-mode subscription run** is required to re-capture
+authorization evidence against the ADR-041 code. The previous `sub_TabaZJZTQzNfWy`
+evidence is superseded — a fresh subscription must be used.
+
+Specific prerequisites before re-run:
+
+-   Two pending migrations must be applied (`1789883158253-add-billing-period-end-to-attempt`,
+    `1789885988242-make-billing-period-start-nullable`) — apply with `npx vendure migrate -r`
+-   Build must be current (`npm run build`)
+-   Runtime infrastructure verified (R2-A still holds)
 
 ------------------------------------------------------------------------
 
@@ -758,10 +773,17 @@ corrected path is still required (this gate's remaining work).
 
 ### Current status
 
-**OPEN — runtime evidence pending**
+**CODE HARDENED (ADR-041 G2–G7) / RUNTIME RE-VERIFICATION REQUIRED**
 
-The writer path is corrected; R2-F remains open only until the real signed
-webhook lifecycle is evidenced.
+The writer path is hardened by ADR-041 (G2–G7, 2026-09-20):
+- `NormalizedBillingEvent` carries provider cycle fields; `assertProviderCyclePresent()` fails-closed before any mutation
+- `billingPeriodEnd` column added; `billingPeriodStart` made nullable; uniform NULL semantics for failed attempts
+- `finalizeAfterPayment()` reads cycle from attempt row; no `+1 month` fallback
+- Cycle-monotonic CAS; bounded retry (max 3)
+- `updateBinding()` transactional; binding lookup provider-qualified
+
+R2-F remains open until the real signed webhook lifecycle is re-evidenced against the
+ADR-041 code (fresh Test-mode subscription required — pre-ADR-041 evidence is superseded).
 
 ------------------------------------------------------------------------
 
@@ -804,10 +826,17 @@ For each failure event:
 
 ### Current status
 
-**OPEN — runtime evidence pending**
+**CODE HARDENED (ADR-041 G2–G7) / RUNTIME RE-VERIFICATION REQUIRED**
 
-The `subscription.pending` handling code path exists; R2-G remains open only
-until the intended Saa9vi state transition is evidenced at runtime.
+`subscription.pending` / `subscription.halted` handling is code-hardened by ADR-041 G6:
+- `requireProviderCycleForFailure()` throws before any binding mutation if `current_start` absent
+- Cycle-identity freshness guard (`providerCycleStart <= localCurrentPeriodStart` → stale no-op)
+  replaces the previous wall-clock guard (the wall-clock guard was the root cause of the
+  out-of-order defect noted in ADR-041 context)
+
+R2-G remains open until the intended Saa9vi state transition is re-evidenced at runtime
+against the ADR-041 code. D-5 (halted recovery) remains open — no code path currently
+recovers a `halted` subscription to `active` after manual operator intervention.
 
 ------------------------------------------------------------------------
 
@@ -1082,26 +1111,29 @@ Then verify the actual changed files.
                     `provider-webhook-processing` execution post-restart observed
                     via R2-E
 
-  R2-E              Authorization       OPEN              Test-mode authorization
-                                                          evidence
+  R2-E              Authorization       CODE HARDENED     ADR-041 G2–G7 complete
+                                        (ADR-041) /       (2026-09-20); BUG B found
+                                        RUNTIME RE-VERIF  by probe and fixed; fresh
+                                        REQUIRED          Test-mode subscription
+                                                          required; 2 migrations
+                                                          pending apply
 
-  R2-F              Webhook lifecycle   OPEN              Code blockers resolved
-                                                          (9a31beb); runtime
-                                                          lifecycle evidence
+  R2-F              Webhook lifecycle   CODE HARDENED     ADR-041 G2–G7 complete;
+                                        (ADR-041) /       cycle-monotonic CAS,
+                                        RUNTIME RE-VERIF  transactional updateBinding,
+                                        REQUIRED          fail-closed guards;
+                                                          runtime lifecycle evidence
+                                                          required against ADR-041
+                                                          code
 
-  R2-G              Failure semantics   OPEN              `subscription.pending`
-                                                          handled (9a31beb);
-                                                          pending/halted → `past_due`
-                                                          dunning bridge (CODE
-                                                          VERIFIED, CAS now bumps
-                                                          `version` — real optimistic
-                                                          concurrency); runtime
-                                                          evidence required incl.
-                                                          OUT-OF-ORDER webhook test
-                                                          (Razorpay: event order not
-                                                          guaranteed); halted
-                                                          recovery open as D-5
-                                                          evidence still required
+  R2-G              Failure semantics   CODE HARDENED     ADR-041 G6: cycle-identity
+                                        (ADR-041) /       freshness guard replaces
+                                        RUNTIME RE-VERIF  wall-clock guard;
+                                        REQUIRED          requireProviderCycleForFailure
+                                                          fail-closed; runtime
+                                                          evidence required; D-5
+                                                          (halted recovery) still
+                                                          open
 
   R3                One-time commerce   OPEN              `dummyPaymentHandler` /
                                                           full payment evidence
@@ -1119,9 +1151,15 @@ Then verify the actual changed files.
 
 R2-A is now **evidenced** (post-refactor: real Postgres, real Redis/BullMQ,
 53→55 migrations, merged-worker operational; see Section 8 and the
-`provider-webhook-processing` sub-evidence). The next action is **R2-E**
-(Razorpay Test-Mode authorization), which also captures the final post-restart
-queue-execution observation that closes R2-A fully.
+`provider-webhook-processing` sub-evidence).
+
+**ADR-041 G2–G7 code hardening is complete (2026-09-20).** Two new migrations are
+pending (`1789883158253-add-billing-period-end-to-attempt`,
+`1789885988242-make-billing-period-start-nullable`) — apply before the runtime run.
+
+The next action is **R2-E re-verification** (fresh Razorpay Test-Mode authorization
+against the ADR-041 code), which also captures the final post-restart queue-execution
+observation that closes R2-A fully.
 
 Run against the actual Saa9vi runtime:
 
@@ -1133,7 +1171,7 @@ git rev-parse HEAD
 git rev-parse origin/main
 git status --short
 
-npx vendure migrate -r
+npx vendure migrate -r    # applies both ADR-041 migrations
 
 npm run build
 ```
@@ -1146,11 +1184,13 @@ PostgreSQL = real/healthy
 Redis = real/healthy
 pg-mem fallback = not activated
 DefaultJobQueue fallback = not activated
-migrations = current
+migrations = current (including ADR-041 pair)
 worker/queue = operational
 ```
 
-Only after that evidence exists should R2-E be attempted.
+Only after that evidence exists should R2-E be attempted with a **fresh** Test-mode
+subscription (do not reuse `sub_TabaZJZTQzNfWy` — it was captured against pre-ADR-041
+code and is superseded).
 
 ------------------------------------------------------------------------
 

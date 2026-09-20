@@ -550,12 +550,15 @@ Pending → Provisioning → Active → Completed → Archived
 
 **Lifecycle:** `initiated` → `succeeded` | `failed` (terminal results are never overwritten)
 
-**Fields:** `subscription`, `channelId`, `provider`, `providerSubscriptionId`, `providerPaymentId`, `providerInvoiceId`, `providerEventId`, `invoiceId`, `providerAttemptId`, `amountPaise`, `currency`, `billingPeriodStart`, `status`, `failureReason`, `attemptedAt`
+**Fields:** `subscription`, `channelId`, `provider`, `providerSubscriptionId`, `providerPaymentId`, `providerInvoiceId`, `providerEventId`, `invoiceId`, `providerAttemptId`, `amountPaise`, `currency`, `billingPeriodStart`, `billingPeriodEnd`, `status`, `failureReason`, `attemptedAt`
 
 **Invariants:**
 - Append-only per attempt — terminal results are never overwritten.
 - `UNIQUE(provider, providerEventId)` provides webhook idempotency.
 - `UNIQUE(provider, providerPaymentId) WHERE providerPaymentId IS NOT NULL` (named index `UQ_billing_attempt_provider_payment`) is the database-level guard against two concurrent webhook workers independently persisting the same provider payment; a unique-violation loser converges through the shared terminal-attempt reconciliation helper.
+- `billingPeriodStart` (YYYY-MM-DD, UTC, nullable) — the provider billing-cycle start. Uniform semantics across all terminal states: `NULL` means cycle identity is unknown or not applicable (renewal-worker-initiated rows before terminal CAS; failed attempts where the provider supplied no cycle); a date value means an authoritative provider cycle from Razorpay `current_start`. The field is cycle identity, not a generic audit timestamp — a value that does not originate from a provider cycle MUST NOT be stored here (INV-020).
+- `billingPeriodEnd` (YYYY-MM-DD, UTC, nullable) — the durable carrier of the provider billing-cycle end (ADR-041 / INV-020). Set from Razorpay `current_end` on webhook-created attempts. `NULL` for renewal-worker-initiated attempts, failed attempts without a provider cycle, and pre-G2 legacy rows.
+- `finalizeAfterPayment()` reads `billingPeriodStart`/`billingPeriodEnd` from this row to reconstruct the authoritative provider cycle on every call including replays. A row with `billingPeriodEnd = null` triggers a reconciliation incident rather than falling back to local arithmetic (INV-020).
 - Supersedes the legacy `juspay_payment_attempt` table, which was dropped in 466a4ef (ADR-040).
 
 ---
