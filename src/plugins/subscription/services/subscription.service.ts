@@ -182,8 +182,6 @@ export class SubscriptionService {
     // remains as a pre-auth orphan and is surfaced for reconciliation
     // (ADR-039 external-side-effect model).
     const now = new Date();
-    const periodEnd = new Date(now);
-    periodEnd.setMonth(periodEnd.getMonth() + 1);
 
     const saved = await this.connection.rawConnection.transaction(async (em) => {
       const sub = new OrganizationSubscription({
@@ -191,8 +189,15 @@ export class SubscriptionService {
         plan,
         // ADR-039: pre-authorization state; only provider webhooks drive 'active'.
         status: "pending_provider_auth",
-        currentPeriodStart: now,
-        currentPeriodEnd: periodEnd,
+        // ADR-041: do NOT set currentPeriodStart/End from local clock here.
+        // The authoritative billing period comes from the provider webhook
+        // (current_start / current_end). Setting a local datetime now would
+        // cause the cycle-monotonic CAS to reject the first webhook as "not newer"
+        // when the YYYY-MM-DD target is earlier than the time-of-day component
+        // stored here. NULL is the correct pre-auth value — the IS NULL branch
+        // of the CAS fires correctly for the first provider webhook.
+        currentPeriodStart: null as any,
+        currentPeriodEnd: null as any,
         version: 1,
         providerStatus: providerSub.status,
         providerShortUrl: providerSub.shortUrl,
