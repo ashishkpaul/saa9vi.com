@@ -66,6 +66,58 @@ The fix is code-complete and compile-verified (`npx tsc --noEmit` ✅, `npm run 
 
 ---
 
+## BUG C — `subscribeToPlan` Initial Period Blocked ADR-041 CAS (fixed 2026-09-20)
+
+| Field | Detail |
+|---|---|
+| **ID** | BUG C |
+| **Severity** | Critical |
+| **Found** | 2026-09-20 (R2-E runtime run) |
+| **Fixed** | 2026-09-20 (commit `cd3a80f`) |
+| **Status** | ✅ Fixed and runtime-verified |
+
+### Description
+
+`subscribeToPlan` created the `OrganizationSubscription` row with:
+
+```ts
+currentPeriodStart: now,   // e.g. 2026-09-20T13:01:13.619Z
+currentPeriodEnd:   periodEnd,
+```
+
+The ADR-041 cycle-monotonic CAS condition is:
+
+```sql
+WHERE currentPeriodStart IS NULL OR currentPeriodStart < :targetStart
+```
+
+The provider webhook supplies `current_start` as a Unix timestamp that normalises
+to a UTC calendar date (e.g. `2026-09-20T00:00:00.000Z`). Because the creation
+timestamp (`13:01:13`) was always *after* midnight on the same day, the CAS
+condition `currentPeriodStart < targetStart` evaluated to `false` — the finalization
+was silently rejected as "not a newer cycle" and the subscription remained stuck in
+`pending_provider_auth`.
+
+Evidence: subscription 5 (channel 21, pre-fix) stayed `pending_provider_auth` even
+after all three webhooks processed cleanly. Subscription 7 (channel 13, post-fix)
+correctly transitioned to `active` with `currentPeriodStart = 2026-09-20T00:00:00.000Z`.
+
+### Fix
+
+Set `currentPeriodStart = NULL` and `currentPeriodEnd = NULL` at creation. The `IS NULL`
+branch of the CAS fires correctly for the first provider webhook, and the period is
+written from the authoritative provider cycle (`current_start`/`current_end`).
+
+### Runtime verification
+
+- Subscription 7, channel 13, `sub_TeJjWjzzC0dU4W`
+- `currentPeriodStart = 2026-09-20T00:00:00.000Z` ✅ (from provider cycle)
+- `currentPeriodEnd = 2026-10-19T00:00:00.000Z` ✅ (from provider cycle)
+- `status = active` ✅
+- `version = 2` ✅
+
+---
+
 ## Active Integration Gaps
 
 **Confirmed external-dependency mismatches that are not application bugs.** These block a production gate but the Saa9vi-side state machine is verified correct; the external dependency's configuration/behavior compatibility remains unresolved.

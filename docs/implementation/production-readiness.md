@@ -194,12 +194,11 @@ must remain independently attributable.
   Backup/restore drill    **NOT VERIFIED**        Operational drill not yet
                                                   evidenced
 
-  R2 recurring            **CODE HARDENED     R2-A evidenced; ADR-041
-  subscriptions           (ADR-041) /         G2–G7 complete
-                          RUNTIME RE-VERIF    (2026-09-20); R2-E/F/G
-                          REQUIRED**          runtime re-verification
-                                              required; 2 migrations
-                                              pending apply
+  R2 recurring            **CODE HARDENED     R2-A, R2-E, R2-F
+  subscriptions           (ADR-041) /         VERIFIED
+                          R2-G RUNTIME        (2026-09-20);
+                          RE-VERIF            R2-G runtime
+                          REQUIRED**          evidence pending
 
 
   R3 one-time commerce    **OPEN**                Current payment handler is
@@ -686,22 +685,40 @@ Verify a real Razorpay Test Mode subscription authorization flow.
 
 ### Current status
 
-**CODE HARDENED (ADR-041 G2–G7) / RUNTIME RE-VERIFICATION REQUIRED**
+**RUNTIME VERIFIED (2026-09-20) — R2-E CLOSED**
 
-The R2-E probe (2026-09-20) ran against the pre-ADR-041 code and found **BUG B** — a
-concrete two-month billing-period drift defect (see `known-bugs.md` BUG B). ADR-041 was
-accepted and all G2–G7 code changes were completed on the same day (2026-09-20). The
-hardened code is compile-clean (`npx tsc --noEmit` ✅, `npm run build` ✅) and passes
-all 6 e2e tests. A **fresh Test-mode subscription run** is required to re-capture
-authorization evidence against the ADR-041 code. The previous `sub_TabaZJZTQzNfWy`
-evidence is superseded — a fresh subscription must be used.
+Fresh Razorpay Test Mode subscription run completed against ADR-041 hardened code.
 
-Specific prerequisites before re-run:
+| Evidence item | Value |
+|---|---|
+| OrganizationSubscription.id | 7 |
+| channelId | 13 (`test-academy-f9hmus`) |
+| Razorpay subscription ID | `sub_TeJjWjzzC0dU4W` |
+| Razorpay payment ID | `pay_TeJk63hHNo32gI` (UPI) |
+| Amount | ₹100 (10000 paise) |
+| Webhook events received | 3 (`subscription.charged`, `subscription.authenticated`, `subscription.activated`) |
+| All events processingStatus | `processed` (1 attempt each) |
+| BillingAttempt.id | 15, status=`succeeded` |
+| billingPeriodStart | `2026-09-20` ✅ matches `current_start=1789913044` |
+| billingPeriodEnd | `2026-10-19` ✅ matches `current_end=1792434600` |
+| OrganizationSubscription.status | `active` ✅ (was `pending_provider_auth`) |
+| currentPeriodStart | `2026-09-20T00:00:00.000Z` ✅ from provider cycle |
+| currentPeriodEnd | `2026-10-19T00:00:00.000Z` ✅ from provider cycle |
+| version | 2 (CAS advanced exactly once) |
+| Billing attempt count | 1 (idempotency: one payment → one attempt) |
+| No +1 month drift | ✅ ADR-041 fix confirmed |
+| NULL initial period fix | ✅ BUG C fixed (`subscribeToPlan` now sets NULL, not `now`) |
 
--   Two pending migrations must be applied (`1789883158253-add-billing-period-end-to-attempt`,
-    `1789885988242-make-billing-period-start-nullable`) — apply with `npx vendure migrate -r`
--   Build must be current (`npm run build`)
--   Runtime infrastructure verified (R2-A still holds)
+**BUG C found and fixed during this run:** `subscribeToPlan` was writing
+`currentPeriodStart = now` (full datetime), which caused the ADR-041 CAS
+(`currentPeriodStart IS NULL OR currentPeriodStart < :targetStart`) to reject
+the first webhook because the YYYY-MM-DD target (`00:00:00`) was earlier than
+the creation timestamp (e.g. `13:01:13`). Fixed: `currentPeriodStart = NULL`
+at creation (commit `cd3a80f`). Evidence: sub 5 (pre-fix, stayed
+`pending_provider_auth`) vs sub 7 (post-fix, correctly transitioned to `active`).
+
+R2-A post-restart queue execution observation: `provider-webhook-processing`
+queue executed 3 jobs for the R2-E subscription — R2-A is now fully closed.
 
 ------------------------------------------------------------------------
 
@@ -773,17 +790,18 @@ corrected path is still required (this gate's remaining work).
 
 ### Current status
 
-**CODE HARDENED (ADR-041 G2–G7) / RUNTIME RE-VERIFICATION REQUIRED**
+**RUNTIME VERIFIED (2026-09-20) — R2-F CLOSED**
 
-The writer path is hardened by ADR-041 (G2–G7, 2026-09-20):
-- `NormalizedBillingEvent` carries provider cycle fields; `assertProviderCyclePresent()` fails-closed before any mutation
-- `billingPeriodEnd` column added; `billingPeriodStart` made nullable; uniform NULL semantics for failed attempts
-- `finalizeAfterPayment()` reads cycle from attempt row; no `+1 month` fallback
-- Cycle-monotonic CAS; bounded retry (max 3)
-- `updateBinding()` transactional; binding lookup provider-qualified
+The signed webhook lifecycle was evidenced end-to-end during the R2-E run (sub 7):
 
-R2-F remains open until the real signed webhook lifecycle is re-evidenced against the
-ADR-041 code (fresh Test-mode subscription required — pre-ADR-041 evidence is superseded).
+- HMAC-SHA256 signature verified by `RazorpayWebhookVerifier` (controller → 200)
+- `ProviderWebhookEvent` persisted first (inbox-first, ids 31–33)
+- BullMQ enqueued and executed `provider-webhook-processing` jobs (3 jobs, 1 attempt each)
+- Channel resolved from `SubscriptionProviderBinding` (INV-001)
+- `SubscriptionBillingAttemptService.recordAttemptFromWebhook()` created attempt 15
+- `billingPeriodStart`/`billingPeriodEnd` written from provider `current_start`/`current_end`
+- `finalizeAfterPayment()` ran via the cycle-monotonic CAS — period advanced exactly once
+- Exactly 1 billing attempt for the subscription (idempotency)
 
 ------------------------------------------------------------------------
 
@@ -1106,25 +1124,26 @@ Then verify the actual changed files.
 
   P0-J              Backup/restore      NOT VERIFIED      Restore drill
 
-  R2-A              Migration/runtime   EVIDENCED*        Real Postgres/Redis +
-                    prerequisite                          migration evidence; *
-                    `provider-webhook-processing` execution post-restart observed
-                    via R2-E
+  R2-A              Migration/runtime   VERIFIED          Real Postgres/Redis +
+                    prerequisite                          migration evidence +
+                                                          post-restart queue
+                                                          execution observed
+                                                          (R2-E run, 2026-09-20)
 
-  R2-E              Authorization       CODE HARDENED     ADR-041 G2–G7 complete
-                                        (ADR-041) /       (2026-09-20); BUG B found
-                                        RUNTIME RE-VERIF  by probe and fixed; fresh
-                                        REQUIRED          Test-mode subscription
-                                                          required; 2 migrations
-                                                          pending apply
+  R2-E              Authorization       VERIFIED          sub_TeJjWjzzC0dU4W,
+                                        (2026-09-20)      pay_TeJk63hHNo32gI,
+                                                          status=active,
+                                                          period=2026-09-20→
+                                                          2026-10-19 (matches
+                                                          provider cycle),
+                                                          BUG C fixed
 
-  R2-F              Webhook lifecycle   CODE HARDENED     ADR-041 G2–G7 complete;
-                                        (ADR-041) /       cycle-monotonic CAS,
-                                        RUNTIME RE-VERIF  transactional updateBinding,
-                                        REQUIRED          fail-closed guards;
-                                                          runtime lifecycle evidence
-                                                          required against ADR-041
-                                                          code
+  R2-F              Webhook lifecycle   VERIFIED          3 events processed
+                                        (2026-09-20)      (1 attempt each),
+                                                          attempt 15 succeeded,
+                                                          provider cycle identity
+                                                          confirmed, idempotency
+                                                          confirmed
 
   R2-G              Failure semantics   CODE HARDENED     ADR-041 G6: cycle-identity
                                         (ADR-041) /       freshness guard replaces
@@ -1149,48 +1168,30 @@ Then verify the actual changed files.
 
 # 15. Immediate next action
 
-R2-A is now **evidenced** (post-refactor: real Postgres, real Redis/BullMQ,
-53→55 migrations, merged-worker operational; see Section 8 and the
-`provider-webhook-processing` sub-evidence).
+**R2-A, R2-E, and R2-F are now VERIFIED (2026-09-20).**
 
-**ADR-041 G2–G7 code hardening is complete (2026-09-20).** Two new migrations are
-pending (`1789883158253-add-billing-period-end-to-attempt`,
-`1789885988242-make-billing-period-start-nullable`) — apply before the runtime run.
+R2-A closed: post-restart `provider-webhook-processing` queue execution observed
+during the R2-E run (3 jobs, all processed).
 
-The next action is **R2-E re-verification** (fresh Razorpay Test-Mode authorization
-against the ADR-041 code), which also captures the final post-restart queue-execution
-observation that closes R2-A fully.
+R2-E closed: fresh Test Mode authorization with UPI (`pay_TeJk63hHNo32gI`),
+subscription `sub_TeJjWjzzC0dU4W`, provider-cycle identity confirmed, no period
+drift. BUG C also found and fixed during this run (see `known-bugs.md`).
 
-Run against the actual Saa9vi runtime:
+R2-F closed: signed webhook lifecycle end-to-end — inbox persist, BullMQ queue,
+processor, billing attempt, cycle-monotonic CAS, period finalization, idempotency.
 
-``` bash
-cd ~/edu/saa9vi_com
+**Next action: R2-G** — Razorpay failure lifecycle (Test Mode):
 
-git fetch origin
-git rev-parse HEAD
-git rev-parse origin/main
-git status --short
+Trigger `subscription.pending` → retry → `subscription.halted` against the
+runtime and verify:
 
-npx vendure migrate -r    # applies both ADR-041 migrations
+1. `OrganizationSubscription.status` → `past_due` on `subscription.pending`
+2. Cycle-identity freshness guard fires correctly for stale failure events
+3. `subscription.halted` → `past_due` (not double-transition)
+4. Out-of-order `subscription.pending` for an already-finalized cycle → no-op
 
-npm run build
-```
-
-Then start the intended production/staging API and worker topology and
-capture logs proving:
-
-``` text
-PostgreSQL = real/healthy
-Redis = real/healthy
-pg-mem fallback = not activated
-DefaultJobQueue fallback = not activated
-migrations = current (including ADR-041 pair)
-worker/queue = operational
-```
-
-Only after that evidence exists should R2-E be attempted with a **fresh** Test-mode
-subscription (do not reuse `sub_TabaZJZTQzNfWy` — it was captured against pre-ADR-041
-code and is superseded).
+Use the existing Razorpay Test Mode subscription (`sub_TeJjWjzzC0dU4W`) or
+create a new one and simulate payment failure via the Razorpay Test Dashboard.
 
 ------------------------------------------------------------------------
 
