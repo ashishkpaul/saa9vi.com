@@ -25,6 +25,7 @@ export const adminApiExtensions = gql`
     name: String!
     concurrentMeetingLimit: Int!
     maxParticipantsPerMeeting: Int!
+    maxSessionsPerOrg: Int!
     recordingEnabled: Boolean!
     suspended: Boolean!
   }
@@ -214,6 +215,24 @@ export const adminApiExtensions = gql`
     subjectTags: [String!]
   }
 
+  """
+  A reusable template for generating recurring/series sessions.
+  Each generated session starts as DRAFT and must be published individually.
+  """
+  type BbbSessionTemplate {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    organizationId: ID!
+    name: String!
+    defaultTitle: String!
+    defaultTrainerId: ID
+    durationMinutes: Int!
+    defaultSubjectTags: [String!]
+    defaultVisibility: String!
+    productVariantId: ID
+  }
+
 
   type BbbServerList {
     items: [BbbServer!]!
@@ -269,6 +288,10 @@ export const adminApiExtensions = gql`
     bbbTrialRegistrationsByOrganization(organizationId: ID!): [BbbTrialRegistration!]!
     bbbEntitlements(options: BbbEntitlementListOptions): BbbEntitlementList!
     """
+    List all session templates for an organization.
+    """
+    bbbSessionTemplates(organizationId: ID!): [BbbSessionTemplate!]!
+    """
     List all organization memberships for a given organization (FEAT-001).
     """
     bbbOrgMemberships(organizationId: ID!): [BbbOrganizationMembership!]!
@@ -318,6 +341,25 @@ export const adminApiExtensions = gql`
       input: UpdateBbbScheduledSessionInput!
     ): BbbScheduledSession!
     cancelBbbScheduledSession(id: ID!): BbbScheduledSession!
+    """
+    Transition a DRAFT session to SCHEDULED, making it visible and startable.
+    Only DRAFT sessions can be published.
+    """
+    publishBbbScheduledSession(id: ID!): BbbScheduledSession!
+    """
+    Create a reusable session template for generating recurring/series sessions.
+    """
+    createBbbSessionTemplate(input: CreateBbbSessionTemplateInput!): BbbSessionTemplate!
+    """
+    Delete a session template (does not affect already-generated sessions).
+    """
+    deleteBbbSessionTemplate(id: ID!): Boolean!
+    """
+    Generate multiple DRAFT sessions from a template by supplying start times.
+    endTime = startTime + template.durationMinutes for each occurrence.
+    All sessions start as DRAFT and must be published individually.
+    """
+    createSessionsFromTemplate(templateId: ID!, startTimes: [String!]!): [BbbScheduledSession!]!
     updateBbbTrialRegistrationStatus(id: ID!, status: String!): BbbTrialRegistration!
     addBbbMember(input: AddBbbMemberInput!): BbbOrganizationMember!
     updateBbbMember(
@@ -372,6 +414,11 @@ export const adminApiExtensions = gql`
     name: String
     concurrentMeetingLimit: Int
     maxParticipantsPerMeeting: Int
+    """
+    Maximum non-terminal sessions allowed for this org. 0 = unlimited.
+    Only platform operators (BbbManageOrganizationsPermission) can set this.
+    """
+    maxSessionsPerOrg: Int
     recordingEnabled: Boolean
     suspended: Boolean
   }
@@ -466,6 +513,17 @@ export const adminApiExtensions = gql`
     endTime: String
     subjectTags: [String!]
     visibility: String
+  }
+
+  input CreateBbbSessionTemplateInput {
+    organizationId: ID!
+    name: String!
+    defaultTitle: String!
+    defaultTrainerId: ID
+    durationMinutes: Int
+    defaultSubjectTags: [String!]
+    defaultVisibility: String
+    productVariantId: ID
   }
 
   input CreateBbbProductAccessInput {

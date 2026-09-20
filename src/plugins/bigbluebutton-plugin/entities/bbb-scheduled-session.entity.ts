@@ -40,8 +40,8 @@ export class BbbScheduledSession extends VendureEntity {
   @Column()
   endTime: Date;
 
-  @Column({ default: "SCHEDULED" })
-  status: string; // SCHEDULED | LIVE | FINISHED | CANCELLED
+  @Column({ default: "DRAFT" })
+  status: string; // DRAFT | SCHEDULED | LIVE | FINISHED | CANCELLED
 
   @Index()
   @ManyToOne(() => BbbOrganization, (org) => org.id)

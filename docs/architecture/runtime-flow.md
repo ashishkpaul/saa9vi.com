@@ -298,6 +298,208 @@ banner-activator scheduled task
 
 ---
 
+## Scheduled Session Lifecycle
+
+> Added 2026-09-20 to reflect the DRAFT state and template/recurring session features.
+
+### Direct session creation
+
+```
+createBbbScheduledSession(input)  [Admin API]
+  │
+  ├─ assert organization/channel access (BbbChannelAccessService)
+  ├─ validate session inputs
+  ├─ lock BbbOrganization row FOR UPDATE (same @Transaction() as insert)
+  ├─ count DRAFT + SCHEDULED + LIVE sessions
+  ├─ enforce maxSessionsPerOrg (0 = unlimited)
+  └─ persist BbbScheduledSession  status = DRAFT
+       │
+       └─ SessionCreatedEvent
+            └─ MarketplaceEventListener → addIndexSessionJob
+                 └─ DRAFT is not marketplace-eligible → no-op / remove
+```
+
+### Template / recurring session generation
+
+```
+createBbbSessionTemplate(input)  [Admin API]
+  │
+  ├─ validate durationMinutes (1–1440)
+  ├─ validate defaultTrainerId is active member of organization
+  └─ persist BbbSessionTemplate
+
+createSessionsFromTemplate(templateId, startTimes[])  [Admin API]
+  │
+  ├─ validate batch (1..100 occurrences, valid ISO-8601, no duplicates)
+  ├─ validate template trainer still active in org
+  ├─ lock BbbOrganization row FOR UPDATE (same @Transaction() as all inserts)
+  ├─ count DRAFT + SCHEDULED + LIVE sessions
+  ├─ enforce maxSessionsPerOrg for entire batch
+  └─ persist each BbbScheduledSession  status = DRAFT
+       │
+       └─ SessionCreatedEvent per session → marketplace no-op (DRAFT ineligible)
+```
+
+### Publication
+
+```
+publishBbbScheduledSession(id)  [Admin API]
+  │
+  ├─ assert session/channel access
+  ├─ require status = DRAFT  (any other status → error)
+  ├─ status → SCHEDULED
+  └─ SessionUpdatedEvent
+       └─ MarketplaceEventListener → addIndexSessionJob
+            ├─ PUBLIC + SCHEDULED → indexed in saa9vi_marketplace_sessions
+            └─ PRIVATE or other status → removed
+```
+
+### Session start (trainer)
+
+```
+startScheduledSession(sessionId)  [Shop API, trainer only]
+  │
+  ├─ require status = SCHEDULED  (DRAFT → clear error: publish first)
+  └─ BbbMeetingService.createAndEnqueue()
+       │
+       └─ BullMQ provisioning job
+            └─ BbbApiService.createMeeting()
+                 │
+                 └─ MeetingProvisionedEvent
+                      └─ BbbSessionProvisioningListener
+                           ├─ session.status → LIVE
+                           └─ SessionStartedEvent
+                                └─ MarketplaceEventListener → addIndexSessionJob
+                                     └─ PUBLIC + LIVE → indexed / re-indexed
+```
+
+### Session completion
+
+```
+BBB meeting ended
+  │
+  └─ BbbWebhookProcessor / BbbReconciliationService
+       └─ MeetingCompletedEvent
+            └─ BbbSessionProvisioningListener
+                 ├─ session.status → FINISHED
+                 └─ SessionEndedEvent
+                      └─ MarketplaceEventListener → addIndexSessionJob
+                           └─ FINISHED is not eligible → removed from index
+```
+
+### Session cancellation
+
+```
+cancelBbbScheduledSession(id)  [Admin API]
+  │
+  ├─ status → CANCELLED
+  └─ SessionCancelledEvent
+       └─ MarketplaceEventListener → addIndexSessionJob
+            └─ CANCELLED is not eligible → removed from index
+```
+
+**Marketplace eligibility rule** (sole arbiter — `MarketplaceIndexerService.indexSession()`):
+
+```
+visibility === PUBLIC  AND  status IN (SCHEDULED, LIVE)
+  → indexed / updated
+
+anything else (DRAFT, FINISHED, CANCELLED, PRIVATE)
+  → removed from public index
+```
+
+---
+
+## Scheduled Session Lifecycle
+
+> Added 2026-09-20 (DRAFT state + template/recurring sessions).
+
+### Direct session creation
+
+```
+createBbbScheduledSession(input)  [Admin API]
+  │
+  ├─ assert organization/channel access
+  ├─ lock BbbOrganization row FOR UPDATE (same @Transaction() as insert)
+  ├─ count DRAFT + SCHEDULED + LIVE sessions
+  ├─ enforce maxSessionsPerOrg (0 = unlimited)
+  └─ persist BbbScheduledSession  status = DRAFT
+       │
+       └─ SessionCreatedEvent → addIndexSessionJob
+            └─ DRAFT ineligible → no-op / remove
+```
+
+### Template / recurring session generation
+
+```
+createBbbSessionTemplate(input)  [Admin API]
+  │
+  ├─ validate durationMinutes (1–1440)
+  ├─ validate defaultTrainerId is active member of org
+  └─ persist BbbSessionTemplate
+
+createSessionsFromTemplate(templateId, startTimes[])  [Admin API]
+  │
+  ├─ validate batch (1..100, valid ISO-8601, no duplicates)
+  ├─ validate template trainer still active in org
+  ├─ lock BbbOrganization row FOR UPDATE (same @Transaction() as all inserts)
+  ├─ count + enforce cap for entire batch atomically
+  └─ persist each session  status = DRAFT
+       └─ SessionCreatedEvent per session → DRAFT ineligible → no-op
+```
+
+### Publication
+
+```
+publishBbbScheduledSession(id)  [Admin API]
+  │
+  ├─ require status = DRAFT
+  ├─ status → SCHEDULED
+  └─ SessionUpdatedEvent → addIndexSessionJob
+       ├─ PUBLIC + SCHEDULED → indexed
+       └─ PRIVATE → removed
+```
+
+### Session start (trainer, Shop API)
+
+```
+startScheduledSession(sessionId)
+  │
+  ├─ require status = SCHEDULED  (DRAFT → error: publish first)
+  └─ BbbMeetingService.createAndEnqueue()
+       └─ BullMQ provisioning job → BbbApiService.createMeeting()
+            └─ MeetingProvisionedEvent
+                 └─ BbbSessionProvisioningListener
+                      ├─ status → LIVE
+                      └─ SessionStartedEvent → addIndexSessionJob
+                           └─ PUBLIC + LIVE → indexed
+```
+
+### Session completion
+
+```
+BBB meeting ended → MeetingCompletedEvent
+  └─ BbbSessionProvisioningListener
+       ├─ status → FINISHED
+       └─ SessionEndedEvent → addIndexSessionJob
+            └─ FINISHED ineligible → removed from index
+```
+
+### Session cancellation
+
+```
+cancelBbbScheduledSession(id)  [Admin API]
+  ├─ status → CANCELLED
+  └─ SessionCancelledEvent → addIndexSessionJob
+       └─ CANCELLED ineligible → removed from index
+```
+
+**Marketplace eligibility** (sole arbiter: `MarketplaceIndexerService.indexSession()`):
+`visibility === PUBLIC AND status IN (SCHEDULED, LIVE)` → indexed.
+All other states (DRAFT, FINISHED, CANCELLED) or PRIVATE visibility → removed.
+
+---
+
 ## Marketplace Indexing
 
 > Corrected 2026-09-04 to match the implemented event→projection contract (see Gate 1.4 matrix in `phase3-audit.md`). All session projection paths pass through `MarketplaceIndexerService.indexSession()`, which is the sole arbiter of public eligibility: `visibility === PUBLIC` AND `status IN (SCHEDULED, LIVE)` — eligible sessions are indexed/updated; everything else is removed from the public index.

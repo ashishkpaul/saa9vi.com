@@ -434,7 +434,10 @@ export class BbbShopResolver {
     const sessions = await this.connection
       .getRepository(ctx, BbbScheduledSession)
       .find({
-        where: { visibility: "PUBLIC", isTrial: true },
+        where: [
+          { visibility: "PUBLIC", isTrial: true, status: "SCHEDULED" },
+          { visibility: "PUBLIC", isTrial: true, status: "LIVE" },
+        ],
         order: { startTime: "ASC" },
       });
 

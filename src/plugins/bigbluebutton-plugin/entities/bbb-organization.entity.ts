@@ -44,6 +44,15 @@ export class BbbOrganization extends VendureEntity implements ChannelAware {
   @Column({ default: 30 })
   maxParticipantsPerMeeting: number;
 
+  /**
+   * Maximum number of scheduled sessions (in any non-terminal state) allowed
+   * for this organization. 0 = unlimited. Enforced at creation time by
+   * BbbScheduledSessionService.create(). Tenant admins cannot exceed this
+   * limit; platform operators set it via updateBbbOrganization().
+   */
+  @Column({ default: 0 })
+  maxSessionsPerOrg: number;
+
   @Column({ default: false })
   recordingEnabled: boolean;
 

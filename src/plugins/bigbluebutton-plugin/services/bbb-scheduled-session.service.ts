@@ -7,6 +7,7 @@ import {
   TransactionalConnection,
 } from "@vendure/core";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
+import { BbbSessionTemplate } from "../entities/bbb-session-template.entity";
 import { BbbOrganizationService } from "./bbb-organization.service";
 import { BbbMeetingService } from "./bbb-meeting.service";
 import { BbbMemberService } from "./bbb-member.service";
@@ -21,6 +22,9 @@ import {
 } from "../events/bbb-events";
 
 const loggerCtx = "BbbScheduledSessionService";
+
+/** Non-terminal statuses that count against the org session cap. */
+const ACTIVE_STATUSES = ["DRAFT", "SCHEDULED", "LIVE"];
 
 @Injectable()
 export class BbbScheduledSessionService {
@@ -112,6 +116,32 @@ export class BbbScheduledSessionService {
       input.organizationId,
     );
 
+    // Gap 1: enforce per-org session cap with pessimistic write lock.
+    // The resolver is already wrapped in @Transaction() so ctx carries an
+    // active transaction. Lock the org row, count, validate, then insert —
+    // all inside the SAME transaction so the lock covers the insert.
+    if (org.maxSessionsPerOrg > 0) {
+      const lockedOrg = await this.connection
+        .getRepository(ctx, BbbOrganization)
+        .createQueryBuilder("org")
+        .setLock("pessimistic_write")
+        .where("org.id = :id", { id: org.id })
+        .getOne();
+      if (!lockedOrg) throw new Error("Organization not found");
+      const activeCount = await this.connection
+        .getRepository(ctx, BbbScheduledSession)
+        .createQueryBuilder("s")
+        .where("s.organizationId = :orgId", { orgId: String(org.id) })
+        .andWhere("s.status IN (:...statuses)", { statuses: ACTIVE_STATUSES })
+        .getCount();
+      if (activeCount >= lockedOrg.maxSessionsPerOrg) {
+        throw new Error(
+          `Organization has reached its session limit of ${lockedOrg.maxSessionsPerOrg}. ` +
+            `Cancel or finish existing sessions before creating new ones, or ask the platform operator to raise the limit.`,
+        );
+      }
+    }
+
     let trainer = await this.connection
       .getRepository(ctx, BbbOrganizationMember)
       .findOne({ where: { id: input.trainerId as string } });
@@ -142,7 +172,10 @@ export class BbbScheduledSessionService {
       startTime: new Date(input.startTime),
       endTime: new Date(input.endTime),
       trainer,
-      status: "SCHEDULED",
+      // Gap 3: sessions start as DRAFT — must be explicitly published
+      // (publishBbbScheduledSession) before they are discoverable by
+      // learners or startable by trainers.
+      status: "DRAFT",
       activeMeeting: null,
       channelId: channelId ?? null,
       productVariantId: input.productVariantId ?? null,
@@ -213,6 +246,269 @@ export class BbbScheduledSessionService {
     return saved;
   }
 
+  // ─── Gap 3: Draft → Scheduled publish ────────────────────────────────────
+
+  /**
+   * Transition a DRAFT session to SCHEDULED, making it visible to learners
+   * and startable by trainers.
+   *
+   * Only DRAFT sessions can be published. Attempting to publish a session
+   * in any other status is a no-op error to avoid accidental re-publishing
+   * of finished or cancelled sessions.
+   */
+  async publish(ctx: RequestContext, id: ID): Promise<BbbScheduledSession> {
+    await this.channelAccess.assertSessionAccess(ctx, id);
+    const session = await this.findById(ctx, id);
+    if (!session) throw new EntityNotFoundError("BbbScheduledSession", id);
+
+    if (session.status !== "DRAFT") {
+      throw new Error(
+        `Cannot publish session ${id}: status is '${session.status}'. Only DRAFT sessions can be published.`,
+      );
+    }
+
+    session.status = "SCHEDULED";
+    const saved = await this.connection
+      .getRepository(ctx, BbbScheduledSession)
+      .save(session);
+
+    Logger.info(`Scheduled session ${id} published (DRAFT → SCHEDULED)`, loggerCtx);
+    this.eventBus.publish(new SessionUpdatedEvent(String(saved.id), saved.channelId ?? null));
+    return saved;
+  }
+
+  // ─── Gap 2: Template / recurring sessions ────────────────────────────────
+
+  /**
+   * Create a reusable session template. The template stores shared defaults
+   * (title, trainer, tags, duration, productVariantId) so that the same
+   * values do not need to be repeated for every session in a series.
+   */
+  async createTemplate(
+    ctx: RequestContext,
+    input: {
+      organizationId: ID;
+      name: string;
+      defaultTitle: string;
+      defaultTrainerId?: ID;
+      durationMinutes?: number;
+      defaultSubjectTags?: string[];
+      defaultVisibility?: string;
+      productVariantId?: string;
+    },
+  ): Promise<BbbSessionTemplate> {
+    await this.channelAccess.assertOrganizationAccess(ctx, input.organizationId);
+    const org = await this.connection.getEntityOrThrow(
+      ctx,
+      BbbOrganization,
+      input.organizationId,
+    );
+
+    const channelId =
+      (org.channelId as string | undefined) ?? (ctx.channelId as string | undefined);
+
+    // Validate duration.
+    const durationMinutes = input.durationMinutes ?? 60;
+    if (durationMinutes <= 0 || !Number.isFinite(durationMinutes)) {
+      throw new Error(`durationMinutes must be a positive number, got ${durationMinutes}.`);
+    }
+    if (durationMinutes > 1440) {
+      throw new Error(`durationMinutes cannot exceed 1440 (24 hours), got ${durationMinutes}.`);
+    }
+
+    // Validate trainer belongs to this org if supplied.
+    if (input.defaultTrainerId) {
+      const trainer = await this.connection
+        .getRepository(ctx, BbbOrganizationMember)
+        .findOne({
+          where: {
+            id: String(input.defaultTrainerId),
+            organization: { id: org.id as any },
+            active: true,
+          },
+        });
+      if (!trainer) {
+        throw new Error(
+          `Trainer ${input.defaultTrainerId} is not an active member of organization ${org.id}.`,
+        );
+      }
+    }
+
+    const template = new BbbSessionTemplate({
+      organization: org,
+      organizationId: String(org.id),
+      channelId: channelId ?? null,
+      name: input.name,
+      defaultTitle: input.defaultTitle,
+      defaultTrainerId: input.defaultTrainerId ? String(input.defaultTrainerId) : null,
+      durationMinutes,
+      defaultSubjectTags: input.defaultSubjectTags ?? null,
+      defaultVisibility: input.defaultVisibility ?? "PRIVATE",
+      productVariantId: input.productVariantId ?? null,
+    });
+
+    const saved = await this.connection
+      .getRepository(ctx, BbbSessionTemplate)
+      .save(template);
+
+    Logger.info(
+      `Session template ${saved.id} created for org ${org.id}: "${input.name}"`,
+      loggerCtx,
+    );
+    return saved;
+  }
+
+  async findTemplatesByOrganization(
+    ctx: RequestContext,
+    orgId: ID,
+  ): Promise<BbbSessionTemplate[]> {
+    await this.channelAccess.assertOrganizationAccess(ctx, orgId);
+    return this.connection
+      .getRepository(ctx, BbbSessionTemplate)
+      .find({ where: { organizationId: String(orgId) }, order: { createdAt: "ASC" } });
+  }
+
+  async deleteTemplate(ctx: RequestContext, id: ID): Promise<boolean> {
+    const template = await this.connection
+      .getRepository(ctx, BbbSessionTemplate)
+      .findOne({ where: { id: String(id) } });
+    if (!template) throw new EntityNotFoundError("BbbSessionTemplate", id);
+    await this.channelAccess.assertOrganizationAccess(ctx, template.organizationId);
+    await this.connection.getRepository(ctx, BbbSessionTemplate).delete(String(id));
+    return true;
+  }
+
+  /**
+   * Generate multiple DRAFT BbbScheduledSession instances from a template.
+   *
+   * The caller supplies an array of start-time strings. Each entry produces
+   * one session: endTime = startTime + template.durationMinutes. All sessions
+   * start as DRAFT and must be individually published.
+   *
+   * The session cap (maxSessionsPerOrg) is checked against the total of
+   * current active sessions PLUS the number of new sessions being created —
+   * the entire batch is rejected if it would exceed the limit.
+   */
+  async createSessionsFromTemplate(
+    ctx: RequestContext,
+    templateId: ID,
+    startTimes: string[],
+  ): Promise<BbbScheduledSession[]> {
+    if (!startTimes.length) {
+      throw new Error("createSessionsFromTemplate: startTimes must not be empty.");
+    }
+    if (startTimes.length > 100) {
+      throw new Error("createSessionsFromTemplate: cannot create more than 100 sessions in a single batch.");
+    }
+
+    // Validate all dates up front before touching the DB.
+    const parsedTimes: Date[] = [];
+    for (const s of startTimes) {
+      const d = new Date(s);
+      if (isNaN(d.getTime())) {
+        throw new Error(`createSessionsFromTemplate: invalid start time "${s}". Must be a valid ISO 8601 datetime.`);
+      }
+      parsedTimes.push(d);
+    }
+
+    // Reject duplicate start times.
+    const unique = new Set(parsedTimes.map((d) => d.toISOString()));
+    if (unique.size !== parsedTimes.length) {
+      throw new Error("createSessionsFromTemplate: startTimes contains duplicate entries.");
+    }
+
+    const template = await this.connection
+      .getRepository(ctx, BbbSessionTemplate)
+      .findOne({
+        where: { id: String(templateId) },
+        relations: ["organization"],
+      });
+    if (!template) throw new EntityNotFoundError("BbbSessionTemplate", templateId);
+
+    await this.channelAccess.assertOrganizationAccess(ctx, template.organizationId);
+
+    const org = template.organization;
+
+    // Enforce cap across the whole batch inside the resolver's existing
+    // transaction (ctx). Lock → count → validate → insert all stay in one
+    // transaction so the lock covers every insert in the batch.
+    if (org.maxSessionsPerOrg > 0) {
+      const lockedOrg = await this.connection
+        .getRepository(ctx, BbbOrganization)
+        .createQueryBuilder("org")
+        .setLock("pessimistic_write")
+        .where("org.id = :id", { id: org.id })
+        .getOne();
+      if (!lockedOrg) throw new Error("Organization not found");
+      const activeCount = await this.connection
+        .getRepository(ctx, BbbScheduledSession)
+        .createQueryBuilder("s")
+        .where("s.organizationId = :orgId", { orgId: String(org.id) })
+        .andWhere("s.status IN (:...statuses)", { statuses: ACTIVE_STATUSES })
+        .getCount();
+      const available = lockedOrg.maxSessionsPerOrg - activeCount;
+      if (startTimes.length > available) {
+        throw new Error(
+          `Cannot create ${startTimes.length} sessions: organization limit is ${lockedOrg.maxSessionsPerOrg} ` +
+            `and ${activeCount} active sessions already exist (${available} slot(s) remaining).`,
+        );
+      }
+    }
+
+    // Resolve trainer if set on template — validate it belongs to this org.
+    let trainer: BbbOrganizationMember | null = null;
+    if (template.defaultTrainerId) {
+      trainer =
+        (await this.connection
+          .getRepository(ctx, BbbOrganizationMember)
+          .findOne({
+            where: {
+              id: template.defaultTrainerId,
+              organization: { id: template.organizationId as any },
+              active: true,
+            },
+          })) ?? null;
+      if (!trainer) {
+        throw new Error(
+          `Template trainer ${template.defaultTrainerId} is not an active member of organization ${template.organizationId}. ` +
+            `Update the template with a valid trainer before generating sessions.`,
+        );
+      }
+    }
+
+    const repo = this.connection.getRepository(ctx, BbbScheduledSession);
+    const created: BbbScheduledSession[] = [];
+
+    for (const startTime of parsedTimes) {
+      const endTime = new Date(startTime.getTime() + template.durationMinutes * 60_000);
+
+      const session = new BbbScheduledSession({
+        organization: org,
+        organizationId: String(org.id),
+        title: template.defaultTitle,
+        startTime,
+        endTime,
+        trainer: trainer ?? undefined,
+        status: "DRAFT",
+        activeMeeting: null,
+        channelId: template.channelId,
+        productVariantId: template.productVariantId,
+        subjectTags: template.defaultSubjectTags,
+        visibility: template.defaultVisibility,
+      });
+
+      const saved = await repo.save(session);
+      this.eventBus.publish(new SessionCreatedEvent(String(saved.id), saved.channelId ?? null));
+      created.push(saved);
+    }
+
+    Logger.info(
+      `Created ${created.length} DRAFT sessions from template ${templateId} for org ${org.id}`,
+      loggerCtx,
+    );
+    return created;
+  }
+
   /**
    * Update editable session fields (Gate 1.4 / F5). Publishes
    * SessionUpdatedEvent so the marketplace projection can reindex or
@@ -281,7 +577,8 @@ export class BbbScheduledSessionService {
     // Guard: session must be SCHEDULED
     if (session.status !== "SCHEDULED") {
       throw new Error(
-        `Cannot start session in status: ${session.status}. Expected SCHEDULED.`,
+        `Cannot start session in status: ${session.status}. ` +
+          `${session.status === "DRAFT" ? "Publish the session first (publishBbbScheduledSession)." : "Expected SCHEDULED."}`,
       );
     }
 

@@ -68,6 +68,7 @@ None.
 | BbbOrganization | `bbb_organization` | Yes |
 | BbbRoom | `bbb_room` | No (scoped via organization) |
 | BbbScheduledSession | `bbb_scheduled_session` | No (scoped via organization) |
+| BbbSessionTemplate | `bbb_session_template` | No (scoped via organization; factory entity — not a bookable session) |
 | BbbMeeting | `bbb_meeting` | No |
 | BbbOrganizationMembership | `bbb_organization_membership` | No (DL-017) |
 | BbbOrganizationMember | `bbb_organization_member` | No (scoped via organization; distinct from Membership) |
@@ -112,7 +113,8 @@ None (injects TenantPlugin services for org verification).
 |---|---|
 | `BbbMeetingService` | Meeting lifecycle, join URL generation; **enqueue-only** (delegates provisioning to `BbbProvisioningWorkerService`) |
 | `BbbProvisioningWorkerService` | Sole BBB provisioning consumer; provisions BBB meetings; performs **atomic org-capacity reservation** (`PROVISIONING + ACTIVE ≤ concurrentMeetingLimit`, pessimistic org lock + count + promote in one transaction); publishes `MeetingProvisionedEvent` / `MeetingFailedEvent` |
-| `BbbSessionProvisioningListener` | Sole transition of `BbbScheduledSession` SCHEDULED → **LIVE** (on `MeetingProvisionedEvent`) and LIVE → **FINISHED** (on `MeetingCompletedEvent`); startup reconciliation for orphaned LIVE sessions |
+| `BbbSessionProvisioningListener` | Sole transition of `BbbScheduledSession` SCHEDULED → **LIVE** (on `MeetingProvisionedEvent`) and LIVE → **FINISHED** (on `MeetingCompletedEvent`); publishes `SessionEndedEvent` on completion; startup reconciliation for orphaned LIVE sessions |
+| `BbbScheduledSessionService` | Session CRUD; **DRAFT → SCHEDULED** publish transition; per-org session cap enforcement (pessimistic org-row lock + count + insert in one resolver transaction; 0 = unlimited); template generation |
 | `BbbRoomService` | Room lifecycle, provisioning requests |
 | `BbbEntitlementService` | Entitlement create/hasAccess/delete |
 | `BbbMembershipService` | Organization membership CRUD and lookup |

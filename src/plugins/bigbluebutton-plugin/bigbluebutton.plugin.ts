@@ -29,6 +29,7 @@ import { BbbEntitlement } from "./entities/bbb-entitlement.entity";
 import { BbbOrganizationMembership } from "./entities/bbb-organization-membership.entity";
 import { BbbCapacityAlertLog } from "./entities/bbb-capacity-alert-log.entity";
 import { BbbPlatformCapacityPolicy } from "./entities/bbb-platform-capacity-policy.entity";
+import { BbbSessionTemplate } from "./entities/bbb-session-template.entity";
 import { EventLog } from "../../platform/tracing/entities/event-log.entity";
 
 import { BbbChannelAccessService } from "./services/bbb-channel-access.service";
@@ -106,6 +107,7 @@ import {
     BbbOrganizationMembership,
     BbbCapacityAlertLog,
     BbbPlatformCapacityPolicy,
+    BbbSessionTemplate,
     CustomerDeletionLog,
     EventLog,
   ],

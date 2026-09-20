@@ -69,6 +69,20 @@ export class TrialRegistrationService {
       throw new Error(`Session ${sessionId} is not a trial session`);
     }
 
+    // DRAFT sessions are not learner-visible and cannot be registered for.
+    if (session.status === "DRAFT") {
+      throw new Error(
+        `Session ${sessionId} is not yet available for registration. It has not been published.`,
+      );
+    }
+
+    // Terminal sessions cannot accept new registrations.
+    if (session.status === "FINISHED" || session.status === "CANCELLED") {
+      throw new Error(
+        `Session ${sessionId} is no longer available for registration (status: ${session.status}).`,
+      );
+    }
+
     // Capacity check: ensure maxAttendees is not exceeded
     if (session.maxAttendees != null && session.maxAttendees > 0) {
       const registrationRepo = this.connection.getRepository(ctx, BbbTrialRegistration);

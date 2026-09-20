@@ -10,6 +10,7 @@ import {
 import {
   SessionCancelledEvent,
   SessionCreatedEvent,
+  SessionEndedEvent,
   SessionStartedEvent,
   SessionUpdatedEvent,
 } from '../../bigbluebutton-plugin/events/bbb-events';
@@ -95,6 +96,16 @@ export class MarketplaceEventListener implements OnApplicationBootstrap {
       // removes the document via the F7 eligibility guard.
       this.indexQueue.addIndexSessionJob(event.sessionId).catch((err: Error) => {
         this.logger.warn(`Failed to enqueue removal job for session ${event.sessionId}: ${err.message}`);
+      });
+    });
+
+    this.eventBus.ofType(SessionEndedEvent).subscribe((event) => {
+      // LIVE→FINISHED makes the session ineligible: indexSession()
+      // removes the document via the F7 eligibility guard (status not in
+      // SCHEDULED|LIVE → remove). Closes the previous gap where a FINISHED
+      // session could remain in the public Elasticsearch index indefinitely.
+      this.indexQueue.addIndexSessionJob(event.sessionId).catch((err: Error) => {
+        this.logger.warn(`Failed to enqueue removal job for ended session ${event.sessionId}: ${err.message}`);
       });
     });
 

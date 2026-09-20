@@ -29,6 +29,7 @@ import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
+import { BbbSessionTemplate } from "../entities/bbb-session-template.entity";
 import {
   BbbAdminPermission,
   BbbManageEntitlementsPermission,
@@ -90,6 +91,8 @@ interface UpdateBbbOrganizationInput {
   name?: string;
   concurrentMeetingLimit?: number;
   maxParticipantsPerMeeting?: number;
+  /** 0 = unlimited. Only platform operators should set this. */
+  maxSessionsPerOrg?: number;
   recordingEnabled?: boolean;
   suspended?: boolean;
 }
@@ -140,6 +143,17 @@ interface CreateBbbScheduledSessionInput {
   trainerId: string;
   productVariantId?: string;
   subjectTags?: string[];
+}
+
+interface CreateBbbSessionTemplateInput {
+  organizationId: string;
+  name: string;
+  defaultTitle: string;
+  defaultTrainerId?: string;
+  durationMinutes?: number;
+  defaultSubjectTags?: string[];
+  defaultVisibility?: string;
+  productVariantId?: string;
 }
 
 interface UpdateBbbScheduledSessionInput {
@@ -1005,6 +1019,58 @@ export class BbbAdminResolver {
     @Args("id") id: string,
   ) {
     return this.scheduledSessionService.cancel(ctx, id);
+  }
+
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
+  @Transaction()
+  @Mutation()
+  publishBbbScheduledSession(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+  ) {
+    return this.scheduledSessionService.publish(ctx, id);
+  }
+
+  // ─── Session Templates (Gap 2: recurring/series) ──────────────────────────
+
+  @Query()
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
+  bbbSessionTemplates(
+    @Ctx() ctx: RequestContext,
+    @Args("organizationId") organizationId: string,
+  ) {
+    return this.scheduledSessionService.findTemplatesByOrganization(ctx, organizationId);
+  }
+
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
+  @Transaction()
+  @Mutation()
+  createBbbSessionTemplate(
+    @Ctx() ctx: RequestContext,
+    @Args("input") input: CreateBbbSessionTemplateInput,
+  ): Promise<BbbSessionTemplate> {
+    return this.scheduledSessionService.createTemplate(ctx, input);
+  }
+
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
+  @Transaction()
+  @Mutation()
+  async deleteBbbSessionTemplate(
+    @Ctx() ctx: RequestContext,
+    @Args("id") id: string,
+  ): Promise<boolean> {
+    return this.scheduledSessionService.deleteTemplate(ctx, id);
+  }
+
+  @Allow(BbbAdminPermission.Permission, BbbManageSessionsPermission.Permission)
+  @Transaction()
+  @Mutation()
+  createSessionsFromTemplate(
+    @Ctx() ctx: RequestContext,
+    @Args("templateId") templateId: string,
+    @Args("startTimes") startTimes: string[],
+  ) {
+    return this.scheduledSessionService.createSessionsFromTemplate(ctx, templateId, startTimes);
   }
 
   // ─── Platform Capacity Policy (ADR-031) ────────────────────────────────────

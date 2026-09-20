@@ -144,17 +144,61 @@
 - Has a trainer (BbbOrganizationMember)
 - Has an optional activeMeeting (BbbMeeting)
 - Links to ProductVariant via `productVariantId`
+- Optionally generated from a BbbSessionTemplate (factory only — template is not retained on the session row)
 
 **Lifecycle:**
-- Created by trainer with title, time, price, capacity
-- Status: `SCHEDULED` → `LIVE` → `FINISHED` | `CANCELLED`
-- Activated by trainer clicking "Start session"
-- Indexed in marketplace ES index when published
+```
+DRAFT → SCHEDULED → LIVE → FINISHED
+                  ↘ CANCELLED
+DRAFT → CANCELLED  (direct cancel before publishing)
+```
+- Created by admin/trainer; starts as **`DRAFT`** (not yet visible to learners or startable)
+- `publishBbbScheduledSession` (Admin API) transitions `DRAFT → SCHEDULED`
+- Trainer calls `startScheduledSession` (Shop API) to provision the BBB meeting; status moves to `LIVE` after provisioning
+- Meeting completion transitions to `FINISHED`; admin cancel transitions to `CANCELLED`
+- Marketplace eligibility: `PUBLIC` visibility + `SCHEDULED` or `LIVE` status
+
+**Fields (additions 2026-09-20):**
+- `status` default changed from `SCHEDULED` to `DRAFT`
 
 **Invariants:**
 - `(organizationId, slug)` composite unique index
 - `channelId` denormalized for tenant isolation
 - `maxAttendees` is a commercial field (how many can buy), distinct from `BbbRoom.maxParticipants` (infrastructure limit)
+- A `DRAFT` session cannot be started — trainer must publish first
+- `BbbOrganization.maxSessionsPerOrg` (0 = unlimited) limits the total number of non-terminal sessions (DRAFT + SCHEDULED + LIVE) per organization; enforced with a pessimistic write lock on the org row
+
+---
+
+## BbbSessionTemplate ✅ Implemented (2026-09-20)
+
+| Property | Value |
+|---|---|
+| **Plugin** | BigBlueButtonPlugin |
+| **Table** | `bbb_session_template` |
+| **Purpose** | A reusable factory configuration for generating multiple BbbScheduledSession instances (recurring/series support). **Not a bookable entity** — it is a configuration carrier only. |
+
+**Fields:** `name`, `defaultTitle`, `defaultTrainerId`, `durationMinutes`, `defaultSubjectTags`, `defaultVisibility`, `productVariantId`, `organizationId`, `channelId`
+
+**Relationships:**
+- Belongs to BbbOrganization
+- `channelId` inherited from organization at creation time (INV-001 authoritative aggregate)
+
+**Lifecycle:**
+- Created by admin via `createBbbSessionTemplate`
+- Used to batch-generate sessions via `createSessionsFromTemplate(templateId, startTimes: [ISO8601...])`
+- Each generated session is an independent DRAFT BbbScheduledSession
+- `endTime` for each occurrence = `startTime + durationMinutes`
+- Template can be deleted independently; deleting a template does not affect already-generated sessions
+- Listed per organization via `bbbSessionTemplates(organizationId)`
+
+**Invariants:**
+- `defaultTrainerId` must be an active member of the template's organization (validated at create and at generation time)
+- `durationMinutes` must be between 1 and 1440 (inclusive)
+- Batch generation rejects more than 100 occurrences in a single call
+- Duplicate start times within a single batch are rejected
+- Invalid ISO 8601 strings are rejected before any DB write
+- Session cap (`maxSessionsPerOrg`) is enforced across the whole batch atomically
 
 ---
 

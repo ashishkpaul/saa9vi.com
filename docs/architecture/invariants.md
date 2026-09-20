@@ -282,3 +282,51 @@ WHERE id = :id
 **Related invariants:** INV-017 (CAS optimistic locking), INV-019 (attempt record lifecycle).
 
 **Rejection criterion:** Any code path that derives a provider-originated billing period from `new Date(currentPeriodEnd).setMonth(+1)`, or that allows a charge webhook with missing `current_start`/`current_end` to be marked `processed` without operator intervention, is rejected.
+
+
+---
+
+## INV-021: BbbScheduledSession Starts as DRAFT and Must Be Explicitly Published
+
+**Rule:** A newly created `BbbScheduledSession` MUST start in `DRAFT` status. It MUST NOT be visible to learners, trial-registerable, or startable by a trainer until a platform operator or tenant admin explicitly calls `publishBbbScheduledSession`, which transitions it to `SCHEDULED`.
+
+**FSM:**
+```
+DRAFT → SCHEDULED → LIVE → FINISHED
+      ↘ CANCELLED         ↗ CANCELLED (from SCHEDULED)
+```
+
+**Corollaries:**
+- `startScheduledSession` (Shop API) MUST reject any session not in `SCHEDULED` status with a clear message directing the caller to publish first.
+- `publicScheduledSessions` (Shop API) MUST filter on `status IN (SCHEDULED, LIVE)` — DRAFT sessions MUST NOT appear in learner-facing queries.
+- `TrialRegistrationService.register()` MUST reject registration for sessions in `DRAFT`, `FINISHED`, or `CANCELLED` status.
+- Marketplace indexing eligibility: `visibility === PUBLIC AND status IN (SCHEDULED, LIVE)`. All other status values cause removal from the public index.
+
+**Rejection criterion:** Any code path that allows a `DRAFT` session to appear in learner-facing Shop API queries, be started by a trainer, or receive trial registrations is rejected.
+
+---
+
+## INV-022: BbbOrganization Session Cap Is Enforced Atomically
+
+**Rule:** When `BbbOrganization.maxSessionsPerOrg > 0`, the count of non-terminal sessions (`DRAFT + SCHEDULED + LIVE`) for that organization MUST NOT exceed the cap. The cap check and any new session insert MUST execute inside the same database transaction, with a pessimistic write lock (`SELECT … FOR UPDATE`) held on the `BbbOrganization` row for the duration of that transaction.
+
+**Corollaries:**
+- The resolver mutation (`createBbbScheduledSession`, `createSessionsFromTemplate`) MUST be decorated with `@Transaction()` so `ctx` carries an active transaction before the lock is acquired.
+- `withTransaction()` MUST NOT be used to wrap the cap check — it creates a separate transaction boundary that releases the lock before the insert, making the check non-atomic.
+- For batch generation (`createSessionsFromTemplate`), the cap is checked against the entire batch size in one locked check; partial batch creation is not permitted.
+- `maxSessionsPerOrg = 0` means unlimited; no lock or count is required in that case.
+
+**Rejection criterion:** Any cap enforcement that acquires the org lock in one transaction and inserts sessions in a separate transaction is rejected.
+
+---
+
+## INV-023: BbbSessionTemplate Is a Factory Entity, Not a Booking Entity
+
+**Rule:** `BbbSessionTemplate` is a reusable configuration carrier for generating `BbbScheduledSession` instances. It MUST NOT be used as a booking record, a meeting proxy, or a source of truth for individual session lifecycle. Deleting a template MUST NOT affect already-generated sessions.
+
+**Corollaries:**
+- `defaultTrainerId` MUST reference an active `BbbOrganizationMember` belonging to the template's organization. This is validated at both template creation and session generation time.
+- `durationMinutes` MUST be between 1 and 1440 (inclusive).
+- A single `createSessionsFromTemplate` call MUST NOT generate more than 100 sessions.
+- Duplicate ISO 8601 start times within a single batch MUST be rejected before any DB write.
+- `channelId` on generated sessions is inherited from `template.channelId`, which is derived from the owning organization at template creation time (INV-001 authoritative aggregate).
