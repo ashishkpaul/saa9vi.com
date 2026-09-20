@@ -11,7 +11,7 @@ import { SubscriptionBillingAttempt } from "../entities/subscription-billing-att
 import { RenewalPaymentReconciliationRequired } from "../entities/renewal-reconciliation-required.entity";
 import { SubscriptionRenewedEvent, SubscriptionInvoicePaidEvent } from "../events/subscription.events";
 import { SubscriptionRenewalQueueService } from "./subscription-renewal-queue.service";
-import { SubscriptionBillingAttemptService } from "./subscription-billing-attempt.service";
+import { SubscriptionBillingAttemptService, DEFAULT_BILLING_CURRENCY } from "./subscription-billing-attempt.service";
 import { RecurringBillingProvider } from "../providers/recurring-billing.provider";
 import { RenewalResult } from "../types";
 import { RECURRING_BILLING_PROVIDER } from "../constants";
@@ -209,6 +209,9 @@ export class SubscriptionRenewalService {
       invoiceId,
       billingPeriodStart,
       amountPaise: sub.plan.monthlyPriceInPaise,
+      // No provider payload exists yet on the renewal path (Razorpay owns
+      // recurring execution), so the attempt carries the platform currency.
+      currency: DEFAULT_BILLING_CURRENCY,
       provider: "razorpay",
       providerAttemptId: orderId,
     });

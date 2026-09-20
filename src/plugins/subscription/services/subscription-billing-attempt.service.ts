@@ -5,6 +5,17 @@ import { SubscriptionBillingAttempt, BillingAttemptStatus } from "../entities/su
 const loggerCtx = "SubscriptionBillingAttemptService";
 
 /**
+ * Fallback currency for billing attempts.
+ *
+ * `subscription_billing_attempt.currency` is NOT NULL, so EVERY insert path
+ * must supply a value. The provider payload is authoritative when present
+ * (Razorpay carries `payload.payment.entity.currency`). The renewal worker
+ * records an attempt BEFORE the provider charge exists, so no provider
+ * currency is available on that path and this platform default applies.
+ */
+export const DEFAULT_BILLING_CURRENCY = "INR";
+
+/**
  * Provider-neutral billing attempt service.
  *
  * This is the ONLY service allowed to mutate a SubscriptionBillingAttempt.
@@ -40,6 +51,8 @@ export class SubscriptionBillingAttemptService {
         provider: string;
         providerSubscriptionId?: string;
         providerAttemptId?: string;
+        /** ISO-4217 currency. Required by the NOT NULL column; defaults to INR. */
+        currency?: string;
     }): Promise<SubscriptionBillingAttempt> {
         const repo = this.connection.rawConnection.getRepository(SubscriptionBillingAttempt);
         const created = (await repo.save(
@@ -49,6 +62,7 @@ export class SubscriptionBillingAttemptService {
                 invoiceId: params.invoiceId,
                 billingPeriodStart: params.billingPeriodStart,
                 amountPaise: params.amountPaise,
+                currency: params.currency ?? DEFAULT_BILLING_CURRENCY,
                 provider: params.provider,
                 providerSubscriptionId: params.providerSubscriptionId,
                 providerAttemptId: params.providerAttemptId,
@@ -202,6 +216,12 @@ export class SubscriptionBillingAttemptService {
         invoiceId: string;
         billingPeriodStart: string;
         amountPaise: number;
+        /**
+         * ISO-4217 currency from the provider payload
+         * (`payload.payment.entity.currency`). Required by the NOT NULL
+         * column; defaults to INR when the provider omits it.
+         */
+        currency?: string;
         provider: string;
         providerSubscriptionId: string;
         providerPaymentId?: string;
@@ -218,6 +238,7 @@ export class SubscriptionBillingAttemptService {
                 invoiceId: params.invoiceId,
                 billingPeriodStart: params.billingPeriodStart,
                 amountPaise: params.amountPaise,
+                currency: params.currency ?? DEFAULT_BILLING_CURRENCY,
                 provider: params.provider,
                 providerSubscriptionId: params.providerSubscriptionId,
                 providerPaymentId: params.providerPaymentId,

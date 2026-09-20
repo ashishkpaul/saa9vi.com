@@ -298,6 +298,9 @@ export class RazorpayWebhookProcessor {
                     invoiceId,
                     billingPeriodStart,
                     amountPaise,
+                    // Provider payload is authoritative for currency; the
+                    // service falls back to the platform default when absent.
+                    currency: ne.currency,
                     provider: 'razorpay',
                     providerSubscriptionId: ne.providerSubscriptionId,
                     providerPaymentId: ne.providerPaymentId,
