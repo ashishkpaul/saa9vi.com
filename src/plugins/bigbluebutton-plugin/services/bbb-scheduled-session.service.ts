@@ -14,6 +14,7 @@ import { BbbMemberService } from "./bbb-member.service";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbOrganizationMember } from "../entities/bbb-organization-member.entity";
 import { Customer, Product, ProductVariant } from "@vendure/core";
+import { InstructorProfile } from "../../tenant-plugin/entities/instructor-profile.entity";
 import { BbbChannelAccessService } from "./bbb-channel-access.service";
 import {
   SessionCancelledEvent,
@@ -199,17 +200,36 @@ export class BbbScheduledSessionService {
         if (variant) {
           const product = (variant as any).product;
           if (product) {
+            // Resolve the authoritative InstructorProfile ID from the trainer's customerId.
+            // input.trainerId is a BbbOrganizationMember.id — not an InstructorProfile.id.
+            // The downstream marketplace indexer queries InstructorProfile by this field,
+            // so storing BbbOrganizationMember.id here would produce broken marketplace links.
+            let resolvedInstructorProfileId: string | null = null;
+            if (trainer?.customerId) {
+              const profile = await this.connection
+                .getRepository(ctx, InstructorProfile)
+                .findOne({ where: { customerId: trainer.customerId as any } });
+              if (profile) {
+                resolvedInstructorProfileId = String(profile.id);
+              } else {
+                Logger.warn(
+                  `No InstructorProfile found for trainer customerId=${trainer.customerId} — instructorProfileId will be null on product ${product.id}`,
+                  loggerCtx,
+                );
+              }
+            }
+
             const productRepo = this.connection.getRepository(ctx, Product);
             await productRepo.save({
               ...product,
               customFields: {
                 ...(product as any).customFields,
                 bbbSessionId: String(saved.id),
-                instructorProfileId: input.trainerId ? String(input.trainerId) : null,
+                instructorProfileId: resolvedInstructorProfileId,
               },
             });
             Logger.info(
-              `Updated Product ${product.id} customFields: bbbSessionId=${saved.id}, instructorProfileId=${input.trainerId}`,
+              `Updated Product ${product.id} customFields: bbbSessionId=${saved.id}, instructorProfileId=${resolvedInstructorProfileId}`,
               loggerCtx,
             );
           }
