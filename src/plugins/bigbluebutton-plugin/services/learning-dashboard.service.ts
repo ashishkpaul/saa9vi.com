@@ -94,20 +94,27 @@ export class LearningDashboardService {
     }
 
     // 3. Pre-resolve instructor names from InstructorProfile
-    //    BbbScheduledSession.trainer has a customerId → InstructorProfile.customerId
+    //    BbbScheduledSession.trainer has a customerId (varchar) →
+    //    InstructorProfile.customerId (integer in DB).
+    //    Cast to number for the IN query to avoid a type mismatch where
+    //    PostgreSQL integer column does not match a varchar IN clause.
     const trainerCustomerIds = sessions
       .map((s) => s.trainer?.customerId)
       .filter(Boolean) as string[];
 
-    const instructorProfiles = trainerCustomerIds.length
+    const trainerCustomerIdNumbers = trainerCustomerIds
+      .map((id) => Number(id))
+      .filter((n) => !isNaN(n));
+
+    const instructorProfiles = trainerCustomerIdNumbers.length
       ? await this.connection
           .getRepository(ctx, InstructorProfile)
-          .find({ where: { customerId: In(trainerCustomerIds) } })
+          .find({ where: { customerId: In(trainerCustomerIdNumbers) as any } })
       : [];
 
     const instructorNameMap = new Map<string, string>();
     for (const ip of instructorProfiles) {
-      instructorNameMap.set(ip.customerId, ip.fullName);
+      instructorNameMap.set(String(ip.customerId), ip.fullName);
     }
 
     // 4. Build the dashboard response
