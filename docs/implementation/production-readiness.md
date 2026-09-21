@@ -862,7 +862,8 @@ For each failure event:
 **Still open:**
 - `subscription.halted` runtime evidence (retry exhaustion → halted state)
 - Out-of-order `subscription.pending` for a stale cycle (freshness guard no-op test)
-- D-5: halted recovery path (no code path currently recovers halted → active)
+- Duplicate/replay failure delivery idempotency
+- Runtime halted recovery: the existing successful-charge finalization path can transition a Saa9vi `past_due`/halted subscription to `active` when a later provider charge finalizes a newer billing cycle (no `halted` exclusion in the CAS — only `cancelled` is excluded). Runtime evidence for the full recovery sequence (halted → provider charge → `subscription.charged`/`activated` webhooks → `active`) remains open. Previously stated as "no code path" which was incorrect.
 
 ------------------------------------------------------------------------
 
