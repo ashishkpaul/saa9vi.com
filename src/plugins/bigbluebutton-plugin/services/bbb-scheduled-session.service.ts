@@ -108,6 +108,8 @@ export class BbbScheduledSessionService {
       trainerId: ID;
       productVariantId?: string;
       subjectTags?: string[];
+      isTrial?: boolean;
+      visibility?: string;
     },
   ): Promise<BbbScheduledSession> {
     await this.channelAccess.assertOrganizationAccess(ctx, input.organizationId);
@@ -181,6 +183,8 @@ export class BbbScheduledSessionService {
       channelId: channelId ?? null,
       productVariantId: input.productVariantId ?? null,
       subjectTags: input.subjectTags ?? null,
+      isTrial: input.isTrial ?? false,
+      visibility: input.visibility ?? "PRIVATE",
     });
 
     const saved = await this.connection
@@ -543,6 +547,7 @@ export class BbbScheduledSessionService {
       endTime?: string;
       subjectTags?: string[];
       visibility?: string;
+      isTrial?: boolean;
     },
   ): Promise<BbbScheduledSession> {
     await this.channelAccess.assertSessionAccess(ctx, id);
@@ -554,6 +559,7 @@ export class BbbScheduledSessionService {
     if (input.endTime !== undefined) session.endTime = new Date(input.endTime);
     if (input.subjectTags !== undefined) session.subjectTags = input.subjectTags;
     if (input.visibility !== undefined) session.visibility = input.visibility;
+    if (input.isTrial !== undefined) session.isTrial = input.isTrial;
 
     const saved = await this.connection
       .getRepository(ctx, BbbScheduledSession)

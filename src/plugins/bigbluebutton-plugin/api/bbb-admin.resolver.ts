@@ -143,6 +143,8 @@ interface CreateBbbScheduledSessionInput {
   trainerId: string;
   productVariantId?: string;
   subjectTags?: string[];
+  isTrial?: boolean;
+  visibility?: string;
 }
 
 interface CreateBbbSessionTemplateInput {
@@ -162,6 +164,7 @@ interface UpdateBbbScheduledSessionInput {
   endTime?: string;
   subjectTags?: string[];
   visibility?: string;
+  isTrial?: boolean;
 }
 
 @Resolver()

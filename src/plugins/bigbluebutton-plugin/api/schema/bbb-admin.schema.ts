@@ -505,6 +505,8 @@ export const adminApiExtensions = gql`
     endTime: String!
     trainerId: ID!
     subjectTags: [String!]
+    isTrial: Boolean
+    visibility: String
   }
 
   input UpdateBbbScheduledSessionInput {
@@ -513,6 +515,7 @@ export const adminApiExtensions = gql`
     endTime: String
     subjectTags: [String!]
     visibility: String
+    isTrial: Boolean
   }
 
   input CreateBbbSessionTemplateInput {
