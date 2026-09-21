@@ -81,14 +81,26 @@ type Query {
   instructorProfiles(options: InstructorProfileListOptions): InstructorProfileList!
   tenantProfile: TenantProfile
   mediaResources(ownerType: String!, ownerId: String!): [MediaResource!]!
+
+  """
+  Returns the active theme for the current tenant channel, or null if
+  the channel uses the Saa9vi platform default theme.
+  """
+  myTenantTheme: TenantTheme
   myBbbMeetings(skip: Int, take: Int): BbbMeetingPublicList!
   myBbbCapacityGrants: [BbbCapacityGrantPublic!]!
   myBbbRooms: [BbbRoomPublic!]!
   bbbRoomStatus(id: ID!): BbbRoomPublic
   myScheduledSessions: [BbbScheduledSessionPublic!]!
-  myBbbEnrollments: [BbbEnrollmentPublic!]! @deprecated(reason: "Use myLearningDashboard or myBbbRooms backed by BbbEntitlement")
+  myBbbEnrollments: [BbbEnrollmentPublic!]! @deprecated(reason: "Use myLearningDashboard or myBbRooms backed by BbbEntitlement")
   myTrialRegistrations: [BbbTrialRegistrationPublic!]!
   publicScheduledSessions: [BbbScheduledSessionPublic!]!
+
+  """
+  The calling student's own attendance record for a session.
+  Returns null if no attendance record exists or the student is not the owner.
+  """
+  mySessionAttendance(sessionId: ID!): SessionAttendancePublic
 
   """
   Student learning dashboard — aggregates entitlements, sessions, and join URLs
@@ -899,6 +911,30 @@ enum Permission {
 
   """Allows access to review management features"""
   ReviewAdmin
+
+  """Grants permission to create MarketplaceAdvertising"""
+  CreateMarketplaceAdvertising
+
+  """Grants permission to read MarketplaceAdvertising"""
+  ReadMarketplaceAdvertising
+
+  """Grants permission to update MarketplaceAdvertising"""
+  UpdateMarketplaceAdvertising
+
+  """Grants permission to delete MarketplaceAdvertising"""
+  DeleteMarketplaceAdvertising
+
+  """Grants permission to create MarketplaceCommission"""
+  CreateMarketplaceCommission
+
+  """Grants permission to read MarketplaceCommission"""
+  ReadMarketplaceCommission
+
+  """Grants permission to update MarketplaceCommission"""
+  UpdateMarketplaceCommission
+
+  """Grants permission to delete MarketplaceCommission"""
+  DeleteMarketplaceCommission
 
   """Allows suspending and reinstating customer accounts"""
   ManageCustomerSuspension
@@ -3949,6 +3985,26 @@ type VerifyTenantAdminResult {
   channelToken: String
 }
 
+"""
+The active theme for the current tenant channel.
+All fields are nullable — the storefront falls back to the platform default
+when a field is null or when no active theme exists.
+"""
+type TenantTheme {
+  id: ID!
+  channelId: ID!
+  version: Int!
+  status: String!
+  primaryColor: String
+  secondaryColor: String
+  accentColor: String
+  backgroundColor: String
+  textColor: String
+  fontFamily: String
+  logoAssetId: ID
+  displayName: String
+}
+
 type BbbMeetingPublic {
   id: ID!
   title: String!
@@ -4063,6 +4119,24 @@ type LeaveAcademyResult {
 type DeleteAccountResult {
   success: Boolean!
   message: String
+}
+
+"""
+Student's own attendance record for a session.
+Exposes only the calling student's own row — never other students' records.
+"""
+type SessionAttendancePublic {
+  id: ID!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  scheduledSessionId: ID!
+  joinedAt: DateTime
+  leftAt: DateTime
+  totalDurationSeconds: Int!
+  cyclesCount: Int!
+  attendanceStatus: String!
+  source: String!
+  lastEventAt: DateTime
 }
 
 type Article implements Node {
@@ -4289,6 +4363,19 @@ input ReportReviewInput {
 type MarketplaceSession {
   id: ID!
   productVariantId: ID
+
+  """
+  Tenant-storefront product path for deep linking (/product/{productSlug}).
+  Null when the session has no purchasable product variant.
+  """
+  productSlug: String
+
+  """
+  Opaque, HMAC-signed attribution reference minted per search result (INV-008:
+  the client only carries it; validity is re-verified server-side at apply
+  time and again at order placement). Null for non-purchasable sessions.
+  """
+  marketplaceRef: String
   channelId: String!
   channelToken: String!
   title: String!

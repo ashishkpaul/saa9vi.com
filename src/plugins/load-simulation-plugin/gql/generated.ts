@@ -2122,7 +2122,18 @@ export type MarketplaceSession = {
   id: Scalars['ID']['output'];
   instructorName?: Maybe<Scalars['String']['output']>;
   isSponsored: Scalars['Boolean']['output'];
+  /**
+   * Opaque, HMAC-signed attribution reference minted per search result (INV-008:
+   * the client only carries it; validity is re-verified server-side at apply
+   * time and again at order placement). Null for non-purchasable sessions.
+   */
+  marketplaceRef?: Maybe<Scalars['String']['output']>;
   priceInPaise: Scalars['Int']['output'];
+  /**
+   * Tenant-storefront product path for deep linking (/product/{productSlug}).
+   * Null when the session has no purchasable product variant.
+   */
+  productSlug?: Maybe<Scalars['String']['output']>;
   productVariantId?: Maybe<Scalars['ID']['output']>;
   startTime: Scalars['DateTime']['output'];
   subjectTags: Array<Scalars['String']['output']>;
@@ -3055,6 +3066,10 @@ export enum Permission {
   CreateFacet = 'CreateFacet',
   /** Grants permission to create InstructorProfile */
   CreateInstructorProfile = 'CreateInstructorProfile',
+  /** Grants permission to create MarketplaceAdvertising */
+  CreateMarketplaceAdvertising = 'CreateMarketplaceAdvertising',
+  /** Grants permission to create MarketplaceCommission */
+  CreateMarketplaceCommission = 'CreateMarketplaceCommission',
   /** Grants permission to create MediaResource */
   CreateMediaResource = 'CreateMediaResource',
   /** Grants permission to create Order */
@@ -3113,6 +3128,10 @@ export enum Permission {
   DeleteFacet = 'DeleteFacet',
   /** Grants permission to delete InstructorProfile */
   DeleteInstructorProfile = 'DeleteInstructorProfile',
+  /** Grants permission to delete MarketplaceAdvertising */
+  DeleteMarketplaceAdvertising = 'DeleteMarketplaceAdvertising',
+  /** Grants permission to delete MarketplaceCommission */
+  DeleteMarketplaceCommission = 'DeleteMarketplaceCommission',
   /** Grants permission to delete MediaResource */
   DeleteMediaResource = 'DeleteMediaResource',
   /** Grants permission to delete Order */
@@ -3179,6 +3198,10 @@ export enum Permission {
   ReadFacet = 'ReadFacet',
   /** Grants permission to read InstructorProfile */
   ReadInstructorProfile = 'ReadInstructorProfile',
+  /** Grants permission to read MarketplaceAdvertising */
+  ReadMarketplaceAdvertising = 'ReadMarketplaceAdvertising',
+  /** Grants permission to read MarketplaceCommission */
+  ReadMarketplaceCommission = 'ReadMarketplaceCommission',
   /** Grants permission to read MediaResource */
   ReadMediaResource = 'ReadMediaResource',
   /** Grants permission to read Order */
@@ -3243,6 +3266,10 @@ export enum Permission {
   UpdateGlobalSettings = 'UpdateGlobalSettings',
   /** Grants permission to update InstructorProfile */
   UpdateInstructorProfile = 'UpdateInstructorProfile',
+  /** Grants permission to update MarketplaceAdvertising */
+  UpdateMarketplaceAdvertising = 'UpdateMarketplaceAdvertising',
+  /** Grants permission to update MarketplaceCommission */
+  UpdateMarketplaceCommission = 'UpdateMarketplaceCommission',
   /** Grants permission to update MediaResource */
   UpdateMediaResource = 'UpdateMediaResource',
   /** Grants permission to update Order */
@@ -3729,7 +3756,7 @@ export type Query = {
   me?: Maybe<CurrentUser>;
   mediaResources: Array<MediaResource>;
   myBbbCapacityGrants: Array<BbbCapacityGrantPublic>;
-  /** @deprecated Use myLearningDashboard or myBbbRooms backed by BbbEntitlement */
+  /** @deprecated Use myLearningDashboard or myBbRooms backed by BbbEntitlement */
   myBbbEnrollments: Array<BbbEnrollmentPublic>;
   myBbbMeetings: BbbMeetingPublicList;
   myBbbRooms: Array<BbbRoomPublic>;
@@ -3739,6 +3766,16 @@ export type Query = {
    */
   myLearningDashboard: LearningDashboard;
   myScheduledSessions: Array<BbbScheduledSessionPublic>;
+  /**
+   * The calling student's own attendance record for a session.
+   * Returns null if no attendance record exists or the student is not the owner.
+   */
+  mySessionAttendance?: Maybe<SessionAttendancePublic>;
+  /**
+   * Returns the active theme for the current tenant channel, or null if
+   * the channel uses the Saa9vi platform default theme.
+   */
+  myTenantTheme?: Maybe<TenantTheme>;
   myTrialRegistrations: Array<BbbTrialRegistrationPublic>;
   /** Returns the possible next states that the activeOrder can transition to */
   nextOrderStates: Array<Scalars['String']['output']>;
@@ -3842,6 +3879,11 @@ export type QueryMediaResourcesArgs = {
 export type QueryMyBbbMeetingsArgs = {
   skip?: InputMaybe<Scalars['Int']['input']>;
   take?: InputMaybe<Scalars['Int']['input']>;
+};
+
+
+export type QueryMySessionAttendanceArgs = {
+  sessionId: Scalars['ID']['input'];
 };
 
 
@@ -4128,6 +4170,25 @@ export type Seller = Node & {
   updatedAt: Scalars['DateTime']['output'];
 };
 
+/**
+ * Student's own attendance record for a session.
+ * Exposes only the calling student's own row — never other students' records.
+ */
+export type SessionAttendancePublic = {
+  __typename?: 'SessionAttendancePublic';
+  attendanceStatus: Scalars['String']['output'];
+  createdAt: Scalars['DateTime']['output'];
+  cyclesCount: Scalars['Int']['output'];
+  id: Scalars['ID']['output'];
+  joinedAt?: Maybe<Scalars['DateTime']['output']>;
+  lastEventAt?: Maybe<Scalars['DateTime']['output']>;
+  leftAt?: Maybe<Scalars['DateTime']['output']>;
+  scheduledSessionId: Scalars['ID']['output'];
+  source: Scalars['String']['output'];
+  totalDurationSeconds: Scalars['Int']['output'];
+  updatedAt: Scalars['DateTime']['output'];
+};
+
 export type SessionWindow = {
   __typename?: 'SessionWindow';
   endsAt: Scalars['DateTime']['output'];
@@ -4386,6 +4447,27 @@ export type TenantProfile = Node & {
   tagline?: Maybe<Scalars['String']['output']>;
   timezone: Scalars['String']['output'];
   updatedAt: Scalars['DateTime']['output'];
+};
+
+/**
+ * The active theme for the current tenant channel.
+ * All fields are nullable — the storefront falls back to the platform default
+ * when a field is null or when no active theme exists.
+ */
+export type TenantTheme = {
+  __typename?: 'TenantTheme';
+  accentColor?: Maybe<Scalars['String']['output']>;
+  backgroundColor?: Maybe<Scalars['String']['output']>;
+  channelId: Scalars['ID']['output'];
+  displayName?: Maybe<Scalars['String']['output']>;
+  fontFamily?: Maybe<Scalars['String']['output']>;
+  id: Scalars['ID']['output'];
+  logoAssetId?: Maybe<Scalars['ID']['output']>;
+  primaryColor?: Maybe<Scalars['String']['output']>;
+  secondaryColor?: Maybe<Scalars['String']['output']>;
+  status: Scalars['String']['output'];
+  textColor?: Maybe<Scalars['String']['output']>;
+  version: Scalars['Int']['output'];
 };
 
 export type TextCustomFieldConfig = CustomField & {
