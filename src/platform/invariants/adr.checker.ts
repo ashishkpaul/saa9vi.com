@@ -12,6 +12,7 @@ export class AdrChecker implements Checker {
       this.meetingFsmRules(),
       this.noAdHocAccessChecks(),
       this.administratorVisibility(),
+      this.tenantThemeInvariants(),
     ];
 
     const results = await Promise.all(checks);
@@ -85,8 +86,11 @@ export class AdrChecker implements Checker {
       }
 
       if (/entity/i.test(fileName) && !/entitlement/i.test(fileName)) {
-        const hasMembership = /membership/i.test(content);
-        const hasRole = /role\s*:\s*string/.test(content);
+        // Match actual typed property declarations only — a bare `/membership/i`
+        // previously matched doc-comment prose (e.g. "membership plan" in
+        // subscription-plan.entity.ts) and false-flagged non-access entities.
+        const hasMembership = /\bmembership\w*\??\s*:\s*/i.test(content);
+        const hasRole = /\brole\w*\??\s*:\s*(string\b|['"])/i.test(content);
 
         if (hasMembership || hasRole) {
           nonEntitlementAccessEntities.push(fileName);
@@ -208,6 +212,62 @@ export class AdrChecker implements Checker {
       severity: hasAdministratorsOverride ? 'info' : 'error',
       message,
       details: 'INV-016: administrators query must be channel-scoped to prevent leaking global/SuperAdmin accounts to tenant admins',
+    };
+  }
+
+  /**
+   * INV-025 (ADR-043) — structural verification of the TenantTheme invariant.
+   * Lightweight by design: verifies the structural elements exist (entity with
+   * DB-enforced one-active index, channel-scoped service, public Shop read,
+   * eligibility service). Runtime behaviour is covered by e2e tests, not here.
+   */
+  private async tenantThemeInvariants(): Promise<CheckResult> {
+    const srcDir = path.join(__dirname, '../../..');
+    const failures: string[] = [];
+
+    const entityPath = path.join(srcDir, 'src/plugins/tenant-plugin/entities/tenant-theme.entity.ts');
+    const entityContent = readFileContent(entityPath);
+    if (!/channelId\s*:\s*string/.test(entityContent)) {
+      failures.push('TenantTheme entity missing scalar channelId');
+    }
+    // DB-enforced one-active-per-channel: partial unique index on status='active'
+    if (!/status\s*=\s*'active'/.test(entityContent) || !/unique|Unique/i.test(entityContent)) {
+      failures.push('TenantTheme entity missing partial unique index for one-active-per-channel');
+    }
+
+    const servicePath = path.join(srcDir, 'src/plugins/tenant-plugin/services/tenant-theme.service.ts');
+    const serviceContent = readFileContent(servicePath);
+    if (!/ctx\.channelId/.test(serviceContent)) {
+      failures.push('TenantThemeService must derive channel from ctx.channelId');
+    }
+    if (!/assertCanUseWhitelabel|canUseWhitelabel/.test(serviceContent)) {
+      failures.push('TenantThemeService must gate writes/activation via TenantCommercialEligibilityService');
+    }
+
+    const shopPath = path.join(srcDir, 'src/plugins/tenant-plugin/api/tenant-shop.resolver.ts');
+    const shopContent = readFileContent(shopPath);
+    if (!/Permission\.Public[\s\S]{0,400}myTenantTheme/.test(shopContent)) {
+      failures.push('myTenantTheme must be Permission.Public (storefront resolves branding pre-auth)');
+    }
+    if (!/canUseWhitelabel|getActiveTheme\(ctx/.test(shopContent) && !/getActiveTheme/.test(shopContent)) {
+      failures.push('myTenantTheme must resolve entitlement-conditionally via the theme service');
+    }
+
+    const eligibilityPath = path.join(srcDir, 'src/plugins/tenant-plugin/services/tenant-commercial-eligibility.service.ts');
+    const eligibilityContent = readFileContent(eligibilityPath);
+    if (!/trialing/.test(eligibilityContent) || !/past_due/.test(eligibilityContent) || !/whitelabelEnabled/.test(eligibilityContent)) {
+      failures.push('TenantCommercialEligibilityService must enforce the ADR-043 §2.1 state window');
+    }
+
+    return {
+      checker: this.name,
+      name: 'tenant-theme-invariants',
+      passed: failures.length === 0,
+      severity: 'error',
+      message: failures.length === 0
+        ? 'TenantTheme structural invariants present (INV-025)'
+        : failures.join('; '),
+      details: 'INV-025: channel isolation, DB-enforced one-active, entitlement gating, public conditional Shop read',
     };
   }
 

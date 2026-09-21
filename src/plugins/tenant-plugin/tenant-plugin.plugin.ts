@@ -21,6 +21,7 @@ import { TenantDeletionService } from './services/tenant-deletion.service';
 import { TenantRegistrationService } from './services/tenant-registration.service';
 import { TenantRoleReconciliationService } from './services/tenant-role-reconciliation.service';
 import { TenantThemeService } from './services/tenant-theme.service';
+import { TenantCommercialEligibilityService } from './services/tenant-commercial-eligibility.service';
 import { TenantAdminResolver } from './api/tenant-admin.resolver';
 import { TenantShopResolver } from './api/tenant-shop.resolver';
 import { adminApiExtensions, shopApiExtensions, themeAdminExtensions, themeShopExtensions } from './api/api-extensions';
@@ -55,6 +56,7 @@ function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
     TenantRegistrationService,
     TenantRoleReconciliationService,
     TenantThemeService,
+    TenantCommercialEligibilityService,
   ],
   adminApiExtensions: {
     schema: concatApiExtensions(adminApiExtensions, themeAdminExtensions),

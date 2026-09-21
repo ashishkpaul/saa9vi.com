@@ -12,12 +12,28 @@ import { Column, Entity, Index } from 'typeorm';
  *   a curated list. No arbitrary CSS.
  * L3 (future): constrained custom CSS, gated by plan.customCssEnabled.
  *
- * Only ONE theme row per channel may have status='active' at any time.
- * Previous active themes are archived (status='archived') to support rollback.
- * status='draft' is used for preview/staging before publishing.
+ * Lifecycle (ADR-043 L1):
+ *   draft --publish--> active --(publish the next version)--> archived
+ *
+ * Only ONE theme row per channel may have status='active' at any time. This is
+ * enforced by PostgreSQL (partial unique index below), NOT merely by service
+ * logic — see INV-025. A losing concurrent publisher therefore fails closed
+ * with a 23505 instead of silently leaving two active themes.
+ *
+ * Version history is immutable: a version may only be edited while it is a
+ * 'draft'. Editing the live theme means creating a new draft
+ * (createDraftFromVersion) and publishing it. That is what makes rollback
+ * deterministic — every archived row still holds exactly the values that were
+ * live when it was active.
  */
 @Entity('tenant_theme')
 @Index(['channelId', 'version'], { unique: true })
+/**
+ * INV-025: at most one ACTIVE theme per channel, arbitrated by the database.
+ * Mirrors the house pattern used by OrganizationSubscription
+ * (`UNIQUE(channelId) WHERE status != 'cancelled'`).
+ */
+@Index(['channelId'], { unique: true, where: '"status" = \'active\'' })
 export class TenantTheme extends VendureEntity {
   constructor(input?: DeepPartial<TenantTheme>) {
     super(input);
@@ -33,7 +49,13 @@ export class TenantTheme extends VendureEntity {
 
   /**
    * Monotonically increasing version number per channel.
-   * Incremented on every save. Used for rollback (restore previous version).
+   *
+   * Allocated when a draft is created — MAX(version) + 1 computed inside the
+   * insert transaction while holding a per-channel advisory lock, so two
+   * concurrent drafts cannot collide on UNIQUE(channelId, version).
+   *
+   * NOT incremented on save. A version is immutable once published, so the
+   * number identifies a fixed set of values and rollback is deterministic.
    */
   @Column('int', { default: 1 })
   version: number;

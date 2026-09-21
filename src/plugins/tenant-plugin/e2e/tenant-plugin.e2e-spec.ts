@@ -50,10 +50,13 @@ import {
 import { SchemaPostgresInitializer } from './schema-postgres-initializer';
 import {
   Administrator,
+  Asset,
+  Channel,
   mergeConfig,
   NativeAuthenticationMethod,
   PasswordCipher,
   Permission,
+  RequestContext,
   Role,
   TransactionalConnection,
   User,
@@ -67,6 +70,15 @@ import {
 } from 'vitest';
 
 import { TenantPlugin } from '../tenant-plugin.plugin';
+import { TenantTheme } from '../entities/tenant-theme.entity';
+import { TenantThemeService } from '../services/tenant-theme.service';
+import { TenantCommercialEligibilityService } from '../services/tenant-commercial-eligibility.service';
+import { SubscriptionPlugin } from '../../subscription/subscription.plugin';
+import { SubscriptionPlan } from '../../subscription/entities/subscription-plan.entity';
+import { OrganizationSubscription } from '../../subscription/entities/organization-subscription.entity';
+// TypeORM's DeepPartial (not @vendure/common's): Repository.create/save overloads
+// are declared against this one, and the two differ structurally (`| null`).
+import type { DeepPartial } from 'typeorm';
 import { BigBlueButtonPlugin } from '../../bigbluebutton-plugin';
 import { CmsPlugin } from '../../cms/cms.plugin';
 import { ReviewsPlugin } from '../../reviews/reviews-plugin';
@@ -391,6 +403,97 @@ const SHOP_CMS_PAGE = gql`
   }
 `;
 
+// ─── TenantTheme — ADR-043 L1 lifecycle ───────────────────────────────────
+// Shared selection set so every theme assertion sees the same shape.
+const THEME_FIELDS = `
+  id
+  channelId
+  version
+  status
+  primaryColor
+  secondaryColor
+  accentColor
+  backgroundColor
+  textColor
+  fontFamily
+  logoAssetId
+  displayName
+`;
+
+const CREATE_TENANT_THEME = gql`
+  mutation CreateTenantTheme($input: TenantThemeInput!) {
+    createTenantTheme(input: $input) {
+      ${THEME_FIELDS}
+    }
+  }
+`;
+
+const UPDATE_TENANT_THEME = gql`
+  mutation UpdateTenantTheme($id: ID!, $input: TenantThemeInput!) {
+    updateTenantTheme(id: $id, input: $input) {
+      ${THEME_FIELDS}
+    }
+  }
+`;
+
+const PUBLISH_TENANT_THEME = gql`
+  mutation PublishTenantTheme($id: ID!) {
+    publishTenantTheme(id: $id) {
+      ${THEME_FIELDS}
+    }
+  }
+`;
+
+const ROLLBACK_TENANT_THEME = gql`
+  mutation RollbackTenantTheme($id: ID!) {
+    rollbackTenantTheme(id: $id) {
+      ${THEME_FIELDS}
+    }
+  }
+`;
+
+const RESET_TENANT_THEME = gql`
+  mutation ResetTenantTheme {
+    resetTenantTheme
+  }
+`;
+
+const ADMIN_TENANT_THEMES = gql`
+  query AdminTenantThemes {
+    tenantThemes {
+      items {
+        ${THEME_FIELDS}
+      }
+      totalItems
+    }
+  }
+`;
+
+const ADMIN_TENANT_THEME = gql`
+  query AdminTenantTheme($id: ID!) {
+    tenantTheme(id: $id) {
+      ${THEME_FIELDS}
+    }
+  }
+`;
+
+const SHOP_MY_TENANT_THEME = gql`
+  query ShopMyTenantTheme {
+    myTenantTheme {
+      ${THEME_FIELDS}
+    }
+  }
+`;
+
+/**
+ * Vendure's ID scalar encodes ids with a type prefix (`T_2`), while the scalar
+ * `channelId` / `logoAssetId` columns store the raw value (`2`). Normalise
+ * before comparing GraphQL output against DB values.
+ */
+function stripIdPrefix(value: string | null | undefined): string {
+  return String(value ?? '').replace(/^T_/, '');
+}
+
 // ─── Test suite ───────────────────────────────────────────────────────────
 
 describe('TenantPlugin', () => {
@@ -418,7 +521,19 @@ describe('TenantPlugin', () => {
         schema: 'e2e_tenant_plugin',
         synchronize: true,
       },
-      plugins: [TenantPlugin, BigBlueButtonPlugin, CmsPlugin, ReviewsPlugin],
+      // SubscriptionPlugin is loaded because ADR-043 §2 gates tenant theming on
+      // the tenant's subscription entitlement (plan.whitelabelEnabled + status),
+      // so organization_subscription / subscription_plan must exist in this
+      // schema. TenantPlugin reads them through TransactionalConnection instead
+      // of injecting SubscriptionService — which is why this is a test-schema
+      // requirement rather than a plugin dependency of TenantPlugin.
+      plugins: [
+        TenantPlugin,
+        BigBlueButtonPlugin,
+        CmsPlugin,
+        ReviewsPlugin,
+        SubscriptionPlugin.init({}) as any,
+      ],
     }),
   );
 
@@ -1495,6 +1610,602 @@ describe('TenantPlugin', () => {
         id: tenantBAdmin.id,
       });
       expect(administrator).toBeNull();
+    });
+  });
+
+  // ── TenantTheme — ADR-043 L1 lifecycle ──────────────────────────────────
+  // Covers the A1 hardening: published versions are immutable, exactly one
+  // ACTIVE theme per channel is arbitrated by PostgreSQL, version allocation is
+  // race-safe, logo assets must belong to the channel, and INV-025 isolation.
+
+  describe('TenantTheme — ADR-043 L1 lifecycle', () => {
+    const tenantAPassword = 'StrongP@ss1';
+    const tenantBPassword = 'StrongP@ss2';
+
+    let v1Id: string;
+    let v2Id: string;
+    let tenantBThemeId: string;
+
+    async function asTenantAdmin(email: string, password: string, token: string) {
+      adminClient.setChannelToken(token);
+      await adminClient.asUserWithCredentials(email, password);
+    }
+
+    // `stripIdPrefix` is defined at module scope (shared with the entitlement suite).
+
+    /**
+     * A RequestContext bound to a tenant channel, for direct service calls
+     * outside the request cycle (the GraphQL path builds this automatically).
+     * `RequestContext.channelId` is a getter derived from `_channel`, so the
+     * channel must be supplied through the constructor — it cannot be assigned.
+     */
+    async function ctxForChannel(channelId: string): Promise<RequestContext> {
+      const { connection } = rawRepos();
+      const channel = await connection.rawConnection
+        .getRepository(Channel)
+        .findOne({ where: { id: Number(channelId) } });
+      expect(channel).toBeTruthy();
+      return new RequestContext({
+        apiType: 'admin',
+        channel: channel!,
+        isAuthorized: true,
+        authorizedAsOwnerOnly: false,
+      });
+    }
+
+    function rawRepos() {
+      const connection = server.app.get(TransactionalConnection);
+      return {
+        connection,
+        theme: connection.rawConnection.getRepository(TenantTheme),
+        asset: connection.rawConnection.getRepository(Asset),
+      };
+    }
+
+    /**
+     * Creates an Asset owned by `channelId`.
+     *
+     * Raw insert — avoids a multipart file upload. The literal is cast to
+     * `DeepPartial<Asset>` rather than `any`: an `any` argument selects
+     * Repository.create's ARRAY overload, typing the result as `Asset[]` and
+     * breaking the declared return type (TS2740).
+     */
+    async function createAssetOwnedBy(channelId: string, label: string): Promise<Asset> {
+      const { connection, asset } = rawRepos();
+      const channel = await connection.rawConnection
+        .getRepository(Channel)
+        .findOne({ where: { id: Number(channelId) } });
+      expect(channel).toBeTruthy();
+
+      const draft = asset.create({
+        name: label,
+        type: 'IMAGE',
+        mimeType: 'image/png',
+        fileSize: 1024,
+        source: `e2e/${label}.png`,
+        preview: `e2e/${label}.png`,
+        channels: [channel as Channel],
+      } as DeepPartial<Asset>);
+      return asset.save(draft);
+    }
+
+    const WL_ON_SLUG = 'e2e-whitelabel-on';
+    const WL_OFF_SLUG = 'e2e-whitelabel-off';
+
+    /**
+     * TEST-ONLY FIXTURE SETUP (repository writes against the isolated
+     * `e2e_tenant_plugin` schema) — deliberately not GraphQL. These tests prove
+     * the entitlement decision function across subscription states/flags, which
+     * production workflows cannot produce on demand. This is not an operational
+     * data-mutation procedure.
+     *
+     * Drives the ADR-043 §2 entitlement deterministically: points the tenant's
+     * subscription at a white-label (or non-white-label) plan and sets the
+     * requested status from the local FSM.
+     */
+    async function setSubscription(
+      channelId: string,
+      status: string,
+      whitelabelEnabled = true,
+    ): Promise<void> {
+      const { connection } = rawRepos();
+      const planRepo = connection.rawConnection.getRepository(SubscriptionPlan);
+      const subRepo = connection.rawConnection.getRepository(OrganizationSubscription);
+
+      const slug = whitelabelEnabled ? WL_ON_SLUG : WL_OFF_SLUG;
+      const existingPlan = await planRepo.findOne({ where: { slug } });
+      const plan =
+        existingPlan ??
+        (await planRepo.save(
+          planRepo.create({
+            name: slug,
+            slug,
+            whitelabelEnabled,
+          } as DeepPartial<SubscriptionPlan>),
+        ));
+
+      const existing = await subRepo.findOne({ where: { channelId } });
+      if (existing) {
+        existing.status = status as any;
+        existing.plan = plan;
+        await subRepo.save(existing);
+        return;
+      }
+      await subRepo.save(
+        subRepo.create({
+          channelId,
+          status,
+          plan,
+        } as DeepPartial<OrganizationSubscription>),
+      );
+    }
+
+    /** Removes the tenant's subscription entirely (no-entitlement case). */
+    async function clearSubscription(channelId: string): Promise<void> {
+      const { connection } = rawRepos();
+      await connection.rawConnection
+        .getRepository(OrganizationSubscription)
+        .delete({ channelId });
+    }
+
+    beforeAll(async () => {
+      // ADR-043 §2: theming requires the white-label entitlement, so both
+      // tenants start on an active subscription backed by a white-label plan.
+      await setSubscription(tenantAChannelId, 'active', true);
+      await setSubscription(tenantBChannelId, 'active', true);
+    });
+
+    it('creates a theme as a DRAFT and leaves the storefront on the platform default', async () => {
+      await asTenantAdmin(tenantAEmail, tenantAPassword, tenantAChannelToken);
+
+      const { createTenantTheme } = await adminClient.query(CREATE_TENANT_THEME, {
+        input: {
+          primaryColor: '#2563EB',
+          backgroundColor: '#FFFFFF',
+          textColor: '#111111',
+          fontFamily: 'inter',
+          displayName: 'Mehta Coaching',
+        },
+      });
+
+      expect(createTenantTheme.status).toBe('draft');
+      expect(createTenantTheme.version).toBe(1);
+      expect(stripIdPrefix(createTenantTheme.channelId)).toBe(tenantAChannelId);
+      v1Id = createTenantTheme.id;
+
+      // Nothing published yet → Shop API reports no theme (platform default).
+      shopClient.setChannelToken(tenantAChannelToken);
+      const { myTenantTheme } = await shopClient.query(SHOP_MY_TENANT_THEME);
+      expect(myTenantTheme).toBeNull();
+    });
+
+    it('edits a DRAFT in place', async () => {
+      await asTenantAdmin(tenantAEmail, tenantAPassword, tenantAChannelToken);
+
+      const { updateTenantTheme } = await adminClient.query(UPDATE_TENANT_THEME, {
+        id: v1Id,
+        input: { accentColor: '#F59E0B' },
+      });
+
+      expect(updateTenantTheme.status).toBe('draft');
+      expect(updateTenantTheme.accentColor).toBe('#F59E0B');
+      // Untouched fields survive a partial update.
+      expect(updateTenantTheme.primaryColor).toBe('#2563EB');
+    });
+
+    it('rejects an invalid hex colour and a non-curated font', async () => {
+      await asTenantAdmin(tenantAEmail, tenantAPassword, tenantAChannelToken);
+
+      const badColour = adminClient.query(CREATE_TENANT_THEME, {
+        input: { primaryColor: 'rgb(0,0,0)' },
+      });
+      await expect(badColour).rejects.toThrow(/hex colour/i);
+
+      const badFont = adminClient.query(CREATE_TENANT_THEME, {
+        input: { fontFamily: 'comic-sans' },
+      });
+      await expect(badFont).rejects.toThrow(/not in the allowed set/i);
+    });
+
+    it('publishes the draft and serves it on the public Shop API', async () => {
+      await asTenantAdmin(tenantAEmail, tenantAPassword, tenantAChannelToken);
+
+      const { publishTenantTheme } = await adminClient.query(PUBLISH_TENANT_THEME, {
+        id: v1Id,
+      });
+      expect(publishTenantTheme.status).toBe('active');
+
+      shopClient.setChannelToken(tenantAChannelToken);
+      const { myTenantTheme } = await shopClient.query(SHOP_MY_TENANT_THEME);
+      expect(myTenantTheme.status).toBe('active');
+      expect(myTenantTheme.version).toBe(1);
+      expect(myTenantTheme.primaryColor).toBe('#2563EB');
+      expect(myTenantTheme.fontFamily).toBe('inter');
+    });
+
+    it('REJECTS editing an ACTIVE version (published versions are immutable)', async () => {
+      await asTenantAdmin(tenantAEmail, tenantAPassword, tenantAChannelToken);
+
+      const promise = adminClient.query(UPDATE_TENANT_THEME, {
+        id: v1Id,
+        input: { primaryColor: '#000000' },
+      });
+
+      await expect(promise).rejects.toThrow(/immutable/i);
+
+      // The live values are untouched.
+      shopClient.setChannelToken(tenantAChannelToken);
+      const { myTenantTheme } = await shopClient.query(SHOP_MY_TENANT_THEME);
+      expect(myTenantTheme.primaryColor).toBe('#2563EB');
+    });
+
+    it('archives the previous version when a new draft is published', async () => {
+      await asTenantAdmin(tenantAEmail, tenantAPassword, tenantAChannelToken);
+
+      const created = await adminClient.query(CREATE_TENANT_THEME, {
+        input: { primaryColor: '#DC2626', displayName: 'Mehta Coaching (v2)' },
+      });
+      v2Id = created.createTenantTheme.id;
+      expect(created.createTenantTheme.version).toBe(2);
+
+      const { publishTenantTheme } = await adminClient.query(PUBLISH_TENANT_THEME, {
+        id: v2Id,
+      });
+      expect(publishTenantTheme.status).toBe('active');
+
+      const { tenantThemes } = await adminClient.query(ADMIN_TENANT_THEMES);
+      const v1 = tenantThemes.items.find((t: any) => stripIdPrefix(t.id) === stripIdPrefix(v1Id));
+      expect(v1.status).toBe('archived');
+      // v1 keeps the values that were live — history is frozen.
+      expect(v1.primaryColor).toBe('#2563EB');
+
+      const v2 = tenantThemes.items.find((t: any) => stripIdPrefix(t.id) === stripIdPrefix(v2Id));
+      expect(v2.status).toBe('active');
+    });
+
+    it('rolls back to the exact archived values', async () => {
+      await asTenantAdmin(tenantAEmail, tenantAPassword, tenantAChannelToken);
+
+      const { rollbackTenantTheme } = await adminClient.query(ROLLBACK_TENANT_THEME, {
+        id: v1Id,
+      });
+      expect(rollbackTenantTheme.status).toBe('active');
+      expect(rollbackTenantTheme.primaryColor).toBe('#2563EB');
+
+      shopClient.setChannelToken(tenantAChannelToken);
+      const { myTenantTheme } = await shopClient.query(SHOP_MY_TENANT_THEME);
+      expect(myTenantTheme.version).toBe(1);
+      expect(myTenantTheme.primaryColor).toBe('#2563EB');
+    });
+
+    it('clones an ACTIVE version into a new draft (edit-the-live-theme flow)', async () => {
+      // createDraftFromVersion is the internal building block for "edit the
+      // live theme" — deliberately not exposed on the Admin GraphQL API yet, so
+      // it is exercised at the service boundary. v1 is ACTIVE at this point.
+      const themeService = server.app.get(TenantThemeService);
+      const ctx = await ctxForChannel(tenantAChannelId);
+
+      // Direct service calls bypass the GraphQL ID scalar, so pass the RAW id
+      // (v1Id came back encoded as `T_5`).
+      const rawV1Id = stripIdPrefix(v1Id);
+      const source = await themeService.findById(ctx, rawV1Id as any);
+      expect(source?.status).toBe('active');
+
+      const draft = await themeService.createDraftFromVersion(ctx, rawV1Id as any);
+      expect(draft.status).toBe('draft');
+      expect(draft.version).toBeGreaterThan(source!.version);
+      // Values carry over, so editing the draft cannot silently reset branding.
+      expect(draft.primaryColor).toBe(source!.primaryColor);
+      expect(draft.fontFamily).toBe(source!.fontFamily);
+      expect(draft.displayName).toBe(source!.displayName);
+
+      // The published source version is untouched.
+      const stillActive = await themeService.findById(ctx, rawV1Id as any);
+      expect(stillActive?.status).toBe('active');
+    });
+
+    it('refuses to clone a draft (update it in place instead)', async () => {
+      const themeService = server.app.get(TenantThemeService);
+      const ctx = await ctxForChannel(tenantAChannelId);
+
+      const draft = await themeService.createDraftFromVersion(
+        ctx,
+        stripIdPrefix(v1Id) as any,
+      );
+      const promise = themeService.createDraftFromVersion(ctx, draft.id as any);
+      await expect(promise).rejects.toThrow(/already a draft/i);
+    });
+
+    it('cannot publish an archived version', async () => {
+      await asTenantAdmin(tenantAEmail, tenantAPassword, tenantAChannelToken);
+
+      const promise = adminClient.query(PUBLISH_TENANT_THEME, { id: v2Id });
+      await expect(promise).rejects.toThrow(/archived/i);
+    });
+
+    it('enforces at most one ACTIVE theme per channel at the database level', async () => {
+      const { theme } = rawRepos();
+
+      // Bypass the service entirely: the partial unique index must reject this.
+      const clash = theme.create({
+        channelId: tenantAChannelId,
+        version: 9999,
+        status: 'active',
+        primaryColor: '#00FF00',
+      } as any);
+      await expect(theme.save(clash)).rejects.toThrow(/duplicate key|23505/);
+
+      const activeCount = await theme.count({
+        where: { channelId: tenantAChannelId, status: 'active' },
+      });
+      expect(activeCount).toBe(1);
+    });
+
+    it('allocates distinct versions for concurrent drafts', async () => {
+      await asTenantAdmin(tenantAEmail, tenantAPassword, tenantAChannelToken);
+
+      const [a, b] = await Promise.all([
+        adminClient.query(CREATE_TENANT_THEME, { input: { displayName: 'race-a' } }),
+        adminClient.query(CREATE_TENANT_THEME, { input: { displayName: 'race-b' } }),
+      ]);
+
+      const versions = [a.createTenantTheme.version, b.createTenantTheme.version];
+      expect(new Set(versions).size).toBe(2);
+      expect(versions.every((v: number) => v > 0)).toBe(true);
+    });
+
+    it('rejects a logo asset owned by another channel and accepts its own', async () => {
+      const otherTenantAsset = await createAssetOwnedBy(tenantBChannelId, 'tenant-b-logo');
+
+      await asTenantAdmin(tenantAEmail, tenantAPassword, tenantAChannelToken);
+      const rejected = adminClient.query(CREATE_TENANT_THEME, {
+        input: { logoAssetId: String(otherTenantAsset.id) },
+      });
+      await expect(rejected).rejects.toThrow(/does not belong/i);
+
+      const ownAsset = await createAssetOwnedBy(tenantAChannelId, 'tenant-a-logo');
+      const accepted = await adminClient.query(CREATE_TENANT_THEME, {
+        input: { logoAssetId: String(ownAsset.id) },
+      });
+      expect(stripIdPrefix(accepted.createTenantTheme.logoAssetId)).toBe(String(ownAsset.id));
+    });
+
+    it('rejects a non-existent logo asset', async () => {
+      await asTenantAdmin(tenantAEmail, tenantAPassword, tenantAChannelToken);
+      const promise = adminClient.query(CREATE_TENANT_THEME, {
+        input: { logoAssetId: '99999999' },
+      });
+      await expect(promise).rejects.toThrow(/does not exist/i);
+    });
+
+    it('isolates themes per channel (INV-025)', async () => {
+      // Tenant B creates and publishes its own theme.
+      await asTenantAdmin(tenantBEmail, tenantBPassword, tenantBChannelToken);
+      const created = await adminClient.query(CREATE_TENANT_THEME, {
+        input: { primaryColor: '#7C3AED', displayName: 'Sharma Academy' },
+      });
+      tenantBThemeId = created.createTenantTheme.id;
+      await adminClient.query(PUBLISH_TENANT_THEME, { id: tenantBThemeId });
+
+      // Tenant A cannot read tenant B's theme by id...
+      await asTenantAdmin(tenantAEmail, tenantAPassword, tenantAChannelToken);
+      const { tenantTheme } = await adminClient.query(ADMIN_TENANT_THEME, {
+        id: tenantBThemeId,
+      });
+      expect(tenantTheme).toBeNull();
+
+      // ...its own list contains only its own themes...
+      const { tenantThemes } = await adminClient.query(ADMIN_TENANT_THEMES);
+      expect(
+        tenantThemes.items.every((t: any) => stripIdPrefix(t.channelId) === tenantAChannelId),
+      ).toBe(true);
+
+      // ...and each storefront resolves its own channel's active theme.
+      shopClient.setChannelToken(tenantAChannelToken);
+      const tenantAView = await shopClient.query(SHOP_MY_TENANT_THEME);
+      expect(tenantAView.myTenantTheme.primaryColor).toBe('#2563EB');
+
+      shopClient.setChannelToken(tenantBChannelToken);
+      const tenantBView = await shopClient.query(SHOP_MY_TENANT_THEME);
+      expect(tenantBView.myTenantTheme.primaryColor).toBe('#7C3AED');
+      expect(tenantBView.myTenantTheme.displayName).toBe('Sharma Academy');
+    });
+
+    it('resets to the platform default by archiving the active theme', async () => {
+      await asTenantAdmin(tenantAEmail, tenantAPassword, tenantAChannelToken);
+
+      const { resetTenantTheme } = await adminClient.query(RESET_TENANT_THEME);
+      expect(resetTenantTheme).toBe(true);
+
+      shopClient.setChannelToken(tenantAChannelToken);
+      const { myTenantTheme } = await shopClient.query(SHOP_MY_TENANT_THEME);
+      expect(myTenantTheme).toBeNull();
+
+      // Reset archives rather than deletes, so rollback is still possible.
+      const { tenantThemes } = await adminClient.query(ADMIN_TENANT_THEMES);
+      expect(tenantThemes.items.some((t: any) => t.status === 'active')).toBe(false);
+
+      const restored = await adminClient.query(ROLLBACK_TENANT_THEME, { id: v1Id });
+      expect(restored.rollbackTenantTheme.status).toBe('active');
+    });
+
+    // ── ADR-043 §2 — white-label commercial entitlement ────────────────────
+    // `whitelabelEnabled` controls whether tenant-specific branding is USABLE,
+    // not merely whether it can be edited: losing the entitlement removes the
+    // theme from the storefront (myTenantTheme → null) as well as blocking
+    // create/update/publish/rollback/createDraftFromVersion. Only reset, which
+    // removes branding, stays universally available.
+
+    describe('white-label entitlement gate (ADR-043 §2)', () => {
+      async function shopActiveTheme() {
+        shopClient.setChannelToken(tenantAChannelToken);
+        const { myTenantTheme } = await shopClient.query(SHOP_MY_TENANT_THEME);
+        return myTenantTheme;
+      }
+
+      async function asTenantA() {
+        await asTenantAdmin(tenantAEmail, tenantAPassword, tenantAChannelToken);
+      }
+
+      it('serves the active theme while entitled (active + whitelabelEnabled)', async () => {
+        await setSubscription(tenantAChannelId, 'active', true);
+
+        const theme = await shopActiveTheme();
+        expect(theme).not.toBeNull();
+        expect(theme.version).toBe(1);
+        expect(theme.primaryColor).toBe('#2563EB');
+      });
+
+      it('keeps serving the theme during past_due (dunning must not strip branding)', async () => {
+        await setSubscription(tenantAChannelId, 'past_due', true);
+        expect(await shopActiveTheme()).not.toBeNull();
+      });
+
+      it('serves the theme while trialing', async () => {
+        await setSubscription(tenantAChannelId, 'trialing', true);
+        expect(await shopActiveTheme()).not.toBeNull();
+      });
+
+      it('denies pending_provider_auth: no theme served and no writes', async () => {
+        await setSubscription(tenantAChannelId, 'pending_provider_auth', true);
+        await asTenantA();
+
+        expect(await shopActiveTheme()).toBeNull();
+
+        // Every write/activation path is gated — note the entitlement check runs
+        // BEFORE the lifecycle checks, so update on an ACTIVE theme reports the
+        // entitlement error rather than 'immutable'.
+        await expect(
+          adminClient.query(CREATE_TENANT_THEME, { input: { displayName: 'nope' } }),
+        ).rejects.toThrow(/not enabled/i);
+        await expect(
+          adminClient.query(UPDATE_TENANT_THEME, { id: v1Id, input: { accentColor: '#000000' } }),
+        ).rejects.toThrow(/not enabled/i);
+        await expect(
+          adminClient.query(PUBLISH_TENANT_THEME, { id: v1Id }),
+        ).rejects.toThrow(/not enabled/i);
+        await expect(
+          adminClient.query(ROLLBACK_TENANT_THEME, { id: v1Id }),
+        ).rejects.toThrow(/not enabled/i);
+      });
+
+      it('denies cancelled: no theme, no writes, but reset stays available', async () => {
+        await setSubscription(tenantAChannelId, 'cancelled', true);
+        await asTenantA();
+
+        expect(await shopActiveTheme()).toBeNull();
+        await expect(
+          adminClient.query(CREATE_TENANT_THEME, { input: { displayName: 'nope' } }),
+        ).rejects.toThrow(/not enabled/i);
+        // Rollback ACTIVATES branding → gated, so a lapsed tenant cannot
+        // re-enable white-label theming by flipping between archived versions.
+        await expect(
+          adminClient.query(ROLLBACK_TENANT_THEME, { id: v1Id }),
+        ).rejects.toThrow(/not enabled/i);
+
+        // reset only REMOVES branding → always allowed.
+        const { resetTenantTheme } = await adminClient.query(RESET_TENANT_THEME);
+        expect(resetTenantTheme).toBe(true);
+        expect(await shopActiveTheme()).toBeNull();
+      });
+
+      it('denies an active subscription whose plan has whitelabelEnabled=false', async () => {
+        await setSubscription(tenantAChannelId, 'active', false);
+        await asTenantA();
+
+        expect(await shopActiveTheme()).toBeNull();
+        await expect(
+          adminClient.query(CREATE_TENANT_THEME, { input: { displayName: 'nope' } }),
+        ).rejects.toThrow(/not enabled/i);
+
+        const { resetTenantTheme } = await adminClient.query(RESET_TENANT_THEME);
+        expect(resetTenantTheme).toBe(true);
+      });
+
+      it('denies a tenant with no subscription at all', async () => {
+        await clearSubscription(tenantAChannelId);
+        await asTenantA();
+
+        expect(await shopActiveTheme()).toBeNull();
+        await expect(
+          adminClient.query(CREATE_TENANT_THEME, { input: { displayName: 'nope' } }),
+        ).rejects.toThrow(/not enabled/i);
+
+        const { resetTenantTheme } = await adminClient.query(RESET_TENANT_THEME);
+        expect(resetTenantTheme).toBe(true);
+      });
+
+      it('gates createDraftFromVersion too (service boundary, no resolver)', async () => {
+        // Still no subscription here; the internal clone seam must not be a way
+        // around the entitlement boundary.
+        const themeService = server.app.get(TenantThemeService);
+        const ctx = await ctxForChannel(tenantAChannelId);
+
+        await expect(
+          themeService.createDraftFromVersion(ctx, stripIdPrefix(v1Id) as any),
+        ).rejects.toThrow(/not enabled/i);
+      });
+
+      it('reduces the entitlement decision to one place (TenantCommercialEligibilityService)', async () => {
+        const eligibility = server.app.get(TenantCommercialEligibilityService);
+        const ctx = await ctxForChannel(tenantAChannelId);
+
+        // no subscription (left over from the previous test)
+        expect(await eligibility.canUseWhitelabel(ctx)).toBe(false);
+
+        await setSubscription(tenantAChannelId, 'cancelled', true);
+        expect(await eligibility.canUseWhitelabel(ctx)).toBe(false);
+
+        await setSubscription(tenantAChannelId, 'pending_provider_auth', true);
+        expect(await eligibility.canUseWhitelabel(ctx)).toBe(false);
+
+        await setSubscription(tenantAChannelId, 'active', false);
+        expect(await eligibility.canUseWhitelabel(ctx)).toBe(false);
+
+        await setSubscription(tenantAChannelId, 'active', true);
+        expect(await eligibility.canUseWhitelabel(ctx)).toBe(true);
+
+        await setSubscription(tenantAChannelId, 'past_due', true);
+        expect(await eligibility.canUseWhitelabel(ctx)).toBe(true);
+
+        await setSubscription(tenantAChannelId, 'trialing', true);
+        expect(await eligibility.canUseWhitelabel(ctx)).toBe(true);
+      });
+
+      it('restores theming once the entitlement returns (gate is reversible)', async () => {
+        await setSubscription(tenantAChannelId, 'active', true);
+        await asTenantA();
+
+        // v1 was archived by the resets above; rollback is permitted again.
+        const { rollbackTenantTheme } = await adminClient.query(ROLLBACK_TENANT_THEME, {
+          id: v1Id,
+        });
+        expect(rollbackTenantTheme.status).toBe('active');
+
+        const theme = await shopActiveTheme();
+        expect(theme).not.toBeNull();
+        expect(theme.primaryColor).toBe('#2563EB');
+      });
+
+      it('strips theming on a PLAN SWITCH while the subscription stays active (plan-derived, not cached)', async () => {
+        // Same subscription row, same 'active' status — only the plan changes
+        // from whitelabelEnabled=true to whitelabelEnabled=false. This proves
+        // the entitlement is re-evaluated from SubscriptionPlan on every read,
+        // not cached from subscription creation.
+        await setSubscription(tenantAChannelId, 'active', false);
+        await asTenantA();
+
+        expect(await shopActiveTheme()).toBeNull();
+        await expect(
+          adminClient.query(CREATE_TENANT_THEME, { input: { displayName: 'nope' } }),
+        ).rejects.toThrow(/not enabled/i);
+
+        // Switching back restores the storefront theme without recreating it.
+        await setSubscription(tenantAChannelId, 'active', true);
+        const theme = await shopActiveTheme();
+        expect(theme).not.toBeNull();
+        expect(theme.primaryColor).toBe('#2563EB');
+      });
     });
   });
 });

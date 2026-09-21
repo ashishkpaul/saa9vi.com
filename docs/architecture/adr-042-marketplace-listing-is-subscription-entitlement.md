@@ -1,8 +1,10 @@
 # ADR-042: Marketplace Listing Is a Subscription Entitlement
 
-**Status:** Accepted  
-**Date:** 2026-09-21  
+**Status:** Accepted — implementation pending
+**Date:** 2026-09-21
 **Related:** ADR-038 (direct Razorpay provider), ADR-039 (provider-wired subscription lifecycle), ADR-041 (provider-cycle billing period identity), G1 hostname contract decision (2026-09-15), INV-001 (Channel = tenant identity)
+
+> **Implementation status (2026-09-21):** The architecture is accepted, but the required implementation is **not yet present in `src/`**. `SubscriptionPlan.marketplaceListingEnabled`, `OrganizationSubscription.marketplaceGraceUntil`, and `MarketplaceIndexerService.channelMarketplaceEligible()` do not exist in the codebase yet. This ADR records the decision; the marketplace entitlement workstream (M0) will implement it. Marketplace eligibility is a **separate** entitlement from ADR-043 L1 white-label theming and must not be conflated with it.
 
 ---
 

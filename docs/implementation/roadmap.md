@@ -219,7 +219,7 @@ Juspay → Razorpay routing was **rejected** by Razorpay (ticket #20876157). Dir
 
 ## Phase 4 — Scale & Premium
 
-- [ ] White-label theming via `TenantProfile.theme`
+- [ ] White-label theming — **superseded by ADR-043**: L1 `TenantTheme` backend implemented (entity, migrations, Admin/Shop API, `whitelabelEnabled` entitlement gating, INV-025); L2 layout presets pending; L3 custom CSS pending; `edu-frontend` consumption pending (C phase). The old `TenantProfile.theme` concept is abandoned.
 - [ ] TimescaleDB for BBB event-heavy analytics
 - [ ] AI features (meeting summary, CMS content writer, review summarisation)
 - [ ] Multi-BBB-server geographic routing

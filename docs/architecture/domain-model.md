@@ -628,3 +628,35 @@ Pending → Provisioning → Active → Completed → Archived
 - `UNIQUE(provider, providerEventId)` prevents duplicate processing.
 - `channelId` is NULL at ingress and resolved by the worker from the provider binding — the authoritative channel comes from the binding, not arbitrary request context (INV-018).
 - The legacy Juspay webhook entities (`juspay_webhook_event`, `juspay_webhook_endpoint`, etc.) were dropped in 466a4ef (ADR-040) after the provider-neutral refactor (9a31beb); the unified `provider_webhook_event` inbox is the sole webhook record (ADR-038).
+
+---
+
+## TenantTheme ✅ Implemented (2026-09-21, ADR-043 L1)
+
+| Property | Value |
+|---|---|
+| **Plugin** | TenantPlugin (`src/plugins/tenant-plugin`) |
+| **Table** | `tenant_theme` |
+| **ChannelAware** | No ORM relationship — immutable scalar `channelId` (ADR-003 scalar-only exception) |
+| **Purpose** | One version of a tenant academy's storefront branding (L1 controlled theme). Tenant presentation as data, not code (ADR-043). |
+
+**Relationships:**
+- Logical 1:1 with Channel (via `channelId`; no `channels[]` join table)
+- Logical reference to Vendure `Asset` (via `logoAssetId`; asset must belong to the same channel)
+
+**Lifecycle:**
+- `draft` → `active` (publish) → `archived` (superseded by the next published version)
+- Live changes require a new draft: `active vN` → clone → `draft vN+1` → publish → `vN` archived
+- `rollbackTenantTheme` re-activates an archived version (archiving the currently active one)
+- `resetTenantTheme` archives the active version → channel returns to the platform default
+
+**Fields:** `channelId`, `version`, `status` (`draft` | `active` | `archived`), `primaryColor`, `secondaryColor`, `accentColor`, `backgroundColor`, `textColor`, `fontFamily` (curated allow-list key), `logoAssetId`, `displayName`, `createdAt`, `updatedAt`
+
+**Invariants:**
+- `UNIQUE(channelId, version)` + `UNIQUE(channelId) WHERE status = 'active'` (PostgreSQL partial index) — at most one active theme per channel, DB-enforced.
+- Published versions (`active`/`archived`) are immutable; only `draft` rows are editable. `version` is allocated (`MAX(version)+1`) at draft creation under a per-channel advisory lock — **not** incremented on save.
+- All reads/writes are channel-scoped from `ctx.channelId`; the channel is never a caller-supplied argument (INV-025).
+- Non-null `logoAssetId` must resolve to an existing Asset whose `channels[]` contains the tenant's own channel.
+- Commercially gated (INV-025 / ADR-043 §2.1): create/update/publish/rollback/draft-clone and the storefront read require subscription exists + `plan.whitelabelEnabled = true` + status ∈ {`trialing`, `active`, `past_due`}, evaluated solely by `TenantCommercialEligibilityService`. Ineligible `myTenantTheme` (public Shop read) returns `null` → platform default.
+- `resetTenantTheme` (removing branding) is always permitted.
+- Theme data never applies to the admin portal, marketplace, or other tenants' storefronts.

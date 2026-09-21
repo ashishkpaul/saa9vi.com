@@ -57,32 +57,102 @@ Tenant B        → Tenant B theme (isolated from A)
 
 L1 ships first (T1). L2 and L3 are subsequent milestones (T2+). This ADR governs all three levels.
 
+#### 2.1 L1 entitlement — subscription-state window
+
+A plan flag alone is not an entitlement: it must be paired with a live commercial relationship. A tenant may use L1 theming only when **both** hold:
+
+```
+subscription.plan.whitelabelEnabled === true
+AND subscription.status ∈ { trialing, active, past_due }
+```
+
+| Subscription state | `whitelabelEnabled` | L1 theming |
+|---|---|---|
+| `trialing` | `true` | ✅ |
+| `active` | `true` | ✅ |
+| `past_due` | `true` | ✅ — dunning must not strip branding from a tenant still being billed |
+| `pending_provider_auth` | `true` | ❌ — authorization never completed |
+| `cancelled` | `true` | ❌ — commercial relationship ended |
+| any state | `false` | ❌ |
+| no subscription row | — | ❌ |
+
+The **local** subscription FSM is the only source of truth. Provider-side states (e.g. a Razorpay `halted`) do not introduce additional local eligibility states.
+
+**Enforcement boundary.** `whitelabelEnabled` gates whether tenant branding is *usable*, not merely whether it can be edited:
+
+| Operation | Gated |
+|---|---|
+| `createTenantTheme`, `updateTenantTheme` | ✅ |
+| `publishTenantTheme` | ✅ |
+| `rollbackTenantTheme` | ✅ — rollback *activates* a version, so it re-enables branding |
+| `createDraftFromVersion` (internal seam) | ✅ — creates theming state |
+| `myTenantTheme` (public Shop read) | ✅ — ineligible ⇒ `null` ⇒ platform default |
+| `resetTenantTheme` | ❌ — only *removes* branding; the operational escape hatch |
+
+Public API access and commercial entitlement are different questions: `myTenantTheme` remains `Permission.Public` because the storefront must resolve branding before customer authentication, while the *value* it returns is entitlement-conditional.
+
+Entitlement is evaluated in exactly one place (`TenantCommercialEligibilityService`). Marketplace listing eligibility (ADR-042, `marketplaceListingEnabled`) is a **separate** entitlement and is not part of this rule.
+
 ### 3. `TenantTheme` entity
 
-A new `TenantTheme` entity stores the tenant's active theme configuration:
+`TenantTheme` stores one version of a tenant's theme. The fields are **flat columns**, not a JSON blob, so each field is independently nullable, typed and GraphQL-mappable:
 
 ```ts
 TenantTheme {
   id
-  channelId          // tenant scope — enforced at all access points
-  version: number    // incremented on every update; enables deterministic rollback
-  status: 'active' | 'draft' | 'archived'
-  config: ThemeConfig  // validated JSON (colour palette, logo asset IDs, font choices)
-  customCss?: string   // L3 only — null until customCssEnabled
+  channelId        // tenant scope — derived from ctx.channelId; immutable
+  version: number  // monotonic per channel; allocated at draft creation
+  status: 'draft' | 'active' | 'archived'
+  primaryColor     // hex (#RGB | #RRGGBB | #RRGGBBAA), nullable
+  secondaryColor
+  accentColor
+  backgroundColor
+  textColor
+  fontFamily       // key from the curated ALLOWED_FONTS set
+  logoAssetId      // Vendure Asset owned by this channel
+  displayName      // storefront header override
   createdAt
   updatedAt
 }
 ```
 
-**Versioning:** `version` is a monotonic integer. The previous active theme version is retained as `archived` to support instant rollback (set previous `archived` version back to `active`). Only one `active` version per channel at any time.
+`customCss` is **not** part of the entity in L1; it arrives with the L3 milestone alongside `SubscriptionPlan.customCssEnabled`.
 
-**`config` schema is validated server-side** on every write. Unknown keys are rejected. Logo/image references must resolve to assets in the tenant's own asset namespace.
+**Lifecycle:**
+
+```
+draft --publish--> active --(publish the next version)--> archived
+```
+
+**Versioning — published versions are immutable.** `version` is a monotonic per-channel integer allocated when a **draft** is created (`MAX(version) + 1`, under a per-channel advisory lock so concurrent drafts cannot collide). It is **not** incremented on save.
+
+- A version may only be edited while `status = 'draft'`.
+- Changing the live theme requires a new draft: `active v3 → clone → draft v4 → publish v4`, which archives v3.
+- Consequently every archived version still holds exactly the values that were live when it was active — which is what makes rollback deterministic.
+
+**Validation** runs server-side on every write:
+
+| Field group | Rule |
+|---|---|
+| Colours | Must be a hex colour, else rejected |
+| `fontFamily` | Must be a key in the curated `ALLOWED_FONTS` set — no arbitrary fonts or font URLs |
+| `logoAssetId` | Must resolve to an existing (non-soft-deleted) `Asset` whose `channels[]` contains the tenant's own channel |
+
+Unknown input keys are rejected at the GraphQL layer by the typed `TenantThemeInput`.
 
 ### 4. Channel isolation — invariant
 
-`TenantTheme.channelId` is set at creation from the authoritative `BbbOrganization.channelId` / `ctx.channelId` (INV-001 pattern). Theme reads are always filtered by `channelId`. A tenant admin can only read and write their own channel's theme — the same access model as CMS content (ADR-036).
+`TenantTheme.channelId` is derived from the authoritative request channel (`ctx.channelId`, INV-001 pattern) and is immutable thereafter. Theme reads and writes are always filtered by `channelId`. A tenant admin can only read and write their own channel's theme — the same access model as CMS content (ADR-036).
 
 Themes are never cross-channel-assignable. There is no `channels[]` join table — `channelId` is the sole scope identifier, consistent with the scalar-channel exception pattern.
+
+**Exactly one `active` version per channel is enforced by PostgreSQL**, not merely by service convention:
+
+```sql
+UNIQUE ("channelId") WHERE "status" = 'active'
+```
+
+A losing concurrent publisher therefore fails closed (23505) instead of leaving two active themes. A separate `UNIQUE (channelId, version)` prevents duplicate versions.
 
 ### 5. L3 custom CSS — security boundary
 
@@ -127,7 +197,30 @@ The capability flags on `SubscriptionPlan` remain separate and independently bil
 
 ### 8. Default theme and reset
 
-Each channel's default state is `TenantTheme` absent (no row) → storefront renders the Saa9vi default theme. Resetting a tenant's theme to the platform default is equivalent to deleting or archiving their `TenantTheme` row; the storefront falls back to the platform default without error.
+Each channel's default state is `TenantTheme` absent (no active row) → storefront renders the Saa9vi default theme. Resetting is done via the `resetTenantTheme` Admin mutation, which archives the active version inside a transaction; there is **no** `deleteTenantTheme` mutation (history is preserved for audit). The storefront falls back to the platform default without error. `resetTenantTheme` is deliberately **ungated** by the entitlement: it only removes tenant branding and can never create theming state.
+
+---
+
+## Implementation status (2026-09-21)
+
+This ADR is **Accepted** as an architectural decision; the capability matrix below records what is implemented vs. pending, so the ADR is not mistaken for a completed feature.
+
+| Capability | ADR | Current code |
+|---|---|---|
+| `TenantTheme` entity (flat fields) | Required | ✅ |
+| Channel isolation (`ctx.channelId`) | Required | ✅ |
+| L1 colours, curated fonts, logo | Required | ✅ |
+| Logo channel-ownership validation | Required | ✅ |
+| Immutable published versions | Required | ✅ |
+| One active per channel (DB partial unique index) | Required | ✅ |
+| Draft cloning from published version | Required | ✅ |
+| Admin CRUD + publish/rollback/reset | Required | ✅ |
+| L1 entitlement (`whitelabelEnabled` + state window) | Required | ✅ |
+| Public Shop `myTenantTheme`, entitlement-conditional | Required | ✅ |
+| Storefront theme rendering (`edu-frontend`) | Required for delivery | ❌ pending (C phase) |
+| L2 layout presets | Future | ❌ |
+| `customCssEnabled` plan flag | Future | ❌ |
+| L3 custom CSS + CSP changes | Future | ❌ |
 
 ---
 
@@ -140,8 +233,8 @@ Each channel's default state is `TenantTheme` absent (no row) → storefront ren
 | `TenantTheme` entity | New entity + migration |
 | `SubscriptionPlan` entity | Add `customCssEnabled: boolean` (default `false`) |
 | Theme service | `TenantThemeService` — CRUD, version management, rollback |
-| Admin GraphQL | `createTenantTheme`, `updateTenantTheme`, `rollbackTenantTheme`, `deleteTenantTheme`, `tenantTheme(channelId)` |
-| Shop GraphQL | `myTenantTheme` (read-only, for the tenant admin dashboard UI) |
+| Admin GraphQL | `tenantTheme(id)`, `tenantThemes`, `createTenantTheme`, `updateTenantTheme`, `publishTenantTheme`, `rollbackTenantTheme`, `resetTenantTheme` — channel derived from `ctx.channelId`, never a caller-supplied `channelId` argument |
+| Shop GraphQL | `myTenantTheme` — `Permission.Public`, consumed by the tenant **storefront** (branding must resolve before customer authentication); entitlement-conditional: ineligible ⇒ `null` ⇒ platform default |
 | Storefront | Theme resolution at request time by `channelId`; no server-side injection for admin/marketplace routes |
 | CSS validation | Prohibited-construct rejection at save time (L3) |
 | CSP | Content Security Policy updated to block external `url()` in tenant CSS scope |
@@ -160,13 +253,27 @@ Each channel's default state is `TenantTheme` absent (no row) → storefront ren
 
 ### Invariant additions (to `invariants.md`)
 
-> **INV-025 — Tenant theme applies only to the tenant's own storefront**
+> **INV-025 — Tenant theme is channel-isolated, immutable once published, and commercially gated**
 >
-> A `TenantTheme` row is scoped to exactly one `channelId`. Tenant theme configuration
-> (colours, logo, fonts, custom CSS) MUST NOT be applied to: the Saa9vi admin portal,
-> the marketplace surface, or any other tenant's storefront pages.
-> Custom CSS, when enabled, MUST be constrained to a tenant-scoped stylesheet boundary
-> and MUST NOT load arbitrary external resources or inject executable code.
+> 1. `TenantTheme.channelId` is derived from the authoritative request channel
+>    (`ctx.channelId`) and is immutable. All reads and writes are channel-scoped;
+>    tenant A can never read or write tenant B's theme.
+> 2. At most one `active` theme exists per channel — enforced by a PostgreSQL
+>    partial unique index, not merely by service convention.
+> 3. Published versions (`active`/`archived`) are immutable; edits happen only on
+>    `draft` rows. Live changes require a new draft version.
+> 4. Tenant theme configuration MUST NOT be applied to: the Saa9vi admin portal,
+>    the marketplace surface, or any other tenant's storefront pages.
+> 5. A non-null `logoAssetId` MUST resolve to an Asset belonging to the same channel.
+> 6. L1 theme use (create/update/publish/rollback/draft-clone and the storefront
+>    read) requires the commercial entitlement: subscription exists,
+>    `plan.whitelabelEnabled === true`, and subscription status ∈
+>    {`trialing`, `active`, `past_due`}. Ineligible storefront reads resolve to
+>    the platform default (`myTenantTheme` returns `null`).
+> 7. `resetTenantTheme` (removing branding) is always permitted.
+> 8. Custom CSS, when enabled (L3), MUST be constrained to a tenant-scoped
+>    stylesheet boundary and MUST NOT load arbitrary external resources or inject
+>    executable code.
 
 ---
 
@@ -176,7 +283,6 @@ T1 (L1 controlled theme) is safe to build before the marketplace entitlement gat
 
 ## Migration note
 
-Two schema migrations required, both via Vendure CLI:
-
-1. `npx vendure migrate -g add-tenant-theme` — creates `tenant_theme` table
-2. `npx vendure migrate -g add-custom-css-enabled-to-plan` — adds `customCssEnabled BOOLEAN NOT NULL DEFAULT false` to `subscription_plan`
+1. `npx vendure migrate -g add-tenant-theme` — creates `tenant_theme` table (**done**)
+2. `npx vendure migrate -g tenant-theme-one-active-per-channel` — partial unique index enforcing one active theme per channel (**done**)
+3. `npx vendure migrate -g add-custom-css-enabled-to-plan` — adds `customCssEnabled BOOLEAN NOT NULL DEFAULT false` to `subscription_plan` (future, L3)

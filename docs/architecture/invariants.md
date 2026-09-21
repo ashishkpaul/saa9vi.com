@@ -345,14 +345,18 @@ Hostname configuration (`tenantSlug`, `customDomain`), Razorpay `providerStatus`
 
 ---
 
-## INV-025: Tenant Theme Applies Only to the Tenant's Own Storefront (ADR-043)
+## INV-025: Tenant Theme Is Channel-Isolated, Immutable Once Published, and Commercially Gated (ADR-043)
 
-**Rule:** A `TenantTheme` row is scoped to exactly one `channelId`. Tenant theme configuration (colours, logo, fonts, custom CSS) MUST NOT be applied to: the Saa9vi admin portal, the marketplace surface (`marketplace.saa9vi.com`), or any other tenant's storefront pages.
+**Rule:** A `TenantTheme` row is scoped to exactly one `channelId` (derived from the authoritative request channel, `ctx.channelId` — immutable thereafter). Tenant theme configuration (colours, logo, fonts, custom CSS) MUST NOT be applied to: the Saa9vi admin portal, the marketplace surface (`marketplace.saa9vi.com`), or any other tenant's storefront pages.
 
 **Corollaries:**
+- At most one `active` theme exists per channel — enforced by a PostgreSQL partial unique index (`UNIQUE(channelId) WHERE status = 'active'`), not merely by service convention. A losing concurrent publisher fails closed (23505).
+- Published versions (`active`/`archived`) are immutable; only `draft` rows are editable. `version` is allocated at draft creation (`MAX(version)+1` under a per-channel advisory lock) and is NOT incremented on save. Live changes require a new draft version, which is what makes rollback deterministic.
+- A non-null `logoAssetId` MUST resolve to an existing Asset whose `channels[]` contains the tenant's own channel.
+- Commercial gating: creating, updating, publishing, rolling back, or draft-cloning a tenant theme — and the public storefront read (`myTenantTheme`) — require the L1 entitlement (subscription exists + `plan.whitelabelEnabled === true` + status ∈ {`trialing`, `active`, `past_due`}), evaluated solely by `TenantCommercialEligibilityService`. Ineligible storefront reads resolve to the platform default (`myTenantTheme` returns `null`).
+- `resetTenantTheme` (removing branding) is always permitted — it can never create theming state.
 - Custom CSS (L3), when enabled, MUST be constrained to a tenant-scoped stylesheet boundary. Prohibited constructs and external resource loading MUST be rejected at save time, not merely at render time. Scoping + CSP + prohibited-construct rejection together form the security boundary — CSS sanitization alone is insufficient.
 - Tenant theme data MUST NOT include executable JavaScript in any form.
 - The marketplace surface always renders with the Saa9vi platform theme regardless of which tenant's sessions are displayed.
-- `TenantTheme.channelId` is set from the authoritative aggregate at creation (INV-001) and is immutable thereafter.
 
-**Rejection criterion:** Any code path that applies tenant theme data to the admin portal, marketplace pages, or another tenant's storefront is rejected.
+**Rejection criterion:** Any code path that applies tenant theme data to the admin portal, marketplace pages, or another tenant's storefront — that permits two active themes per channel, that mutates a published version in place, that serves a tenant theme to a commercially ineligible tenant (other than the always-permitted reset), or that accepts a logo asset from another channel — is rejected.

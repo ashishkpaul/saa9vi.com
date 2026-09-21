@@ -778,12 +778,17 @@ Tenant Channel (test-academy-f9hmus)
 - L3: Constrained custom CSS — gated by new `customCssEnabled` plan flag (separate from `whitelabelEnabled`)
 
 **Key additions:**
-- `TenantTheme` entity — versioned, channel-scoped, with rollback support
-- `SubscriptionPlan.customCssEnabled` (boolean, default false) — independent of `whitelabelEnabled`
+- `TenantTheme` entity — versioned, channel-scoped, with rollback support; published versions immutable; one active per channel enforced by PostgreSQL partial unique index
+- `TenantCommercialEligibilityService` — sole evaluator of the L1 entitlement
+- L1 entitlement window: subscription exists + `whitelabelEnabled = true` + status ∈ {`trialing`, `active`, `past_due`}; `resetTenantTheme` ungated
+- `SubscriptionPlan.customCssEnabled` (boolean, default false) — **future, L3**; not yet in the schema
 - Security boundary: CSS scoping + CSP + prohibited-construct rejection (sanitization alone insufficient)
 - Marketplace always uses Saa9vi platform theme regardless of tenant
-- INV-025 added to `invariants.md`
+- INV-025 added to `invariants.md` (channel isolation + immutability + commercial gating)
+
+**Implementation status (2026-09-21):** L1 backend complete (entity, both migrations, Admin/Shop API, entitlement gating, 72 e2e tests). L2/L3 and storefront consumption (`edu-frontend`) pending.
 
 **Migrations required:**
-1. `add-tenant-theme`
-2. `add-custom-css-enabled-to-plan`
+1. `add-tenant-theme` ✅
+2. `tenant-theme-one-active-per-channel` ✅
+3. `add-custom-css-enabled-to-plan` (future, L3)

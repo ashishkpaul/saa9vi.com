@@ -108,6 +108,6 @@ export class TenantShopResolver {
   @Query()
   @Allow(Permission.Public)
   async myTenantTheme(@Ctx() ctx: RequestContext) {
-    return this.tenantThemeService.getActiveTheme(String(ctx.channelId));
+    return this.tenantThemeService.getActiveTheme(ctx);
   }
 }
