@@ -41,7 +41,7 @@
 | **R2-F** Inbox Idempotency | ✅ Proven | UNIQUE(provider, providerEventId) — inbox-level. |
 | **R2-F** Processing Idempotency | ✅ VERIFIED (2026-09-20) | Exactly 1 billing attempt for subscription 7. CAS replay-safe confirmed. |
 | **R2-F** Concurrent Idempotency | ✅ VERIFIED (2026-09-20) | Single attempt created; duplicate event replay handled by `reconcileTerminalAttempt`. |
-| **R2-G** Failure Semantics | ⚠️ CODE HARDENED / RUNTIME OPEN | ADR-041 G6 code: `requireProviderCycleForFailure()` fail-closed; cycle-identity freshness guard. Runtime evidence for `subscription.pending` → `past_due` → `subscription.halted` still required. Out-of-order webhook test required. D-5 (halted recovery) still open. |
+| **R2-G** Failure Semantics | ⚠️ PARTIALLY VERIFIED (2026-09-20) | `subscription.pending` → `past_due` evidenced: event 34, `TeZ7o2h0smBz5B`, providerCycle `2026-10-19 → 2026-11-19` (FRESH vs local `2026-09-20`), `status=past_due`, `version=3`, no spurious attempt. Still open: `subscription.halted` runtime evidence; stale-cycle no-op test; D-5 halted recovery. |
 | **R2-G** Channel Isolation | ✅ Proven | Cross-tenant events stay isolated |
 | **ADR-038** Provider Freeze | ✅ Complete | Accepted 2026-09-12. (Gate id "R3" is reserved for one-time commerce — see `production-readiness.md` evidence ledger) |
 

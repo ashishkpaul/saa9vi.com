@@ -844,17 +844,25 @@ For each failure event:
 
 ### Current status
 
-**CODE HARDENED (ADR-041 G2–G7) / RUNTIME RE-VERIFICATION REQUIRED**
+**RUNTIME VERIFIED (2026-09-20) — R2-G PARTIALLY CLOSED**
 
-`subscription.pending` / `subscription.halted` handling is code-hardened by ADR-041 G6:
-- `requireProviderCycleForFailure()` throws before any binding mutation if `current_start` absent
-- Cycle-identity freshness guard (`providerCycleStart <= localCurrentPeriodStart` → stale no-op)
-  replaces the previous wall-clock guard (the wall-clock guard was the root cause of the
-  out-of-order defect noted in ADR-041 context)
+`subscription.pending` → `past_due` evidenced end-to-end:
 
-R2-G remains open until the intended Saa9vi state transition is re-evidenced at runtime
-against the ADR-041 code. D-5 (halted recovery) remains open — no code path currently
-recovers a `halted` subscription to `active` after manual operator intervention.
+| Evidence item | Value |
+|---|---|
+| Webhook event | id=34, `subscription.pending`, providerEventId=`TeZ7o2h0smBz5B` |
+| processingStatus | `processed` (1 attempt) |
+| Provider cycle (failure) | `current_start=1792434600` → `2026-10-19`; `current_end=1795113000` → `2026-11-19` |
+| ADR-041 G6 freshness guard | `providerCycleStart (2026-10-19) > localPeriodStart (2026-09-20)` → FRESH → past_due applied ✅ |
+| OrganizationSubscription.status | `past_due` ✅ |
+| OrganizationSubscription.providerStatus | `pending` ✅ |
+| version | 3 (CAS advanced exactly once) ✅ |
+| No spurious billing attempt | 1 attempt total (succeeded, from activation) — no failure attempt created ✅ |
+
+**Still open:**
+- `subscription.halted` runtime evidence (retry exhaustion → halted state)
+- Out-of-order `subscription.pending` for a stale cycle (freshness guard no-op test)
+- D-5: halted recovery path (no code path currently recovers halted → active)
 
 ------------------------------------------------------------------------
 
@@ -1145,14 +1153,14 @@ Then verify the actual changed files.
                                                           confirmed, idempotency
                                                           confirmed
 
-  R2-G              Failure semantics   CODE HARDENED     ADR-041 G6: cycle-identity
-                                        (ADR-041) /       freshness guard replaces
-                                        RUNTIME RE-VERIF  wall-clock guard;
-                                        REQUIRED          requireProviderCycleForFailure
-                                                          fail-closed; runtime
-                                                          evidence required; D-5
-                                                          (halted recovery) still
-                                                          open
+  R2-G              Failure semantics   PARTIALLY         sub_TeJjWjzzC0dU4W:
+                                        VERIFIED          subscription.pending →
+                                        (2026-09-20)      past_due evidenced;
+                                                          ADR-041 G6 freshness
+                                                          guard confirmed FRESH;
+                                                          version=3; no spurious
+                                                          attempt. Halted/stale-
+                                                          cycle still open.
 
   R3                One-time commerce   OPEN              `dummyPaymentHandler` /
                                                           full payment evidence
