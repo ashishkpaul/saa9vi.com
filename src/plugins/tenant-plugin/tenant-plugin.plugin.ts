@@ -11,6 +11,7 @@ import { TenantProfile } from './entities/tenant-profile.entity';
 import { InstructorProfile } from './entities/instructor-profile.entity';
 import { MediaResource } from './entities/media-resource.entity';
 import { TenantRegistrationLog } from './entities/tenant-registration-log.entity';
+import { TenantTheme } from './entities/tenant-theme.entity';
 import { TenantProfileService } from './services/tenant-profile.service';
 import { InstructorProfileService } from './services/instructor-profile.service';
 import { MediaResourceService } from './services/media-resource.service';
@@ -19,14 +20,31 @@ import { DomainChannelResolverService } from './services/domain-channel-resolver
 import { TenantDeletionService } from './services/tenant-deletion.service';
 import { TenantRegistrationService } from './services/tenant-registration.service';
 import { TenantRoleReconciliationService } from './services/tenant-role-reconciliation.service';
+import { TenantThemeService } from './services/tenant-theme.service';
 import { TenantAdminResolver } from './api/tenant-admin.resolver';
 import { TenantShopResolver } from './api/tenant-shop.resolver';
-import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
+import { adminApiExtensions, shopApiExtensions, themeAdminExtensions, themeShopExtensions } from './api/api-extensions';
+import { DocumentNode, Kind } from 'graphql';
+
+/**
+ * Concatenates multiple GraphQL schema-extension documents into a single
+ * DocumentNode WITHOUT merging/redefining types. Unlike `mergeTypeDefs`,
+ * this preserves `extend type Query` / `extend type Mutation` as extension
+ * definitions, which is required by Vendure's schema-extension mechanism
+ * (mergeTypeDefs converts them into full `type Query` definitions, causing
+ * "Cannot define a new schema within a schema extension").
+ */
+function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
+  return {
+    kind: Kind.DOCUMENT,
+    definitions: docs.flatMap((doc) => doc.definitions),
+  };
+}
 
 @VendurePlugin({
   compatibility: '^3.0.0',
   imports: [PluginCommonModule, CustomerDeletionModule],
-  entities: [TenantProfile, InstructorProfile, MediaResource, TenantRegistrationLog],
+  entities: [TenantProfile, InstructorProfile, MediaResource, TenantRegistrationLog, TenantTheme],
   providers: [
     TenantProfileService,
     InstructorProfileService,
@@ -36,13 +54,14 @@ import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
     TenantDeletionService,
     TenantRegistrationService,
     TenantRoleReconciliationService,
+    TenantThemeService,
   ],
   adminApiExtensions: {
-    schema: adminApiExtensions,
+    schema: concatApiExtensions(adminApiExtensions, themeAdminExtensions),
     resolvers: [TenantAdminResolver],
   },
   shopApiExtensions: {
-    schema: shopApiExtensions,
+    schema: concatApiExtensions(shopApiExtensions, themeShopExtensions),
     resolvers: [TenantShopResolver],
   },
   dashboard: './dashboard/index.tsx',

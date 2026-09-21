@@ -207,3 +207,106 @@ export const shopApiExtensions = gql`
         verifyTenantAdmin(token: String!): VerifyTenantAdminResult!
     }
 `;
+
+export const themeShopExtensions = gql`
+  """
+  The active theme for the current tenant channel.
+  All fields are nullable — the storefront falls back to the platform default
+  when a field is null or when no active theme exists.
+  """
+  type TenantTheme {
+    id: ID!
+    channelId: ID!
+    version: Int!
+    status: String!
+    primaryColor: String
+    secondaryColor: String
+    accentColor: String
+    backgroundColor: String
+    textColor: String
+    fontFamily: String
+    logoAssetId: ID
+    displayName: String
+  }
+
+  extend type Query {
+    """
+    Returns the active theme for the current tenant channel, or null if
+    the channel uses the Saa9vi platform default theme.
+    """
+    myTenantTheme: TenantTheme
+  }
+`;
+
+export const themeAdminExtensions = gql`
+  type TenantTheme {
+    id: ID!
+    channelId: ID!
+    version: Int!
+    status: String!
+    primaryColor: String
+    secondaryColor: String
+    accentColor: String
+    backgroundColor: String
+    textColor: String
+    fontFamily: String
+    logoAssetId: ID
+    displayName: String
+    createdAt: DateTime!
+    updatedAt: DateTime!
+  }
+
+  type TenantThemeList {
+    items: [TenantTheme!]!
+    totalItems: Int!
+  }
+
+  input TenantThemeInput {
+    primaryColor: String
+    secondaryColor: String
+    accentColor: String
+    backgroundColor: String
+    textColor: String
+    """
+    Font family key from the curated set: inter, roboto, open-sans, lato,
+    poppins, nunito, source-sans-pro, system.
+    """
+    fontFamily: String
+    logoAssetId: ID
+    displayName: String
+  }
+
+  extend type Query {
+    """
+    List all themes (draft/active/archived) for the current channel.
+    """
+    tenantThemes: TenantThemeList!
+    """
+    Get a specific theme by ID (must belong to the current channel).
+    """
+    tenantTheme(id: ID!): TenantTheme
+  }
+
+  extend type Mutation {
+    """
+    Create a new DRAFT theme for the current channel.
+    """
+    createTenantTheme(input: TenantThemeInput!): TenantTheme!
+    """
+    Update an existing DRAFT or ACTIVE theme.
+    """
+    updateTenantTheme(id: ID!, input: TenantThemeInput!): TenantTheme!
+    """
+    Publish a DRAFT theme, making it ACTIVE. Archives the previous active theme.
+    """
+    publishTenantTheme(id: ID!): TenantTheme!
+    """
+    Roll back to a previously archived theme.
+    """
+    rollbackTenantTheme(id: ID!): TenantTheme!
+    """
+    Reset to the platform default theme (archives the active theme).
+    """
+    resetTenantTheme: Boolean!
+  }
+`;

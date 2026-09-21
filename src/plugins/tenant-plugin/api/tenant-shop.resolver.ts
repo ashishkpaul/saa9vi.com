@@ -3,6 +3,7 @@ import { Allow, Ctx, Logger, Permission, RequestContext, UserService } from '@ve
 import { TenantProfileService } from '../services/tenant-profile.service';
 import { InstructorProfileService } from '../services/instructor-profile.service';
 import { MediaResourceService } from '../services/media-resource.service';
+import { TenantThemeService } from '../services/tenant-theme.service';
 import {
   RegisterTenantInput,
   TenantRegistrationService,
@@ -15,6 +16,7 @@ export class TenantShopResolver {
     private readonly instructorProfileService: InstructorProfileService,
     private readonly mediaResourceService: MediaResourceService,
     private readonly tenantRegistrationService: TenantRegistrationService,
+    private readonly tenantThemeService: TenantThemeService,
     private readonly userService: UserService,
   ) {}
 
@@ -99,5 +101,13 @@ export class TenantShopResolver {
       Logger.warn(`verifyTenantAdmin failed: ${e?.message}`, 'TenantShopResolver');
       return { success: false, message: e?.message ?? 'Verification failed', channelToken: null };
     }
+  }
+
+  // ── Theme (ADR-043 L1) ────────────────────────────────────────────────────
+
+  @Query()
+  @Allow(Permission.Public)
+  async myTenantTheme(@Ctx() ctx: RequestContext) {
+    return this.tenantThemeService.getActiveTheme(String(ctx.channelId));
   }
 }

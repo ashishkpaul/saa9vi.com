@@ -12,6 +12,7 @@ import { SUPER_ADMIN_ROLE_CODE } from '@vendure/common/lib/shared-constants';
 import { TenantProfileService } from '../services/tenant-profile.service';
 import { InstructorProfileService } from '../services/instructor-profile.service';
 import { MediaResourceService } from '../services/media-resource.service';
+import { TenantThemeService } from '../services/tenant-theme.service';
 import { tenantProfilePermission, instructorProfilePermission, mediaResourcePermission } from '../constants';
 import { Administrator, Role } from '@vendure/core';
 
@@ -21,6 +22,7 @@ export class TenantAdminResolver {
     private readonly tenantProfileService: TenantProfileService,
     private readonly instructorProfileService: InstructorProfileService,
     private readonly mediaResourceService: MediaResourceService,
+    private readonly tenantThemeService: TenantThemeService,
     private readonly connection: TransactionalConnection,
   ) {}
 
@@ -303,5 +305,55 @@ export class TenantAdminResolver {
   async deleteMediaResource(@Ctx() ctx: RequestContext, @Args() args: { id: ID }) {
     await this.mediaResourceService.delete(ctx, args.id as string);
     return true;
+  }
+
+  // ── Theme (ADR-043 L1) ────────────────────────────────────────────────────
+
+  @Query()
+  @Allow(tenantProfilePermission.Read)
+  async tenantThemes(@Ctx() ctx: RequestContext) {
+    const items = await this.tenantThemeService.listByChannel(ctx);
+    return { items, totalItems: items.length };
+  }
+
+  @Query()
+  @Allow(tenantProfilePermission.Read)
+  async tenantTheme(@Ctx() ctx: RequestContext, @Args('id') id: ID) {
+    return this.tenantThemeService.findById(ctx, id);
+  }
+
+  @Mutation()
+  @Transaction()
+  @Allow(tenantProfilePermission.Update)
+  async createTenantTheme(@Ctx() ctx: RequestContext, @Args('input') input: any) {
+    return this.tenantThemeService.createTheme(ctx, input);
+  }
+
+  @Mutation()
+  @Transaction()
+  @Allow(tenantProfilePermission.Update)
+  async updateTenantTheme(@Ctx() ctx: RequestContext, @Args('id') id: ID, @Args('input') input: any) {
+    return this.tenantThemeService.updateTheme(ctx, id, input);
+  }
+
+  @Mutation()
+  @Transaction()
+  @Allow(tenantProfilePermission.Update)
+  async publishTenantTheme(@Ctx() ctx: RequestContext, @Args('id') id: ID) {
+    return this.tenantThemeService.publishTheme(ctx, id);
+  }
+
+  @Mutation()
+  @Transaction()
+  @Allow(tenantProfilePermission.Update)
+  async rollbackTenantTheme(@Ctx() ctx: RequestContext, @Args('id') id: ID) {
+    return this.tenantThemeService.rollbackTheme(ctx, id);
+  }
+
+  @Mutation()
+  @Transaction()
+  @Allow(tenantProfilePermission.Update)
+  async resetTenantTheme(@Ctx() ctx: RequestContext) {
+    return this.tenantThemeService.resetTheme(ctx);
   }
 }
