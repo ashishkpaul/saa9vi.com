@@ -330,3 +330,29 @@ DRAFT → SCHEDULED → LIVE → FINISHED
 - A single `createSessionsFromTemplate` call MUST NOT generate more than 100 sessions.
 - Duplicate ISO 8601 start times within a single batch MUST be rejected before any DB write.
 - `channelId` on generated sessions is inherited from `template.channelId`, which is derived from the owning organization at template creation time (INV-001 authoritative aggregate).
+
+---
+
+## INV-024: Marketplace Listing Eligibility Is a Subscription Entitlement (ADR-042)
+
+**Rule:** A tenant channel's marketplace listing eligibility is determined solely by:
+(a) `SubscriptionPlan.marketplaceListingEnabled = true`, AND
+(b) `OrganizationSubscription.status = 'active'` OR (`status = 'past_due'` AND `now() < marketplaceGraceUntil`).
+
+Hostname configuration (`tenantSlug`, `customDomain`), Razorpay `providerStatus`, and provider subscription ID existence are NOT eligibility signals. `marketplaceGraceUntil` is set by the Saa9vi subscription FSM (on `past_due` transition) and evaluated using the Saa9vi server clock — never derived from provider state.
+
+**Rejection criterion:** Any code path that grants or denies marketplace listing based on hostname, `providerStatus`, or provider subscription existence is rejected.
+
+---
+
+## INV-025: Tenant Theme Applies Only to the Tenant's Own Storefront (ADR-043)
+
+**Rule:** A `TenantTheme` row is scoped to exactly one `channelId`. Tenant theme configuration (colours, logo, fonts, custom CSS) MUST NOT be applied to: the Saa9vi admin portal, the marketplace surface (`marketplace.saa9vi.com`), or any other tenant's storefront pages.
+
+**Corollaries:**
+- Custom CSS (L3), when enabled, MUST be constrained to a tenant-scoped stylesheet boundary. Prohibited constructs and external resource loading MUST be rejected at save time, not merely at render time. Scoping + CSP + prohibited-construct rejection together form the security boundary — CSS sanitization alone is insufficient.
+- Tenant theme data MUST NOT include executable JavaScript in any form.
+- The marketplace surface always renders with the Saa9vi platform theme regardless of which tenant's sessions are displayed.
+- `TenantTheme.channelId` is set from the authoritative aggregate at creation (INV-001) and is immutable thereafter.
+
+**Rejection criterion:** Any code path that applies tenant theme data to the admin portal, marketplace pages, or another tenant's storefront is rejected.

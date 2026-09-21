@@ -745,3 +745,45 @@ Tenant Channel (test-academy-f9hmus)
 - Removing default-channel content entirely (would break platform CMS).
 
 > **ⓘ Platform-CMS vs. Academy-CMS split:** The channel ownership model creates a natural seam between Platform CMS (SuperAdmin-scoped, default channel) and Academy CMS (Tenant-scoped, tenant channel). This seam opens the door to swapping in an external CMS (e.g., WordPress, Strapi, Contentful) for **SuperAdmin-scoped content only** — the default channel's content is platform-controlled and doesn't need multi-tenant isolation. The door remains **closed for tenant-scoped content** because Academy CMS entities are tightly coupled to Vendure's channel-scoped permission model, and introducing an external CMS there would break the channel-isolation invariants (INV-001, INV-003) that tenant content depends on.
+
+## ADR-042: Marketplace Listing Is a Subscription Entitlement
+
+**Status:** Accepted (2026-09-21)  
+**Full record:** `docs/architecture/adr-042-marketplace-listing-is-subscription-entitlement.md`
+
+**Core decision:** Marketplace listing eligibility is determined by `SubscriptionPlan.marketplaceListingEnabled AND commercialEligibilityWindow(subscription)`. Hostname configuration, Razorpay `providerStatus`, and provider subscription existence are not eligibility signals.
+
+**Key additions:**
+- `SubscriptionPlan.marketplaceListingEnabled` (boolean, default false) — new plan-tier capability flag
+- `OrganizationSubscription.marketplaceGraceUntil` (nullable timestamp) — set on `past_due` transition, cleared on recovery/cancellation; evaluated by Saa9vi server clock only
+- `MarketplaceIndexerService.indexSession()` gains a `channelMarketplaceEligible()` check
+- INV-024 added to `invariants.md`
+
+**Migrations required:**
+1. `add-marketplace-listing-enabled-to-plan`
+2. `add-marketplace-grace-until-to-subscription`
+
+---
+
+## ADR-043: Tenant Storefront Theming Is Tenant Data, Not Code
+
+**Status:** Accepted (2026-09-21)  
+**Full record:** `docs/architecture/adr-043-tenant-storefront-theming-is-tenant-data.md`
+
+**Core decision:** Tenant theme configuration is stored as structured, versioned data (`TenantTheme` entity) and rendered by the shared storefront. No tenant-supplied JavaScript is accepted. Tenant theme never affects the admin portal, marketplace, or other tenants.
+
+**Three capability levels:**
+- L1: Controlled theme (colours, logo, font) — gated by existing `whitelabelEnabled`
+- L2: Layout presets — gated by `whitelabelEnabled` + future flag
+- L3: Constrained custom CSS — gated by new `customCssEnabled` plan flag (separate from `whitelabelEnabled`)
+
+**Key additions:**
+- `TenantTheme` entity — versioned, channel-scoped, with rollback support
+- `SubscriptionPlan.customCssEnabled` (boolean, default false) — independent of `whitelabelEnabled`
+- Security boundary: CSS scoping + CSP + prohibited-construct rejection (sanitization alone insufficient)
+- Marketplace always uses Saa9vi platform theme regardless of tenant
+- INV-025 added to `invariants.md`
+
+**Migrations required:**
+1. `add-tenant-theme`
+2. `add-custom-css-enabled-to-plan`
