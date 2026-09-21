@@ -66,7 +66,9 @@ export class TenantTheme extends VendureEntity {
    * - 'draft':    staged but not yet applied
    * - 'archived': a previous active version, retained for rollback
    *
-   * Invariant: exactly one 'active' row per channelId at any time.
+   * Invariant: at most one 'active' row per channelId at any time.
+   * Zero 'active' rows is the platform-default/reset state.
+   * Enforced by the partial unique index in migration 1789989868806.
    */
   @Column('varchar', { default: 'draft' })
   status: 'active' | 'draft' | 'archived';

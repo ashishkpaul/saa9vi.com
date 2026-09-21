@@ -786,7 +786,7 @@ Tenant Channel (test-academy-f9hmus)
 - Marketplace always uses Saa9vi platform theme regardless of tenant
 - INV-025 added to `invariants.md` (channel isolation + immutability + commercial gating)
 
-**Implementation status (2026-09-21):** L1 backend complete (entity, both migrations, Admin/Shop API, entitlement gating, 72 e2e tests). L2/L3 and storefront consumption (`edu-frontend`) pending.
+**Implementation status (2026-09-21):** L1 backend complete (entity, both migrations, Admin/Shop API, entitlement gating, 73 e2e tests). L2/L3 and storefront consumption (`edu-frontend`) pending.
 
 **Migrations required:**
 1. `add-tenant-theme` ✅
