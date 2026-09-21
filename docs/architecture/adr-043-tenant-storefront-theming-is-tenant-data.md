@@ -146,7 +146,7 @@ Unknown input keys are rejected at the GraphQL layer by the typed `TenantThemeIn
 
 Themes are never cross-channel-assignable. There is no `channels[]` join table — `channelId` is the sole scope identifier, consistent with the scalar-channel exception pattern.
 
-**Exactly one `active` version per channel is enforced by PostgreSQL**, not merely by service convention:
+**At most one `active` version per channel is enforced by PostgreSQL**, not merely by service convention. Zero active rows (after `resetTenantTheme`) is the platform-default state — the partial index prevents *two or more* active rows; it does not require one:
 
 ```sql
 UNIQUE ("channelId") WHERE "status" = 'active'

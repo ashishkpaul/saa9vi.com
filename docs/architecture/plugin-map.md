@@ -20,6 +20,7 @@
 | InstructorProfile | `instructor_profile` | No (DL-010) |
 | MediaResource | `media_resource` | Yes |
 | TenantRegistrationLog | `tenant_registration_log` | No |
+| TenantTheme | `tenant_theme` | No (scalar `channelId`, ADR-043) |
 
 ### Publishes (key cross-plugin events — not an exhaustive inventory; see `src/plugins/tenant-plugin/events/tenant-events.ts` for the full set)
 
@@ -38,8 +39,8 @@ None.
 
 | Resolver | Scope | Purpose |
 |---|---|---|
-| `TenantShopResolver` | Shop API (Public) | `registerNewTenant`, `tenantProfile`, `instructorProfiles`, `mediaResources` |
-| `TenantAdminResolver` | Admin API | Tenant profile CRUD, instructor CRUD, media CRUD |
+| `TenantShopResolver` | Shop API (Public) | `registerNewTenant`, `tenantProfile`, `instructorProfiles`, `mediaResources`, `myTenantTheme` (public; entitlement-conditional — returns null → platform default) |
+| `TenantAdminResolver` | Admin API | Tenant profile CRUD, instructor CRUD, media CRUD, theme lifecycle: `tenantThemes`, `tenantTheme(id)`, `createTenantTheme`, `updateTenantTheme`, `publishTenantTheme`, `rollbackTenantTheme`, `resetTenantTheme` |
 
 ### Key Services
 
@@ -50,6 +51,8 @@ None.
 | `InstructorProfileService` | Instructor CRUD with explicit `channelId` filter |
 | `InstructorIndexerService` | Per-tenant Elasticsearch indexing for instructors |
 | `DomainChannelResolverService` | Custom domain → channel token Redis mapping |
+| `TenantThemeService` | ADR-043 L1 theme lifecycle: immutable versioned drafts (draft → active → archived), draft cloning, publish/rollback/reset, advisory-locked version allocation, channel-scoped asset ownership validation |
+| `TenantCommercialEligibilityService` | ADR-043 white-label entitlement gate (`whitelabelEnabled` + status ∈ {trialing, active, past_due}); reads subscription entities directly via `TransactionalConnection` (see service comment for rationale); marketplace entitlement (ADR-042) is deliberately separate |
 
 ---
 
