@@ -23,6 +23,17 @@ export type OrganizationSubscriptionStatus =
  *   (trialing retained for non-provider flows)
  * Only provider webhooks drive pending_provider_auth → active;
  * Razorpay is the authoritative activation source (INV-004).
+ *
+ * PROVIDER-FREE EXCEPTION (ADR-044 §4, implemented 2026-09-23): a subscription
+ * whose plan has `providerPlanId IS NULL` (Free Basic) reaches `active` by
+ * LOCAL activation — see FreePlanProvisioningService — with no provider
+ * subscription and no SubscriptionProviderBinding. Such rows MUST keep
+ * currentPeriodStart/currentPeriodEnd NULL: the paid renewal discovery
+ * predicate is `status IN ('active','trialing') AND currentPeriodEnd < now`, so
+ * a non-NULL period would enrol a provider-free row in the paid billing
+ * pipeline (F-7). The rule above therefore reads "only provider webhooks drive
+ * → active for provider-backed rows".
+ *
  * Dunning/retry mechanics reuse RFC-001 §4.2 patterns at org level.
  */
 @Entity("organization_subscription")

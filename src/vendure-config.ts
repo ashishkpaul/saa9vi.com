@@ -294,6 +294,12 @@ apiOptions: {
             // no legacy provider config to resolve.
             hmacSecret: process.env.RAZORPAY_WEBHOOK_SECRET ?? '',
         },
+        // Plan §3.2 / slice 4: every self-serve registered tenant is activated on
+        // this provider-free catalogue plan (no card, no trial clock, no
+        // "no subscription" state). The plan row itself is created via
+        // createSubscriptionPlan with providerPlanId left NULL; when it is absent
+        // provisioning is skipped with a warning and registration still succeeds.
+        freePlanSlug: process.env.FREE_PLAN_SLUG ?? 'free-basic',
     }),
 ],
 };

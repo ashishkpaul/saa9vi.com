@@ -31,6 +31,18 @@ export interface PluginInitOptions {
     provider?: BillingProvider;
     webhook?: RazorpayWebhookConfig;
     /**
+     * Catalogue slug of the provider-free entry-tier plan that
+     * `FreePlanProvisioningService` activates for every newly registered tenant
+     * (plan §3.2). Defaults to `free-basic`.
+     *
+     * The plan must exist in the catalogue with `providerPlanId` NULL — a plan
+     * carrying a `providerPlanId` is provider-wired and is rejected rather than
+     * activated locally. When the plan is absent or inactive, provisioning is
+     * skipped with a warning; registration still succeeds (fail-soft: a missing
+     * catalogue row is an ops gap, not a reason to refuse a registration).
+     */
+    freePlanSlug?: string;
+    /**
      * Razorpay API credentials for real recurring billing (Step 4). When absent:
      *   - dev/test: the renewal worker falls back to a clearly-logged SIMULATED
      *     charge so the CLAIM→ATTEMPT→CHARGE→FINALIZE model still runs without

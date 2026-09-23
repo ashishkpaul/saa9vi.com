@@ -10,6 +10,8 @@ import { RenewalPaymentReconciliationRequired } from './entities/renewal-reconci
 import { SubscriptionAdminResolver } from './api/subscription-admin.resolver';
 import { adminApiExtensions } from './api/schema/subscription-admin.schema';
 import { SubscriptionService } from './services/subscription.service';
+import { FreePlanProvisioningService } from './services/free-plan-provisioning.service';
+import { FreePlanProvisioningListener } from './listeners/free-plan-provisioning.listener';
 import { SubscriptionRenewalService } from './services/subscription-renewal.service';
 import { SubscriptionRenewalQueueService } from './services/subscription-renewal-queue.service';
 import { ProviderWebhookQueueService } from './services/provider-webhook-queue.service';
@@ -69,6 +71,11 @@ import { PluginInitOptions } from './types';
         SubscriptionRenewalQueueService,
         ProviderWebhookQueueService,
         SubscriptionBillingAttemptService,
+        // Provider-free Free Basic activation (plan §3.2 / slice 4).
+        // The listener is the only production caller: it subscribes to
+        // TenantRegisteredEvent and is deliberately fail-soft.
+        FreePlanProvisioningService,
+        FreePlanProvisioningListener,
         // Razorpay services (default provider)
         RazorpaySubscriptionProvider,
         RazorpayWebhookVerifier,
