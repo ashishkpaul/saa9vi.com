@@ -188,4 +188,31 @@ export class SubscriptionAdminResolver {
   ): Promise<OrganizationSubscription> {
     return this.subscriptionService.subscribeToPlan(ctx, channelId, planId);
   }
+
+  // ADR-044: supersede-in-place plan change. Same external-side-effect
+  // ordering as subscribeToPlan — validate → provider calls → one narrow
+  // local transaction (never a resolver-level @Transaction across HTTP).
+  @Mutation()
+  @Allow(Permission.SuperAdmin)
+  async changeOrganizationSubscriptionPlan(
+    @Ctx() ctx: RequestContext,
+    @Args("channelId") channelId: string,
+    @Args("planId") planId: ID,
+  ): Promise<OrganizationSubscription> {
+    return this.subscriptionService.changeOrganizationSubscriptionPlan(ctx, channelId, planId);
+  }
+
+  // ADR-044: local FSM cancellation. Immediate cancels transition the local
+  // row and cancel at the provider when a binding exists; at-period-end
+  // cancels set cancelAtPeriodEnd and let the renewal sweep / provider
+  // webhook (markCancelledFromWebhook) complete the transition.
+  @Mutation()
+  @Allow(Permission.SuperAdmin)
+  async cancelOrganizationSubscription(
+    @Ctx() ctx: RequestContext,
+    @Args("channelId") channelId: string,
+    @Args("atPeriodEnd", { nullable: true, defaultValue: true }) atPeriodEnd?: boolean,
+  ): Promise<OrganizationSubscription> {
+    return this.subscriptionService.cancelOrganizationSubscription(ctx, channelId, atPeriodEnd ?? true);
+  }
 }

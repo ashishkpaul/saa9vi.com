@@ -15,6 +15,7 @@ import { SubscriptionPlan } from "../entities/subscription-plan.entity";
 import { SubscriptionProviderBinding } from "../entities/subscription-provider-binding.entity";
 import {
   CreateRecurringSubscriptionInput,
+  ProviderSubscription,
   RecurringBillingProvider,
 } from "../providers/recurring-billing.provider";
 import { TenantProfile } from "../../tenant-plugin/entities/tenant-profile.entity";
@@ -130,7 +131,15 @@ export class SubscriptionService {
     // ── 1. Validate local prerequisites (no side effects yet — ADR-039) ──
     const existing = await repo.findOne({ where: { channelId } });
     if (existing && existing.status !== "cancelled") {
-      throw new Error(`Channel ${channelId} already has an active or trialing subscription`);
+      // Message matches the ACTUAL condition: ANY non-cancelled status occupies
+      // the partial unique index slot (`status != 'cancelled'`), not just
+      // active/trialing. Use changeOrganizationSubscriptionPlan to move plan,
+      // or cancelOrganizationSubscription first.
+      throw new Error(
+        `Channel ${channelId} already has a non-cancelled subscription ` +
+          `(status '${existing.status}'). Use changeOrganizationSubscriptionPlan to ` +
+          `move it to another plan, or cancelOrganizationSubscription first.`,
+      );
     }
 
     const plan = await this.connection
@@ -238,6 +247,364 @@ export class SubscriptionService {
     Logger.info(
       `Channel ${channelId} ('${channel.code}') subscribed to plan '${plan.name}' ` +
         `(pending_provider_auth; provider sub ${providerSub.providerSubscriptionId})`,
+      loggerCtx,
+    );
+    return saved;
+  }
+
+  /**
+   * ADR-044: supersede-in-place plan change.
+   *
+   * One non-cancelled subscription per channel is an invariant (partial unique
+   * index on `channelId` WHERE `status != 'cancelled'`), so a plan change
+   * REWRITES the existing row's plan in one narrow transaction — never
+   * cancel-then-create, which would strand the provider binding and break the
+   * unique index mid-flight.
+   *
+   * External-side-effect ordering mirrors subscribeToPlan (ADR-039):
+   *   1. validate local prerequisites (no side effects)
+   *   2. provider calls (non-rollbackable)
+   *   3. ONE explicit narrow local transaction covering the atomic unit
+   *
+   * Branches:
+   *   free → paid / paid → paid : new provider subscription created; row →
+   *     pending_provider_auth; the provider webhook drives → active
+   *     (existing machinery — ADR-039/ADR-041).
+   *   → free : row superseded to the provider-free plan with status 'active'
+   *     (ADR-044 §4 — provider-free rows keep their period fields NULL and
+   *     never call provider primitives).
+   *
+   * Idempotency: a change to the SAME plan short-circuits BEFORE any provider
+   * call — it must never mint a duplicate provider subscription.
+   */
+  async changeOrganizationSubscriptionPlan(
+    ctx: RequestContext,
+    channelId: string,
+    planId: ID,
+  ): Promise<OrganizationSubscription> {
+    const repo = this.connection.getRepository(ctx, OrganizationSubscription);
+    const bindingRepo = this.connection.getRepository(ctx, SubscriptionProviderBinding);
+
+    // ── 1. Validate local prerequisites (no side effects yet — ADR-039) ──
+    const current = await repo.findOne({ where: { channelId }, relations: ["plan"] });
+    if (!current) {
+      throw new Error(`Channel ${channelId} has no subscription; use subscribeToPlan`);
+    }
+    if (current.status === "cancelled") {
+      throw new Error(
+        `Channel ${channelId} subscription is cancelled; use subscribeToPlan to start a new subscription`,
+      );
+    }
+    const target = await this.connection
+      .getRepository(ctx, SubscriptionPlan)
+      .findOne({ where: { id: planId } });
+    if (!target) {
+      throw new Error(`SubscriptionPlan ${planId} not found`);
+    }
+
+    // Idempotent no-op: same plan. MUST short-circuit BEFORE any provider call
+    // — otherwise every retry mints a duplicate provider subscription.
+    if (String(current.plan.id) === String(target.id)) {
+      return current;
+    }
+
+    // ADR-044 §5: the paid-upgrade direction is always allowed; a DOWNGRADE
+    // (target strictly cheaper) is rejected while trialing.
+    if (
+      current.status === "trialing" &&
+      target.monthlyPriceInPaise < current.plan.monthlyPriceInPaise
+    ) {
+      throw new Error(
+        `Cannot change a trialing subscription to a lower-priced plan ` +
+          `('${target.name}' < '${current.plan.name}'); cancel and re-subscribe instead`,
+      );
+    }
+
+    // Wiring signal for the OUTGOING cycle. A binding row — in ANY active
+    // state, since `active` is a provider-mirrored flag and not a wiring
+    // indicator — means a provider subscription exists that must be stopped
+    // from renewing. Legacy pre-ADR-039 rows may carry providerPlanId with no
+    // binding at all, so plan.providerPlanId alone is not sufficient here.
+    const currentBinding = await bindingRepo.findOne({
+      where: { channelId },
+      order: { createdAt: "DESC" },
+    });
+
+    // ── 2. EXTERNAL, non-rollbackable: create the new provider subscription ──
+    let providerSub: ProviderSubscription | undefined;
+    let tenantProfileId: string | undefined;
+    if (target.providerPlanId) {
+      if (!this.billingProvider) {
+        throw new Error(
+          `No recurring billing provider configured; cannot change to plan '${target.name}'`,
+        );
+      }
+      const tenantProfile = await this.connection.rawConnection
+        .getRepository(TenantProfile)
+        .findOne({ where: { channelId } });
+      if (!tenantProfile) {
+        throw new Error(
+          `No TenantProfile found for channel ${channelId}; cannot correlate organization`,
+        );
+      }
+      tenantProfileId = String(tenantProfile.id);
+      providerSub = await this.billingProvider.createSubscription({
+        channelId,
+        tenantProfileId,
+        planId: target.providerPlanId,
+      });
+    }
+
+    // ── 2b. EXTERNAL: stop the OLD provider subscription from renewing. ──
+    // Razorpay owns recurring execution — without this, the old subscription
+    // auto-charges at its next cycle even though the tenant has moved plans.
+    // cancelAtCycleEnd preserves any prepaid remainder of the current cycle.
+    // (A free → paid change has no binding, so there is nothing to cancel.)
+    //
+    // Ordering note: this runs BEFORE the local transaction, matching
+    // subscribeToPlan's external-side-effect model. If the local supersede
+    // then fails, the worst case is a scheduled provider cancellation with a
+    // stale local row — surfaced, not silent — rather than a double-billing
+    // window.
+    if (currentBinding && this.billingProvider) {
+      await this.billingProvider.cancelSubscription(currentBinding.providerSubscriptionId, {
+        cancelAtCycleEnd: true,
+      });
+    }
+
+    // ── 3. ONE narrow transaction: supersede in place (ADR-044 §1) ──
+    const channel = await this.connection.rawConnection
+      .getRepository(Channel)
+      .findOne({ where: { id: channelId } });
+    if (!channel) {
+      throw new Error(`Channel ${channelId} not found`);
+    }
+
+    const saved = await this.connection.rawConnection
+      .transaction(async (em) => {
+        const subRepo = em.getRepository(OrganizationSubscription);
+        // Re-read under a write lock so the version CAS below cannot race a
+        // concurrent renewal / plan change / cancellation on this channel.
+        const managed = await subRepo.findOne({
+          where: { id: current.id },
+          lock: { mode: "pessimistic_write" },
+        });
+        if (!managed) {
+          throw new Error(`Subscription ${current.id} disappeared during plan change`);
+        }
+        if (managed.status === "cancelled") {
+          throw new Error(
+            `Subscription ${current.id} was cancelled concurrently; use subscribeToPlan`,
+          );
+        }
+        if (managed.version !== current.version) {
+          throw new Error(
+            `Subscription ${current.id} changed concurrently ` +
+              `(expected version ${current.version}, found ${managed.version}); retry`,
+          );
+        }
+
+        managed.plan = target;
+        // ADR-044 §4: a provider-free target activates locally; a provider-wired
+        // target re-enters pre-authorization (only the provider webhook drives
+        // → active — ADR-039).
+        managed.status = target.providerPlanId ? "pending_provider_auth" : "active";
+        // ADR-041 / F-7: the authoritative billing cycle comes from the provider
+        // webhook — never a local clock estimate. A provider-free row has no
+        // billing period at all (NULL keeps it out of the paid renewal scan,
+        // whose predicate is `status IN ('active','trialing') AND currentPeriodEnd < now`).
+        managed.currentPeriodStart = null as any;
+        managed.currentPeriodEnd = null as any;
+        managed.cancelAtPeriodEnd = false;
+        managed.providerStatus = (providerSub?.status ?? null) as any;
+        managed.providerShortUrl = (providerSub?.shortUrl ?? null) as any;
+        managed.version = managed.version + 1;
+        await em.save(managed);
+
+        // Retire the outgoing binding (append-only history is retained; only
+        // `active` flips). A stale live binding would keep feeding provider
+        // webhooks into this superseded row.
+        if (currentBinding && currentBinding.active) {
+          currentBinding.active = false;
+          currentBinding.metadata = {
+            ...(currentBinding.metadata ?? {}),
+            supersededAt: new Date().toISOString(),
+            supersededBy: providerSub
+              ? providerSub.providerSubscriptionId
+              : "provider-free plan",
+          };
+          await em.save(currentBinding);
+        }
+
+        // Bind the new provider subscription in the SAME transaction and the
+        // SAME request path (ADR-039: the sole first-binding mechanism).
+        if (providerSub) {
+          const binding = new SubscriptionProviderBinding({
+            subscription: managed,
+            channelId,
+            provider: this.billingProvider!.providerName,
+            providerSubscriptionId: providerSub.providerSubscriptionId,
+            providerPlanId: target.providerPlanId,
+            providerStatus: providerSub.status,
+            active: false,
+            metadata: { shortUrl: providerSub.shortUrl, tenantProfileId },
+          });
+          // INV-001 / ADR-036: tenant channel only — deliberately NOT
+          // assignToCurrentChannel(), which would also join the default
+          // channel (BUG-031).
+          binding.channels = [channel];
+          await em.save(binding);
+        }
+
+        return managed;
+      })
+      .catch((err: unknown) => {
+        if (providerSub) {
+          // External-side-effect model (ADR-039): the new provider subscription
+          // remains a pre-auth orphan — surface it for reconciliation.
+          const msg = err instanceof Error ? err.message : String(err);
+          throw new Error(
+            `Plan-change persisted-state failure after provider creation. ` +
+              `ORPHAN provider subscription ${providerSub.providerSubscriptionId} ` +
+              `(channel ${channelId}) must be reconciled/cancelled in the provider ` +
+              `dashboard. Cause: ${msg}`,
+          );
+        }
+        throw err;
+      });
+
+    Logger.info(
+      `Channel ${channelId} ('${channel.code}') changed plan ` +
+        `'${current.plan.name}' -> '${target.name}' (supersede-in-place, ADR-044` +
+        (providerSub
+          ? `; new provider sub ${providerSub.providerSubscriptionId})`
+          : `; provider-free)`),
+      loggerCtx,
+    );
+    return saved;
+  }
+
+  /**
+   * ADR-044: local, FSM-aware cancellation.
+   *
+   *   atPeriodEnd = true  → schedule: the provider is told to cancel at cycle
+   *     end (`cancelAtCycleEnd` — REQUIRED for provider-wired rows, otherwise
+   *     Razorpay still charges the next cycle); the local row keeps status
+   *     'active' with `cancelAtPeriodEnd = true`. Completion happens via the
+   *     provider webhook (`markCancelledFromWebhook`) or the renewal sweep's
+   *     ADR-044 branch — whichever arrives first. Idempotent.
+   *   atPeriodEnd = false → immediate: provider cancelled now (when wired); the
+   *     local row → 'cancelled' + `cancelledAt` in the same request path, so
+   *     the local FSM never waits on a webhook. `markCancelledFromWebhook`
+   *     remains the provider-confirmation bridge and no-ops on arrival.
+   *   provider-free rows (`plan.providerPlanId` NULL) → no billing period
+   *     exists, so BOTH variants cancel locally and immediately (ADR-044 §4:
+   *     never call provider primitives for provider-free rows).
+   *
+   * External-side-effect ordering mirrors subscribeToPlan: provider call FIRST,
+   * then one narrow local transaction. A provider failure leaves the local row
+   * untouched (fail closed — we never mark a row cancelled while the provider
+   * will still charge it).
+   *
+   * Idempotency: cancelling an already-'cancelled' row returns it unchanged.
+   */
+  async cancelOrganizationSubscription(
+    ctx: RequestContext,
+    channelId: string,
+    atPeriodEnd = true,
+  ): Promise<OrganizationSubscription> {
+    const repo = this.connection.getRepository(ctx, OrganizationSubscription);
+    const bindingRepo = this.connection.getRepository(ctx, SubscriptionProviderBinding);
+
+    const sub = await repo.findOne({ where: { channelId }, relations: ["plan"] });
+    if (!sub) {
+      throw new Error(`Channel ${channelId} has no subscription`);
+    }
+    if (sub.status === "cancelled") {
+      // Idempotent no-op: already terminal.
+      return sub;
+    }
+
+    // ADR-044 §4 gives a definitive provider-free test. Otherwise a binding row
+    // (in any active state — `active` is provider-mirrored, and pre-auth rows
+    // created by subscribeToPlan carry active=false while still holding a real
+    // provider subscription) identifies the provider subscription to cancel.
+    const providerFree = !sub.plan?.providerPlanId;
+    const binding = providerFree
+      ? null
+      : await bindingRepo.findOne({ where: { channelId }, order: { createdAt: "DESC" } });
+    const providerWired = !providerFree && !!binding;
+
+    if (providerWired && this.billingProvider) {
+      // EXTERNAL first (non-rollbackable): Razorpay owns recurring execution.
+      await this.billingProvider.cancelSubscription(binding!.providerSubscriptionId, {
+        cancelAtCycleEnd: atPeriodEnd,
+      });
+    } else if (providerWired) {
+      throw new Error(
+        `No recurring billing provider configured; cannot cancel provider-wired subscription for channel ${channelId}`,
+      );
+    }
+
+    // Provider-free rows have no billing period, so "at period end" is not
+    // representable for them; a provider-wired row with no binding has no
+    // provider subscription to schedule either. Both cancel immediately.
+    const immediate = providerFree || !providerWired || !atPeriodEnd;
+
+    // ── ONE narrow local transaction (locking + version CAS). ──
+    const saved = await this.connection.rawConnection.transaction(async (em) => {
+      const subRepo = em.getRepository(OrganizationSubscription);
+      const managed = await subRepo.findOne({
+        where: { id: sub.id },
+        lock: { mode: "pessimistic_write" },
+      });
+      if (!managed) {
+        throw new Error(`Subscription ${sub.id} disappeared during cancellation`);
+      }
+      // Raced with a concurrent cancellation — idempotent no-op.
+      if (managed.status === "cancelled") {
+        return managed;
+      }
+      if (managed.version !== sub.version) {
+        throw new Error(
+          `Subscription ${sub.id} changed concurrently ` +
+            `(expected version ${sub.version}, found ${managed.version}); retry`,
+        );
+      }
+
+      if (!immediate) {
+        // Scheduled: stay active until the period ends. The provider webhook
+        // (markCancelledFromWebhook) or the renewal sweep's ADR-044 branch
+        // completes the transition — the sweep is the safety net for webhook
+        // loss, since the row is still discoverable (status active + a
+        // non-NULL currentPeriodEnd).
+        managed.cancelAtPeriodEnd = true;
+      } else {
+        // Immediate (explicit), or provider-free (no billing period to end at).
+        managed.status = "cancelled";
+        managed.cancelledAt = new Date();
+        managed.cancelAtPeriodEnd = false;
+      }
+      managed.version = managed.version + 1;
+      await em.save(managed);
+
+      // Deactivate the binding only on immediate cancellation; a scheduled
+      // cancel keeps it live until the provider confirms at cycle end (so the
+      // provider's `subscription.cancelled` webhook still resolves to this row).
+      if (binding && immediate) {
+        binding.active = false;
+        await em.save(binding);
+      }
+
+      return managed;
+    });
+
+    Logger.info(
+      `Channel ${channelId} subscription ` +
+        (immediate
+          ? `cancelled immediately${providerFree ? " (provider-free)" : ""}`
+          : `scheduled to cancel at period end`) +
+        ` (ADR-044)`,
       loggerCtx,
     );
     return saved;

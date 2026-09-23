@@ -152,6 +152,54 @@ export class SubscriptionRenewalService {
       return RenewalResult.SUBSCRIPTION_NOT_FOUND;
     }
 
+    // ── ADR-044: a subscription scheduled to cancel at period end must NOT be
+    // billed again. The sweep fires precisely when currentPeriodEnd passes,
+    // which is exactly when the scheduled cancellation completes, so the
+    // discovery predicate picks these rows up: without this branch the sweep
+    // would record a NEW billing attempt for a subscription the tenant already
+    // cancelled.
+    //
+    // Completion order is intentionally whichever-arrives-first: for
+    // provider-wired rows the provider's `subscription.cancelled` webhook
+    // normally lands first (markCancelledFromWebhook, CAS-guarded); this branch
+    // is the idempotent safety net for webhook loss and for provider-free rows.
+    //
+    // NOTE: scheduled-cancel rows are deliberately LEFT IN the discovery query
+    // (no `cancelAtPeriodEnd = false` exclusion there) — excluding them would
+    // remove exactly this safety net and leave the local FSM dependent on
+    // webhook delivery.
+    if (sub.cancelAtPeriodEnd) {
+      const completeResult = await this.connection.rawConnection
+        .createQueryBuilder()
+        .update(OrganizationSubscription)
+        .set({
+          status: "cancelled",
+          cancelledAt: new Date(),
+          cancelAtPeriodEnd: false,
+          version: sub.version + 1,
+        })
+        .where("id = :id AND version = :version AND status != 'cancelled'", {
+          id: sub.id,
+          version: sub.version,
+        })
+        .execute();
+
+      if (completeResult.affected === 1) {
+        this.logger.info(
+          `Subscription ${sub.id} (channel ${sub.channelId}): completed scheduled ` +
+            `cancellation at period end (ADR-044); no billing attempt created`,
+          loggerCtx,
+        );
+      } else {
+        this.logger.info(
+          `Subscription ${sub.id}: scheduled-cancellation completion lost the CAS ` +
+            `(concurrent completion) — idempotent no-op`,
+          loggerCtx,
+        );
+      }
+      return RenewalResult.SUCCESS;
+    }
+
     const oldVersion = sub.version;
     const claimedVersion = oldVersion + 1;
 

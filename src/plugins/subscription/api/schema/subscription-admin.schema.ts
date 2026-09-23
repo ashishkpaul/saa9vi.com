@@ -223,5 +223,9 @@ export const adminApiExtensions = gql`
 
     "Subscribe a channel to a plan. SuperAdmin only."
     subscribeToPlan(channelId: String!, planId: ID!): OrganizationSubscription!
+    "Supersede-in-place plan change for the channel's current subscription (ADR-044). Handles provider-wired and provider-free branches. SuperAdmin only."
+    changeOrganizationSubscriptionPlan(channelId: String!, planId: ID!): OrganizationSubscription!
+    "Cancel the channel's current subscription: immediately (atPeriodEnd=false, provider-wired rows also cancel at the provider) or at period end (atPeriodEnd=true; provider-free rows always cancel locally since they have no billing period). SuperAdmin only."
+    cancelOrganizationSubscription(channelId: String!, atPeriodEnd: Boolean = true): OrganizationSubscription!
   }
 `;
