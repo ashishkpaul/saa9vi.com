@@ -4,7 +4,9 @@
 **Date:** 2026-09-21
 **Related:** ADR-038 (direct Razorpay provider), ADR-039 (provider-wired subscription lifecycle), ADR-041 (provider-cycle billing period identity), G1 hostname contract decision (2026-09-15), INV-001 (Channel = tenant identity)
 
-> **Implementation status (2026-09-21):** The architecture is accepted, but the required implementation is **not yet present in `src/`**. `SubscriptionPlan.marketplaceListingEnabled`, `OrganizationSubscription.marketplaceGraceUntil`, and `MarketplaceIndexerService.channelMarketplaceEligible()` do not exist in the codebase yet. This ADR records the decision; the marketplace entitlement workstream (M0) will implement it. Marketplace eligibility is a **separate** entitlement from ADR-043 L1 white-label theming and must not be conflated with it.
+> **Implementation status (2026-09-21):** The architecture is accepted, but the required implementation is **not yet present in `src/`**. `SubscriptionPlan.marketplaceListingEnabled`, `OrganizationSubscription.marketplaceGraceUntil`, and `MarketplaceIndexerService.channelMarketplaceEligible()` do not exist in the codebase yet. This ADR records the decision; implementation is scheduled as **slice 7** of the Free Basic / storefront commercial programme (`docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` §3.4). There is no separate "M0" workstream entry in `integration-gaps-worklist.md` — the earlier reference to one was inaccurate. Marketplace eligibility is a **separate** entitlement from ADR-043 L1 white-label theming and must not be conflated with it.
+>
+> **Invariant tooling note (2026-09-22):** INV-024 is already recorded in `docs/architecture/invariants.md`, but no structural checker exists for it — `AdrChecker.check()` has no marketplace sub-check (contrast `tenantThemeInvariants()` for ADR-043). Implementing this ADR must add one, per `.clinerules` §9.
 
 ---
 

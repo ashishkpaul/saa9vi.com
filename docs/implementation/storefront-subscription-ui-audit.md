@@ -1,6 +1,8 @@
 # Storefront Subscription UI Audit (2026-09-16, post-ADR-039)
 
 > **STATUS: HISTORICAL — decision made.** The actor-model decision was recorded in the canonical worklist (`UI-1`, commit `7d80854`): **option (b) — Portal Admin subscribes tenants via the Admin API** for the current phase. Dashboard subscription visibility subsequently shipped in `91ca476`. Storefront subscription mutations remain deferred; Shop-API self-service requires a new ADR. This document is retained as the discovery evidence behind that decision.
+>
+> **Update (2026-09-22):** the *read* half of this surface is now specified for implementation as the Shop read-only commercial API in `saa9vi-comprehensive-integration-and-commercial-plan.md` §3.5 (`mySubscription`, `myLiveUsage`, `availableSubscriptionPlans`), whose rules restate this document's findings: tenant resolved from `RequestContext` only, no `channelId` argument, and no mutation. Finding 1 (zero subscription surface in the storefront) and finding 4 (never assume return-from-Razorpay means active) remain the governing constraints for that work; finding 5 (R3 `PaymentMethodHandler` is a separate integration) is unchanged.
 
 Audited `nextjs-starter-vendure` against the post-ADR-039 schema. Findings:
 

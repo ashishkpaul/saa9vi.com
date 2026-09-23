@@ -4,6 +4,8 @@
 > Do NOT implement until M1.2–M1.5 are complete and the contract is frozen.
 >
 > **Last updated:** 2026-09-08 (corrected: mandate fields, rule_value, event names, merchant ID, **Juspay Billing finding**)
+>
+> **⚠️ HISTORICAL (2026-09-22).** This draft was written against the **Juspay** mandate path, which was abandoned: Razorpay direct was selected (ADR-038), Juspay runtime code and legacy tables were removed (ADR-040), and subscription creation was rebuilt provider-wired (ADR-039). Statements below such as "`subscribeToPlan()` → status = `active`" and the proposed `pending` status are stale — the shipped initial status is `pending_provider_auth`. Provider-free (Free Basic) plans are a separate, later workstream: `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` §3.2. Do not implement this draft.
 
 ---
 

@@ -87,6 +87,12 @@ Juspay → Razorpay routing was **rejected** by Razorpay (ticket #20876157). Dir
 - [ ] Tenant onboarding flow in storefront
 - [ ] Custom domain routing via Caddy
 
+### Free Basic plan + storefront commercial integration (programme — planned)
+
+Every tenant lands on a permanent **Free Basic** plan at registration (no card, no trial clock); paid plans add capacity and entitlements. Sequenced slices, gates, and the product decisions still outstanding live in `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` (worklist entry **FREE-1**).
+
+**Blocking prerequisite:** the subscription Admin API has no cancel/change-plan mutation, and `subscribeToPlan()` rejects any channel whose existing subscription row is not `cancelled` — so provider-free activation at registration would block the paid-upgrade path for that tenant. A plan-change/cancel capability plus **ADR-044** ship first.
+
 ---
 
 ## Phase 3 — Marketplace & Retention

@@ -4,6 +4,8 @@
 **Scope:** Compare current Saa9vi subscription code against official Juspay HyperCheckout documentation and Vendure 3.x conventions.
 **Method:** Source inspection only. No API calls. No code changes.
 
+> **⚠️ SUPERSEDED (2026-09-22).** This audit compares Saa9vi against **Juspay HyperCheckout** documentation. Juspay was rejected as the recurring-billing provider — Razorpay direct was selected (ADR-038), Juspay runtime code and legacy `juspay_*` tables were removed (ADR-040), and subscription creation was rebuilt provider-wired (ADR-039). Any statement here about `subscribeToPlan()` setting status `active` is stale: the shipped initial status is `pending_provider_auth`. Retained as historical audit evidence only.
+
 ---
 
 ## 1. Confirmed fact: Saa9vi has a mandate-registration gap

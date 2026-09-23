@@ -369,6 +369,8 @@ None (extends `orderOptions.process` with `customerStatusOrderProcess` to block 
 |---|---|---|
 | `SubscriptionAdminResolver` | Admin API | `subscriptionPlans`, `organizationSubscriptions`, `providerMandates`, `providerPaymentAttempts`, `reconciliationIncidents`, `createSubscriptionPlan`, `updateSubscriptionPlan`, `subscribeToPlan` |
 
+> **Capability gap (verified 2026-09-22).** There is no cancel, change-plan, pause or resume mutation — those three mutations are the *entire* subscription Admin surface (`subscription-admin.schema.ts:217-227`). Combined with `subscribeToPlan()` rejecting any pre-existing row whose status is not `cancelled`, a channel that acquires a subscription at registration can never be moved to a paid plan until a plan-change operation exists. The provider adapters already implement `cancelSubscription`/`pauseSubscription`/`resumeSubscription` (`RecurringBillingProvider`), but they have **zero call sites**. Programme detail: `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` §0.5, §3.1.
+
 ### Key Services
 
 | Service | Purpose |
@@ -377,7 +379,7 @@ None (extends `orderOptions.process` with `customerStatusOrderProcess` to block 
 | `ProviderWebhookQueueService` | Persist-then-process webhook queue (INV-004), BullMQ-backed, `MAX_ATTEMPTS=3` |
 | `RazorpaySubscriptionProvider` | Razorpay Subscriptions API adapter (implements `RecurringBillingProvider`) |
 | `SubscriptionBillingAttemptService` | Authorized CLAIM→CHARGE→FINALIZE billing-attempt ledger writer (the only permitted writer of `SubscriptionBillingAttempt`, INV-019) |
-| `SubscriptionRenewalService` | Renewal discovery, cycle-monotonic FINALIZE CAS (ADR-041), bounded retry (MAX 3), reconcile-after-charge incidents |
+| `SubscriptionRenewalService` | Renewal discovery — `processRenewals()` selects `status IN ('active','trialing') AND currentPeriodEnd < now`, so **any** `active` row with a past period end becomes a charge candidate (including a provider-free row: see plan §0.19 F-7) — cycle-monotonic FINALIZE CAS (ADR-041), bounded retry (MAX 3), reconcile-after-charge incidents |
 | `SubscriptionRenewalQueueService` | BullMQ-backed `subscription-renewal` queue |
 | `SubscriptionService` | Plan/enrollment lifecycle (depends on `RecurringBillingProvider` interface) |
 

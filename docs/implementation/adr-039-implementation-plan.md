@@ -10,6 +10,11 @@
 | 4 — Runtime verification | ✅ COMPLETE — C-1 CLOSED | C-1-A/B/C/C-idempotency/D/E all passed live; evidence in `integration-gaps-worklist.md` |
 | UI-1 — Dashboard visibility | ✅ COMPLETE | commit `91ca476` |
 
+> **Later amendments affecting this record (2026-09-22):**
+> - ADR-039 now carries a **provider-free activation exception** (a Free Basic subscription activates locally to `active` with no provider subscription and no binding) — see the amendment block near the top of `docs/architecture/adr-039-provider-wired-subscription-lifecycle.md`.
+> - The Free→Paid transition is **not** covered by this record: no cancel/change-plan mutation exists, so a supersede operation plus **ADR-044** must be designed before any registration-time subscription provisioning ships.
+> - Programme context: `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` §3.1 (plan change) and §3.2 (provider-free activation).
+
 
 ## Step 1 — Schema (Vendure CLI migration only)
 

@@ -259,6 +259,29 @@ interface RecurringCapacityGrant {
 
 **⚠️ Open Seam:** Phase 2 must add a `GrantReaderService` that unions both `BbbCapacityGrant` and `RecurringCapacityGrant` tables before calling `consumeGrant()`, OR modify `consumeGrant()` to accept an abstract grant interface. The former is preferred to avoid touching Phase 1 code. See [Q-009](#q-009-consumeGrant-union-gap).
 
+> **Reconciliation note (2026-09-22) — the shipped design diverges from this section.**
+> Phase 2 shipped the **discriminator** approach, not a separate entity: subscription grants are
+> `BbbCapacityGrant` rows with `sourceType: 'subscription'`, written by `BbbSubscriptionListener`
+> on `SubscriptionRenewedEvent` (published from `SubscriptionRenewalService.finalizeAfterPayment()`
+> with `plan.includedBbbMinutes`). The Q-009 seam was closed by `GrantReaderService`
+> (`resolveGrantForMeeting()`, `resolveEntityForMeeting()`, `getRemainingMinutes()` — source type
+> parameterised), so `consumeGrantHours()` never needed to union two tables.
+>
+> Consequences to carry forward:
+> - No Phase 1 writer was modified, so the "never modify Phase 1" rationale below did not
+>   actually block the shipped approach.
+> - `enrollmentId`, `invoiceId` and `source: 'subscription_renewal' | 'trial' | 'proration'`
+>   from the interface below were **not** implemented.
+> - The invariant harness still expects the RFC name
+>   (`src/platform/invariants/event-chain/event-causality-validator.ts`, `rfc.checker.ts`),
+>   which is why `npm run verify:invariants` reports one permanent `subscription-renewed-event`
+>   warning ("Missing subsequent actions: RecurringCapacityGrant, Order"). The harness
+>   expectation should be reconciled with the shipped name.
+>
+> This section needs an amendment (inline edit or ADR) before any **new** grant lifecycle — for
+> example the per-day Free Basic allowance — is layered on top of it. See
+> `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` §3.3 and finding F-6.
+
 ---
 
 #### `UsageLedgerEntry` (Subscription Context)
@@ -446,7 +469,7 @@ Queue: subscription-renewal              (concurrency: 5)
   │
   ├── Job: renewal-succeeded-{enrollmentId}
   │     └── Mark invoice paid
-  │     └── Create RecurringCapacityGrant
+  │     └── Create BbbCapacityGrant(sourceType: 'subscription')   # shipped (RFC: RecurringCapacityGrant — see reconciliation note above)
   │     └── Create Vendure Order (for accounting)
   │     └── Publish SubscriptionRenewedEvent
   │

@@ -5,6 +5,23 @@
 **Supersedes:** none
 **Related:** ADR-038 (direct Razorpay provider), ADR-037 (recurring billing foundation), INV-001 (Channel = Tenant), INV-004 (persist-first webhooks), INV-018 (channel-scoped processing), INV-019 (provider-neutral bindings)
 
+> **Amendment (2026-09-22) — provider-free activation exception (planned, not implemented).**
+> A provider-free plan (Free Basic) requires a subscription that reaches `active` with **no
+> provider subscription and no binding**. Decision §3 below ("only provider lifecycle events
+> drive transitions to `active`") therefore becomes conditional: provider-backed plans keep
+> webhook-driven activation; provider-free plans activate locally. This is an exception to
+> §3, not a reversal of it.
+>
+> Two consequences that block a naive implementation:
+> 1. The Free→Paid transition (supersede in place vs cancel-then-create) is a **new** decision
+>    and needs its own ADR (**ADR-044**) before implementation. Per UI-1, any self-service
+>    variant needs a new ADR as well.
+> 2. `subscribeToPlan()` currently rejects **any** pre-existing non-`cancelled` subscription
+>    for the channel, so the provider-free exception cannot ship before a plan-change
+>    operation exists — otherwise every tenant's paid-subscribe path is blocked.
+>
+> Implementation is tracked in `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` §3.1 (plan change) and §3.2 (provider-free activation).
+
 ## Context
 
 Runtime verification of C-1 (2026-09-16, see `integration-gaps-worklist.md`) proved two facts:

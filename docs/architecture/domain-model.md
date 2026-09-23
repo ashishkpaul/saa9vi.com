@@ -324,7 +324,14 @@ Pending → Provisioning → Active → Completed → Archived
 | **Table** | `bbb_capacity_grant` |
 | **Purpose** | Prepaid or internal meeting minutes. The billing unit. |
 
-**Source Types:** `order`, `subscription`, `internal_overhead`, `wallet`
+**Source Types:** `order`, `subscription`, `internal_overhead`
+
+> **Correction (2026-09-22).** The earlier list also carried `wallet`; no such source type
+> exists in the entity's TS union (`bbb-capacity-grant.entity.ts`: `'order' | 'subscription' |
+> 'internal_overhead'`) and nothing writes it. Separately, RFC-001 §4 specified a **separate**
+> `RecurringCapacityGrant` entity for subscription-linked grants; the shipped design uses the
+> `sourceType: 'subscription'` discriminator on this table instead
+> (`bbb-subscription.listener.ts`). See the reconciliation note in RFC-001 §4.
 
 **Relationships:**
 - Belongs to BbbOrganization
@@ -336,8 +343,9 @@ Pending → Provisioning → Active → Completed → Archived
 - Exhausted when `consumedMinutes >= grantedMinutes`
 
 **Invariants:**
-- `internal_overhead` grants are unbounded (`isUnbounded: true`) — skip exhaustion checks
-- Earliest-expiring grant consumed first
+- `internal_overhead` grants are unbounded (`isUnbounded: true`) and skip exhaustion logic in `consumeGrantHours()`.
+- ⚠️ **Known defect (2026-09-22):** the provisioning-time capacity check does **not** honour `isUnbounded` — `doProvisionMeeting()` selects on `exhausted = false` + validity window and then rejects when `grantedMinutes - consumedMinutes <= 0`, while only `GrantReaderService.getRemainingMinutes()` special-cases unbounded grants. An org whose only valid grant is the unbounded overhead grant therefore fails provisioning with "No minutes remaining on plan", and an exhausted commercial grant falls through to the overhead grant. Tracked as **F-4** in `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` §0.19 (static read; runtime-unverified).
+- Earliest-expiring grant consumed first (`validUntil ASC, createdAt ASC`); grants with `exhausted = true` are excluded from selection.
 
 ---
 
@@ -543,15 +551,18 @@ Pending → Provisioning → Active → Completed → Archived
 - `pending_provider_auth` → `active` → `past_due` → `cancelled`
 - `trialing` retained for non-provider flows
 - Only provider webhooks drive `pending_provider_auth` → `active`; Razorpay is the authoritative activation source (INV-004).
+- **Planned exception (not yet implemented):** a **provider-free** plan (Free Basic) activates locally to `active` with no provider subscription and no binding. ADR-039 §3's "only provider webhooks drive → `active`" therefore needs a documented exception, and the Free→Paid transition needs its own operation and ADR (no plan-change/cancel mutation exists today). Programme detail: `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` §3.1–§3.2.
 
 **Fields:** `plan`, `channels`, `channelId`, `status`, `currentPeriodStart`, `currentPeriodEnd`, `cancelAtPeriodEnd`, `cancelledAt`, `dunningRetryCount`, `lastDunningAttemptAt`, `billingCustomerId` (provider-neutral customer reference, e.g. Razorpay `customer_id`), `providerStatus`, `providerShortUrl`, `version`
 
 **Invariants:**
 - `UNIQUE(channelId) WHERE status != 'cancelled'` — at most one non-cancelled subscription per tenant.
-- `pending_provider_auth` occupies the one-active-subscription slot (provider authorization must not be bypassed by a second subscribe).
+- **Any** non-cancelled status occupies the one-subscription slot, not just authorization states: `subscribeToPlan()` rejects a channel whose existing row is in any state other than `cancelled` (its error message says "active or trialing", which understates the real condition).
+- No cancel, change-plan, pause or resume operation exists in the Admin API — the only subscription mutations are `createSubscriptionPlan`, `updateSubscriptionPlan`, `subscribeToPlan`. Provider-side `cancelSubscription`/`pauseSubscription`/`resumeSubscription` exist on `RecurringBillingProvider` with **zero call sites**. Consequence: auto-provisioning a subscription at registration would block the paid-subscribe path for that channel — see the plan §0.5 / §3.1.
 - `providerShortUrl` is returned to the admin caller at creation; it is not automatically cleared on activation (documented residual — authoritative post-auth state is `status` + the binding).
 - `version` is a plain CAS token for renewal compare-and-swap (NOT auto-locking); the worker must check affected-rows === 1 before charging.
 - Status column is `varchar`, so adding FSM values is not a DB-enum migration.
+- A **provider-free** subscription MUST keep `currentPeriodStart`/`currentPeriodEnd` **NULL**: `SubscriptionRenewalService.processRenewals()` discovers candidates by `currentPeriodEnd < now AND status IN ('active','trialing')`, so a non-NULL past period end would pull the row into the paid charge pipeline and create an `initiated` billing attempt that no provider webhook can ever finalize (orphan-attempt loop). NULL is the correct value for a row that will never receive a provider webhook — and matches ADR-041's "NULL = first webhook wins" semantics.
 
 ---
 

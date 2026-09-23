@@ -27,6 +27,18 @@
 
 ---
 
+## Free Basic plan + storefront commercial integration (programme) — ⏳ NEXT
+
+**Canonical plan:** `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` (v3, evidence-verified at `4f3a9cf`; its §6 preflight was executed 2026-09-22 and recorded in §6.1). Worklist entry: `integration-gaps-worklist.md` **FREE-1**.
+
+Decision: every tenant lands on a permanent **Free Basic** plan at registration — no card, no trial clock. Paid plans add capacity (live rooms/day minutes/participants) and entitlements (hosted academy / custom domain, white-label theming, marketplace listing per ADR-042).
+
+**Blocking prerequisite before any code:** the subscription Admin API exposes only `createSubscriptionPlan`/`updateSubscriptionPlan`/`subscribeToPlan` (no cancel, no change-plan), and `subscribeToPlan()` rejects any channel whose existing row is not `cancelled`. Auto-provisioning a subscription at registration would therefore **block the paid-upgrade path** for that tenant. ADR-044 + a plan-change/cancel capability ship first — the provider adapters' `cancelSubscription`/`pauseSubscription`/`resumeSubscription` already exist with zero call sites.
+
+Then, in order: provider-free activation → grant-selection correctness → daily live allowance → ADR-042 marketplace entitlement → Shop read-only commercial API → `edu-frontend` theme + dashboard → R4 runtime evidence. **R3 (`dummyPaymentHandler` still registered) remains a separate launch gate**, unaffected by this programme. Outstanding product decisions: the free-tier limits themselves.
+
+---
+
 ## R2: Razorpay Subscription Contract Verification
 
 | Gate | Status | Notes |

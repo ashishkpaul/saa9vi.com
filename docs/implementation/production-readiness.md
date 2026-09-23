@@ -1066,6 +1066,26 @@ DOCUMENTATION CLAIM WITHOUT IMPLEMENTATION EVIDENCE
 Do not silently update documentation to make a failed verification
 appear complete.
 
+## Drift sweep record — 2026-09-22 (Free Basic programme preparation)
+
+A bidirectional sweep was run against `main` @ `4f3a9cf` while preparing the Free Basic / storefront commercial programme. Each correction below was verified against code before editing.
+
+| Finding | Document | Correction |
+|---|---|---|
+| `BbbCapacityGrant` source types listed `wallet`, which is not in the entity union and is never written | `architecture/domain-model.md`, `product/glossary.md` | Corrected to `order` / `subscription` / `internal_overhead` |
+| `internal_overhead` exhaustion semantics overstated ("skip exhaustion checks") | `architecture/domain-model.md` | Scoped to `consumeGrantHours()`; the provisioning-time check ignores `isUnbounded` (defect F-4, static read, runtime-unverified) |
+| Subscription FSM implied only authorization states occupy the unique slot | `architecture/domain-model.md` | Corrected: **any** non-`cancelled` status does; recorded that no cancel/change-plan mutation exists |
+| ADR-039 §3 "only provider webhooks drive → `active`" | `architecture/adr-039-provider-wired-subscription-lifecycle.md` | Amendment added: provider-free activation is a planned exception; ADR-044 required; blocked by the missing plan-change operation |
+| ADR-042 referenced an "M0 workstream" that does not exist in the worklist | `architecture/adr-042-marketplace-listing-is-subscription-entitlement.md` | Replaced with the actual schedule (plan slice 7) + note that INV-024 still lacks a structural checker |
+| ADR-043 opening claimed no theming system / data structure exists | `architecture/adr-043-tenant-storefront-theming-is-tenant-data.md` | Reworded as the pre-acceptance state, with shipped L1 commits recorded; L2/L3 still unbuilt |
+| RFC-001 §4 specified a separate `RecurringCapacityGrant` entity | `adr/rfc-001-continuous-commerce-loop.md` | Reconciliation note: shipped design uses the `sourceType: 'subscription'` discriminator; `GrantReaderService` closed the Q-009 seam; the harness name mismatch produces one permanent `verify:invariants` warning |
+| D-5 stated no halted-recovery code path exists | `implementation/integration-gaps-worklist.md` | Correction block: capability exists via the successful-charge CAS (only `cancelled` is excluded); runtime evidence remains open |
+| Subscription Admin surface described without noting its missing operations | `architecture/plugin-map.md` | Capability-gap note: only 3 mutations; provider cancel/pause/resume primitives have zero call sites |
+
+**Deliberately left open (not drift):** the frontend repository was not inspected; Razorpay R2-G runtime evidence is still outstanding; F-4 is a static reading, not a runtime reproduction.
+
+**Code defects filed by the same sweep (2026-09-22):** **BUG-036** — the BBB provisioning-time capacity check ignores `isUnbounded` and `exhausted` grants are silently dropped from selection, so an unbounded overhead grant can never be used. Filed as an active bug in `known-bugs.md` (confirmed by static code reading; runtime reproduction pending). Two construct-level constraints were recorded rather than filed as defects, because no code creates the situation yet: provider-free subscriptions must keep `currentPeriodStart`/`currentPeriodEnd` NULL (they would otherwise be discovered by `processRenewals()`), and the Free tier needs its own `BbbPlatformCapacityPolicy` row before Tier 2 can serve it.
+
 ------------------------------------------------------------------------
 
 # 13. Repository truth rule

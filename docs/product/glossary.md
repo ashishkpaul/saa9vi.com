@@ -6,6 +6,8 @@
 |---|---|
 | **Channel** | Vendure tenant boundary. Every entity that is tenant-scoped is scoped to a Channel. |
 | **Tenant** | A business/academy represented by a Vendure Channel. Has a `TenantProfile`, `BbbOrganization`, and optionally a `Seller`. |
+| **Free Basic** | The permanent provider-free plan every tenant lands on at registration — no card, no trial clock. Commercial limits (daily live minutes, concurrent rooms, participants, staff, students) are product decisions tracked in the Free Basic programme; the in-code 600 min / 100 students / 5 concurrent-meeting defaults are seed values, not decisions. |
+| **Provider-free subscription** | An `OrganizationSubscription` whose plan has no `providerPlanId`: activated locally, with no provider subscription and no `SubscriptionProviderBinding`. Distinguished from provider-backed rows by the plan's provider mapping — **not** by `providerStatus`, which is also null on legacy pre-ADR-039 rows. |
 | **TenantProfile** | Branding and contact information for a tenant. 1:1 with Channel. |
 | **Seller** | Vendure core entity representing a seller in a marketplace context. Created during tenant registration. |
 | **BbbOrganization** | Live meeting organization for a tenant. Owns rooms, memberships, capacity grants, and scheduled sessions. 1:1 with Channel. |
@@ -15,7 +17,7 @@
 | **BbbOrganizationMembership** | Internal moderator/staff access to an organization. Roles: `org_admin`, `moderator`, `staff`. |
 | **BbbEntitlement** | Participant access grant after trial or purchase. Types: `bbb_session` (session-scoped), `bbb_room` (room-scoped). The ADR-targeted access primitive. |
 | **BbbEnrollment** | Legacy room-access mechanism. Being replaced by `BbbEntitlement`. |
-| **BbbCapacityGrant** | Prepaid or internal meeting minutes. Source types: `order`, `subscription`, `internal_overhead`, `wallet`. |
+| **BbbCapacityGrant** | Prepaid or internal meeting minutes. Source types: `order`, `subscription`, `internal_overhead`. (The `wallet` source type previously listed here was never implemented in the entity's TS union and nothing writes it.) |
 | **BbbUsageLedger** | Immutable billing facts. Append-only rows recording consumed meeting minutes. |
 | **BbbWebhookEvent** | Persisted BBB webhook event. Follows persist-before-process pattern. |
 | **BbbTrialRegistration** | Records a student's registration for a free trial session. |

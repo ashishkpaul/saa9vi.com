@@ -10,7 +10,7 @@
 
 Saa9vi is a multi-tenant platform. Each tenant academy has its own storefront (`{tenantSlug}.saa9vi.com` or `customDomain`). The shared marketplace (`marketplace.saa9vi.com`) is platform-owned.
 
-As of 2026-09-21 there is no tenant theming system. All tenant storefronts render with the default Saa9vi theme. The `SubscriptionPlan` entity already carries `whitelabelEnabled` but no theming data structure or delivery mechanism exists.
+As of 2026-09-21 — when this ADR was accepted — there was no tenant theming system: all tenant storefronts rendered with the default Saa9vi theme, and `SubscriptionPlan` carried `whitelabelEnabled` with no theming data structure or delivery mechanism behind it. **The L1 implementation has since shipped** (entity + immutable versioned lifecycle + entitlement gate + public `myTenantTheme`; commits `4d94844`, `4145e13`, `5e41d35`, `4f3a9cf`), which is what the ✅ tables below record. L2 (layout presets) and L3 (constrained custom CSS) remain unbuilt.
 
 This ADR defines the architectural model for tenant storefront theming.
 

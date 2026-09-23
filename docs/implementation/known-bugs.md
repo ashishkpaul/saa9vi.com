@@ -8,11 +8,28 @@
 
 | ID | Severity | File | Description | Status |
 |---|---|---|---|---|
-| _None_ | — | — | No active bugs. All confirmed bugs are fixed (see Fixed Bugs below). | — |
+| BUG-036 | High | `bbb-provisioning-worker.service.ts` (`doProvisionMeeting`) — provisioning-time capacity check ignores `isUnbounded`, and `exhausted` grants are silently dropped from selection, so an unbounded overhead grant can never be used (F-4) | **Open** — confirmed by static code reading (2026-09-22); runtime reproduction pending. Detail below. |
 
 ---
 
-## BUG B — Two-Month Billing-Period Drift (fixed and runtime-verified 2026-09-20)
+## BUG-036 — Provisioning capacity check ignores `isUnbounded` (Open)
+
+**Severity:** High · **Discovered:** 2026-09-22 (static code reading; **not** yet reproduced at runtime) · **Components:** `bbb-provisioning-worker.service.ts` (`doProvisionMeeting`), `bbb-organization.service.ts` (overhead grant), `grant-reader.service.ts`
+
+**What the code does.** `BbbOrganizationService.create()` auto-provisions an unbounded overhead grant per organization (`isUnbounded: true`, `grantedMinutes: -1`, `validUntil: 2099-12-31`). `doProvisionMeeting()` selects a grant with `exhausted = false`, an in-window `validFrom`/`validUntil`, ordered `validUntil ASC, createdAt ASC` — then rejects the meeting when `(grant.grantedMinutes ?? 0) - (grant.consumedMinutes ?? 0) <= 0`. That check never consults `isUnbounded`; only `GrantReaderService.getRemainingMinutes()` treats unbounded grants as `Infinity`.
+
+**Failure modes.**
+
+1. **Severe:** an organization whose only valid grant is the overhead grant can never provision a meeting — selection picks the overhead grant, computes `-1 - consumed <= 0`, and throws `"No minutes remaining on plan"`.
+2. **Misleading:** once a commercial grant reaches its limit it is flagged `exhausted = true`, which *excludes* it from selection; the resolver then lands on the overhead grant and throws the same message — so an exhausted allowance is reported as a missing one, and the real commercial state never reaches the caller.
+
+**Why it matters now.** Tenants register without a purchased grant, and the planned Free Basic tier adds a per-day allowance on this table. Shipping the allowance without fixing selection would leave the free tier depending on a fall-through path that throws.
+
+**Fix options (decide in the grant-selection slice).** Honour `isUnbounded` in the capacity check (Infinity semantics, matching `getRemainingMinutes()`), and/or exclude `internal_overhead` grants from tenant session selection entirely, treating "no eligible commercial grant" as its own domain outcome rather than a generic error.
+
+**Related but distinct.** `GrantReaderService.findEarliestValidGrant()` filters only on `exhausted` and orders by `validUntil`, ignoring its declared validity window — but it has **zero callers**, so it is a dead seam. The planned F-7 rule (a provider-free subscription must keep `currentPeriodStart`/`currentPeriodEnd` NULL so the paid renewal scan does not discover it) is a design constraint for the Free Basic activation slice, not part of this defect. Both are tracked in `saa9vi-comprehensive-integration-and-commercial-plan.md` §0.19.
+
+
 
 | Field | Detail |
 |---|---|

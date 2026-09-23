@@ -497,6 +497,19 @@ retries record ledger intent, no provider webhook arrives, and after
 `DUNNING_MAX_RETRIES` the subscription is auto-cancelled. Payment is never
 actually recovered.
 
+> **Correction (2026-09-21, commit `5856f71`) — the "no operation" claim above is wrong.**
+> A recovery path *does* exist in code: the existing successful-charge finalization path
+> (`finalizeAfterPayment()`) can transition a Saa9vi `past_due`/halted subscription to `active`
+> when a later provider charge finalizes a newer billing cycle — there is **no `halted`
+> exclusion in the cycle-monotonic CAS; only `cancelled` is excluded**. The same correction was
+> applied to `production-readiness.md` §7 and `what-next.md` (R2-G row).
+>
+> What actually remains open is therefore **runtime evidence**, not missing capability: the full
+> sequence halted → provider charge → `subscription.charged`/`activated` webhooks → `active` has
+> not been observed live. The resolution options below are consequently *optional* — option 1
+> (`recoverSubscription`/manual-charge on the provider) may still be wanted for operator-driven
+> recovery, but the acceptance criterion is now satisfiable by exercising the existing charge path.
+
 ### Resolution options (choose one before R2-G can be considered closed)
 
 1. **Provider-driven recovery** — add a `recoverSubscription`/manual-charge
@@ -524,6 +537,36 @@ At minimum inspect `docs/architecture/`, `docs/implementation/`, `docs/what-next
 ### Acceptance criterion
 
 No documentation says a feature is `complete`, `accepted`, `implemented`, or `verified` unless repository/runtime evidence supports that claim. Likewise, significant implemented architecture must have a canonical documentation reference.
+
+# Track F — Free Basic plan + storefront commercial integration
+
+## FREE-1 — Provider-free Free Basic plan (programme)
+
+**Priority:** P0 — **Status:** planned; no implementation yet. **Canonical plan:** `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` (v3, evidence-verified against `4f3a9cf`; its §6 preflight was executed and recorded in §6.1).
+
+**Product decision:** every tenant lands on a permanent **Free Basic** plan at registration — no card, no trial clock, no "no subscription" state. Paid plans add capacity (concurrent live rooms, daily live minutes, participants, staff, students) and entitlements (hosted academy / custom domain, white-label theming, marketplace listing per ADR-042).
+
+### Blocking prerequisite (verified 2026-09-22 — do not skip)
+
+`SubscriptionService.subscribeToPlan()` throws for any channel whose subscription row is in a state other than `cancelled`, and the subscription Admin API exposes **only** `createSubscriptionPlan`, `updateSubscriptionPlan`, `subscribeToPlan` — no cancel, no change-plan, no pause/resume. Therefore auto-provisioning a subscription at registration **blocks the paid-upgrade path for that channel**. A plan-change/cancel capability and its ADR (**ADR-044**) must ship before — or together with — free-plan provisioning. Provider-side `cancelSubscription`/`pauseSubscription`/`resumeSubscription` already exist on `RecurringBillingProvider` with **zero call sites**, so this is wiring plus a local, transactional, FSM-aware operation — not new provider integration.
+
+### Slices (detail and gates in the plan §4)
+
+1. Commercial matrix freeze (product decision; the in-code 600 min / 100 students / 5 concurrent meetings are seed defaults, not decisions).
+2. Documentation drift sweep (this commit's sibling edits: ADR-039 amendment, ADR-042 M0 reference, ADR-043 opening, RFC-001 §4, D-5 correction, domain-model grant source types / FSM slot wording).
+3. ADR-044 + plan-change/cancel capability.
+4. Provider-free Free Basic activation at registration (idempotent; no provider call; no fake binding).
+5. Grant-selection correctness (`internal_overhead` vs exhaustion; plan-derived `concurrentMeetingLimit`).
+6. Daily live allowance layer (scheduled daily grants, `sourceType: 'subscription'`; `BbbUsageLedger` semantics unchanged).
+7. ADR-042 implementation (two CLI migrations, grace transitions, shared eligibility policy, indexer gate, INV-024 checker).
+8. Shop read-only commercial API (`mySubscription`, `myLiveUsage`, `availableSubscriptionPlans`).
+9. `edu-frontend` theme consumption + plan/usage dashboard.
+10. R4 runtime evidence (R4 is already implemented — verification only).
+11. R3 one-time payment handler — **separate launch gate**, blocked by nothing here.
+
+**Scope exclusions:** no `marketplacePromotionEnabled` (promotion is a separate subsystem); no tenant-facing upgrade mutation (UI-1 defers it pending an ADR); no external headless CMS as a core dependency.
+
+---
 
 # Final Cline Execution Gate
 

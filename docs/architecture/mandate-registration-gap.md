@@ -2,6 +2,8 @@
 
 > **Status:** Gap confirmed. M1.1 sandbox verification complete (2026-09-08). No code changes yet — this document establishes the contract before implementation.
 > **Supersedes:** The earlier (incorrect) assumption that `subscribeToPlan()` calls `createMandate()`.
+>
+> **⚠️ SUPERSEDED (2026-09-22).** This document analyses the **Juspay** mandate-registration path. Juspay was rejected as the recurring provider (Razorpay direct selected — ADR-038; see `docs/what-next.md`), the Juspay runtime implementation and legacy `juspay_*` tables were removed (ADR-040), and `subscribeToPlan()` is now provider-wired per **ADR-039** (Razorpay subscription + `SubscriptionProviderBinding` created in the same request path; initial status is `pending_provider_auth`, not `active`). The mandate analysis below is retained as historical evidence only — do not implement against it. Current subscription work: `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md`.
 
 ## 1. The central finding
 
