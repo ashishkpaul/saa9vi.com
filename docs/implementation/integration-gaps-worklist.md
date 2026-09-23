@@ -552,14 +552,14 @@ No documentation says a feature is `complete`, `accepted`, `implemented`, or `ve
 
 ### Slices (detail and gates in the plan §4)
 
-1. Commercial matrix freeze (product decision; the in-code 600 min / 100 students / 5 concurrent meetings are seed defaults, not decisions).
-2. Documentation drift sweep (this commit's sibling edits: ADR-039 amendment, ADR-042 M0 reference, ADR-043 opening, RFC-001 §4, D-5 correction, domain-model grant source types / FSM slot wording).
-3. ADR-044 + plan-change/cancel capability.
-4. Provider-free Free Basic activation at registration (idempotent; no provider call; no fake binding).
+1. Commercial matrix freeze (product decision; the in-code 600 min / 100 students / 5 concurrent meetings are seed defaults, not decisions). — ✅ **DONE 2026-09-22** (slice 1).
+2. Documentation drift sweep (this commit's sibling edits: ADR-039 amendment, ADR-042 M0 reference, ADR-043 opening, RFC-001 §4, D-5 correction, domain-model grant source types / FSM slot wording). — ✅ **DONE 2026-09-22** (slice 2).
+3. ADR-044 + plan-change/cancel capability. — ✅ **DONE 2026-09-23** (commit `66e6cd4`): `changeOrganizationSubscriptionPlan`, `cancelOrganizationSubscription`, provider-wired + provider-free branches, and the renewal-sweep `cancelAtPeriodEnd` completion branch. Runtime acceptance script committed but **not yet executed** (needs a dev DB + Razorpay test key).
+4. Provider-free Free Basic activation at registration (idempotent; no provider call; no fake binding). — ✅ **DONE + RUNTIME-VERIFIED 2026-09-23 (uncommitted)**: `FreePlanProvisioningService` + `FreePlanProvisioningListener` (subscription plugin), triggered by `TenantRegisteredEvent`; option `freePlanSlug` (default `free-basic`, env `FREE_PLAN_SLUG`); status `active`, period fields **NULL** (F-7), no provider call and no binding; ADR-039 + entity docstrings amended. Deliberately excluded: capacity grants (org overhead grant already exists; the free allowance is the daily grant in slice 6) and `concurrentMeetingLimit` sync (slice 5). Runtime evidence: `scripts/verify/free-basic-activation.sh` → **19 passed / 0 failed / 3 skipped** (exit 0). The same run exposed and fixed two defects in BOTH verify scripts (corrupt `vars="${5:-{}}"` payloads; bearer-token login instead of the session cookie) — `adr-044-acceptance.sh` had been unrunnable for that reason. The Free tier's `BbbPlatformCapacityPolicy` row (5/5/5) remains an Admin/ops call — the script performs it idempotently.
 5. Grant-selection correctness (`internal_overhead` vs exhaustion; plan-derived `concurrentMeetingLimit`).
 6. Daily live allowance layer (scheduled daily grants, `sourceType: 'subscription'`; `BbbUsageLedger` semantics unchanged).
 7. ADR-042 implementation (two CLI migrations, grace transitions, shared eligibility policy, indexer gate, INV-024 checker).
-8. Shop read-only commercial API (`mySubscription`, `myLiveUsage`, `availableSubscriptionPlans`).
+8. Shop read-only commercial API (`mySubscription`, `myLiveUsage`, `availableSubscriptionPlans`). — **owns the "no subscription / missing Free Basic row" detection surface** deferred from slice 4.
 9. `edu-frontend` theme consumption + plan/usage dashboard.
 10. R4 runtime evidence (R4 is already implemented — verification only).
 11. R3 one-time payment handler — **separate launch gate**, blocked by nothing here.
