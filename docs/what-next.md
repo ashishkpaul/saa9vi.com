@@ -1,6 +1,6 @@
 # What Next — Saa9vi Platform
 
-**Updated:** 2026-09-16
+**Updated:** 2026-09-23
 
 ---
 
@@ -35,7 +35,7 @@ Decision: every tenant lands on a permanent **Free Basic** plan at registration 
 
 **Blocking prerequisite before any code:** the subscription Admin API exposes only `createSubscriptionPlan`/`updateSubscriptionPlan`/`subscribeToPlan` (no cancel, no change-plan), and `subscribeToPlan()` rejects any channel whose existing row is not `cancelled`. Auto-provisioning a subscription at registration would therefore **block the paid-upgrade path** for that tenant. ADR-044 + a plan-change/cancel capability ship first — the provider adapters' `cancelSubscription`/`pauseSubscription`/`resumeSubscription` already exist with zero call sites.
 
-Then, in order: ✅ provider-free activation (runtime-verified 2026-09-23) → grant-selection correctness → daily live allowance → ✅ ADR-042 marketplace entitlement (implemented 2026-09-23: two CLI migrations, shared `CommercialEntitlementService`, `indexSession()` gate, INV-024 checker) → Shop read-only commercial API → `edu-frontend` theme + dashboard → R4 runtime evidence. **R3 (`dummyPaymentHandler` still registered) remains a separate launch gate**, unaffected by this programme. Outstanding product decisions: the free-tier limits themselves.
+Then, in order: ✅ provider-free activation (runtime-verified 2026-09-23) → grant-selection correctness → daily live allowance → ✅ ADR-042 marketplace entitlement (implemented 2026-09-23: two CLI migrations, shared `CommercialEntitlementService`, `indexSession()` gate, INV-024 checker; indexer e2e matrix **14/14 against real Postgres + Elasticsearch**, convergence **4/4**, tenant regression 73/73) → Shop read-only commercial API → `edu-frontend` theme + dashboard → R4 runtime evidence. **R3 (`dummyPaymentHandler` still registered) remains a separate launch gate**, unaffected by this programme. Outstanding product decisions: the free-tier limits themselves.
 
 ---
 

@@ -25,6 +25,8 @@
 >
 > **Invariants:** INV-024 is recorded in `docs/architecture/invariants.md` and is now enforced by the structural checker above (`npm run verify:invariants`).
 
+> **Runtime evidence (commit `dad099c`, 2026-09-23):** `MARKETPLACE_E2E=true` → **14/14 `marketplace.e2e-spec.ts`** against real Postgres + real Elasticsearch — flag-off plan delists an `active` channel; `past_due` inside `marketplaceGraceUntil` stays listed; past the deadline delists; NULL grace delists; a channel with no subscription row delists as `false` (not an error); PROHIBITED signals cannot change the decision; eligibility restored re-lists. **4/4 `convergence.e2e-spec.ts`** with the same seeding, **25/25** infra-free gate spec, **73/73** tenant e2e regression (real Postgres), `npm run verify:invariants` green (INV-024 sub-check under `adr-invariants`). Two e2e-only harness defects were fixed en route and are *not* product bugs: fixtures passed the GraphQL-encoded id form (`T_1`) where the queue contract delivers the raw PK, and the session `DRAFT` default required fixtures to pin `{visibility: PUBLIC, status: SCHEDULED}`.
+
 ---
 
 ## Context
