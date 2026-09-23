@@ -251,22 +251,36 @@ Rules:
 
 The in-code values (600 minutes/billing period, 100 students, 5 concurrent meetings, room-capacity defaults 25/100/250) are seed/fallback values, not product decisions. Freeze one canonical table and record, per row, **which mechanism enforces it and whether that mechanism exists yet**:
 
+> **SLICE 1 — FROZEN 2026-09-22 (product sign-off).** The values below are decisions, not seeds (D-1 resolved). Rows marked **marketing copy** are *declared-but-unenforced* (D-2 resolved): they may appear in copy but must never be presented to tenants as enforced limits.
+
 | Capability | Free Basic | Paid | Enforced by | Exists today? |
 |---|---|---|---|---|
-| Concurrent live rooms | 1 | n | `org.concurrentMeetingLimit` | Mechanism exists; **not plan-derived** (F-3) |
-| Daily live minutes | 60/day | n/day | daily `BbbCapacityGrant` + job | **To build** (§3.3) |
-| Live minutes per billing period | — | `includedBbbMinutes` | renewal grant | Exists for provider-backed plans |
-| Participants per room | platform default | plan tier | `BbbPlatformCapacityPolicy` Tier 2 | Exists |
-| Instructors / staff | ? | ? | — | **Nothing exists** |
-| Students | ? | ? | `plan.maxStudents` (declared) | **Decorative (F-2)** |
-| Custom domain | no | yes | `plan.customDomainEnabled` (declared) | **Decorative (F-2)**; hostname provisioning itself is done (B-2) |
+| Concurrent live rooms | **1** | per-plan `org.concurrentMeetingLimit` (Admin-set) | `org.concurrentMeetingLimit` (`assertCanCreateMeeting`) | Mechanism exists; **not plan-derived** (F-3) — plan-derived sync is slice 5 |
+| Daily live minutes | **60/day** | — (billing-period pool instead) | daily `BbbCapacityGrant` + refresh job | **To build** (§3.3, slice 6) |
+| Live minutes per billing period | **—** (daily only; D-8 default) | `includedBbbMinutes` (600 = seed, value per plan) | renewal grant (`SubscriptionRenewedEvent`) | Exists for provider-backed plans |
+| Participants per room | **5** (default *and* ceiling, via free-tier policy row) | plan tier (`PLAN_TIER_DEFAULTS` / Portal Admin rows) | `BbbPlatformCapacityPolicy` Tier 2 → `resolveRoomCapacity()` (default from `defaultRoomCapacity`, ceiling at `maxRoomCapacity`) | Exists; **free-tier row must be created** (spec below) |
+| Instructors / staff | **de-scoped** — not offered, not promised, on any tier | de-scoped | — | **Nothing exists** |
+| Students | **100 — marketing copy** (declared, not enforced) | per-plan — **marketing copy** (declared, not enforced) | `plan.maxStudents` (decorative) | **Decorative (F-2)**; no enforcement in this programme |
+| Custom domain | no — flag itself is **marketing copy** when offered (declared, not enforced) | yes — **marketing copy** (declared, not enforced) | `plan.customDomainEnabled` (decorative) | **Decorative (F-2)**; hostname provisioning itself is done (B-2) |
 | White-label theming | no | yes | `canUseWhitelabel()` | Exists |
-| Marketplace basic listing | yes | yes | ADR-042 gate | **To build** (§3.4) |
+| Marketplace basic listing | **yes** | yes | ADR-042 gate | **To build** (§3.4, slice 7) |
 | Marketplace promotion/advertising | separate paid subsystem | — | existing advertising subsystem | Exists |
 
 Any row with an empty or decorative "Enforced by" cell is an aspirational statement, not a limit — either build the enforcement in this programme or label it as marketing copy.
 
 **Free-tier capacity-policy row is part of this freeze (added 2026-09-22, second review round).** Plan-matched **Tier 2** of `BbbPlatformCapacityPolicyService` resolves capacity by querying `organization_subscription` directly for `status IN ('trialing','active')` and matching a policy row on `subscriptionPlanId` (`bbb-platform-capacity-policy.service.ts:88-110`). A Free Basic row at `active` therefore **already drives Tier 2** the moment such a policy row exists — while `PLAN_TIER_DEFAULTS` defines only `starter`/`growth`/`enterprise` (`:19-23`). Consequence: the freeze must decide the **Free tier's policy row** (default room capacity, max room capacity, max concurrent participants), not just minutes and concurrent-room count. If no free-tier row is created, free tenants silently inherit the Tier 3 default or Tier 4 hardcoded fallback (25/100/250).
+
+**FROZEN free-tier policy row (slice-1 deliverable, 2026-09-22):**
+
+| Field | Value |
+|---|---|
+| `channelId` | `NULL` (plan-scoped so Tier 2 matches it) |
+| `subscriptionPlanId` | id of the Free Basic `SubscriptionPlan` (row created once the plan exists) |
+| `defaultRoomCapacity` | **5** |
+| `maxRoomCapacity` | **5** |
+| `maxConcurrentParticipants` | **5** (= 1 concurrent room × 5 participants) |
+
+Mechanism: created through the existing Admin mutation `upsertPlatformCapacityPolicy` (`bbb-admin.schema.ts:760`, resolver `bbb-admin.resolver.ts:1117-1138`) — no migration or seed script exists or is needed (none found 2026-09-22). Enforcement caveat (static read 2026-09-22): `maxConcurrentParticipants` has **no enforcement consumer** today — it is stored, upserted and returned, but never read by any check; participants-per-room is enforced through `resolveRoomCapacity()` using `defaultRoomCapacity` (default) and `maxRoomCapacity` (ceiling). The value is still spec'd at 5 so the row is correct once enforcement lands. Tier 1 channel overrides continue to beat this row per the cascade.
 
 ### 3.7 G-7 — Documentation drift fixes (all one-liners, all `CONFIRMED`)
 
@@ -304,7 +318,7 @@ Slices 3 and 4 are deliberately paired — see §3.1 for why shipping Free Basic
 
 | # | Slice | Deliverable | Gate |
 |---|---|---|---|
-| 1 | **Commercial matrix freeze** (§3.6) | One canonical capability table with enforcement status per row; the "Instructors/staff" and "Students" rows decided or explicitly de-scoped; the **Free tier's `BbbPlatformCapacityPolicy` row** (default/max room capacity, max concurrent participants) specified so Tier 2 does not fall through to the 25/100/250 fallback | Product sign-off; no code |
+| 1 | **Commercial matrix freeze** (§3.6) | ✅ **FROZEN 2026-09-22** — canonical capability table with enforcement status per row (§3.6); instructors/staff de-scoped, students + custom-domain = marketing copy (D-1/D-2 resolved); **Free tier policy row spec'd `5/5/5`** with the `maxConcurrentParticipants` no-consumer caveat, creatable via existing `upsertPlatformCapacityPolicy` (no migration) | Product sign-off received; docs-only, committed separately |
 | 2 | **Doc drift sweep** (§3.7) | ✅ **DONE 2026-09-22** — the corrections plus programme registration across the docs tree | Recorded in `production-readiness.md` §12 |
 | 3 | **ADR-044 + plan-change/cancel capability** (§3.1) | New ADR for the supersede transition; `changeOrganizationSubscriptionPlan` (+ operator cancel/request) with provider-wired and provider-free branches, wiring the **already-implemented, currently uncalled** provider primitives; provider-free detection via `plan.providerPlanId IS NULL` | Admin GraphQL acceptance; no regression of the existing `subscribeToPlan` path |
 | 4 | **Free Basic activation** (§3.2) | Charging-free provisioning at registration: idempotent `OrganizationSubscription` (status `active`), no provider call, no binding; allowance via the existing `SubscriptionRenewedEvent`/grant seam; ADR-039 amendment | Registration e2e: exactly one subscription, no Razorpay call; second registration attempt does not duplicate; `currentPeriodStart`/`currentPeriodEnd` are NULL and `processRenewals()` creates no attempt for the row (F-7) |
@@ -479,14 +493,14 @@ Re-run §6 after any merge into `main` before starting a slice; this record is a
 
 | # | Decision | Owner | Blocks |
 |---|---|---|---|
-| D-1 | Free-tier numbers: daily minutes, concurrent rooms, participants/room, instructors/staff, students | Product | Slices 3–6 |
-| D-2 | Is "students" a real limit (needs enforcement) or marketing copy? Same question for "custom domain" | Product | Slice 1 table |
+| D-1 | ~~Free-tier numbers~~ **✅ RESOLVED — FROZEN 2026-09-22 (§3.6):** 60 min/day · 1 concurrent room · 5 participants/room (policy row 5/5/5) · instructors/staff **de-scoped** · students 100 = marketing copy | Product | — |
+| D-2 | **✅ RESOLVED 2026-09-22:** both "students" and "custom domain" are **marketing copy** — declared-but-unenforced; building their enforcement is explicitly out of scope for this programme | Product | — |
 | D-3 | Provider-free discriminator: plan-derived (`providerPlanId IS NULL`) vs a new explicit column | Architecture | Slices 3–4 |
 | D-4 | Upgrade semantics: supersede in place vs cancel-then-create (supersede recommended) | Architecture (ADR-044) | Slice 3 |
 | D-5 | `internal_overhead` grant: exclude from tenant session selection, or honour `isUnbounded` in the provisioning check | Backend | Slices 5–6 |
 | D-6 | "Allowance exhausted" at provisioning time: terminal meeting state + notification, or pre-enqueue check | Backend/UX | Slice 5 |
 | D-7 | Daily-allowance refresh job: schedule, timezone (Saa9vi server clock, per ADR-042's rule for grace) and catch-up after downtime | Backend | Slice 6 |
-| D-8 | Does the free plan get a billing-period allowance at all, or daily only? | Product | Slice 6 |
+| D-8 | Does the free plan get a billing-period allowance at all, or daily only? — §3.6 freeze defaults free to **daily only** (billing-period row `—`); confirm explicitly when slice 6 opens | Product | Slice 6 |
 
 ---
 
