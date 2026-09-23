@@ -53,10 +53,19 @@ import { SessionUpdatedEvent } from '../../bigbluebutton-plugin/events/bbb-event
 import { CmsPlugin } from '../../cms/cms.plugin';
 import { ReviewsPlugin } from '../../reviews/reviews-plugin';
 import { MarketplaceIndexerPlugin } from '../marketplace-indexer.plugin';
+// ADR-042/INV-024: marketplace listing is a subscription entitlement, so the
+// suites that publish PUBLIC sessions must register SubscriptionPlugin (owner
+// of the subscription_plan / organization_subscription entities the shared
+// policy reads) and seed an eligible subscription per publishing channel.
+import { SubscriptionPlugin } from '../../subscription/subscription.plugin';
+import { seedMarketplaceSubscription, clearMarketplaceSubscription } from './marketplace-entitlement.fixture';
+import { MarketplaceIndexerService } from '../services/marketplace-indexer.service';
+import { MarketplaceBaselineService } from '../services/marketplace-baseline.service';
 import { E2E_INITIAL_DATA } from '../../tenant-plugin/e2e/fixtures/e2e-initial-data';
 import { SchemaPostgresInitializer } from '../../tenant-plugin/e2e/schema-postgres-initializer';
 import { AdSpendLedger } from '../entities/ad-spend-ledger.entity';
 import { BbbScheduledSession } from '../../bigbluebutton-plugin/entities/bbb-scheduled-session.entity';
+import { BbbOrganization } from '../../bigbluebutton-plugin/entities/bbb-organization.entity';
 import { ReviewApprovedEvent } from '../../reviews/events/review.events';
 import { TransactionalConnection } from '@vendure/core';
 import { AdSpendLedgerImmutableSubscriber } from '../ad-spend-ledger-immutable.subscriber';
@@ -282,7 +291,10 @@ const { server, adminClient, shopClient } = createTestEnvironment(
       // for the ledger immutability test (layer F) to be meaningful.
       subscribers: [AdSpendLedgerImmutableSubscriber],
     },
-    plugins: [TenantPlugin, BigBlueButtonPlugin, CmsPlugin, ReviewsPlugin, MarketplaceIndexerPlugin],
+    // SubscriptionPlugin: ADR-042/INV-024 — the marketplace listing gate reads
+    // subscription_plan / organization_subscription; without these entities in
+    // this schema every PUBLIC session would fail closed on missing metadata.
+    plugins: [TenantPlugin, BigBlueButtonPlugin, CmsPlugin, ReviewsPlugin, MarketplaceIndexerPlugin, SubscriptionPlugin.init({}) as any],
   }),
 );
 
@@ -363,13 +375,69 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
       adminId: resB.registerNewTenant.administratorId,
     };
 
+    // ADR-042 / INV-024: marketplace listing is a SUBSCRIPTION ENTITLEMENT, so
+    // both publishing channels must be seeded as eligible BEFORE the first
+    // session event — a channel with no subscription row is delisted by design
+    // (and fails closed), which would make every projection test below fail.
+    const seedingConnection = server.app.get(TransactionalConnection);
+    await seedMarketplaceSubscription(seedingConnection, tenantA.channelId);
+    await seedMarketplaceSubscription(seedingConnection, tenantB.channelId);
+
+    // B2 hostname provisioning (bbb-tenant-provisioning.listener) auto-creates
+    // a BbbOrganization on TenantRegisteredEvent, RACING this suite's own
+    // CREATE_ORG mutation — the listener now reliably wins once any work (e.g.
+    // the ADR-042 entitlement seeding above) is interleaved between
+    // registration and CREATE_ORG. Resolve the race explicitly: reuse the
+    // auto-provisioned row when present, pin the slug the academySlug
+    // assertions expect, and read the GraphQL-form id back through the Admin
+    // API instead of guessing the entity-id encoding.
+    const ensureOrg = async (channelId: string, slug: string, name: string): Promise<string> => {
+      const orgRepo = server.app
+        .get(TransactionalConnection)
+        .rawConnection.getRepository(BbbOrganization);
+
+      // Converge instead of assuming an ordering: the listener and this suite
+      // may each win, and the listener can also land BETWEEN our read and our
+      // write (a true TOCTOU — observed: read → null, CREATE_ORG ms later →
+      // "already exists"). Loop until one of the two outcomes is ours.
+      //
+      // NOTE the id-form asymmetry (e2e-only, TestingEntityIdStrategy):
+      // `tenantA.channelId` is the GraphQL-encoded form (`T_2`) while
+      // BbbOrganization stores the internal form (`2`). The mutation decodes
+      // its own input, but a raw repository read does not — read with the
+      // decoded form or the row is invisible forever.
+      const internalChannelId = channelId.replace(/^T_/, '');
+      const deadline = Date.now() + 20_000;
+      for (;;) {
+        const existing = await orgRepo.findOne({ where: { channelId: internalChannelId } });
+        if (existing) {
+          // Reuse the auto-provisioned row; pin the slug the academySlug
+          // assertions expect (the listener writes event.tenantSlug instead).
+          if (existing.slug !== slug || existing.name !== name) {
+            existing.slug = slug;
+            existing.name = name;
+            await orgRepo.save(existing);
+          }
+          const orgs = await adminClient.query(MY_ORGS);
+          const match = orgs.bbbOrganizations.items.find((o: any) => o.slug === slug);
+          if (match) return match.id; // GraphQL-form id — no encoding guesswork
+          throw new Error(`ensureOrg: org with slug '${slug}' not visible via bbbOrganizations`);
+        }
+        try {
+          const created = await adminClient.query(CREATE_ORG, { input: { channelId, slug, name } });
+          return created.createBbbOrganization.id;
+        } catch (err: any) {
+          if (!/already exists/i.test(String(err?.message ?? err))) throw err;
+          if (Date.now() > deadline) throw err;
+          await new Promise((r) => setTimeout(r, 250)); // listener won — re-read
+        }
+      }
+    };
+
     // Tenant A: org + two sessions (one stable, one for transition tests)
     adminClient.setChannelToken(tenantA.channelToken);
     await adminClient.asUserWithCredentials(emailA, 'StrongP@ss1');
-    const orgA = await adminClient.query(CREATE_ORG, {
-      input: { channelId: tenantA.channelId, slug: 'e2e-academy-a', name: 'E2E Academy A Org' },
-    });
-    orgAId = orgA.createBbbOrganization.id;
+    orgAId = await ensureOrg(tenantA.channelId, 'e2e-academy-a', 'E2E Academy A Org');
 
     // Sessions require a trainer: create a customer + org membership, then
     // pass the customerId as trainerId (the service resolves either).
@@ -407,10 +475,7 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
     // Tenant B: org + one session
     adminClient.setChannelToken(tenantB.channelToken);
     await adminClient.asUserWithCredentials(emailB, 'StrongP@ss2');
-    const orgB = await adminClient.query(CREATE_ORG, {
-      input: { channelId: tenantB.channelId, slug: 'e2e-academy-b', name: 'E2E Academy B Org' },
-    });
-    orgBId = orgB.createBbbOrganization.id;
+    orgBId = await ensureOrg(tenantB.channelId, 'e2e-academy-b', 'E2E Academy B Org');
 
     const trainerB = await adminClient.query(CREATE_CUSTOMER, {
       input: { firstName: 'Bob', lastName: 'Trainer', emailAddress: `trainer-b-${Date.now()}@example.com` },
@@ -431,15 +496,18 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
     });
     sessionB1Id = s3.createBbbScheduledSession.id;
 
-    // Sessions default to visibility=PRIVATE (F7 safe-by-default). The
-    // marketplace projection only indexes PUBLIC sessions, so publish the
+    // Sessions default to visibility=PRIVATE (F7 safe-by-default) AND — since
+    // the DRAFT lifecycle (commit 09f98fd) — status=DRAFT. The marketplace
+    // projection only indexes PUBLIC + SCHEDULED/LIVE sessions, so publish the
     // fixtures directly at the entity level before the pipeline tests run.
+    // (This suite predates the DRAFT lifecycle; without status here every doc
+    // is silently pruned by F7 and the projection assertions see an empty index.)
     const connection = server.app.get(TransactionalConnection);
     const sessionRepo = connection.rawConnection.getRepository(BbbScheduledSession);
     const toPk = (id: string) => parseInt(String(id).replace(/^T_/, ''), 10);
     await sessionRepo.update(
       { id: In([toPk(sessionA1Id), toPk(sessionA2Id), toPk(sessionB1Id)]) },
-      { visibility: 'PUBLIC' },
+      { visibility: 'PUBLIC', status: 'SCHEDULED' },
     );
     // Publish events for the visibility change so the projection indexes them
     // through the same guarded path as any other update.
@@ -660,6 +728,127 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
       await expect(ledgerRepo.remove(afterUpdate)).rejects.toThrow(/INV-010 violation/);
       const afterDelete = await ledgerRepo.findOneOrFail({ where: { id: row.id } });
       expect(afterDelete.id).toBe(row.id);
+    });
+  });
+
+  // ─── Layer G: ADR-042 / INV-024 — marketplace listing entitlement ─────────
+  //
+  // The infra-gated counterpart to
+  // src/plugins/marketplace/__tests__/marketplace-listing-entitlement.spec.ts:
+  // same policy and same enforcement point, but against REAL Postgres rows and
+  // REAL Elasticsearch documents. Drives indexSession() directly (the ADR's
+  // primary enforcement point) so assertions do not depend on queue timing.
+
+  d('ADR-042 marketplace listing entitlement (INV-024)', () => {
+    let indexer: MarketplaceIndexerService;
+    let entitlementCtx: any;
+    let connection: TransactionalConnection;
+
+    /** Re-run the enforcement point for tenant A's stable session. */
+    const reindexA1 = async () => {
+      // Mirror the queue contract: events deliver String(session.id) — the RAW
+      // PK ('1'), never the GraphQL-encoded form ('T_1'). indexSession()
+      // decodes internally for its lookup and re-encodes via toPublicId() for
+      // the ES doc id, so assertions still compare against sessionA1Id.
+      const rawPk = String(parseInt(String(sessionA1Id).replace(/^T_/, ''), 10));
+      await indexer.indexSession(rawPk, entitlementCtx);
+    };
+
+    /** Poll until sessionA1Id is (or is no longer) present in the index. */
+    const expectListed = async (listed: boolean) => {
+      const hits = await waitFor(
+        () => searchSessions('E2E'),
+        (h) => (listed ? h.some((s: any) => s.id === sessionA1Id) : !h.some((s: any) => s.id === sessionA1Id)),
+      );
+      expect(hits.some((s: any) => s.id === sessionA1Id)).toBe(listed);
+    };
+
+    beforeAll(async () => {
+      indexer = server.app.get(MarketplaceIndexerService);
+      entitlementCtx = await server.app.get(MarketplaceBaselineService).createInternalContext();
+      connection = server.app.get(TransactionalConnection);
+      await reindexA1();
+      await expectListed(true); // baseline: seeded active + flag on → LISTED
+    });
+
+    afterAll(async () => {
+      // Leave the channel eligible so any suite ordering stays deterministic.
+      await seedMarketplaceSubscription(connection, tenantA.channelId);
+      await reindexA1();
+    });
+
+    it('a plan with marketplaceListingEnabled=false DELISTS an active channel', async () => {
+      await seedMarketplaceSubscription(connection, tenantA.channelId, { marketplaceListingEnabled: false });
+      await reindexA1();
+      await expectListed(false);
+
+      await seedMarketplaceSubscription(connection, tenantA.channelId, { marketplaceListingEnabled: true });
+      await reindexA1();
+      await expectListed(true);
+    });
+
+    it('past_due INSIDE marketplaceGraceUntil keeps the listing (dunning grace)', async () => {
+      await seedMarketplaceSubscription(connection, tenantA.channelId, {
+        status: 'past_due',
+        marketplaceGraceUntil: new Date(Date.now() + 7 * 86_400_000),
+      });
+      await reindexA1();
+      await expectListed(true);
+    });
+
+    it('past_due AFTER the grace deadline DELISTS the channel', async () => {
+      await seedMarketplaceSubscription(connection, tenantA.channelId, {
+        status: 'past_due',
+        marketplaceGraceUntil: new Date(Date.now() - 1000),
+      });
+      await reindexA1();
+      await expectListed(false);
+    });
+
+    it('past_due with a NULL grace deadline DELISTS (grace is FSM-stamped, not implicit)', async () => {
+      await seedMarketplaceSubscription(connection, tenantA.channelId, {
+        status: 'past_due',
+        marketplaceGraceUntil: null,
+      });
+      await reindexA1();
+      await expectListed(false);
+    });
+
+    it('no subscription row DELISTS — false, not an error (ADR-042 §4)', async () => {
+      await clearMarketplaceSubscription(connection, tenantA.channelId);
+      await reindexA1();
+      await expectListed(false);
+    });
+
+    it('PROHIBITED signals cannot change the decision (ADR-042 §6)', async () => {
+      // An attractive provider state must NOT rescue an expired grace window…
+      await seedMarketplaceSubscription(connection, tenantA.channelId, {
+        status: 'past_due',
+        marketplaceGraceUntil: new Date(Date.now() - 1000),
+        providerStatus: 'authenticated',
+      });
+      await reindexA1();
+      await expectListed(false);
+
+      // …and a hostile provider state must NOT revoke an entitled channel.
+      await seedMarketplaceSubscription(connection, tenantA.channelId, {
+        status: 'active',
+        marketplaceListingEnabled: true,
+        providerStatus: 'halted',
+      });
+      await reindexA1();
+      await expectListed(true);
+    });
+
+    it('restores the seeded eligibility so later ordering stays deterministic', async () => {
+      await seedMarketplaceSubscription(connection, tenantA.channelId, {
+        status: 'active',
+        marketplaceListingEnabled: true,
+        marketplaceGraceUntil: null,
+        providerStatus: undefined,
+      });
+      await reindexA1();
+      await expectListed(true);
     });
   });
 });

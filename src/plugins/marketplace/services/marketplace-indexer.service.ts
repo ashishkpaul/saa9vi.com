@@ -11,6 +11,7 @@ import { MarketplaceAdService } from './marketplace-ad.service';
 import { BayesianRatingService } from './bayesian-rating.service';
 import { MarketplaceBaselineService } from './marketplace-baseline.service';
 import { SponsoredBoostConfigService } from './sponsored-boost-config.service';
+import { CommercialEntitlementService } from '../../../platform/commercial/commercial-entitlement.service';
 
 export interface MarketplaceSessionDocument {
   id: string;
@@ -78,6 +79,13 @@ export class MarketplaceIndexerService {
     private readonly baselineService: MarketplaceBaselineService,
     private readonly configService: ConfigService,
     private readonly sponsorBoostConfig: SponsoredBoostConfigService,
+    /**
+     * ADR-042 / INV-024 marketplace listing eligibility — the shared platform
+     * policy (also used by the ADR-043 white-label theme gate). Appended last so
+     * existing positional constructions (e2e/unit wiring of this service) keep
+     * working unchanged.
+     */
+    private readonly commercialEntitlements: CommercialEntitlementService,
   ) {
     const node = process.env.ELASTICSEARCH_NODE || process.env.ELASTICSEARCH_URL || 'http://localhost:9200';
     const password = process.env.ELASTICSEARCH_PASSWORD;
@@ -257,7 +265,26 @@ export class MarketplaceIndexerService {
     const publiclyVisible =
       session.visibility === 'PUBLIC' &&
       (session.status === 'SCHEDULED' || session.status === 'LIVE');
-    if (!publiclyVisible) {
+
+    // ─── ADR-042 §4 / INV-024: listing is a SUBSCRIPTION ENTITLEMENT. ──────────
+    // A publicly visible session is STILL removed from the index when the owning
+    // channel is not commercially entitled: plan.marketplaceListingEnabled must
+    // be true AND the subscription must be `active` (or `past_due` while now() is
+    // inside `marketplaceGraceUntil`). A missing subscription row or a plan
+    // without the flag yields `false` — not an error (ADR-042 §4).
+    //
+    // Prohibited signals (ADR-042 §6): hostname / tenantSlug presence,
+    // customDomain configuration, Razorpay providerStatus, provider subscription
+    // existence, BillingAttempt count. Evaluated through the shared platform
+    // policy so this gate and the ADR-043 theme gate can never drift.
+    //
+    // Short-circuit order matters: a session that fails F7 is pruned without a
+    // subscription read.
+    const marketplaceEligible =
+      publiclyVisible &&
+      (await this.commercialEntitlements.channelMarketplaceEligible(session.channelId ?? ''));
+
+    if (!marketplaceEligible) {
       await this.deleteSession(this.toPublicId(session.id));
       await this.reindexInstructorsForSession(String(session.id));
       return;
@@ -399,8 +426,9 @@ export class MarketplaceIndexerService {
    * this window all documents converge to targetVersion.
    *
    * Eligible population (F7) mirrors the per-document guard in indexSession():
-   * PUBLIC + SCHEDULED/LIVE sessions. indexSession() additionally prunes
-   * documents that are no longer eligible.
+   * PUBLIC + SCHEDULED/LIVE sessions. indexSession() additionally applies the
+   * ADR-042 subscription-entitlement gate per channel and prunes documents that
+   * are no longer eligible, so this broader discovery query is safe.
    */
   async globalReindex(targetVersion: number, ctx: RequestContext): Promise<void> {
     // Resolve the authoritative baseline for THIS target version.
@@ -415,8 +443,9 @@ export class MarketplaceIndexerService {
     }
 
     const sessionRepo = this.connection.rawConnection.getRepository(BbbScheduledSession);
-    // F7 eligible population. indexSession() applies the same guard and prunes
-    // stale documents on the per-session path.
+    // F7 eligible population. indexSession() applies the same guard PLUS the
+    // ADR-042 subscription-entitlement gate, and prunes stale documents on the
+    // per-session path.
     const sessions = await sessionRepo.find({
       where: {
         visibility: 'PUBLIC',
@@ -545,10 +574,16 @@ export class MarketplaceIndexerService {
 
   /**
    * 3D.2: compute search-refinement aggregates for one instructor from the
-   * authoritative F7 session population. Eligibility mirrors indexSession():
-   * PUBLIC + SCHEDULED/LIVE, with `startTime > now` for "upcoming". Price is
-   * the ProductVariant.price per session (same source as the session docs).
-   * Read-only on PostgreSQL; ES is never consulted here.
+   * authoritative F7 session population. Eligibility mirrors indexSession()'s
+   * session-visibility rule (PUBLIC + SCHEDULED/LIVE, with `startTime > now` for
+   * "upcoming"); price is the ProductVariant.price per session (same source as
+   * the session docs). Read-only on PostgreSQL; ES is never consulted here.
+   *
+   * KNOWN RESIDUAL (ADR-042 scope boundary): this aggregate deliberately does
+   * NOT apply the subscription-entitlement gate. ADR-042 §4 gates session
+   * documents only; an ineligible channel's instructor documents are therefore
+   * not pruned by the marketplace listing gate. Documented in the ADR-042
+   * implementation note rather than silently widening the ADR's scope.
    */
   private async computeInstructorAggregates(profileId: string): Promise<{
     upcomingSessionsCount: number;

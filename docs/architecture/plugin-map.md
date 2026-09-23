@@ -52,7 +52,7 @@ None.
 | `InstructorIndexerService` | Per-tenant Elasticsearch indexing for instructors |
 | `DomainChannelResolverService` | Custom domain → channel token Redis mapping |
 | `TenantThemeService` | ADR-043 L1 theme lifecycle: immutable versioned drafts (draft → active → archived), draft cloning, publish/rollback/reset, advisory-locked version allocation, channel-scoped asset ownership validation |
-| `TenantCommercialEligibilityService` | ADR-043 white-label entitlement gate (`whitelabelEnabled` + status ∈ {trialing, active, past_due}); reads subscription entities directly via `TransactionalConnection` (see service comment for rationale); marketplace entitlement (ADR-042) is deliberately separate |
+| `TenantCommercialEligibilityService` | ADR-043 white-label entitlement gate (`whitelabelEnabled` + status ∈ {trialing, active, past_due}); contributes only the theming window + plan flag and **delegates** the shared evaluation to the platform `CommercialEntitlementService` (`src/platform/commercial/`), which is also ADR-042's `channelMarketplaceEligible()` — one evaluator, window supplied per entitlement |
 
 ---
 

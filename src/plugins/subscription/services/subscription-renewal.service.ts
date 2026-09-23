@@ -58,6 +58,32 @@ export class SubscriptionRenewalService {
   }
 
   /**
+   * ADR-042 §3 — marketplace-listing grace period.
+   *
+   * While a subscription is `past_due` and now() is still inside this window,
+   * the tenant keeps its marketplace listing (INV-024) so a brief payment
+   * failure does not instantly remove the academy from discovery while dunning
+   * runs. Default 7 days; override with MARKETPLACE_GRACE_PERIOD_DAYS.
+   *
+   * A non-finite or negative configuration is clamped to the default rather
+   * than producing an Invalid Date — a misconfigured env var must not be able
+   * to grant an unbounded grace window.
+   */
+  private get marketplaceGracePeriodMs(): number {
+    const days = Number(process.env.MARKETPLACE_GRACE_PERIOD_DAYS ?? 7);
+    if (!Number.isFinite(days) || days < 0) return 7 * 86_400_000;
+    return days * 86_400_000;
+  }
+
+  /**
+   * The grace deadline to stamp when entering `past_due`. Computed from the
+   * Saa9vi server clock only (ADR-042 §3) — never from a provider timestamp.
+   */
+  private marketplaceGraceUntilFromNow(now = new Date()): Date {
+    return new Date(now.getTime() + this.marketplaceGracePeriodMs);
+  }
+
+  /**
    * Scans for subscriptions that have passed their currentPeriodEnd and
    * enqueues them for background processing.
    *
@@ -176,6 +202,9 @@ export class SubscriptionRenewalService {
           status: "cancelled",
           cancelledAt: new Date(),
           cancelAtPeriodEnd: false,
+          // ADR-042 §3: cancellation clears the marketplace-listing grace
+          // deadline — no stale deadline survives on a terminal row.
+          marketplaceGraceUntil: null,
           version: sub.version + 1,
         })
         .where("id = :id AND version = :version AND status != 'cancelled'", {
@@ -469,6 +498,11 @@ export class SubscriptionRenewalService {
         currentPeriodStart: newPeriodStart,
         currentPeriodEnd: newPeriodEnd,
         status: "active",
+        // ADR-042 §5: a successful recovery ends the marketplace-listing grace
+        // period. Clearing in the SAME CAS as the status→active write keeps
+        // `marketplaceGraceUntil` from lingering as a stale deadline on an
+        // active (unconditionally eligible) subscription.
+        marketplaceGraceUntil: null,
       })
       .where(
         "id = :id AND version = :version AND (currentPeriodStart IS NULL OR currentPeriodStart < :targetStart)",
@@ -750,10 +784,18 @@ export class SubscriptionRenewalService {
       }
     }
 
+    // ADR-042 §3/§5: entering past_due opens the marketplace-listing grace
+    // window in the SAME CAS write as the status change, so a reader can never
+    // observe a past_due subscription with a stale/absent deadline. Written by
+    // the local FSM here — never derived from providerStatus.
     const result = await this.connection.rawConnection
       .createQueryBuilder()
       .update(OrganizationSubscription)
-      .set({ status: "past_due", version: sub.version + 1 })
+      .set({
+        status: "past_due",
+        marketplaceGraceUntil: this.marketplaceGraceUntilFromNow(),
+        version: sub.version + 1,
+      })
       .where("id = :id AND version = :version", {
         id: sub.id,
         version: sub.version,
@@ -792,7 +834,14 @@ export class SubscriptionRenewalService {
     const result = await this.connection.rawConnection
       .createQueryBuilder()
       .update(OrganizationSubscription)
-      .set({ status: "cancelled", version: sub.version + 1 })
+      .set({
+        status: "cancelled",
+        // ADR-042 §5: cancellation terminates the grace period. `cancelled` is
+        // never marketplace-eligible anyway (INV-024 window), so this is
+        // hygiene: no stale deadline survives on a terminal row.
+        marketplaceGraceUntil: null,
+        version: sub.version + 1,
+      })
       .where("id = :id AND version = :version", {
         id: sub.id,
         version: sub.version,
@@ -834,7 +883,14 @@ export class SubscriptionRenewalService {
     await this.connection.rawConnection
       .createQueryBuilder()
       .update(OrganizationSubscription)
-      .set({ status: "past_due" })
+      .set({
+        status: "past_due",
+        // ADR-042 §3 defines the trigger as the TRANSITION to past_due, so the
+        // grace window opens here too — not only on the webhook-driven path.
+        // Otherwise a locally-detected failed charge would delist the academy
+        // immediately, defeating the stated purpose of the grace period.
+        marketplaceGraceUntil: this.marketplaceGraceUntilFromNow(),
+      })
       .where("id = :id AND version = :version", {
         id: subscription.id,
         version: claimedVersion,

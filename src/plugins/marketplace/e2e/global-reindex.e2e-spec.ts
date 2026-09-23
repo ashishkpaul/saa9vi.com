@@ -100,6 +100,10 @@ describe('MarketplaceIndexerService.globalReindex target-version guard (Step 7)'
       baselineService,
       {} as any,
       {} as any,
+      // ADR-042 policy: unused here — indexSession() is replaced by a spy in
+      // these suite-level tests (the gate itself is covered by the dedicated
+      // marketplace-indexer-eligibility spec and the marketplace e2e suite).
+      {} as any,
     );
     (indexer as any).indexSession = vi.fn(async (id: string) => {
       indexSessionCalls.push(id);
@@ -157,6 +161,8 @@ describe('MarketplaceIndexerService.measureConvergence (Step 8)', () => {
       baselineService,
       configService,
       {} as any,
+      // ADR-042 policy is not exercised by the convergence measurement path.
+      {} as any,
     );
     (indexer as any).client = {
       search: vi.fn(async () => ({ hits: { hits: esDocs.map((d) => ({ _source: d })) } })),
@@ -211,6 +217,8 @@ describe('MarketplaceIndexerService.globalReindex mid-run version-advance guard 
       {} as any,
       baselineService,
       {} as any,
+      {} as any,
+      // ADR-042 policy: unused — indexSession() is a spy in this suite.
       {} as any,
     );
     (indexer as any).indexSession = vi.fn(async (id: string) => {

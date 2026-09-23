@@ -13,6 +13,7 @@ export class AdrChecker implements Checker {
       this.noAdHocAccessChecks(),
       this.administratorVisibility(),
       this.tenantThemeInvariants(),
+      this.marketplaceEntitlementInvariants(),
     ];
 
     const results = await Promise.all(checks);
@@ -268,6 +269,93 @@ export class AdrChecker implements Checker {
         ? 'TenantTheme structural invariants present (INV-025)'
         : failures.join('; '),
       details: 'INV-025: channel isolation, DB-enforced one-active, entitlement gating, public conditional Shop read',
+    };
+  }
+
+  /**
+   * INV-024 (ADR-042) — structural verification of the marketplace listing
+   * entitlement. Lightweight by design: verifies the structural elements exist
+   * (plan capability flag defaulting to false, subscription grace column, ONE
+   * shared policy evaluator, the indexer enforcement point, the FSM writers).
+   * Runtime behaviour is covered by e2e tests, not here.
+   *
+   * It also enforces ADR-042 §6 by asserting that the policy file references no
+   * prohibited eligibility signal (hostname/tenantSlug, customDomain,
+   * providerStatus, provider subscription id).
+   */
+  private async marketplaceEntitlementInvariants(): Promise<CheckResult> {
+    const srcDir = path.join(__dirname, '../../..');
+    const failures: string[] = [];
+
+    const planPath = path.join(srcDir, 'src/plugins/subscription/entities/subscription-plan.entity.ts');
+    const planContent = readFileContent(planPath);
+    if (!/marketplaceListingEnabled\s*:\s*boolean/.test(planContent)) {
+      failures.push('SubscriptionPlan must declare marketplaceListingEnabled');
+    }
+    if (!/marketplaceListingEnabled[\s\S]{0,200}?default:\s*false|default:\s*false[\s\S]{0,200}?marketplaceListingEnabled/.test(planContent)) {
+      failures.push('SubscriptionPlan.marketplaceListingEnabled must default to false (opt-in listing)');
+    }
+
+    const subPath = path.join(srcDir, 'src/plugins/subscription/entities/organization-subscription.entity.ts');
+    const subContent = readFileContent(subPath);
+    if (!/marketplaceGraceUntil/.test(subContent)) {
+      failures.push('OrganizationSubscription must declare marketplaceGraceUntil');
+    }
+
+    // ONE policy evaluator (ADR-042 §4 / plan §3.4 item 4) — the shared
+    // platform-level service, not a second evaluator inside the indexer.
+    const policyPath = path.join(srcDir, 'src/platform/commercial/commercial-entitlement.service.ts');
+    const policyContent = readFileContent(policyPath);
+    if (!/channelMarketplaceEligible\s*\(/.test(policyContent)) {
+      failures.push('CommercialEntitlementService must expose channelMarketplaceEligible()');
+    }
+    if (!/marketplaceListingEnabled/.test(policyContent)) {
+      failures.push('The shared policy must gate on plan.marketplaceListingEnabled (ADR-042 §4)');
+    }
+    if (!/active/.test(policyContent) || !/past_due/.test(policyContent) || !/marketplaceGraceUntil/.test(policyContent)) {
+      failures.push('The shared policy must implement the ADR-042 window: active OR (past_due AND now() < marketplaceGraceUntil)');
+    }
+    // ADR-042 §6 prohibition — the policy must not consult these as signals.
+    // Comments are stripped first: the file is REQUIRED to document the
+    // prohibited signals (ADR-042 §6 is part of the spec), so scanning raw text
+    // would flag the documentation itself. Only executable code is checked.
+    const policyCode = policyContent
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/[^\n]*/gm, '$1');
+    for (const prohibited of ['tenantSlug', 'customDomain', 'providerStatus', 'providerSubscriptionId']) {
+      if (new RegExp(`\\b${prohibited}\\b`).test(policyCode)) {
+        failures.push(`ADR-042 §6 violation: the eligibility policy references prohibited signal '${prohibited}'`);
+      }
+    }
+
+    const indexerPath = path.join(srcDir, 'src/plugins/marketplace/services/marketplace-indexer.service.ts');
+    const indexerContent = readFileContent(indexerPath);
+    if (!/channelMarketplaceEligible/.test(indexerContent)) {
+      failures.push('MarketplaceIndexerService.indexSession() must apply channelMarketplaceEligible()');
+    }
+    if (!/commercialEntitlements/.test(indexerContent)) {
+      failures.push('MarketplaceIndexerService must inject the shared platform policy, not a second evaluator');
+    }
+
+    // ADR-042 §5: grace transitions owned by SubscriptionRenewalService.
+    const renewalPath = path.join(srcDir, 'src/plugins/subscription/services/subscription-renewal.service.ts');
+    const renewalContent = readFileContent(renewalPath);
+    if (!/marketplaceGraceUntil/.test(renewalContent)) {
+      failures.push('SubscriptionRenewalService must own the marketplaceGraceUntil transitions');
+    }
+    if (!/MARKETPLACE_GRACE_PERIOD_DAYS/.test(renewalContent)) {
+      failures.push('The marketplace grace period must be configurable (MARKETPLACE_GRACE_PERIOD_DAYS)');
+    }
+
+    return {
+      checker: this.name,
+      name: 'marketplace-entitlement-invariants',
+      passed: failures.length === 0,
+      severity: 'error',
+      message: failures.length === 0
+        ? 'Marketplace listing entitlement structural invariants present (INV-024)'
+        : failures.join('; '),
+      details: 'INV-024: plan flag default-false, subscription grace deadline, one shared policy evaluator, indexer enforcement, FSM-owned transitions, no prohibited signals',
     };
   }
 

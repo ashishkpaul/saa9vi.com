@@ -78,6 +78,23 @@ export class OrganizationSubscription extends VendureEntity implements ChannelAw
   cancelledAt: Date;
 
   /**
+   * Marketplace-listing grace deadline (ADR-042 §3).
+   *
+   * Set to `now() + MARKETPLACE_GRACE_PERIOD` (default 7 days) when the
+   * subscription transitions to `past_due`; cleared on recovery to `active`
+   * and on cancellation. While set and in the future, a `past_due`
+   * subscription still satisfies INV-024 — a brief payment failure must not
+   * instantly remove the academy from marketplace discovery while dunning runs.
+   *
+   * Written ONLY by SubscriptionRenewalService (never by the webhook processor
+   * or the ADR-044 plan-change/cancel paths): this is a Saa9vi business-state
+   * field owned by the local subscription FSM, NOT a mirror of Razorpay
+   * `providerStatus` (ADR-042 §5). Evaluated with the Saa9vi server clock.
+   */
+  @Column({ type: "timestamp", nullable: true })
+  marketplaceGraceUntil: Date | null;
+
+  /**
    * Dunning retry count — incremented by the dunning job each time a
    * past_due subscription is re-enqueued for payment retry (RFC-001 §4.2).
    * Null = never been dunning-retried.

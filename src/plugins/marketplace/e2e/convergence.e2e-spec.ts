@@ -37,6 +37,11 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { In } from 'typeorm';
 import { TenantPlugin } from '../../tenant-plugin/tenant-plugin.plugin';
+// ADR-042/INV-024: the convergence suite indexes real documents, so it needs
+// the subscription entities (SubscriptionPlugin) and an eligible publishing
+// channel — marketplace listing is a subscription entitlement.
+import { SubscriptionPlugin } from '../../subscription/subscription.plugin';
+import { seedMarketplaceSubscription } from './marketplace-entitlement.fixture';
 import { BigBlueButtonPlugin } from '../../bigbluebutton-plugin';
 import { CmsPlugin } from '../../cms/cms.plugin';
 import { ReviewsPlugin } from '../../reviews/reviews-plugin';
@@ -44,6 +49,7 @@ import { MarketplaceIndexerPlugin } from '../marketplace-indexer.plugin';
 import { E2E_INITIAL_DATA } from '../../tenant-plugin/e2e/fixtures/e2e-initial-data';
 import { SchemaPostgresInitializer } from '../../tenant-plugin/e2e/schema-postgres-initializer';
 import { BbbScheduledSession } from '../../bigbluebutton-plugin/entities/bbb-scheduled-session.entity';
+import { BbbOrganization } from '../../bigbluebutton-plugin/entities/bbb-organization.entity';
 import { MarketplaceIndexerService } from '../services/marketplace-indexer.service';
 import { MarketplaceBaselineService } from '../services/marketplace-baseline.service';
 
@@ -120,6 +126,18 @@ const CREATE_ORG = gql`
   }
 `;
 
+const LIST_ORGS = gql`
+  query Orgs {
+    bbbOrganizations(options: { skip: 0, take: 10 }) {
+      items {
+        id
+        slug
+        name
+      }
+    }
+  }
+`;
+
 const CREATE_SESSION = gql`
   mutation CreateSession($input: CreateBbbScheduledSessionInput!) {
     createBbbScheduledSession(input: $input) {
@@ -186,7 +204,9 @@ const { server, adminClient, shopClient } = createTestEnvironment(
       schema: 'e2e_convergence',
       synchronize: true,
     },
-    plugins: [TenantPlugin, BigBlueButtonPlugin, CmsPlugin, ReviewsPlugin, MarketplaceIndexerPlugin],
+    // SubscriptionPlugin: ADR-042/INV-024 — the listing gate reads the
+    // subscription entities; without them every session fails closed.
+    plugins: [TenantPlugin, BigBlueButtonPlugin, CmsPlugin, ReviewsPlugin, MarketplaceIndexerPlugin, SubscriptionPlugin.init({}) as any],
   }),
 );
 
@@ -270,11 +290,55 @@ describe('Marketplace convergence / recovery (3D.1b Step 9)', () => {
       email: emailA,
     };
 
+    // ADR-042/INV-024: seed the publishing channel as marketplace-eligible
+    // BEFORE any session is created — an unentitled channel is delisted by
+    // design, which would make the convergence totals collapse to zero.
+    await seedMarketplaceSubscription(server.app.get(TransactionalConnection), tenantA.channelId);
+
     adminClient.setChannelToken(tenantA.channelToken);
     await adminClient.asUserWithCredentials(tenantA.email, 'StrongP@ss1');
-    const org = await adminClient.query(CREATE_ORG, {
-      input: { channelId: tenantA.channelId, slug: 'e2e-convergence', name: 'E2E Convergence Org' },
-    });
+
+    // B2 hostname provisioning (bbb-tenant-provisioning.listener) auto-creates
+    // the BbbOrganization on TenantRegisteredEvent, racing this suite's own
+    // CREATE_ORG mutation (exposed by the ADR-042 entitlement seeding above).
+    // Converge instead of assuming an ordering — the listener can land between
+    // our read and our write (observed TOCTOU: read → null, CREATE ms later →
+    // "already exists"). Reuse + pin slug/name; read the GraphQL-form id back.
+    const orgRepo = server.app
+      .get(TransactionalConnection)
+      .rawConnection.getRepository(BbbOrganization);
+    let orgId: string;
+    {
+      const internalChannelId = tenantA.channelId.replace(/^T_/, '');
+      const deadline = Date.now() + 20_000;
+      for (;;) {
+        const existingOrg = await orgRepo.findOne({ where: { channelId: internalChannelId } });
+        if (existingOrg) {
+          if (existingOrg.slug !== 'e2e-convergence' || existingOrg.name !== 'E2E Convergence Org') {
+            existingOrg.slug = 'e2e-convergence';
+            existingOrg.name = 'E2E Convergence Org';
+            await orgRepo.save(existingOrg);
+          }
+          const orgs = await adminClient.query(LIST_ORGS);
+          const match = orgs.bbbOrganizations.items.find((o: any) => o.slug === 'e2e-convergence');
+          if (!match) throw new Error("ensureOrg: auto-provisioned org 'e2e-convergence' not visible via bbbOrganizations");
+          orgId = match.id;
+          break;
+        }
+        try {
+          const created = await adminClient.query(CREATE_ORG, {
+            input: { channelId: tenantA.channelId, slug: 'e2e-convergence', name: 'E2E Convergence Org' },
+          });
+          orgId = created.createBbbOrganization.id;
+          break;
+        } catch (err: any) {
+          if (!/already exists/i.test(String(err?.message ?? err))) throw err;
+          if (Date.now() > deadline) throw err;
+          await new Promise((r) => setTimeout(r, 250)); // listener won — re-read
+        }
+      }
+    }
+
     const trainer = await adminClient.query(CREATE_CUSTOMER, {
       input: {
         firstName: 'Con',
@@ -284,7 +348,7 @@ describe('Marketplace convergence / recovery (3D.1b Step 9)', () => {
     });
     const member = await adminClient.query(ADD_MEMBER, {
       input: {
-        organizationId: org.createBbbOrganization.id,
+        organizationId: orgId,
         customerId: trainer.createCustomer.id,
         role: 'org-admin',
       },
@@ -295,7 +359,7 @@ describe('Marketplace convergence / recovery (3D.1b Step 9)', () => {
     for (let i = 1; i <= 4; i++) {
       const s = await adminClient.query(CREATE_SESSION, {
         input: {
-          organizationId: org.createBbbOrganization.id,
+          organizationId: orgId,
           title: `E2E Convergence Session ${i}`,
           startTime: new Date(Date.now() + 86400_000).toISOString(),
           endTime: new Date(Date.now() + 90000_000).toISOString(),
@@ -307,12 +371,15 @@ describe('Marketplace convergence / recovery (3D.1b Step 9)', () => {
     }
 
     // Sessions 1–3 eligible (PUBLIC + SCHEDULED); session 4 stays PRIVATE.
+    // Since the DRAFT lifecycle (commit 09f98fd) sessions are created DRAFT, so
+    // status must be pinned here too — F7 requires PUBLIC + SCHEDULED/LIVE and
+    // silently prunes anything else (this suite's comment predates the change).
     const connection = server.app.get(TransactionalConnection);
     const sessionRepo = connection.rawConnection.getRepository(BbbScheduledSession);
     const toPk = (id: string) => parseInt(String(id).replace(/^T_/, ''), 10);
     await sessionRepo.update(
       { id: In(sessionIds.slice(0, 3).map(toPk)) },
-      { visibility: 'PUBLIC' },
+      { visibility: 'PUBLIC', status: 'SCHEDULED' },
     );
     eligibleIds = sessionIds.slice(0, 3);
     ineligibleId = sessionIds[3];

@@ -343,6 +343,8 @@ Hostname configuration (`tenantSlug`, `customDomain`), Razorpay `providerStatus`
 
 **Rejection criterion:** Any code path that grants or denies marketplace listing based on hostname, `providerStatus`, or provider subscription existence is rejected.
 
+**Structural checker (since 2026-09-23):** `AdrChecker.marketplaceEntitlementInvariants()` (`src/platform/invariants/adr.checker.ts`) — verifies the plan flag defaults to false, the grace column exists, exactly one shared policy evaluator (`CommercialEntitlementService.channelMarketplaceEligible()`) gates `MarketplaceIndexerService.indexSession()`, the FSM owns the grace transitions, and no prohibited signal appears in the policy's executable code. Runs under `npm run verify:invariants`.
+
 ---
 
 ## INV-025: Tenant Theme Is Channel-Isolated, Immutable Once Published, and Commercially Gated (ADR-043)

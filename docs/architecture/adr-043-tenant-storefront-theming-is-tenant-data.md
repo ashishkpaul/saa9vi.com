@@ -91,7 +91,7 @@ The **local** subscription FSM is the only source of truth. Provider-side states
 
 Public API access and commercial entitlement are different questions: `myTenantTheme` remains `Permission.Public` because the storefront must resolve branding before customer authentication, while the *value* it returns is entitlement-conditional.
 
-Entitlement is evaluated in exactly one place (`TenantCommercialEligibilityService`). Marketplace listing eligibility (ADR-042, `marketplaceListingEnabled`) is a **separate** entitlement and is not part of this rule.
+Entitlement is evaluated in exactly one place (`TenantCommercialEligibilityService`), which since ADR-042's implementation **delegates** the shared window evaluation to the platform `CommercialEntitlementService` (`src/platform/commercial/`) — one evaluator, the window supplied per entitlement. Marketplace listing eligibility (ADR-042, `marketplaceListingEnabled`) is a **separate** entitlement and is not part of this rule.
 
 ### 3. `TenantTheme` entity
 
@@ -279,7 +279,7 @@ This ADR is **Accepted** as an architectural decision; the capability matrix bel
 
 ## Sequencing
 
-T1 (L1 controlled theme) is safe to build before the marketplace entitlement gates (ADR-042 / M0) because tenant presentation is independent of marketplace eligibility. T2 (L3 custom CSS) should remain after T1 in the implementation roadmap — it has the highest security surface area and should only be introduced after L1 is proven stable.
+T1 (L1 controlled theme) is safe to build before the marketplace entitlement gates (ADR-042, implemented as plan slice 7) because tenant presentation is independent of marketplace eligibility. T2 (L3 custom CSS) should remain after T1 in the implementation roadmap — it has the highest security surface area and should only be introduced after L1 is proven stable.
 
 ## Migration note
 

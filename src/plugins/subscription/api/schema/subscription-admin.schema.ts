@@ -24,6 +24,8 @@ export const adminApiExtensions = gql`
     maxStudents: Int!
     customDomainEnabled: Boolean!
     whitelabelEnabled: Boolean!
+    "ADR-042: plan-tier marketplace listing capability. Opt-in per tier."
+    marketplaceListingEnabled: Boolean!
     isActive: Boolean!
     sortOrder: Int!
     providerPlanId: String
@@ -40,6 +42,8 @@ export const adminApiExtensions = gql`
     currentPeriodEnd: DateTime
     cancelAtPeriodEnd: Boolean!
     cancelledAt: DateTime
+    "ADR-042 §3: deadline until which a past_due subscription keeps its marketplace listing (null = no grace in progress). Set/cleared by the local subscription FSM."
+    marketplaceGraceUntil: DateTime
     billingCustomerId: String
     providerStatus: String
     providerShortUrl: String
@@ -55,6 +59,8 @@ export const adminApiExtensions = gql`
     maxStudents: Int
     customDomainEnabled: Boolean
     whitelabelEnabled: Boolean
+    "ADR-042: enable/disable marketplace listing for this plan tier (default false)."
+    marketplaceListingEnabled: Boolean
     isActive: Boolean
     sortOrder: Int
     providerPlanId: String

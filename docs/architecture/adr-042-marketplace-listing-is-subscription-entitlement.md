@@ -1,12 +1,29 @@
 # ADR-042: Marketplace Listing Is a Subscription Entitlement
 
-**Status:** Accepted — implementation pending
+**Status:** Accepted — implemented 2026-09-23
 **Date:** 2026-09-21
 **Related:** ADR-038 (direct Razorpay provider), ADR-039 (provider-wired subscription lifecycle), ADR-041 (provider-cycle billing period identity), G1 hostname contract decision (2026-09-15), INV-001 (Channel = tenant identity)
 
-> **Implementation status (2026-09-21):** The architecture is accepted, but the required implementation is **not yet present in `src/`**. `SubscriptionPlan.marketplaceListingEnabled`, `OrganizationSubscription.marketplaceGraceUntil`, and `MarketplaceIndexerService.channelMarketplaceEligible()` do not exist in the codebase yet. This ADR records the decision; implementation is scheduled as **slice 7** of the Free Basic / storefront commercial programme (`docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` §3.4). There is no separate "M0" workstream entry in `integration-gaps-worklist.md` — the earlier reference to one was inaccurate. Marketplace eligibility is a **separate** entitlement from ADR-043 L1 white-label theming and must not be conflated with it.
+> **Implementation status (2026-09-23):** Implemented as written — **slice 7 / plan §3.4** (`docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md`). There is no separate "M0" workstream entry in `integration-gaps-worklist.md` — the earlier reference to one was inaccurate (corrected 2026-09-22). Marketplace eligibility remains a **separate** entitlement from ADR-043 L1 white-label theming and is not conflated with it.
 >
-> **Invariant tooling note (2026-09-22):** INV-024 is already recorded in `docs/architecture/invariants.md`, but no structural checker exists for it — `AdrChecker.check()` has no marketplace sub-check (contrast `tenantThemeInvariants()` for ADR-043). Implementing this ADR must add one, per `.clinerules` §9.
+> | ADR requirement | Where it landed |
+> |---|---|
+> | `SubscriptionPlan.marketplaceListingEnabled` (default `false`) | `src/plugins/subscription/entities/subscription-plan.entity.ts` |
+> | `OrganizationSubscription.marketplaceGraceUntil` | `src/plugins/subscription/entities/organization-subscription.entity.ts` |
+> | Two migrations, both via `npx vendure migrate -g` | `src/migrations/1790172415061-add-marketplace-listing-enabled-to-plan.ts` and `src/migrations/1790172546153-add-marketplace-grace-until-to-subscription.ts` (Vendure-CLI-generated, both applied) |
+> | `channelMarketplaceEligible()` — one shared evaluator | `src/platform/commercial/commercial-entitlement.service.ts` (`CommercialEntitlementService`); the window is supplied **per entitlement**, and `TenantCommercialEligibilityService` now delegates its window evaluation to the same service |
+> | Grace transitions owned by the local FSM | `SubscriptionRenewalService`: set on entry to `past_due`, cleared on recovery (`finalizeAfterPayment()` → `finalizeRenewalPeriod()`) and on cancellation (`markCancelledFromWebhook()` and the ADR-044 renewal-sweep completion branch) |
+> | Enforcement in `indexSession()` | `MarketplaceIndexerService` — F7 gate AND `channelMarketplaceEligible(session.channelId)`; ineligible ⇒ document removed, `false` is not an error |
+> | Admin schema | `subscription-admin.schema.ts` — plan **type + input**, subscription **type** |
+> | INV-024 structural checker (`.clinerules` §9) | `AdrChecker.marketplaceEntitlementInvariants()`, registered in `AdrChecker.check()` |
+>
+> The grace length is `MARKETPLACE_GRACE_PERIOD_DAYS` (default 7). **Deliberately not added:** `marketplacePromotionEnabled` — promotion/advertising is a separate subsystem (plan §3.4 item 9).
+>
+> **Scope note (§5 vs §3):** §5 enumerates the webhook-facing writers; `markSubscriptionPastDue()` — the local failed-charge transition inside the same service — stamps the deadline too, because §3 defines the trigger as *the transition to `past_due`*. Without it a locally-detected failure would delist instantly, defeating the stated purpose of the grace period. The column is written **only** by `SubscriptionRenewalService`.
+>
+> **Known residual (deliberate, not an omission):** §4 gates **session** documents only. Instructor documents (`MarketplaceInstructorDocument`, incl. `computeInstructorAggregates()` counts) are not pruned for an ineligible channel; widening §4 to the instructor index would change this ADR's scope and needs its own decision.
+>
+> **Invariants:** INV-024 is recorded in `docs/architecture/invariants.md` and is now enforced by the structural checker above (`npm run verify:invariants`).
 
 ---
 

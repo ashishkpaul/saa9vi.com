@@ -1,6 +1,7 @@
 import { Inject, OnApplicationBootstrap } from '@nestjs/common';
 import { PluginCommonModule, VendurePlugin } from '@vendure/core';
 import { CustomerDeletionModule } from '../../platform/customer-deletion/customer-deletion.module';
+import { CommercialEntitlementModule } from '../../platform/commercial/commercial-entitlement.module';
 import { CustomerDeletionService } from '../../platform/customer-deletion/customer-deletion.service';
 import {
   tenantProfilePermission,
@@ -44,7 +45,7 @@ function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
 
 @VendurePlugin({
   compatibility: '^3.0.0',
-  imports: [PluginCommonModule, CustomerDeletionModule],
+  imports: [PluginCommonModule, CustomerDeletionModule, CommercialEntitlementModule],
   entities: [TenantProfile, InstructorProfile, MediaResource, TenantRegistrationLog, TenantTheme],
   providers: [
     TenantProfileService,

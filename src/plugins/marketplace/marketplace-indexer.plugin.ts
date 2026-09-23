@@ -24,6 +24,7 @@ import { AdWalletLedger } from './entities/ad-wallet-ledger.entity';
 import { MarketplaceAdvertisingResolver } from './api/marketplace-advertising.resolver';
 import { shopApiExtensions, adminApiExtensions } from './api/marketplace-schema';
 import { BaselineRefreshQueueService } from './services/baseline-refresh-queue.service';
+import { CommercialEntitlementModule } from '../../platform/commercial/commercial-entitlement.module';
 import { bayesianBaselineRefreshTask } from './jobs/bayesian-baseline-refresh.task';
 import { CommissionReconciliationService } from './services/commission-reconciliation.service';
 import { MarketplaceCommissionReconciliationResolver } from './api/marketplace-commission-reconciliation.resolver';
@@ -48,11 +49,22 @@ import {
  * - **BigBlueButtonPlugin** must be registered FIRST — this plugin queries
  *   `BbbScheduledSession` via TransactionalConnection, a BBB entity.
  *   Same TypeORM metadata dependency applies.
+ * - **SubscriptionPlugin** must be registered — the ADR-042/INV-024 marketplace
+ *   listing gate (`CommercialEntitlementService.channelMarketplaceEligible()`)
+ *   reads `OrganizationSubscription` / `SubscriptionPlan`, which are TypeORM
+ *   entities registered by SubscriptionPlugin. Without it, session indexing
+ *   fails closed on missing entity metadata (loudly, per job failure) rather
+ *   than silently listing every channel. A channel is listed only when its plan
+ *   sets `marketplaceListingEnabled` AND the subscription is `active` (or
+ *   `past_due` inside `marketplaceGraceUntil`) — INV-024.
  *
  * Key design rules (INV-009):
  * - ES indices are derived read projections. Authoritative data stays in Postgres.
  * - All commerce (checkout, entitlement) routes to the tenant's channel — INV-001 preserved.
  * - `marketplaceSearch` query is public (no channel token required).
+ * - Listing eligibility is a COMMERCIAL entitlement (ADR-042), never a hostname
+ *   property, never provider state. The evaluation lives in the shared
+ *   platform policy — this plugin does not own a second evaluator.
  *
  * Index writes are triggered by:
  * - `InstructorProfileCreatedEvent` / `InstructorProfileUpdatedEvent` for instructor changes
@@ -82,7 +94,7 @@ import {
  */
 @VendurePlugin({
   compatibility: '^3.0.0',
-  imports: [PluginCommonModule],
+  imports: [PluginCommonModule, CommercialEntitlementModule],
   entities: [
     MarketplaceAdCampaign,
     AdSpendLedger,

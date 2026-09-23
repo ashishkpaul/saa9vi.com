@@ -53,6 +53,25 @@ export class SubscriptionPlan extends VendureEntity {
   @Column({ default: false })
   whitelabelEnabled: boolean;
 
+  /**
+   * Marketplace-listing capability flag (ADR-042 §2).
+   *
+   * Eligible tenant channels may have their sessions surfaced on the shared
+   * discovery surface (marketplace.saa9vi.com). Defaults to `false` — listing
+   * is opt-in per plan tier, so every pre-existing plan row stays delisted
+   * until Portal Admin explicitly enables it (ADR-042 "Migration note").
+   *
+   * SEPARATE entitlement from `whitelabelEnabled` (ADR-043 L1 theming) and
+   * from marketplace *promotion* (the advertising subsystem — deliberately no
+   * `marketplacePromotionEnabled` twin, plan §3.4 item 9).
+   *
+   * This flag alone is not sufficient: INV-024 additionally requires a
+   * commercial eligibility window (status active, or past_due inside
+   * marketplaceGraceUntil). See `CommercialEntitlementService`.
+   */
+  @Column({ default: false })
+  marketplaceListingEnabled: boolean;
+
   @Column({ default: true })
   isActive: boolean;
 
