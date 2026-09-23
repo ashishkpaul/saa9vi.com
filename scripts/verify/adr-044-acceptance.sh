@@ -27,6 +27,9 @@ ADMIN_PASS="${SUPERADMIN_PASSWORD:-superadmin}"
 RUN_ID="$(date +%s)"
 OUTDIR="${OUTDIR:-/tmp/adr044}"
 mkdir -p "$OUTDIR"
+# Shared Vendure session cookie jar (admin auth is cookie-based; the login
+# payload's `id` is the USER id, not a bearer token).
+COOKIE_JAR="$OUTDIR/session.cookies"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 passCount=0; failCount=0; skipCount=0
@@ -43,8 +46,16 @@ skip() { echo -e "${YELLOW}○ SKIP${NC} $1"; [ -n "${2:-}" ] && echo "       $2
 
 # gql <file-key> <url> <auth-header-or-empty> <query> [variables-json]
 gql() {
-  local key="$1" url="$2" auth="$3" query="$4" vars="${5:-{}}"
-  local args=(-sS -X POST "$url" -H "Content-Type: application/json")
+  local key="$1" url="$2" auth="$3" query="$4"
+  # NOTE: do NOT write this as vars="${5:-{}}". Bash terminates a parameter
+  # expansion at the FIRST '}', so that form appends a literal '}' to $5 —
+  # silently corrupting every request body that carries variables (the script
+  # then fails with "POST body missing, invalid Content-Type" while every
+  # response looks like a server-side fault).
+  local default_vars='{}'
+  local vars="${5:-$default_vars}"
+  local args=(-sS -X POST "$url" -H "Content-Type: application/json"
+              -b "$COOKIE_JAR" -c "$COOKIE_JAR")
   [ -n "$auth" ] && args+=(-H "$auth")
   args+=(-d "$(python3 -c 'import json,sys;print(json.dumps({"query":sys.argv[1],"variables":json.loads(sys.argv[2])}))' "$query" "$vars")")
   curl "${args[@]}" > "$OUTDIR/$key.json"
@@ -58,13 +69,18 @@ def dig(o,path):
     return o
 print(json.dumps(dig(d, sys.argv[2])))" "$1" "$2"; }
 
-echo "=== 0. Admin login ==="
+echo "=== 0. Admin login (Vendure session cookie) ==="
 gql login "$ADMIN_API" "" \
   'mutation($u:String!,$p:String!){ login(username:$u,password:$p){ ... on CurrentUser { id identifier } } }' \
   "{\"u\":\"$ADMIN_USER\",\"p\":\"$ADMIN_PASS\"}"
-TOKEN=$(jget "$OUTDIR/login.json" "data.login.id"); TOKEN="${TOKEN//\"/}"
-check "admin login returned a token" "[ -n \"$TOKEN\" ] && [ \"$TOKEN\" != \"null\" ]" "see $OUTDIR/login.json"
-AUTH="Authorization: Bearer $TOKEN"
+check "admin login succeeded" "! grep -q '\"errors\"' '$OUTDIR/login.json' && grep -q '\"login\"' '$OUTDIR/login.json'" "see $OUTDIR/login.json"
+check "session cookie captured" "[ -s \"$COOKIE_JAR\" ]" "the admin API is session-cookie authenticated"
+# Fail fast on auth so a later failure cannot be misread as a defect in the code
+# under test.
+gql authcheck "$ADMIN_API" "" 'query{ subscriptionPlans{ id } }'
+check "session is authorized for SuperAdmin-only queries" \
+  "grep -q 'subscriptionPlans' '$OUTDIR/authcheck.json'" "see $OUTDIR/authcheck.json"
+AUTH=""
 
 echo "=== 1. Plan catalogue fixtures (unique slugs per run) ==="
 mkplan() { # mkplan <key> <slug> <name> <price> <providerPlanId-or-empty>
