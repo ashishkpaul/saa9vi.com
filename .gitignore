@@ -35,6 +35,7 @@ _fix_script.js
 !.vscode/tasks.json
 !.vscode/launch.json
 .idea/
+.kiro/
 *.suo
 *.ntvs*
 *.njsproj
