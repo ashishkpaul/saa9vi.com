@@ -31,7 +31,42 @@ export class EventTraceCollector {
       await this.scanFile(file);
     }
 
+    this.linkSubscriberActions(files);
     this.buildEventChains();
+  }
+
+  /**
+   * Merge actions performed inside event subscribers (listeners) into the
+   * emission chain of the event they subscribe to. Publisher-side lookahead
+   * alone cannot see actions performed in another file — e.g. the subscription
+   * capacity grant is written by bbb-subscription.listener.ts while
+   * SubscriptionRenewedEvent is published from subscription-renewal.service.ts.
+   * Only emissions that already have a publisher are augmented: a subscriber
+   * never introduces a new trigger chain, so rules whose trigger event has no
+   * in-repo publisher stay "pending" exactly as before (F-6, 2026-09-24).
+   */
+  private linkSubscriberActions(files: string[]): void {
+    const ofTypeRegex = /ofType\(\s*(\w+Event)\s*\)/g;
+
+    for (const file of files) {
+      const lines = readFileContent(file).split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        let match: RegExpExecArray | null;
+        ofTypeRegex.lastIndex = 0;
+        while ((match = ofTypeRegex.exec(lines[i])) !== null) {
+          const eventName = match[1];
+          const emission = this.eventEmissions.find((e) => e.eventName === eventName);
+          if (!emission) {
+            continue;
+          }
+          for (const action of this.inferTriggeredActions(lines, i, 90)) {
+            if (!emission.triggeredActions.includes(action)) {
+              emission.triggeredActions.push(action);
+            }
+          }
+        }
+      }
+    }
   }
 
   private async scanFile(filePath: string): Promise<void> {
@@ -60,9 +95,9 @@ export class EventTraceCollector {
     }
   }
 
-  private inferTriggeredActions(lines: string[], startLine: number): string[] {
+  private inferTriggeredActions(lines: string[], startLine: number, window = 30): string[] {
     const actions: string[] = [];
-    const lookahead = Math.min(startLine + 30, lines.length);
+    const lookahead = Math.min(startLine + window, lines.length);
 
     for (let i = startLine; i < lookahead; i++) {
       const line = lines[i];
@@ -70,8 +105,12 @@ export class EventTraceCollector {
       if (/createInvoice|SubscriptionInvoice/.test(line)) {
         actions.push('SubscriptionInvoice');
       }
-      if (/RecurringCapacityGrant|createGrant/.test(line)) {
-        actions.push('RecurringCapacityGrant');
+      // Canonical action name is SubscriptionCapacityGrant (F-6, 2026-09-24):
+      // subscription grants are BbbCapacityGrant(sourceType='subscription')
+      // rows, not a separate RecurringCapacityGrant entity. The legacy name is
+      // kept in the pattern so older references still map to the same action.
+      if (/RecurringCapacityGrant|createGrant|new\s+BbbCapacityGrant\(|recurring subscription capacity grant/.test(line)) {
+        actions.push('SubscriptionCapacityGrant');
       }
       if (/orderService\.create|OrderLine/.test(line)) {
         actions.push('Order');

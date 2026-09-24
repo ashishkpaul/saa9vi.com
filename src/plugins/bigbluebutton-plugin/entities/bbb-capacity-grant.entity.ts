@@ -9,7 +9,9 @@ import { BbbOrganization } from "./bbb-organization.entity";
  *
  * sourceType discriminator (FEAT-002 / ADR §8A OP-005):
  * - 'order'             — created by BbbOrderFulfillmentListener on purchase
- * - 'subscription'      — Phase 2: created by RecurringCapacityGrant renewal
+ * - 'subscription'      — written by BbbSubscriptionListener on SubscriptionRenewedEvent
+ *                         (RFC-001 §4 amendment 2026-09-24: the sourceType discriminator
+ *                         shipped instead of a separate RecurringCapacityGrant entity)
  * - 'internal_overhead' — auto-created per org; isUnbounded=true; never exhausted
  */
 @Entity("bbb_capacity_grant")

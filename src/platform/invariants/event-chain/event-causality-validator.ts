@@ -75,15 +75,15 @@ export class EventCausalityValidator implements Checker {
       },
       {
         name: 'invoice-to-grant',
-        description: 'SubscriptionInvoice MUST precede RecurringCapacityGrant',
+        description: 'SubscriptionInvoice MUST precede the subscription capacity grant',
         trigger: 'SubscriptionInvoice',
-        requiredSteps: ['RecurringCapacityGrant'],
+        requiredSteps: ['SubscriptionCapacityGrant'],
         severity: 'error',
       },
       {
         name: 'grant-to-order',
         description: 'Grant issuance MUST precede Order creation',
-        trigger: 'RecurringCapacityGrant',
+        trigger: 'SubscriptionCapacityGrant',
         requiredSteps: ['Order'],
         severity: 'error',
       },
@@ -110,9 +110,17 @@ export class EventCausalityValidator implements Checker {
       },
       {
         name: 'subscription-renewed-event',
-        description: 'Subscription renewal success publishes SubscriptionRenewedEvent with grant + order',
+        // F-6 reconciliation (2026-09-24): the shipped grant is a
+        // BbbCapacityGrant(sourceType='subscription') written by
+        // BbbSubscriptionListener — a subscriber-side action merged into this
+        // chain by EventTraceCollector.linkSubscriberActions under the
+        // canonical action name SubscriptionCapacityGrant. RFC-001 §4's
+        // programmatic renewal Order is not part of the shipped path yet
+        // (R3/R4 payment gates), so it is deliberately not required here.
+        description:
+          'Subscription renewal success publishes SubscriptionRenewedEvent and writes the subscription capacity grant',
         trigger: 'SubscriptionRenewedEvent',
-        requiredSteps: ['RecurringCapacityGrant', 'Order'],
+        requiredSteps: ['SubscriptionCapacityGrant'],
         severity: 'error',
       },
     ];

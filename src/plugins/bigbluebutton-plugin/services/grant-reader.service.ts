@@ -23,9 +23,11 @@ export interface CapacityGrantLike {
 /**
  * RFC-001 Q-009: Abstracted grant resolution seam.
  *
- * Phase 1 grants are BbbCapacityGrant rows (order / internal_overhead).
- * Phase 2 will add RecurringCapacityGrant (subscription) — adding it
- * requires only one new branch in resolveGrantForMeeting().
+ * All grant source types are BbbCapacityGrant rows (order / subscription /
+ * internal_overhead): subscription grants are written by BbbSubscriptionListener
+ * via sourceType='subscription' — the discriminator shipped instead of RFC-001
+ * §4's separate RecurringCapacityGrant entity (amended 2026-09-24), so there is
+ * only one table and Q-009's union seam stays closed by construction.
  *
  * This service exists so that BbbReconciliationService.consumeGrantHours()
  * does not directly query BbbCapacityGrant, closing the Q-009 seam.

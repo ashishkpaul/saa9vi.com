@@ -67,16 +67,16 @@ export class RfcLifecycleChecker implements Checker {
   private async invoiceCreatesGrant(): Promise<CheckResult> {
     const srcDir = path.join(__dirname, '../../..');
     const files = findFiles(
-      ['src/plugins/**/services/*.ts'],
+      ['src/plugins/**/services/*.ts', 'src/plugins/**/listeners/*.ts'],
       srcDir
     );
 
-    let hasInvoiceToGrantFlow = false;
+    let hasSubscriptionGrantFlow = false;
 
     for (const file of files) {
       const content = readFileContent(file);
-      if (/RecurringCapacityGrant|recurring.*grant/i.test(content)) {
-        hasInvoiceToGrantFlow = true;
+      if (/SubscriptionCapacityGrant|RecurringCapacityGrant|recurring.*grant|sourceType.*subscription/i.test(content)) {
+        hasSubscriptionGrantFlow = true;
         break;
       }
     }
@@ -84,12 +84,13 @@ export class RfcLifecycleChecker implements Checker {
     return {
       checker: this.name,
       name: 'invoice-creates-grant',
-      passed: !hasInvoiceToGrantFlow || true, // Phase 2 not yet implemented
+      passed: hasSubscriptionGrantFlow,
       severity: 'info',
-      message: hasInvoiceToGrantFlow
-        ? 'Invoice-to-grant flow detected'
-        : 'No recurring capacity grant flow found (Phase 2 not implemented yet — expected)',
-      details: 'RFC §4: Successful subscription renewal creates RecurringCapacityGrant',
+      message: hasSubscriptionGrantFlow
+        ? 'Subscription renewal writes a subscription-source capacity grant'
+        : 'No subscription-source capacity grant writer found under src/plugins/**/{services,listeners}',
+      details:
+        "RFC §4 (amended 2026-09-24): renewal creates BbbCapacityGrant with sourceType='subscription' — the discriminator shipped instead of a separate RecurringCapacityGrant entity",
     };
   }
 
@@ -113,11 +114,13 @@ export class RfcLifecycleChecker implements Checker {
     return {
       checker: this.name,
       name: 'grant-creates-order',
-      passed: !hasVendureOrderCreation || true, // Phase 2 not yet implemented
+      // Informational only: RFC-001 §4's programmatic renewal Order is not
+      // part of the shipped path yet (R3/R4 payment gates) — keep non-blocking.
+      passed: !hasVendureOrderCreation || true,
       severity: 'info',
       message: hasVendureOrderCreation
         ? 'Vendure order creation from subscription renewal detected'
-        : 'No subscription order creation found (Phase 2 not implemented yet — expected)',
+        : 'No subscription order creation found (renewal programmatic Order ships with R3/R4 — expected today)',
       details: 'RFC §4: Subscription renewal creates Vendure Order for accounting (status=paid)',
     };
   }
