@@ -250,6 +250,16 @@ Razorpay events may arrive out of order. Regression test: `subscription.activate
 
 Full chain on production Razorpay: subscription create/authorize → recurring lifecycle → HTTPS webhook → HMAC → `ProviderWebhookEvent` → BullMQ → `RazorpayWebhookProcessor` → `SubscriptionBillingAttempt` → `OrganizationSubscription` → Entitlement — with corresponding DB facts verified. Then final regression suite, production deploy, post-deployment webhook observation.
 
+### V1.10 — Production fail-fast on missing PostgreSQL/Redis (P0-K)
+
+Not part of the V1.1→V1.9 ordering — it is a boot-time safety property that can be done in parallel — but it must close **before V1.9**, otherwise the smoke test can pass against a process that silently degraded.
+
+- [ ] Gate the `src/index.ts` emergency fallbacks on environment: in production, PostgreSQL unreachable → **fail startup**; Redis unreachable → **fail startup**
+- [ ] Keep the pg-mem and `DefaultJobQueuePlugin` fallbacks for development/test only — an explicit condition rather than the unqualified default
+- [ ] Re-capture the P0-A/P0-B startup evidence, showing the production branch refuses to boot without both dependencies
+
+Rationale: R2-A established that the fallbacks *did not activate* during the verified runtime; it did not establish that they *cannot* activate. For a platform holding recurring-billing state, immutable ledgers, provider webhook inboxes, and BullMQ processing, an in-memory database with `synchronize: true` is not a safe degradation mode. Full detail: `production-readiness.md` **P0-K**.
+
 ### Explicitly out of scope for V1
 
 - Refactoring remaining `setImmediate()` hits (BBB subsystem / `reference/` material — unrelated)

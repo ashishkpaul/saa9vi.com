@@ -168,6 +168,13 @@ must remain independently attributable.
                                                     when `REDIS_HOST` is set; merged-worker queue
                                                     start log.
 
+  Production DB/Redis     **OPEN — requires code     src/index.ts falls back to pg-mem
+  fallback policy           fix (see P0-K)**         (`synchronize: true`) and to
+                                                    `DefaultJobQueuePlugin` whenever
+                                                    PostgreSQL/Redis are unreachable, in
+                                                    every environment. "Inactive during the
+                                                    verified runtime" is not "cannot activate".
+
   Migration state         **VERIFIED (R2-A)        55 applied migrations;
                           post-refactor            `npx vendure migrate -r` →
                           evidence                 "No pending migrations found"
@@ -494,6 +501,56 @@ A backup existing on disk/cloud is not equivalent to a restore drill.
 ### Current status
 
 **NOT VERIFIED**
+
+------------------------------------------------------------------------
+
+## P0-K --- Production fallback behaviour (PostgreSQL / Redis)
+
+`src/index.ts` contains *emergency* fallbacks that are convenient in
+development but unsafe as a production degradation mode:
+
+```text
+PostgreSQL unreachable → in-memory PostgreSQL (pg-mem) + dbOptions.synchronize = true
+Redis unreachable      → unset REDIS_HOST + DefaultJobQueuePlugin (in-process queue)
+```
+
+Neither is gated by environment. R2-A correctly records that neither
+activated during the verified runtime — but that is a statement about one
+*specific run*, not about the code:
+
+| Statement | Established? |
+|---|---|
+| "the fallback did not activate during the verified runtime" | ✅ yes (R2-A) |
+| "production cannot activate the fallback" | ❌ no — nothing in the source prevents it |
+
+### Why this is more than routine hardening
+
+Silently switching to an in-memory database with `synchronize: true`, or to an
+in-process queue, is not a safe degradation for this platform: it holds
+recurring-billing state, immutable ledgers, BullMQ processing, provider webhook
+inboxes, tenant/subscription state, and marketplace index state. An instance
+that "starts anyway" against pg-mem can accept writes that vanish on restart and
+can silently diverge from the migration-managed schema.
+
+### Required correction
+
+- Determine the environment explicitly (`APP_ENV` / `NODE_ENV`) and, in
+  production: **PostgreSQL unavailable → fail startup; Redis unavailable → fail
+  startup.**
+- Keep both fallbacks for development/test only — where a hard boot failure is
+  worse than degraded infrastructure — and make that the explicit condition
+  rather than the unqualified default.
+- Afterwards, re-capture the P0-A/P0-B startup evidence to show the production
+  branch refuses to boot without both dependencies.
+
+### Current status
+
+**CODE VERIFIED — REQUIRES CODE FIX** (recorded 2026-09-24)
+
+Separate from the B-6 storefront fail-closed work: that is a different ingress
+(see `integration-gaps-worklist.md` B-6, "Ingress boundary") and is already
+closed. This item is about the process being unable to start in a
+silently-degraded production mode.
 
 ------------------------------------------------------------------------
 

@@ -371,9 +371,11 @@ Direct client attempts to inject `x-saa9vi-channel-token` cannot select another 
 **Priority:** P2 — **Depends on:** B-1/B-2
 **Status:** CLOSED (fail-closed) 2026-09-24 for the unmapped-hostname and misconfigured-lookup cases — see evidence below. Two items remain outside this closure: the B-5 deployed-vhost gap (no effect in production until that vhost is replaced) and the deliberate Redis-*outage* fail-open (availability trade-off, retained).
 
-Confirmed code pattern (audit B-6): `(await getChannelTokenFromHeaders()) || getChannelToken()` silently renders the default channel when the proxy header is missing.
+### Pre-fix finding (historical — not current behaviour)
 
-Evaluate replacing this in production with `missing channel → 404 / domain-not-configured / marketplace redirect`, while preserving convenient local development behavior.
+Before B-6, `(await getChannelTokenFromHeaders()) || getChannelToken()` let an **unmapped public hostname** fall through to the default channel: the resolution route collapsed "no mapping", "Redis down" and "private hostname" into `200` + empty header, and `api.ts` then fell back to the env-var token. The fix evaluated at the time was `missing channel → 404 / domain-not-configured / marketplace redirect`, while preserving convenient local development behavior.
+
+The current production path no longer relies on that fallback for tenant identity — the reverse-proxy resolution edge denies unmapped public hostnames with `403` before Next.js renders (see **Resolution** below). `api.ts` keeps the env-var fallback for the remaining `''`/absent cases, which is now correct by construction.
 
 ### Resolution (2026-09-24, edu-frontend)
 
@@ -407,6 +409,17 @@ Runtime evidence (2026-09-24, live local stack — route probed directly on `:30
 A production tenant request with no resolvable tenant identity cannot silently render the default tenant's storefront.
 
 → **Satisfied** for "Redis answered: no mapping" (`403`) and "lookup misconfigured" (`500`). **Not** satisfied during a Redis *outage*, where the storefront deliberately serves the `VENDURE_CHANNEL_TOKEN` fallback (availability over strictness — documented in `deploy/VERIFY.md` §4). Closing the B-5 deployed-vhost gap is a prerequisite for either behaviour to apply in production.
+
+### Ingress boundary — what B-6 does *not* cover (recorded 2026-09-24)
+
+B-6 hardened the **storefront** ingress only. The backend's own `domainChannelMiddleware` (`src/plugins/tenant-plugin/config/domain-channel.middleware.ts`) is deliberately **non-blocking**: when `REDIS_HOST` is unset, Redis is unavailable, the hostname has no mapping, or the lookup errors, it calls `next()` with the request unmodified and Vendure proceeds with the default channel. That is not B-6 drift — it is a different ingress with a different job (a hostname-resolution quirk must not fail the entire Admin/Shop API).
+
+| Ingress | Unknown / unresolvable hostname |
+|---|---|
+| Storefront (`edu-frontend`: `/api/resolve-channel` → reverse proxy → Next.js) | **fail closed** — `403` (B-6) |
+| Backend (`domainChannelMiddleware` → Vendure API) | pass through; default channel (by design) |
+
+Operationally: for the architecture `tenant host → proxy → Next.js → Vendure central API`, B-6 is the relevant protection. **If Vendure is ever exposed directly under tenant hostnames, the backend middleware needs its own fail-closed policy** — do not assume it inherits B-6.
 
 ## B-7 — Channel-token rotation architecture
 

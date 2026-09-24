@@ -58,6 +58,8 @@
 
 ### Razorpay recurring billing — renewal-charge execution implemented; authorization-onboarding seam pending (per ADR-038; legacy Juspay removed — ADR-040)
 
+> **Reading note (added 2026-09-24):** the `[x]` steps below are *delivered history*, listed in build order, not pending work. Steps 1–2 name Juspay-era entities (`JuspaySubscriptionMandate`, `JuspayPaymentAttempt`, webhook tables) that **no longer exist in the runtime**: the Juspay runtime implementation and those entities were removed (`9a31beb`) and the `juspay_*` tables dropped (`466a4ef`, **ADR-040**), with the historical migration files kept as immutable history. **Razorpay is the sole active recurring-billing provider** (ADR-038). Read "Juspay" in these bullets as "the mandate/attempt/webhook architecture that Razorpay now implements" — never as current code or outstanding work.
+
 - [x] Step 0 — BuyLits reference analysis (`reference/buylits/`; port patterns, not files).
 - [x] Step 1 — vestigial Juspay surface inventory and subscription-aware integration seam.
 - [x] Step 2 — `JuspaySubscriptionMandate`, `JuspayPaymentAttempt` (INV-019), `JuspayWebhookEvent`, `JuspayWebhookEndpoint`, reconciliation incident record; migrations generated/applied.
@@ -87,11 +89,13 @@ Juspay → Razorpay routing was **rejected** by Razorpay (ticket #20876157). Dir
 - [ ] Tenant onboarding flow in storefront
 - [ ] Custom domain routing via Caddy
 
-### Free Basic plan + storefront commercial integration (programme — planned)
+### Free Basic plan + storefront commercial integration (programme — **IN PROGRESS**, reconciled 2026-09-24)
 
-Every tenant lands on a permanent **Free Basic** plan at registration (no card, no trial clock); paid plans add capacity and entitlements. Sequenced slices, gates, and the product decisions still outstanding live in `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` (worklist entry **FREE-1**).
+Every tenant lands on a permanent **Free Basic** plan at registration (no card, no trial clock); paid plans add capacity and entitlements. Sequenced slices, gates, and the product decisions still outstanding live in `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` (worklist entry **FREE-1**) — that plan is the canonical source for slice state; completed slices are recorded in `what-next.md` and `release-notes.md` per this document's purpose.
 
-**Blocking prerequisite:** the subscription Admin API has no cancel/change-plan mutation, and `subscribeToPlan()` rejects any channel whose existing subscription row is not `cancelled` — so provider-free activation at registration would block the paid-upgrade path for that tenant. A plan-change/cancel capability plus **ADR-044** ship first.
+**Blocking prerequisite — ✅ RESOLVED 2026-09-23** (previously: "the subscription Admin API has no cancel/change-plan mutation"). Shipped as **ADR-044** (`docs/architecture/adr-044-local-plan-change-and-cancellation.md`) plus `changeOrganizationSubscriptionPlan` / `cancelOrganizationSubscription` (commits `66e6cd4` feature, `5d3d2d9` harness repair). `subscribeToPlan()` still rejects a channel whose existing row is not `cancelled` — which is exactly why that capability had to land *before* registration-time activation, not after it.
+
+**Position (plan §4 order):** slices 1, 2, 3, 4, 7, 8 are done; slice 5 is **partial** (BUG-036 grant-selection correctness ✅ `d711940`; plan-derived `concurrentMeetingLimit` sync outstanding). **Next: slice 9 — `edu-frontend` theme consumption + plan/usage dashboard** (its backend contract, slice 8, is done). Slice 6 (daily live allowance) remains open behind the slice-5 concurrency item; slices 10 (R4 runtime evidence) and 11 (R3 one-time payment handler) are independent gates.
 
 ---
 
