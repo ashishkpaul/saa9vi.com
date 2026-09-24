@@ -1,6 +1,6 @@
 # RFC-001: Continuous Commerce Loop (Phase 2 — Subscription Billing)
 
-**Status:** Draft v3
+**Status:** Draft v4 (amended 2026-09-24)
 **Date:** 2026-06
 **Authors:** Lead Architect, Platform Engineering
 **Supersedes:** RFC-001 v2 (2026-06)
@@ -11,6 +11,8 @@
 > **What changed in v2:** Six assessment findings from peer review incorporated. (1) Q-009 (`GrantReaderService` union gap) and Q-010 (notification transport for dunning events) formalised in Section 7. (2) ASCII FSM diagram updated to include `CANCELLED` as explicit terminal box. (3) `SubscriptionInvoice` idempotency protection specified — `UNIQUE` constraint on `(enrollmentId, periodStart)` with `status = 'paid'` guard. (4) Recovery path period-end recalculation rule committed: original-cycle-anchor semantics (see Section 4.3). (5) Phase 1 reference updated to ADR v1.5. (6) Appendix C added — Phase 3 marketplace integration points for subscription tenants.
 >
 > **What changed in v3:** Capacity Intelligence System integration points added. (1) Appendix C-4: `RecurringCapacityGrant` in capacity forecasts — `CapacityIntelligenceService.buildForecast()` adds trailing 4-week attendee-minute signal for subscription academies with sparse scheduled session data; reads from `BbbUsageLedger WHERE enrollmentId IS NOT NULL`. (2) Appendix C-5: `GrantReaderService` (Q-009 resolution) must expose `getRemainingMinutes(organizationId)` consumed by `CapacityIntelligenceService` to reflect subscription quota headroom in pool dashboard. Phase 1 reference updated to ADR v1.6.
+>
+> **What changed in v4 (amendment, 2026-09-24):** §4's key decision that `RecurringCapacityGrant` is a **separate entity** is **superseded** — the shipped design uses the `sourceType: 'subscription'` discriminator on `BbbCapacityGrant` (writer: `BbbSubscriptionListener` on `SubscriptionRenewedEvent`). The §4 interface, diagram edge and open-seam note below are retained as the superseded original record; `GrantReaderService` reads a single table (Q-009 closed by construction), and the invariant harness now validates the discriminator model under the canonical action name `SubscriptionCapacityGrant` (comprehensive-plan finding F-6, closed at `f0e5ece`).
 
 ---
 
@@ -278,9 +280,9 @@ interface RecurringCapacityGrant {
 >   warning ("Missing subsequent actions: RecurringCapacityGrant, Order"). The harness
 >   expectation should be reconciled with the shipped name.
 >
-> This section needs an amendment (inline edit or ADR) before any **new** grant lifecycle — for
-> example the per-day Free Basic allowance — is layered on top of it. See
-> `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` §3.3 and finding F-6.
+> **Amendment applied 2026-09-24 (v4):** the separate-entity key decision below is superseded — the discriminator is authoritative for any **new** grant
+> lifecycle (e.g. the per-day Free Basic allowance in §3.3). See
+> `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` §3.3 and finding F-6 (closed at `f0e5ece`).
 
 ---
 

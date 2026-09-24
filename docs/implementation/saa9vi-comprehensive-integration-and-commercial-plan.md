@@ -1,10 +1,10 @@
 # Saa9vi — Free Basic Plan + Storefront Commercial Integration (v3, evidence-verified)
 
 **Repo:** `ashishkpaul/saa9vi.com` · **Branch:** `main`
-**Verified HEAD (local clone):** `ec866fe` = `ec866fec984b2723ec8397ecbd932ec86aadefd9`
+**Verified HEAD (local clone):** `fbcdce9` (F-6 grant-model reconciliation `f0e5ece` + registration-comment refresh `fbcdce9`, both 2026-09-24; backend product code otherwise unchanged since `ec866fe` = `ec866fec984b2723ec8397ecbd932ec86aadefd9`)
 **Working tree at review:** clean
 **Verification date:** 2026-09-24 · **Method:** local clone — `git rev-parse`, `git merge-base --is-ancestor`, `grep`/`sed` over `src/`, `docs/`, `schema-shop.graphql`, `node_modules/@vendure/core`
-**Baseline note:** the §0/§2/§6 evidence tables were written at `4f3a9cf` (2026-09-22) and are retained unchanged as the record of that review; this header, §3.5 and §3.8 were reconciled to `ec866fe` on 2026-09-24 after slice 8 shipped, and the §6 preflight + the §4 slice-5 row were reconciled again at `c2a5fe5` (2026-09-24) to remove three statements slice 8 had falsified. **Frontend baseline:** `edu-frontend` at `2bba7e2` (slice-8-consistent codegen, the B-6 fail-closed resolution edge, then slice-9 ADR-043 theme `7561643` + billing dashboard/sign-in bridge `b262ba3` + template-contract doc `2bba7e2`; §3.8 and the §4 slice-9 row reconciled to this baseline on 2026-09-24 after slice 9 shipped) — see §3.8. The earlier `7e6d974` baseline is superseded.
+**Baseline note:** the §0/§2/§6 evidence tables were written at `4f3a9cf` (2026-09-22) and are retained unchanged as the record of that review; this header, §3.5 and §3.8 were reconciled to `ec866fe` on 2026-09-24 after slice 8 shipped, and the §6 preflight + the §4 slice-5 row were reconciled again at `c2a5fe5` (2026-09-24) to remove three statements slice 8 had falsified. **Frontend baseline:** `edu-frontend` at `2bba7e2` (slice-8-consistent codegen, the B-6 fail-closed resolution edge, then slice-9 ADR-043 theme `7561643` + billing dashboard/sign-in bridge `b262ba3` + template-contract doc `2bba7e2`; §3.8 and the §4 slice-9 row reconciled to this baseline on 2026-09-24 after slice 9 shipped) — see §3.8. The earlier `7e6d974` baseline is superseded. Post-slice-9 reconciliation (2026-09-24): F-6 grant-model fix at `f0e5ece` (clears the permanent `verify:invariants` warning) and stale registration comments at `fbcdce9`; this document's drift sweep follows in the next docs-only commit.
 
 > **Evidence rule.** Every claim in §0/§2 carries a `file:line` reference that was read at the verified HEAD.
 > Classification vocabulary: `CONFIRMED` (repo evidence) · `UNVERIFIED` (plausible, not proven) · `PROPOSED` (design, needs an ADR) · `DRIFT` (doc ≠ code).
@@ -72,6 +72,8 @@ This section exists because this plan is version 3 and two prior reviews disagre
 ```
 
 Before building the daily allowance on this table, amend RFC-001 §4 to record the discriminator decision (or accept the separate entity) — do not let the free tier inherit an unresolved modeling split. And treat that specific warning as **known**, not as a regression introduced by this work.
+
+> **RESOLVED 2026-09-24 (`f0e5ece`).** RFC-001 §4 now carries a v4 amendment recording the discriminator as shipped; the entity + `GrantReaderService` comments were corrected; the causality validator, trace collector and RFC checker use the canonical `SubscriptionCapacityGrant` action, with a new subscriber-side link (the grant write lives in `bbb-subscription.listener.ts`, not at the `SubscriptionRenewedEvent` publish site — publisher-only lookahead could never see it); and `subscription-renewed-event` now requires only the shipped grant (the programmatic renewal `Order` is R3/R4-gated). `npm run verify:invariants`: runtime-causality **1 passed / 0 warnings** (was ⚠️ violated) — the permanent warning is gone; the rules whose triggers have no in-repo publisher remain legitimately pending.
 
 **F-7 A Free Basic row with a non-NULL `currentPeriodEnd` would enter the paid renewal pipeline (missed by rounds 1–3; directly shapes the activation slice).**
 
@@ -222,7 +224,7 @@ BbbUsageLedger            = immutable usage fact (append-only, one row per (meet
    - creation time → `assertCanCreateMeeting` throws (user-visible, good);
    - provisioning time → `reserveProvisioningCapacity` returns false and the meeting silently stays `PENDING` with only a log (`bbb-provisioning-worker.service.ts:101-108`). That is *not* acceptable UX for a commercial limit — it needs a distinct terminal state/notification or a pre-check before enqueueing.
 3. Wire the concurrency limit to the plan. `concurrentMeetingLimit` is currently form-supplied, default 5 (F-3). The plan-tier value must be applied at org provisioning *and* on plan change (G-1), analogous to how `syncOrganizationCache` writes `maxParticipantsPerMeeting` from the policy.
-4. Close the grant-entity modeling split before extending the table (F-6): RFC-001 §4 says a separate `RecurringCapacityGrant` entity; the code uses a `sourceType` discriminator. Adding a *second* grant semantics on top of an unresolved split is how a duplicate writer gets born.
+4. Close the grant-entity modeling split before extending the table (F-6): RFC-001 §4 says a separate `RecurringCapacityGrant` entity; the code uses a `sourceType` discriminator. Adding a *second* grant semantics on top of an unresolved split is how a duplicate writer gets born. **✅ CLOSED 2026-09-24 (`f0e5ece` + RFC-001 v4):** the `BbbCapacityGrant(sourceType='subscription')` discriminator is now authoritative in the RFC, entity/reader comments and invariant harness — safe to extend with slice 6's daily grant (reuse `BbbSubscriptionListener`/`BbbCapacityGrant`; do not add a second writer).
 
 **Then the allowance layer itself.** Shape recommendation (PROPOSED — it defines a new grant lifecycle and needs a decision record):
 
@@ -312,14 +314,14 @@ Mechanism: created through the existing Admin mutation `upsertPlatformCapacityPo
 
 ### 3.7 G-7 — Documentation drift fixes (all one-liners, all `CONFIRMED`)
 
-> **Status: EXECUTED 2026-09-22** (docs-only sweep, no source changes). All six items below are applied, plus two drifts found while sweeping: the `BbbCapacityGrant` source-type list in `domain-model.md`/`glossary.md` (a `wallet` type that does not exist in the entity) and the subscription-slot wording in `domain-model.md` (any non-`cancelled` status occupies the slot, not just authorization states). The same sweep registered this programme in `what-next.md`, `roadmap.md`, `integration-gaps-worklist.md` (**FREE-1**), `plugin-map.md` and `adr-039-implementation-plan.md`, and added a superseded banner to the three Juspay-era mandate documents. Full record: `production-readiness.md` §12 → "Drift sweep record".
+> **Status: EXECUTED 2026-09-22** (docs-only sweep, no source changes). All six items below are applied, plus two drifts found while sweeping: the `BbbCapacityGrant` source-type list in `domain-model.md`/`glossary.md` (a `wallet` type that does not exist in the entity) and the subscription-slot wording in `domain-model.md` (any non-`cancelled` status occupies the slot, not just authorization states). The same sweep registered this programme in `what-next.md`, `roadmap.md`, `integration-gaps-worklist.md` (**FREE-1**), `plugin-map.md` and `adr-039-implementation-plan.md`, and added a superseded banner to the three Juspay-era mandate documents. Full record: `production-readiness.md` §12 → "Drift sweep record". **Correction (2026-09-24):** two of the six — item 2's registration-comment fix and item 6's RFC/entity/harness reconciliation — were claimed here but not actually applied in that sweep; both landed on 2026-09-24 (`fbcdce9` and `f0e5ece` + the post-slice-9 drift sweep).
 
 1. `adr-043-…md:15` — the opening claims no theming system exists while the ADR's own ✅ tables (and four shipped commits) say otherwise.
-2. `tenant-registration.service.ts:86-90` — "REMAINING (B-1/B-2)" contradicts B-2's IMPLEMENTED status (`worklist:77`).
+2. `tenant-registration.service.ts:86-90` — "REMAINING (B-1/B-2)" contradicts B-2's IMPLEMENTED status (`worklist:77`). **[✅ applied 2026-09-24 at `fbcdce9` — the 2026-09-22 sweep missed it]**
 3. ADR-039:31 and `organization-subscription.entity.ts:21-26` — record the provider-free activation exception (G-2).
 4. `integration-gaps-worklist.md:481-500` (D-5) vs `production-readiness.md:861-866` and `what-next.md:23,44` — reconcile: the capability exists; what remains is runtime evidence (0.14).
 5. ADR-042:7 — remove or repair the reference to a non-existent "M0 workstream" (0.9).
-6. RFC-001 §4 (`docs/adr/rfc-001-continuous-commerce-loop.md:255-260`) — record that the shipped design uses the `sourceType: 'subscription'` discriminator on `BbbCapacityGrant` rather than a separate `RecurringCapacityGrant` entity, and update `bbb-capacity-grant.entity.ts:10-14`'s "Phase 2: created by RecurringCapacityGrant renewal" wording. This also clears the permanent `verify:invariants` warning (F-6).
+6. RFC-001 §4 (`docs/adr/rfc-001-continuous-commerce-loop.md:255-260`) — record that the shipped design uses the `sourceType: 'subscription'` discriminator on `BbbCapacityGrant` rather than a separate `RecurringCapacityGrant` entity, and update `bbb-capacity-grant.entity.ts:10-14`'s "Phase 2: created by RecurringCapacityGrant renewal" wording. This also clears the permanent `verify:invariants` warning (F-6). **[✅ applied 2026-09-24: RFC-001 v4 amendment + `f0e5ece` — warning cleared; the 2026-09-22 sweep missed this item too]**
 
 Do these as their own commit, before code, so the drift does not get folded into an implementation diff.
 
@@ -328,7 +330,7 @@ Do these as their own commit, before code, so the drift does not get folded into
 - `myTenantTheme` → CSS variables, with Saa9vi defaults when the query returns `null` (ineligible ⇒ `null` ⇒ platform default is already the backend contract).
 - Plan/usage dashboard sourced only from §3.5; no client-side entitlement logic.
 - Prove at runtime: tenant A ≠ tenant B for theme and data; marketplace and admin never inherit tenant theme; unknown hostname fails **closed** in production.
-- **`edu-frontend` verified baseline (2026-09-24): `7e6d974`.** `eb67bc7` regenerated `graphql-env.d.ts` against the slice-8 Shop schema, so the typed documents now include `availableSubscriptionPlans` / `mySubscription` / `myLiveUsage` / `myTenantTheme` (`npm run codegen:check` and `npx tsc --noEmit` both exit 0), and `7e6d974` shipped the B-6 fail-closed channel resolution. The `6ff4ba04` revision named in §0/§2 was the pre-slice-8 frontend state and is superseded — audit it no longer.
+- **`edu-frontend` verified baseline (2026-09-24): `2bba7e2`** (supersedes `7e6d974`). `eb67bc7` regenerated `graphql-env.d.ts` against the slice-8 Shop schema, so the typed documents now include `availableSubscriptionPlans` / `mySubscription` / `myLiveUsage` / `myTenantTheme` (`npm run codegen:check` and `npx tsc --noEmit` both exit 0); `7e6d974` shipped the B-6 fail-closed channel resolution; slice 9 then shipped as `7561643` (ADR-043 L1 theme consumption) + `b262ba3` (billing dashboard + admin sign-in bridge) + `2bba7e2` (template-contract doc). Both `7e6d974` and the `6ff4ba04` revision named in §0/§2 are superseded — audit neither.
 - The "unknown hostname fails **closed** in production" proof splits in two, and only one half is evidenced: the **route-level** half is done (unmapped public hostname → `403`, with the Redis-outage fail-open and the misconfiguration `500` both distinguished — `integration-gaps-worklist.md` B-6), while the **proxy-level** half still depends on B-5's deployed-vhost work plus a re-run of `edu-frontend/deploy/VERIFY.md` §2/§3 against staging.
 - Discipline (UI-1 rule 2): backend contract → `npm run codegen` → UI, never UI-first.
 - Scope note for slice 9: the Shop subscription surface is **read-only** — no shop-side purchase/upgrade mutation exists, so purchase wiring was out of slice 9. The ADR-044 dashboard affordance (upgrade/cancel mutations in UI) remains **deferred with UI-1** — slice 9 ships read-only display only (decision recorded in the §4 row and `what-next.md`).
@@ -452,7 +454,7 @@ grep -rn "concurrentMeetingLimit" src/plugins/bigbluebutton-plugin/services/*.ts
 
 # ADR-042 surfaces
 grep -rn "marketplaceListingEnabled\|marketplaceGraceUntil" src docs
-grep -rn "marketplaceListing" src/platform/invariants   # expect: no match until slice 7
+grep -rn "marketplaceListing" src/platform/invariants   # expect: match (INV-024 checker — slice 7 shipped; pre-slice-7 this returned no match)
 
 # Shop contract: slice 8 added the read surface — assert it exists, and that nothing provider-specific leaked
 grep -nE "availableSubscriptionPlans|mySubscription|myLiveUsage" schema-shop.graphql
@@ -519,7 +521,7 @@ Re-run §6 after any merge into `main` before starting a slice; this record is a
 - **Application data:** never mutate Postgres rows by hand. Use Vendure Shop/Admin GraphQL, normal services/events/jobs, or `curl`. Read-only SQL for diagnostics is allowed.
 - **Schema:** Vendure CLI only (`npx vendure migrate -g <name>` → inspect → `npx vendure migrate -r`). Never hand-write migration files, never `ALTER TABLE` by hand, never `synchronize: true` as production repair.
 - **GraphQL:** regenerate Admin + Shop schema → `npm run codegen` → `npm run lint` / `npm run build` → focused e2e. New storefront fields must be domain-oriented; do not expose plugin-internal persistence structures just because they exist.
-- **Invariants:** the three static checkers (`adr-invariants`, `rfc-lifecycle`, `story-flow`) must stay green. Exactly one pre-existing event-chain warning is expected (`RecurringCapacityGrant`, F-6) — do not "fix" it by renaming entities; fix RFC-001 §4. New architecture-level invariants are documented in `docs/architecture/invariants.md` (INV-024 already is) **and** get a structural sub-check in `AdrChecker.check()`.
+- **Invariants:** the three static checkers (`adr-invariants`, `rfc-lifecycle`, `story-flow`) must stay green, and — since the F-6 reconciliation (`f0e5ece`, 2026-09-24) — `runtime-causality` too: **zero warnings expected** (the former permanent `RecurringCapacityGrant` warning is cleared by the `BbbCapacityGrant(sourceType='subscription')` model + RFC-001 v4 + the canonical `SubscriptionCapacityGrant` action; do not reintroduce the separate-entity name into the harness). New architecture-level invariants are documented in `docs/architecture/invariants.md` (INV-024 already is) **and** get a structural sub-check in `AdrChecker.check()`.
 - **Evidence:** R2, R3 and R4 evidence is recorded separately; one is never proof for another. R2-G stays open until its runtime evidence exists (0.14).
 
 ---
@@ -543,7 +545,7 @@ Re-run §6 after any merge into `main` before starting a slice; this record is a
 
 - **`edu-frontend`** — not present in this repository; none of its files were inspected. Its HEAD, GraphQL documents and generated types must be audited separately.
 - **Razorpay runtime evidence** — R2-G failure paths (halted, stale-cycle no-op, duplicate replay, halted recovery) remain open; see `production-readiness.md:861-866` and `what-next.md:23,44`.
-- **The `verify:invariants` event-chain warning** about `RecurringCapacityGrant` is pre-existing (F-6), not caused by this plan. Do not "fix" it by renaming entities; fix the RFC wording.
+- ~~The `verify:invariants` event-chain warning~~ **CLOSED 2026-09-24 (`f0e5ece`):** the RFC-001 §4 v4 amendment + harness reconciliation cleared it (runtime-causality 1 passed / 0 warnings); a regression back to the separate-entity naming should be treated as a gate failure.
 - **F-4** is a static code reading and has not been reproduced against a running stack. Treat it as a strong hypothesis requiring a runtime check before allowance work starts.
 - **Production custom-domain routing/TLS**, secrets, CORS, GraphiQL exposure, asset URL/storage, email mode, API/worker topology, backup/restore — `production-readiness.md`, not this plan.
 - **Any claim about a commit, migration or test that is not re-verified with §6** — per `.clinerules` §11.

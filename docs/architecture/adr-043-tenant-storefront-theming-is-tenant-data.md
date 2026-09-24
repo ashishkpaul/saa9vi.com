@@ -217,7 +217,7 @@ This ADR is **Accepted** as an architectural decision; the capability matrix bel
 | Admin CRUD + publish/rollback/reset | Required | ✅ |
 | L1 entitlement (`whitelabelEnabled` + state window) | Required | ✅ |
 | Public Shop `myTenantTheme`, entitlement-conditional | Required | ✅ |
-| Storefront theme rendering (`edu-frontend`) | Required for delivery | ❌ pending (C phase) |
+| Storefront theme rendering (`edu-frontend`) | Required for delivery | ✅ Implemented 2026-09-24 (`edu-frontend` `7561643` L1 consumption + `b262ba3` billing/sign-in bridge + `2bba7e2` contract doc); positive themed-tenant runtime render not evidenced — no dev channel has an active theme row (backend fixture gap), `null` ⇒ platform default verified |
 | L2 layout presets | Future | ❌ |
 | `customCssEnabled` plan flag | Future | ❌ |
 | L3 custom CSS + CSP changes | Future | ❌ |

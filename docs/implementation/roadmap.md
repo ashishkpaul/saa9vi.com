@@ -95,7 +95,7 @@ Every tenant lands on a permanent **Free Basic** plan at registration (no card, 
 
 **Blocking prerequisite — ✅ RESOLVED 2026-09-23** (previously: "the subscription Admin API has no cancel/change-plan mutation"). Shipped as **ADR-044** (`docs/architecture/adr-044-local-plan-change-and-cancellation.md`) plus `changeOrganizationSubscriptionPlan` / `cancelOrganizationSubscription` (commits `66e6cd4` feature, `5d3d2d9` harness repair). `subscribeToPlan()` still rejects a channel whose existing row is not `cancelled` — which is exactly why that capability had to land *before* registration-time activation, not after it.
 
-**Position (plan §4 order):** slices 1, 2, 3, 4, 7, 8 are done; slice 5 is **partial** (BUG-036 grant-selection correctness ✅ `d711940`; plan-derived `concurrentMeetingLimit` sync outstanding). **Next: slice 9 — `edu-frontend` theme consumption + plan/usage dashboard** (its backend contract, slice 8, is done). Slice 6 (daily live allowance) remains open behind the slice-5 concurrency item; slices 10 (R4 runtime evidence) and 11 (R3 one-time payment handler) are independent gates.
+**Position (plan §4 order):** slices 1, 2, 3, 4, 7, 8, 9 are done; slice 5 is **partial** (BUG-036 grant-selection correctness ✅ `d711940`; plan-derived `concurrentMeetingLimit` sync outstanding). **Next: slice 10 — R4 runtime evidence** (verification-only; `scripts/verify/` exists). Slice 6 (daily live allowance) remains open behind the slice-5 concurrency item; slice 11 (R3 one-time payment handler) is an independent gate.
 
 ---
 
@@ -229,7 +229,7 @@ Every tenant lands on a permanent **Free Basic** plan at registration (no card, 
 
 ## Phase 4 — Scale & Premium
 
-- [ ] White-label theming — **superseded by ADR-043**: L1 `TenantTheme` backend implemented (entity, migrations, Admin/Shop API, `whitelabelEnabled` entitlement gating, INV-025); L2 layout presets pending; L3 custom CSS pending; `edu-frontend` consumption pending (C phase). The old `TenantProfile.theme` concept is abandoned.
+- [ ] White-label theming — **superseded by ADR-043**: L1 `TenantTheme` backend implemented (entity, migrations, Admin/Shop API, `whitelabelEnabled` entitlement gating, INV-025); `edu-frontend` L1 consumption **shipped 2026-09-24** (`7561643`; positive themed-tenant render still unproven in dev fixtures — no active theme row exists there); L2 layout presets pending; L3 custom CSS pending. The old `TenantProfile.theme` concept is abandoned.
 - [ ] TimescaleDB for BBB event-heavy analytics
 - [ ] AI features (meeting summary, CMS content writer, review summarisation)
 - [ ] Multi-BBB-server geographic routing
