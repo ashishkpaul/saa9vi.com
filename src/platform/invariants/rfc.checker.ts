@@ -64,6 +64,16 @@ export class RfcLifecycleChecker implements Checker {
     };
   }
 
+  /**
+   * Structural presence check ONLY: asserts that a subscription-source grant
+   * writer exists in services/listeners. It does NOT verify the causal link.
+   * Causality ("SubscriptionRenewedEvent → SubscriptionCapacityGrant") is
+   * enforced by the stronger event layer: EventTraceCollector (which merges
+   * subscriber-side actions into the publisher's chain) plus
+   * EventCausalityValidator's `subscription-renewed-event` rule. Keep both
+   * layers in mind when moving the writer — this check follows file globs,
+   * the causality rule follows `ofType(...)` subscribers + action patterns.
+   */
   private async invoiceCreatesGrant(): Promise<CheckResult> {
     const srcDir = path.join(__dirname, '../../..');
     const files = findFiles(

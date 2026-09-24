@@ -253,3 +253,6 @@ Every tenant lands on a permanent **Free Basic** plan at registration (no card, 
 
 **Development infrastructure verification**
 - [ ] Local PostgreSQL tunnel (`127.0.0.1:5435`) and Redis tunnel (`127.0.0.1:6385`) must be reachable before runtime verification. If either is unavailable, the application intentionally falls back to pg-mem / `DefaultJobQueuePlugin`; that fallback is suitable for development diagnostics, not production verification.
+
+**Simulation-harness grant-model alignment** (reconcile before either harness is promoted into CI)
+- [ ] `src/platform/stress-test/lifecycle-simulator.ts` (L67/73/77) and `src/plugins/load-simulation-plugin/engine/causal-mapper.ts` (L26) still label the subscription grant `RecurringCapacityGrant` / `RecurringCapacityGrantCreatedEvent`. Both are plain string labels — no such entity or event class exists — and they sit outside the `verify:invariants` scan, so they do not fail any gate today. Reconcile them to the authoritative `BbbCapacityGrant(sourceType='subscription')` / `SubscriptionCapacityGrant` model (RFC-001 v4, `f0e5ece`) before either harness is promoted into CI.
