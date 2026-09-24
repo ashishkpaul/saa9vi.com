@@ -23,6 +23,12 @@ import {
   MeetingFailedEvent,
 } from "../events/bbb-events";
 import { BBB_PROVISIONING_QUEUE, MEETING_STATE } from "../constants";
+import {
+  PROVISIONING_ALLOWANCE_EXHAUSTED_ERROR,
+  TENANT_SELECTABLE_SOURCE_TYPES,
+  grantUnavailableReason,
+  hasProvisionableMinutes,
+} from "./grant-selection.policy";
 
 const loggerCtx = "BbbProvisioningWorkerService";
 
@@ -162,30 +168,51 @@ export class BbbProvisioningWorkerService implements OnModuleInit {
         throw new Error("No healthy BBB server available");
       }
 
-      // Resolve the active grant at provisioning time — immutable linkage
-      const grant = await this.connection
-        .getRepository(ctx, BbbCapacityGrant)
+      // Resolve the active grant at provisioning time — immutable linkage.
+      // BUG-036: selection is restricted to tenant-selectable source types
+      // (`internal_overhead` is ops headroom, not an allowance) and the minutes
+      // gate honours `isUnbounded` through the shared policy helper.
+      const grantRepo = this.connection.getRepository(ctx, BbbCapacityGrant);
+      const now = new Date();
+      const grant = await grantRepo
         .createQueryBuilder("grant")
         .where("grant.organizationId = :orgId", {
           orgId: meeting.organization.id,
         })
         .andWhere("grant.exhausted = :exhausted", { exhausted: false })
-        .andWhere("grant.validFrom <= :now", { now: new Date() })
-        .andWhere("grant.validUntil >= :now", { now: new Date() })
+        .andWhere("grant.sourceType IN (:...sourceTypes)", {
+          sourceTypes: [...TENANT_SELECTABLE_SOURCE_TYPES],
+        })
+        .andWhere("grant.validFrom <= :now", { now })
+        .andWhere("grant.validUntil >= :now", { now })
         .orderBy("grant.validUntil", "ASC")
         .addOrderBy("grant.createdAt", "ASC")
         .getOne();
 
       if (!grant) {
-        throw new Error(
-          "No active capacity grant found for this organization. Please purchase or renew a plan.",
-        );
+        // Distinguish "exhausted allowance" from "no allowance at all": an
+        // exhausted commercial grant is excluded from selection above, so
+        // without this probe the caller would be told nothing exists.
+        const unusableCommercialGrants = await grantRepo
+          .createQueryBuilder("grant")
+          .where("grant.organizationId = :orgId", {
+            orgId: meeting.organization.id,
+          })
+          .andWhere("grant.sourceType IN (:...sourceTypes)", {
+            sourceTypes: [...TENANT_SELECTABLE_SOURCE_TYPES],
+          })
+          .andWhere("grant.exhausted = :exhausted", { exhausted: true })
+          .andWhere("grant.validFrom <= :now", { now })
+          .andWhere("grant.validUntil >= :now", { now })
+          .getCount();
+
+        throw new Error(grantUnavailableReason(unusableCommercialGrants > 0));
       }
 
-      const remainingMinutes =
-        (grant.grantedMinutes ?? 0) - (grant.consumedMinutes ?? 0);
-      if (remainingMinutes <= 0) {
-        throw new Error("No minutes remaining on plan");
+      // isUnbounded grants are Infinity (matching GrantReaderService), so their
+      // `grantedMinutes: -1` sentinel no longer fails this gate.
+      if (!hasProvisionableMinutes(grant)) {
+        throw new Error(PROVISIONING_ALLOWANCE_EXHAUSTED_ERROR);
       }
 
       const bbbMeetingId = `bbb-${meeting.id}`;

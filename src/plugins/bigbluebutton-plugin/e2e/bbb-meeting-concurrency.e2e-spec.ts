@@ -38,6 +38,10 @@ import { BbbServer } from '../entities/bbb-server.entity';
 import { BbbCapacityGrant } from '../entities/bbb-capacity-grant.entity';
 import { BbbProvisioningWorkerService } from '../services/bbb-provisioning-worker.service';
 import { MEETING_STATE } from '../constants';
+import {
+  PROVISIONING_ALLOWANCE_EXHAUSTED_ERROR,
+  PROVISIONING_NO_GRANT_ERROR,
+} from '../services/grant-selection.policy';
 
 registerInitializer('postgres', new SchemaPostgresInitializer());
 
@@ -193,5 +197,158 @@ describe('BbbProvisioningWorker concurrent capacity (Commit 2 gate)', () => {
       expect(pending).toBeGreaterThanOrEqual(1);
       expect(live).toBeLessThanOrEqual(LIMIT);
     }, 15000);
+
+    // ── BUG-036: grant-selection correctness ────────────────────────────────
+    // Same harness (real Postgres, real worker, real grant queries). Each case
+    // uses its own org because `BbbOrganization.channelId` is UNIQUE.
+
+    it('refuses a tenant whose only grant is internal_overhead (BUG-036)', async () => {
+      const orgRepo = connection.getRepository(ctx, BbbOrganization);
+      const overheadOrg = await orgRepo.save(
+        orgRepo.create({
+          channelId: 'bug036-overhead-channel',
+          name: `Overhead Only Org ${Date.now()}`,
+          slug: `overhead-only-${Date.now()}`,
+          ownerUserId: '1',
+          concurrentMeetingLimit: LIMIT,
+        }),
+      );
+
+      // Exactly what BbbOrganizationService.create() auto-provisions.
+      const grantRepo = connection.getRepository(ctx, BbbCapacityGrant);
+      await grantRepo.save(
+        grantRepo.create({
+          organization: overheadOrg,
+          sourceType: 'internal_overhead',
+          grantedMinutes: -1,
+          consumedMinutes: 0,
+          isUnbounded: true,
+          exhausted: false,
+          validFrom: new Date(Date.now() - 3600_000),
+          validUntil: new Date('2099-12-31T00:00:00.000Z'),
+        }),
+      );
+
+      const meetingRepo = connection.getRepository(ctx, BbbMeeting);
+      const meeting = await meetingRepo.save(
+        meetingRepo.create({
+          title: 'Overhead-only Meeting',
+          state: MEETING_STATE.PENDING,
+          organization: overheadOrg,
+        }),
+      );
+
+      await worker.doProvisionMeeting(ctx, meeting.id, 'bug036-overhead');
+
+      const after = await meetingRepo.findOneByOrFail({
+        id: String(meeting.id),
+      });
+      expect(after.state).toBe(MEETING_STATE.FAILED);
+      // The accurate outcome: no eligible commercial grant. Pre-fix this failed
+      // with the misleading "No minutes remaining on plan".
+      expect(after.failureReason).toBe(PROVISIONING_NO_GRANT_ERROR);
+      expect(after.failureReason).not.toContain('No minutes remaining');
+    }, 20000);
+
+    it('reports an exhausted commercial allowance as exhausted, not missing (BUG-036)', async () => {
+      const orgRepo = connection.getRepository(ctx, BbbOrganization);
+      const exhaustedOrg = await orgRepo.save(
+        orgRepo.create({
+          channelId: 'bug036-exhausted-channel',
+          name: `Exhausted Org ${Date.now()}`,
+          slug: `exhausted-${Date.now()}`,
+          ownerUserId: '1',
+          concurrentMeetingLimit: LIMIT,
+        }),
+      );
+
+      const grantRepo = connection.getRepository(ctx, BbbCapacityGrant);
+      await grantRepo.save(
+        grantRepo.create({
+          organization: exhaustedOrg,
+          sourceType: 'subscription',
+          grantedMinutes: 600,
+          consumedMinutes: 600,
+          isUnbounded: false,
+          exhausted: true,
+          validFrom: new Date(Date.now() - 3600_000),
+          validUntil: new Date(Date.now() + 3600_000),
+        }),
+      );
+
+      const meetingRepo = connection.getRepository(ctx, BbbMeeting);
+      const meeting = await meetingRepo.save(
+        meetingRepo.create({
+          title: 'Exhausted Meeting',
+          state: MEETING_STATE.PENDING,
+          organization: exhaustedOrg,
+        }),
+      );
+
+      await worker.doProvisionMeeting(ctx, meeting.id, 'bug036-exhausted');
+
+      const after = await meetingRepo.findOneByOrFail({
+        id: String(meeting.id),
+      });
+      expect(after.state).toBe(MEETING_STATE.FAILED);
+      expect(after.failureReason).toBe(
+        PROVISIONING_ALLOWANCE_EXHAUSTED_ERROR,
+      );
+      expect(after.failureReason).toContain('exhausted');
+    }, 20000);
+
+    it('honours isUnbounded for a non-overhead grant (BUG-036 regression)', async () => {
+      const orgRepo = connection.getRepository(ctx, BbbOrganization);
+      const unboundedOrg = await orgRepo.save(
+        orgRepo.create({
+          channelId: 'bug036-unbounded-channel',
+          name: `Unbounded Org ${Date.now()}`,
+          slug: `unbounded-${Date.now()}`,
+          ownerUserId: '1',
+          concurrentMeetingLimit: LIMIT,
+        }),
+      );
+
+      // A tenant-selectable grant with the same sentinel shape as overhead
+      // grants — the case the old minutes arithmetic (-1 - 42 <= 0) refused.
+      const grantRepo = connection.getRepository(ctx, BbbCapacityGrant);
+      await grantRepo.save(
+        grantRepo.create({
+          organization: unboundedOrg,
+          sourceType: 'subscription',
+          grantedMinutes: -1,
+          consumedMinutes: 42,
+          isUnbounded: true,
+          exhausted: false,
+          validFrom: new Date(Date.now() - 3600_000),
+          validUntil: new Date(Date.now() + 3600_000),
+        }),
+      );
+
+      // Fail at the BBB transport, not at the capacity gate: the observable
+      // proof that the minutes gate was passed.
+      (worker as any).bbbApiService = {
+        createMeeting: async () => {
+          throw new Error('stubbed-bbb-failure');
+        },
+      };
+
+      const meetingRepo = connection.getRepository(ctx, BbbMeeting);
+      const meeting = await meetingRepo.save(
+        meetingRepo.create({
+          title: 'Unbounded Meeting',
+          state: MEETING_STATE.PENDING,
+          organization: unboundedOrg,
+        }),
+      );
+
+      await worker.doProvisionMeeting(ctx, meeting.id, 'bug036-unbounded');
+
+      const after = await meetingRepo.findOneByOrFail({
+        id: String(meeting.id),
+      });
+      expect(after.state).toBe(MEETING_STATE.FAILED);
+      expect(after.failureReason).toBe('stubbed-bbb-failure');
+    }, 20000);
   });
 });

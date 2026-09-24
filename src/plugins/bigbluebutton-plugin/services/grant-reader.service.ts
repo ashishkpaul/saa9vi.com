@@ -1,6 +1,11 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { TransactionalConnection } from "@vendure/core";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
+import {
+  GrantSourceType,
+  isTenantSelectableSourceType,
+  remainingMinutesForGrant,
+} from "./grant-selection.policy";
 
 const loggerCtx = "GrantReaderService";
 
@@ -12,7 +17,7 @@ export interface CapacityGrantLike {
   validUntil: Date;
   exhausted: boolean;
   isUnbounded: boolean;
-  sourceType: "order" | "subscription" | "internal_overhead";
+  sourceType: GrantSourceType;
 }
 
 /**
@@ -41,7 +46,7 @@ export class GrantReaderService {
    */
   async resolveGrantForMeeting(
     grantId: string,
-    sourceType: "order" | "subscription" | "internal_overhead",
+    sourceType: GrantSourceType,
   ): Promise<CapacityGrantLike | null> {
     const grant = await this.repo.findOneBy({ id: grantId });
     if (!grant) return null;
@@ -69,33 +74,26 @@ export class GrantReaderService {
   }
 
   /**
-   * Find the earliest-expiring valid grant for an organization.
-   */
-  async findEarliestValidGrant(
-    organizationId: string,
-    _sourceTypes: Array<"order" | "subscription" | "internal_overhead">,
-  ): Promise<CapacityGrantLike | null> {
-    const grant = await this.repo.findOne({
-      where: { organization: { id: organizationId }, exhausted: false },
-      order: { validUntil: "ASC" },
-    });
-    return grant ? this.toLike(grant) : null;
-  }
-
-  /**
    * Phase 2 integration point for CapacityIntelligenceService
    * (RFC-001 Appendix C-5).
+   *
+   * BUG-036: unbounded grants count as `Infinity` through the shared policy
+   * helper, and `internal_overhead` capacity is excluded — it is ops headroom,
+   * not tenant allowance, so counting it would report every organization as
+   * unbounded. (This method has no callers yet; the semantics are pinned here
+   * because slice 6's allowance read model and slice 8's `myLiveUsage` will
+   * consume it.)
    */
   async getRemainingMinutes(organizationId: string): Promise<number> {
     const grants = await this.repo.find({
       where: { organization: { id: organizationId }, exhausted: false },
     });
-    return grants.reduce(
-      (sum: number, g: BbbCapacityGrant) =>
-        sum +
-        (g.isUnbounded ? Infinity : g.grantedMinutes - g.consumedMinutes),
-      0,
-    );
+    return grants
+      .filter((g: BbbCapacityGrant) => isTenantSelectableSourceType(g.sourceType))
+      .reduce(
+        (sum: number, g: BbbCapacityGrant) => sum + remainingMinutesForGrant(g),
+        0,
+      );
   }
 
   private toLike(grant: BbbCapacityGrant): CapacityGrantLike {
