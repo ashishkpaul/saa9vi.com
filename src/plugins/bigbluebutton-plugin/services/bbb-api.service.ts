@@ -58,8 +58,17 @@ export interface BbbRecording {
 /**
  * Thin adapter for the BigBlueButton API.
  *
- * BBB 3.x uses SHA-256 for API checksums:
+ * Checksum contract:
  *   checksum = SHA256(methodName + queryString + apiSecret)
+ *
+ * Algorithm note: this adapter signs with **SHA-256**, so the connected BBB
+ * server must have SHA-256 enabled in its accepted checksum algorithms — treat
+ * that as a deployment requirement of this integration, not as a property of
+ * BBB in general. BBB's accepted algorithm set is a server-side configuration
+ * (its published API documentation still uses SHA-1 in the canonical example),
+ * so do not read "BBB uses SHA-256" into this code: verify against the actually
+ * deployed BBB version before declaring provider compatibility complete — see
+ * `docs/implementation/production-readiness.md` §11.
  *
  * Reference: https://docs.bigbluebutton.org/development/api
  */
