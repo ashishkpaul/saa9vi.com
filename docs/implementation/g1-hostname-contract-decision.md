@@ -39,7 +39,7 @@ Key facts verified in code:
 
 ## 4. Gap
 
-A newly registered tenant is **unreachable**: registration sets neither `customDomain` nor any platform hostname, so nothing seeds Redis, Caddy has no matching site block, and `resolve-channel` returns `''` → storefront falls back to the default channel (audit B-6). Additionally, the marketplace's `academySlug` (from `BbbOrganization.slug`) is unrelated to `TenantProfile`, so hostname derivation would have two candidate slug sources unless unified.
+A newly registered tenant is **unreachable**: registration sets neither `customDomain` nor any platform hostname, so nothing seeds Redis, Caddy has no matching site block, and `resolve-channel` returns `''` → storefront falls back to the default channel (audit B-6; the *fail-closed* half of that gap was addressed separately on 2026-09-24 — an unmapped public hostname is now denied `403` at the proxy, see `integration-gaps-worklist.md` B-6). Additionally, the marketplace's `academySlug` (from `BbbOrganization.slug`) is unrelated to `TenantProfile`, so hostname derivation would have two candidate slug sources unless unified. Note the two gaps are complementary: with B-6 fail-closed in place, a not-yet-registered or torn-down tenant hostname is *denied* rather than served the default channel, which makes this reachability gap more visible (as an explicit `403`), not less.
 
 ## 5. Candidate hostname contract — **DECIDED**
 
@@ -65,7 +65,7 @@ Custom domain:       TenantProfile.customDomain (explicitly configured, existing
 
 ## 8. Impact on Next.js resolve-channel
 
-**None required.** `resolve-channel` is hostname-agnostic against the Redis map; subdomains resolve identically to custom domains. B-6 (production fail-closed instead of default-channel fallback) remains a separate deferred task.
+**None required.** `resolve-channel` is hostname-agnostic against the Redis map; subdomains resolve identically to custom domains. B-6 (production fail-closed instead of default-channel fallback) was a separate task and is now closed in the frontend edge (2026-09-24: `403` for unmapped public hostnames, proxies deny before Next.js renders) — this contract is unchanged by that fix. See `integration-gaps-worklist.md` B-6.
 
 ## 9. Impact on custom domains
 
@@ -84,7 +84,7 @@ None — the existing `customDomain` create/update/delete Redis sync is preserve
 3. Sync `BbbOrganization.slug` from `tenantSlug` (org auto-provision or reconciliation step).
 4. Registration acceptance test: Tenant A/B via GraphQL → `channel-token:{slug}.saa9vi.com` present in Redis → `resolve-channel?hostname=` returns the correct tokens. No manual Redis/DB writes.
 5. ~~Mapping-TTL re-affirmation strategy decided during B-2.~~ **Amended 2026-09-15:** TTL re-affirmation was explicitly deferred from B-2 and is tracked as a separate operational decision (see the TTL note above). B-2 delivers the registration seed plus update-path recovery only.
-6. Caddy wildcard/on-demand TLS and B-6 fail-closed behavior are explicitly **out of B-2 scope** (G10 / B-6).
+6. Caddy wildcard/on-demand TLS and B-6 fail-closed behavior are explicitly **out of B-2 scope** (G10 / B-6). **B-6 has since been closed in the frontend edge (2026-09-24)**; only the Caddy wildcard/on-demand-TLS work (G10) remains here.
 
 ## 12. Post-B-2 implementation status (2026-09-15)
 

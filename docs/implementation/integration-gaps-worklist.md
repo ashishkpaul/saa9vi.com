@@ -172,7 +172,8 @@ Continued from the pre-flight with the same G3 tenants. Stock fixture was set vi
    injection via an nginx njs subrequest to `/api/resolve-channel`; the local nginx site (a) lacked
    `libnginx-mod-http-js` and (b) did not inject the tenant header, so SSR pages under tenant
    hostnames rendered the default/fallback path. **No cross-tenant data exposure was observed** —
-   this is a deployment/configuration gap, and B-6 default-channel-fallback hardening remains open.
+   this is a deployment/configuration gap. B-6 default-channel-fallback hardening was closed
+   separately on 2026-09-24 (unmapped public hostnames now fail closed at the proxy — see B-6).
 3. Vendure refuses `removeProductsFromChannel` for the default channel, so the default channel
    cannot be used as a tenant-isolated fixture channel. Tenant isolation relies on correct
    per-request channel tokens; the default channel is not an isolation boundary.
@@ -185,7 +186,7 @@ Continued from the pre-flight with the same G3 tenants. Stock fixture was set vi
 | G3-C cart: B hostname/token adds Beta | ✅ distinct cart/order; read-only DB verification confirmed `order.channelId` = B (21) |
 | G3-D cross-tenant: A adds Beta | ✅ rejected — Beta is not visible in A's channel (visibility failure, not stock failure) |
 | G3-D cross-tenant: B adds Alpha | ✅ rejected likewise |
-| Unknown hostname SSR | ⚠️ default-channel fallback; no cross-tenant content observed in this probe; B-6 remains open |
+| Unknown hostname SSR | ⚠️ default-channel fallback **at probe time**; no cross-tenant content observed in this probe — since closed for the Redis-healthy case by B-6 (2026-09-24: unmapped public hostname → `403` at the proxy) |
 
 **B-3 SSR chain — VERIFIED 2026-09-16 (live, njs-free auth_request proxy).** The remaining
 closure item did **not** require installing njs: the local nginx (1.22.1) ships
@@ -368,14 +369,44 @@ Direct client attempts to inject `x-saa9vi-channel-token` cannot select another 
 ## B-6 — Remove unsafe production default-channel fallback
 
 **Priority:** P2 — **Depends on:** B-1/B-2
+**Status:** CLOSED (fail-closed) 2026-09-24 for the unmapped-hostname and misconfigured-lookup cases — see evidence below. Two items remain outside this closure: the B-5 deployed-vhost gap (no effect in production until that vhost is replaced) and the deliberate Redis-*outage* fail-open (availability trade-off, retained).
 
 Confirmed code pattern (audit B-6): `(await getChannelTokenFromHeaders()) || getChannelToken()` silently renders the default channel when the proxy header is missing.
 
 Evaluate replacing this in production with `missing channel → 404 / domain-not-configured / marketplace redirect`, while preserving convenient local development behavior.
 
+### Resolution (2026-09-24, edu-frontend)
+
+Implemented as an **HTTP-status distinction at the resolution edge** — not as a `null`-vs-`''` check in `api.ts` — because nginx does not forward an empty-valued `proxy_set_header`: `''` and "header absent" are indistinguishable by the time they reach the app, so a header-value check could never tell an unmapped hostname from a direct request.
+
+`GET /api/resolve-channel` (`edu-frontend/src/app/api/resolve-channel/route.ts`) now separates the states that previously all collapsed into `200 + ''`:
+
+| Condition | Response |
+|---|---|
+| Mapping found | `200` + token |
+| localhost/private hostname, or no `hostname` param (dev) | `200` + `''` |
+| Redis unreachable / timeout (infrastructure outage) | `200` + `''` — **fail-open retained** |
+| Redis healthy, **no mapping** for a public hostname | `403` `hostname_not_mapped` |
+| Resolution misconfigured (wrong password, revoked ACL, unknown error) | `500` `channel_resolution_misconfigured` |
+
+`403` rather than `404` because nginx `auth_request` forwards only `2xx`/`401`/`403`; any other status becomes an opaque `500`. All three reference proxy configs deny the request before Next.js renders: `resolve_channel.js` (njs) propagates the 403, `auth_request` passes it through, Caddy `forward_auth` denies on non-2xx.
+
+Runtime evidence (2026-09-24, live local stack — route probed directly on `:3001`, Redis at `:6479`):
+
+* mapped hostname → `200` + token (temporary key `channel-token:verify-academy.example.com`, removed after the probe)
+* unmapped public hostname → `403` `{"error":"hostname_not_mapped"}`
+* `localhost` and a missing `hostname` param → `200` + empty header / `null`
+* wrong `REDIS_PASSWORD` → `500` `{"error":"channel_resolution_misconfigured"}`
+* `REDIS_PORT` pointed at a closed port → `200` + `''` (fail-open preserved)
+* `npx tsc --noEmit` → exit 0; `npx eslint` on both changed source files → exit 0
+
+`api.ts` keeps the env-var fallback for `''`/absent headers; that is now correct by construction, since the only requests where the fallback would be wrong are denied at the edge. Deployment steps and the staging re-verification matrix are in `edu-frontend/deploy/VERIFY.md` §2–§4 (§6 probes the route directly).
+
 ### Acceptance criterion
 
 A production tenant request with no resolvable tenant identity cannot silently render the default tenant's storefront.
+
+→ **Satisfied** for "Redis answered: no mapping" (`403`) and "lookup misconfigured" (`500`). **Not** satisfied during a Redis *outage*, where the storefront deliberately serves the `VENDURE_CHANNEL_TOKEN` fallback (availability over strictness — documented in `deploy/VERIFY.md` §4). Closing the B-5 deployed-vhost gap is a prerequisite for either behaviour to apply in production.
 
 ## B-7 — Channel-token rotation architecture
 
