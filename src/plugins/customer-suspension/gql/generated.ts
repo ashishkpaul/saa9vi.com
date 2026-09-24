@@ -2532,6 +2532,59 @@ export type MutationVoteOnReviewArgs = {
   vote: Scalars['Boolean']['input'];
 };
 
+/**
+ * Live meeting-minutes allowance for the active channel's current period.
+ *
+ * Sourced from BbbCapacityGrant, restricted to tenant-selectable source types
+ * ('order', 'subscription'): 'internal_overhead' is ops headroom and is never
+ * reported as customer allowance (BUG-036 semantics, shared with the
+ * provisioning gate).
+ */
+export type MyLiveUsage = {
+  __typename?: 'MyLiveUsage';
+  /** Minutes consumed for this period. */
+  consumedMinutes: Scalars['Int']['output'];
+  /** Minutes granted for this period (excludes unlimited grants). */
+  includedMinutes: Scalars['Int']['output'];
+  isUnbounded: Scalars['Boolean']['output'];
+  periodEnd?: Maybe<Scalars['DateTime']['output']>;
+  /** The subscription period these figures belong to (NULL when provider-free). */
+  periodStart?: Maybe<Scalars['DateTime']['output']>;
+  /**
+   * Minutes left. NULL when the channel has an unlimited grant — infinite
+   * capacity, not a number, so it is not coerced into one.
+   */
+  remainingMinutes?: Maybe<Scalars['Int']['output']>;
+};
+
+/**
+ * The active channel's own subscription. Readable only by the tenant's
+ * business account.
+ */
+export type MySubscription = {
+  __typename?: 'MySubscription';
+  cancelAtPeriodEnd: Scalars['Boolean']['output'];
+  cancelledAt?: Maybe<Scalars['DateTime']['output']>;
+  currentPeriodEnd?: Maybe<Scalars['DateTime']['output']>;
+  /**
+   * NULL for a provider-free plan (Free Basic): those rows must keep the period
+   * NULL so the paid renewal scan never discovers them (plan §0.19 F-7).
+   */
+  currentPeriodStart?: Maybe<Scalars['DateTime']['output']>;
+  /**
+   * ADR-042/INV-024 marketplace-listing eligibility for this channel, evaluated
+   * by the shared platform policy 'CommercialEntitlementService' — not
+   * re-derived here.
+   */
+  marketplaceEligible: Scalars['Boolean']['output'];
+  plan: SubscriptionPlanPublic;
+  /**
+   * Local FSM state (ADR-039): pending_provider_auth | trialing | active |
+   * past_due | cancelled. Never the provider's own status string.
+   */
+  status: Scalars['String']['output'];
+};
+
 export type NativeAuthInput = {
   password: Scalars['String']['input'];
   username: Scalars['String']['input'];
@@ -3727,6 +3780,8 @@ export type Query = {
   activeShippingMethods: Array<Maybe<PublicShippingMethod>>;
   /** An array of supported Countries */
   availableCountries: Array<Country>;
+  /** The platform-global plan catalogue. Public — no tenant state involved. */
+  availableSubscriptionPlans: Array<SubscriptionPlanPublic>;
   bbbRoomStatus?: Maybe<BbbRoomPublic>;
   canReviewProduct: ReviewEligibilityResult;
   cmsArticle?: Maybe<Article>;
@@ -3765,12 +3820,15 @@ export type Query = {
    * into a single domain API. No Bbb* types exposed (INV-006).
    */
   myLearningDashboard: LearningDashboard;
+  myLiveUsage: MyLiveUsage;
   myScheduledSessions: Array<BbbScheduledSessionPublic>;
   /**
    * The calling student's own attendance record for a session.
    * Returns null if no attendance record exists or the student is not the owner.
    */
   mySessionAttendance?: Maybe<SessionAttendancePublic>;
+  /** Null when the channel has no subscription at all. */
+  mySubscription?: Maybe<MySubscription>;
   /**
    * Returns the active theme for the current tenant channel, or null if
    * the channel uses the Saa9vi platform default theme.
@@ -4362,6 +4420,25 @@ export type SubmitProductReviewInput = {
   reviewToken?: InputMaybe<Scalars['String']['input']>;
   summary: Scalars['String']['input'];
   variantId?: InputMaybe<Scalars['ID']['input']>;
+};
+
+/**
+ * A tenant-subscribable tier as the storefront may see it.
+ * Deliberately omits provider wiring (see module note above).
+ */
+export type SubscriptionPlanPublic = {
+  __typename?: 'SubscriptionPlanPublic';
+  customDomainEnabled: Scalars['Boolean']['output'];
+  description?: Maybe<Scalars['String']['output']>;
+  id: Scalars['ID']['output'];
+  includedBbbMinutes: Scalars['Int']['output'];
+  /** ADR-042 §2: whether this tier may be listed on the marketplace. */
+  marketplaceListingEnabled: Scalars['Boolean']['output'];
+  maxStudents: Scalars['Int']['output'];
+  monthlyPriceInPaise: Scalars['Int']['output'];
+  name: Scalars['String']['output'];
+  slug: Scalars['String']['output'];
+  whitelabelEnabled: Scalars['Boolean']['output'];
 };
 
 /** Indicates that an operation succeeded, where we do not want to return any more specific information. */

@@ -1,6 +1,7 @@
 import { Global, Module } from "@nestjs/common";
 import { PluginCommonModule } from "@vendure/core";
 import { CommercialEntitlementService } from "./commercial-entitlement.service";
+import { TenantBusinessAccountService } from "./tenant-business-account.service";
 
 /**
  * Platform module for the shared commercial entitlement policy
@@ -28,7 +29,7 @@ import { CommercialEntitlementService } from "./commercial-entitlement.service";
 @Global()
 @Module({
   imports: [PluginCommonModule],
-  providers: [CommercialEntitlementService],
-  exports: [CommercialEntitlementService],
+  providers: [CommercialEntitlementService, TenantBusinessAccountService],
+  exports: [CommercialEntitlementService, TenantBusinessAccountService],
 })
 export class CommercialEntitlementModule {}

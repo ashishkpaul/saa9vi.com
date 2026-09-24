@@ -9,6 +9,10 @@ import { ProviderWebhookEvent } from './entities/provider-webhook-event.entity';
 import { RenewalPaymentReconciliationRequired } from './entities/renewal-reconciliation-required.entity';
 import { SubscriptionAdminResolver } from './api/subscription-admin.resolver';
 import { adminApiExtensions } from './api/schema/subscription-admin.schema';
+import { SubscriptionShopResolver } from './api/subscription-shop.resolver';
+import { shopApiExtensions } from './api/schema/subscription-shop.schema';
+import { SubscriptionShopService } from './services/subscription-shop.service';
+import { CommercialEntitlementModule } from '../../platform/commercial/commercial-entitlement.module';
 import { SubscriptionService } from './services/subscription.service';
 import { FreePlanProvisioningService } from './services/free-plan-provisioning.service';
 import { FreePlanProvisioningListener } from './listeners/free-plan-provisioning.listener';
@@ -25,7 +29,7 @@ import { subscriptionDunningTask } from './jobs/subscription-dunning.task';
 import { PluginInitOptions } from './types';
 
 @VendurePlugin({
-    imports: [PluginCommonModule],
+    imports: [PluginCommonModule, CommercialEntitlementModule],
     entities: [
         SubscriptionPlan,
         OrganizationSubscription,
@@ -76,6 +80,9 @@ import { PluginInitOptions } from './types';
         // TenantRegisteredEvent and is deliberately fail-soft.
         FreePlanProvisioningService,
         FreePlanProvisioningListener,
+        // Tenant-facing commercial READ surface (plan §3.5, slice 8).
+        // Read-only: self-serve upgrade/cancel stays deferred (UI-1).
+        SubscriptionShopService,
         // Razorpay services (default provider)
         RazorpaySubscriptionProvider,
         RazorpayWebhookVerifier,
@@ -87,6 +94,10 @@ import { PluginInitOptions } from './types';
     adminApiExtensions: {
         schema: adminApiExtensions,
         resolvers: [SubscriptionAdminResolver],
+    },
+    shopApiExtensions: {
+        schema: shopApiExtensions,
+        resolvers: [SubscriptionShopResolver],
     },
     dashboard: './dashboard/index.tsx',
     configuration: (config: RuntimeVendureConfig) => {
