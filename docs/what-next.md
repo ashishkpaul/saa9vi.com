@@ -27,15 +27,59 @@
 
 ---
 
-## Free Basic plan + storefront commercial integration (programme) — ⏳ NEXT
+## Free Basic plan + storefront commercial integration (programme) — ⏳ IN PROGRESS (plan §4 slices 1–4, 7 done; **next: slice 5**)
 
 **Canonical plan:** `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` (v3, evidence-verified at `4f3a9cf`; its §6 preflight was executed 2026-09-22 and recorded in §6.1). Worklist entry: `integration-gaps-worklist.md` **FREE-1**.
 
 Decision: every tenant lands on a permanent **Free Basic** plan at registration — no card, no trial clock. Paid plans add capacity (live rooms/day minutes/participants) and entitlements (hosted academy / custom domain, white-label theming, marketplace listing per ADR-042).
 
-**Blocking prerequisite before any code:** the subscription Admin API exposes only `createSubscriptionPlan`/`updateSubscriptionPlan`/`subscribeToPlan` (no cancel, no change-plan), and `subscribeToPlan()` rejects any channel whose existing row is not `cancelled`. Auto-provisioning a subscription at registration would therefore **block the paid-upgrade path** for that tenant. ADR-044 + a plan-change/cancel capability ship first — the provider adapters' `cancelSubscription`/`pauseSubscription`/`resumeSubscription` already exist with zero call sites.
+**Blocking prerequisite — ✅ RESOLVED 2026-09-23 (recorded for traceability):** the subscription Admin API exposed only `createSubscriptionPlan`/`updateSubscriptionPlan`/`subscribeToPlan` (no cancel, no change-plan), and `subscribeToPlan()` rejects any channel whose existing row is not `cancelled`. Auto-provisioning a subscription at registration would therefore **block the paid-upgrade path** for that tenant. ADR-044 + a plan-change/cancel capability ship first — the provider adapters' `cancelSubscription`/`pauseSubscription`/`resumeSubscription` already exist with zero call sites.
 
-Then, in order: ✅ provider-free activation (runtime-verified 2026-09-23) → grant-selection correctness → daily live allowance → ✅ ADR-042 marketplace entitlement (implemented 2026-09-23: two CLI migrations, shared `CommercialEntitlementService`, `indexSession()` gate, INV-024 checker; indexer e2e matrix **14/14 against real Postgres + Elasticsearch**, convergence **4/4**, tenant regression 73/73) → Shop read-only commercial API → `edu-frontend` theme + dashboard → R4 runtime evidence. **R3 (`dummyPaymentHandler` still registered) remains a separate launch gate**, unaffected by this programme. Outstanding product decisions: the free-tier limits themselves.
+Then, in **plan §4 order** (slice numbers are the plan's canonical ones; the FREE-1 list in `integration-gaps-worklist.md` uses the same order): ✅ 1 commercial-matrix freeze → ✅ 2 doc-drift sweep → ✅ 3 ADR-044 + plan-change/cancel (`66e6cd4`; acceptance harness repaired `5d3d2d9`) → ✅ 4 provider-free Free Basic activation at registration (`d45b0a5`; runtime-verified 19 passed / 0 failed / 3 skipped) → **⏳ 5 grant-selection correctness (next)** → 6 daily live allowance → ✅ 7 ADR-042 marketplace entitlement (`dad099c`; indexer e2e matrix **14/14 against real Postgres + Elasticsearch**, convergence **4/4**, tenant regression 73/73, INV-024 green) → 8 Shop read contract → 9 `edu-frontend` theme + dashboard → 10 R4 runtime evidence → 11 R3 payment handler. **R3 (`dummyPaymentHandler` is still the only registered handler) is a separate launch gate**, unaffected by this programme. Outstanding product decisions: the free-tier limits themselves. Detail, gates and evidence in §Remaining backlog below.
+
+---
+
+## Remaining backlog — plan §4 build order
+
+**Verified against HEAD `6c86a0a` (2026-09-23): `HEAD == origin/main`, working tree clean.** Slice numbers are the plan's canonical ones (§4 table); the `integration-gaps-worklist.md` FREE-1 list uses the same order. This is the recommended execution order.
+
+| Plan §4 # | Workstream | State at `6c86a0a` | Blocker / dependency |
+|---|---|---|---|
+| 5 | **Grant-selection correctness** (§3.3 prerequisites) — BUG-036 | **OPEN — re-confirmed by code reading**, runtime reproduction still pending | None. Load-bearing for 6 and for Free-tier provisioning → **do this first** |
+| 6 | **Daily live allowance** (§3.3) | Open | Blocked by 5 (matrix itself already frozen in slice 1) |
+| 8 | **Shop read contract** (§3.5) | Open | **Nothing blocks it** — can start immediately, in parallel with 5 |
+| 9 | **Frontend: the `edu-frontend` theme + plan/usage dashboard** (§3.8) | Open (separate repo) | Needs 8's schema first; regenerate frontend types after 8 |
+| 10 | **R4 runtime evidence** (§3.10) | Open — verification only, R4 is implemented | Scripts now exist (`scripts/verify/`) |
+| 11 | **R3 payment handler** (§3.9) | Open — `dummyPaymentHandler` is still the only handler in `vendure-config.ts` | Independent launch gate |
+
+### Slice 5 — grant-selection correctness (BUG-036) — next
+
+Re-verified at `6c86a0a` (this re-read **confirms** the `known-bugs.md:11` entry; only runtime reproduction is outstanding):
+
+- `bbb-provisioning-worker.service.ts:166-177` selects `exhausted = false`, in-window, ordered `validUntil ASC, createdAt ASC`.
+- `:185-188` then rejects when `grantedMinutes - consumedMinutes <= 0` with `"No minutes remaining on plan"` — **it never reads `isUnbounded`**, while `grant-reader.service.ts:96` (`getRemainingMinutes()`) treats unbounded grants as `Infinity`. The two disagree.
+- Consequence, both directions: an org whose only valid grant is the auto-created unbounded overhead grant (`bbb-organization.service.ts:~234`, `grantedMinutes: -1`) **can never provision**; and once a commercial grant is flagged `exhausted` it is dropped from selection, so the resolver falls through to the overhead grant and reports an exhausted allowance as a *missing* one.
+- `grant-reader.service.ts:74-83` `findEarliestValidGrant()` ignores both its `_sourceTypes` parameter and its declared validity window. **Confirmed zero callers** (`grep -rn findEarliestValidGrant src/` → the definition only) — a dead seam: fix it in the same pass or delete it.
+
+Acceptance: honour `isUnbounded` at the provisioning gate (Infinity semantics, matching `getRemainingMinutes()`); make `internal_overhead` explicitly non-selectable for tenant sessions; an exhausted commercial allowance must refuse with a domain-accurate outcome, not a generic error; unit + BBB e2e green (`bbb-meeting-concurrency.e2e-spec.ts` covers provisioning); close BUG-036 in `known-bugs.md` with the commit hash.
+
+### Slice 8 — Shop read contract
+
+- **No shop surface exists yet**: `src/plugins/subscription/api/` holds only `schema/subscription-admin.schema.ts` + `subscription-admin.resolver.ts`, and `grep -rn shopApiExtensions src/plugins/subscription/` returns nothing.
+- Queries: `mySubscription` (plan, status, period dates, marketplace eligibility), `myLiveUsage` (included / consumed / remaining), `availableSubscriptionPlans`.
+- Tenant comes from `ctx.channelId` **only** — no `channelId` argument anywhere in the new surface.
+- Eligibility must come from the existing platform evaluator `src/platform/commercial/commercial-entitlement.service.ts` — **do not add a second evaluator**. (Naming note: no `marketplace-eligibility.evaluator.ts` exists in this tree; an earlier prose reference used that name in error.)
+- Permission level is a decision to record, not a default: the in-tree precedent for tenant-scoped public reads is `myTenantTheme` at `@Allow(Permission.Public)` (`tenant-shop.resolver.ts:108-110`).
+- Cross-plugin reads via repository/`rawConnection`, not service injection (the note `TenantCommercialEligibilityService` carries).
+- **No mutations** — UI-1 defers tenant self-serve upgrade pending its own ADR.
+- In-tree patterns to follow: `bigbluebutton-plugin/api/schema/bbb-shop.schema.ts`, `cms/api/api-extensions.ts`, `marketplace/api/marketplace-schema.ts`.
+- After the GraphQL change: `npx vendure schema --api shop` → `npm run codegen` → `npm run build`.
+- Keep the period fields stable now, so that if slice 6 later adds daily-grant fields to `myLiveUsage` the contract does not churn.
+- Gate: A/B isolation (A's token on B's hostname never returns B's data), unknown hostname fails closed, no-subscription channel → `mySubscription: null`.
+
+### Housekeeping (non-blocking, any spare cycle)
+
+Tracked-but-junk files that future audits trip over: `_edit_script.js` and `_fix_script.js` (ad-hoc Node scripts that rewrote `docs/adr/rfc-001-…` in place), the 1.2 MB `src/plugins/tenant-plugin/e2e/__data__/tenant-plugin.e2e-spec.ts.sqlite` test cache, and 7 preview screenshots under `static/assets/`. `git check-ignore` reports **none** of them as ignored, so cleanup is `git rm --cached` plus `.gitignore` entries.
 
 ---
 
