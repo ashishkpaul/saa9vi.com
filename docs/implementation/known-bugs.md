@@ -6,15 +6,17 @@
 
 ## Active Bugs
 
-| ID | Severity | File | Description | Status |
-|---|---|---|---|---|
-| BUG-036 | High | `bbb-provisioning-worker.service.ts` (`doProvisionMeeting`) — provisioning-time capacity check ignores `isUnbounded`, and `exhausted` grants are silently dropped from selection, so an unbounded overhead grant can never be used (F-4) | **Open** — confirmed by static code reading (2026-09-22); runtime reproduction pending. Detail below. |
+_None._ BUG-036 (provisioning capacity/`isUnbounded`) was fixed and runtime-reproduced on 2026-09-23 in `d711940`; BUG-037 (the `bbb-channel-isolation` e2e harness could not pass) was found and fixed on 2026-09-24. Both archived entries are below; the fixes are recorded in `release-notes.md`.
 
 ---
 
-## BUG-036 — Provisioning capacity check ignores `isUnbounded` (Open)
+## BUG-036 — Provisioning capacity check ignored `isUnbounded` — ✅ FIXED (`d711940`, 2026-09-23)
 
-**Severity:** High · **Discovered:** 2026-09-22 (static code reading; **not** yet reproduced at runtime) · **Components:** `bbb-provisioning-worker.service.ts` (`doProvisionMeeting`), `bbb-organization.service.ts` (overhead grant), `grant-reader.service.ts`
+> **Status:** fixed and runtime-verified 2026-09-23 (commit `d711940`). The sections
+> below are retained as the pre-fix record — every symptom in them was
+> reproduced at runtime before the fix and is now covered by tests.
+
+**Severity:** High · **Discovered:** 2026-09-22 (static code reading); **runtime-reproduced:** 2026-09-23 · **Components:** `bbb-provisioning-worker.service.ts` (`doProvisionMeeting`), `bbb-organization.service.ts` (overhead grant), `grant-reader.service.ts`
 
 **What the code does.** `BbbOrganizationService.create()` auto-provisions an unbounded overhead grant per organization (`isUnbounded: true`, `grantedMinutes: -1`, `validUntil: 2099-12-31`). `doProvisionMeeting()` selects a grant with `exhausted = false`, an in-window `validFrom`/`validUntil`, ordered `validUntil ASC, createdAt ASC` — then rejects the meeting when `(grant.grantedMinutes ?? 0) - (grant.consumedMinutes ?? 0) <= 0`. That check never consults `isUnbounded`; only `GrantReaderService.getRemainingMinutes()` treats unbounded grants as `Infinity`.
 
@@ -25,9 +27,58 @@
 
 **Why it matters now.** Tenants register without a purchased grant, and the planned Free Basic tier adds a per-day allowance on this table. Shipping the allowance without fixing selection would leave the free tier depending on a fall-through path that throws.
 
-**Fix options (decide in the grant-selection slice).** Honour `isUnbounded` in the capacity check (Infinity semantics, matching `getRemainingMinutes()`), and/or exclude `internal_overhead` grants from tenant session selection entirely, treating "no eligible commercial grant" as its own domain outcome rather than a generic error.
+**Decision and fix (`d711940`).** Both fix options were taken, plus the accuracy gap between them:
 
-**Related but distinct.** `GrantReaderService.findEarliestValidGrant()` filters only on `exhausted` and orders by `validUntil`, ignoring its declared validity window — but it has **zero callers**, so it is a dead seam. The planned F-7 rule (a provider-free subscription must keep `currentPeriodStart`/`currentPeriodEnd` NULL so the paid renewal scan does not discover it) is a design constraint for the Free Basic activation slice, not part of this defect. Both are tracked in `saa9vi-comprehensive-integration-and-commercial-plan.md` §0.19.
+- Config: new `services/grant-selection.policy.ts` is the single home for the rules that had been duplicated and drifted — `TENANT_SELECTABLE_SOURCE_TYPES` (`order`, `subscription`; `internal_overhead` is ops headroom, never a customer allowance), `remainingMinutesForGrant()` (Infinity for `isUnbounded`, matching what `getRemainingMinutes()` always did) and `hasProvisionableMinutes()`.
+- `doProvisionMeeting()`: selection now uses a **positive** `sourceType IN (:...sourceTypes)` clause (not `!= 'internal_overhead'`, so a future third source type cannot slip through by default), the minutes gate calls `hasProvisionableMinutes()`, and a failure-path probe distinguishes **"allowance exhausted"** from **"no allowance at all"** — the two previously produced the same message.
+- `GrantReaderService.getRemainingMinutes()` now uses the same helper and excludes `internal_overhead` (counting overhead would report every organization as unbounded). Both call sites therefore cannot drift again.
+
+**Runtime reproduction (2026-09-23) — the evidence this entry previously lacked.** The three new cases in `bbb-meeting-concurrency.e2e-spec.ts` were first executed against the **pre-fix** worker; all three failed with exactly the documented symptoms:
+
+| Case (real Postgres) | Pre-fix behaviour | Post-fix |
+|---|---|---|
+| Only grant is the auto-created `internal_overhead` grant | `"No minutes remaining on plan"` (failure mode 1) | `"No active capacity grant found for this organization…"` |
+| Commercial grant at its limit (`exhausted = true`) | `"No active capacity grant found…"` — an exhausted allowance reported as *missing* (failure mode 2) | `"Your plan's meeting minutes for this period are exhausted. Please purchase or renew a plan to continue."` |
+| Tenant-selectable grant with `isUnbounded: true` and the `-1` sentinel | `"No minutes remaining on plan"` (the `-1 − consumed ≤ 0` arithmetic) | Reaches the BBB transport (gate passed) |
+
+Post-fix: `bbb-meeting-concurrency.e2e-spec.ts` **4/4** and `grant-selection.policy.spec.ts` **8/8** (infra-free).
+
+**Related but distinct — resolved.** `GrantReaderService.findEarliestValidGrant()` filtered only on `exhausted` and ordered by `validUntil`, ignoring its declared validity window *and* its `_sourceTypes` parameter. Re-verified with `grep -rn findEarliestValidGrant src/`: a single occurrence — its own definition — so it was dead code rather than a live path (the same was true of `getRemainingMinutes()`, which had no callers either; `doProvisionMeeting()` was the only live enforcement point). It was **deleted** in `d711940` rather than repaired, so the bug family cannot be reintroduced through it. The planned F-7 rule (a provider-free subscription must keep `currentPeriodStart`/`currentPeriodEnd` NULL so the paid renewal scan does not discover it) is a design constraint for the Free Basic activation slice, not part of this defect. Both are tracked in `saa9vi-comprehensive-integration-and-commercial-plan.md` §0.19.
+
+---
+
+## BUG-037 — `bbb-channel-isolation.e2e-spec.ts` could not pass (harness drift) — ✅ FIXED (2026-09-24)
+
+> **Status:** fixed and runtime-verified 2026-09-24 — `npm run test:e2e:bbb-isolation` → **13/13** against real Postgres. Found while re-running the BBB suites as regression cover for BUG-036; the spec itself was never touched by that fix (last modified in `48ad7c7`).
+
+**Severity:** High (missing evidence, not live runtime behaviour) · **Discovered:** 2026-09-24 (first execution of the suite since `48ad7c7`) · **Components:** `src/plugins/bigbluebutton-plugin/__tests__/bbb-channel-isolation.e2e-spec.ts` only — **no product code changed**.
+
+**Why it matters.** This suite is the runtime evidence cited for **INV-001** (cross-tenant channel isolation) by `docs/architecture/security.md` §SEC-002 and `docs/adr/platform-adr.md`. It had silently become impossible to pass, so the "Phase A isolation suite green" claim rested on a suite that could not execute — the same class of drift BUG-033 fixed for the other specs.
+
+**Symptom.** `7 failed / 6 skipped (13)`. The first failure was `registerNewTenant` → `The permission "CreateCmsArticle" may not be assigned`; every later failure was a cascade of `undefined` variables from that. Once registration worked, the next layer surfaced: `createBbbOrganization` → `You are not currently authorized to perform this action`.
+
+**Root causes (three, all harness-side).**
+
+1. **Missing plugins.** The spec loaded `plugins: [TenantPlugin, BigBlueButtonPlugin]`, but `TENANT_ADMIN_ROLE_PERMISSIONS` grants CMS (`CreateCmsArticle`, …) and Reviews (`ReviewAdmin`) permissions, and Vendure rejects any permission that no loaded plugin has registered — so `registerNewTenant` failed while creating the tenant-admin role. Fixed by loading the set that makes the green `tenant-plugin.e2e-spec.ts` pass: `CmsPlugin`, `ReviewsPlugin`, `SubscriptionPlugin.init({})` (the subscription tables are additionally required by ADR-043's theming gate, which `TenantPlugin` reads via `TransactionalConnection`).
+2. **Missed the BUG-033 fix.** `@vendure/testing`'s `testConfig` defaults `authOptions.requireVerification: true` while `registerNewTenant` creates admins with `user.verified = false`, so tenant-channel logins returned a null `CurrentUser`. BUG-033 added `requireVerification: false` to the marketplace / tenant-plugin / customer-deletion specs — **this spec was missed**. Added here.
+3. **An org-creation phase that could not work.** Phase 2 created the org via `createBbbOrganization` as SuperAdmin:
+   - `beforeAll` called `adminClient.asSuperAdmin()` **without `await`**. That is a login round-trip (`createTestEnvironment` does not pre-authenticate the admin client), so the mutation raced the login, ran unauthenticated, and Vendure returned its generic `ForbiddenError` (`RequestContext.userHasPermissions()` is false with no user). Vendure's SuperAdmin role was never the problem — `ensureSuperAdminRoleExists()` grants it all permissions, and `Permission.SuperAdmin` is `assignable: true`.
+   - it then called `setChannelToken('')`, leaving `ctx.channelId` unset — and `userHasPermissions()` returns `false` outright when there is no channel, so even an authenticated SuperAdmin fails every `@Allow(...)` check.
+   - the org already existed anyway: `BbbTenantProvisioningListener` provisions it on `TenantRegisteredEvent` using a ctx **scoped to the tenant channel**, which is required because `BbbOrganizationService.create()` calls `assignToCurrentChannel()` — a default-channel ctx mis-assigns the `channels` join (the BUG-004 / BUG-031 class).
+
+   Phase 2 now asserts the real production path instead: each tenant channel resolves to exactly one organization, polled until the async listener has written it (same pattern as `marketplace.e2e-spec.ts`'s `ensureOrg`).
+
+**Also corrected — latent assertions that could never have passed.** The spec compared the GraphQL `channelId` field against the *decoded* internal id: the API boundary encodes ids (`T_2`) while `tenantAChannelId` was normalised to `2` for repository reads (`channelId.replace(/^T_/, '')`, line 212). Both forms are now explicit — `tenantAChannelId` (internal, for repository reads) and `tenantAChannelIdEncoded` (GraphQL) — and all GraphQL assertions use the encoded form.
+
+**Evidence (same machine, same Postgres, 2026-09-24).**
+
+| Stage | Result |
+|---|---|
+| Pre-fix (as committed) | `7 failed \| 6 skipped (13)` |
+| After root causes 1 + 2 | `5 failed \| 8 passed (13)` — registration and all six isolation cases green |
+| After root cause 3 + id-form correction | **`13 passed (13)`** — `npx tsc --noEmit` exit 0 |
+
+---
 
 
 
@@ -213,3 +264,4 @@ BBB destroys meetings that are never joined after a server-side timeout. `BbbRec
 | BUG-034 | High | `src/plugins/marketplace/e2e/commission.e2e-spec.ts` line 118 — `SetAddress` mutation declared with the incorrect GraphQL input type `AddressInput!` (a non-existent type). Vendure's Shop API declares `setOrderShippingAddress(input: CreateAddressInput!)`. The typo was introduced during a refactor of the test fixture and caused every test exercising the `setOrderShippingAddress` helper to fail at GraphQL validation time, blocking 6 commission E2E cases. **Root cause:** the original fixture used `AddressInput!`, but the actual Vendure contract requires `CreateAddressInput!`. **Fix:** corrected the mutation to `mutation SetAddress($input: CreateAddressInput!)`. Verified: commission E2E **6/6 pass** (positive, $0-row, INV-008 forge, replay, no-ref, single-use ref). Current source uses `CreateAddressInput!` matching the upstream Vendure schema. | ✅ Fixed |
 | BUG-035 | High | `src/plugins/marketplace/e2e/commission.e2e-spec.ts` line 261 — the order-hydration query after `setOrderAddress` fetched the order without `relations: ['lines', 'surcharges']`, so `Order.lines` was empty. The INV-008 forged-reference test (`$0-row`) asserts that a forged `marketplaceRef` on an order with no matching resource lines is rejected; with an empty `lines` array the assertion `order.lines.some(l => l.productVariant.id === resourceVariantId)` always returned `false`, making the test pass for the wrong reason on a green-field DB but fail on any DB where real order lines existed from prior runs. **Root cause:** the hydration step was copied from a simpler fixture that didn't need line-level access and the relations array was never extended. **Fix:** added `relations: ['lines', 'surcharges']` to the order-hydration query. Verified: commission E2E **6/6 pass**, including the INV-008 forge case now correctly exercising the line-matching path. | ✅ Fixed |
 | INV-008 | P1 | `src/lib/vendure/session-cta.ts` (deleted) + `learning-dashboard.service.ts` — `getSessionCta()` was a client-side entitlement isolation layer containing business logic (joinUrl precedence, trial eligibility, registration status) that violated the entitlement-only access invariant. Fixed by moving the CTA decision server-side: `LearningCourse` now carries server-driven `ctaAction`/`ctaLabel` computed in `LearningDashboardService.getDashboard()`. `course-card.tsx` renders these fields instead of re-deriving eligibility from the clock. `session-cta.ts` deleted. | ✅ Fixed |
+| BUG-037 | High | `src/plugins/bigbluebutton-plugin/__tests__/bbb-channel-isolation.e2e-spec.ts` — the INV-001 "Phase A isolation" suite could not pass (7 failed / 6 skipped), so the isolation evidence cited by `security.md` §SEC-002 and `platform-adr.md` rested on a suite that could not execute. Three harness-only causes: (1) the spec loaded only `TenantPlugin` + `BigBlueButtonPlugin`, but `TENANT_ADMIN_ROLE_PERMISSIONS` grants CMS/Reviews permissions no loaded plugin had registered, so `registerNewTenant` failed with `The permission "CreateCmsArticle" may not be assigned`; (2) the spec never received the BUG-033 `requireVerification: false` fix, so tenant-channel logins returned a null `CurrentUser`; (3) phase 2 created the org as SuperAdmin via an **un-awaited** `adminClient.asSuperAdmin()` (login race → unauthenticated request → generic `ForbiddenError`) and `setChannelToken('')` (unset `ctx.channelId` → Vendure's `userHasPermissions()` returns false → every `@Allow` fails), while the org already existed — `BbbTenantProvisioningListener` provisions it on `TenantRegisteredEvent` with a tenant-scoped ctx, as `assignToCurrentChannel()` requires. Fix: load `CmsPlugin`/`ReviewsPlugin`/`SubscriptionPlugin` (the set the green tenant-plugin spec uses), add `requireVerification: false`, replace the creation phase with resolution of the real provisioning path (polled), and compare GraphQL `channelId` against the **encoded** form while repository reads use the decoded one. No product code changed. Verified: `npm run test:e2e:bbb-isolation` → **13/13** real Postgres (pre-fix 7 failed/6 skipped → 5 failed/8 passed → 13/13); `npx tsc --noEmit` exit 0. | ✅ Fixed |

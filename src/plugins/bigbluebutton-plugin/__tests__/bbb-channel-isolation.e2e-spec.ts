@@ -45,6 +45,9 @@ import {
 
 import { TenantPlugin } from '../../tenant-plugin/tenant-plugin.plugin';
 import { BigBlueButtonPlugin } from '../bigbluebutton.plugin';
+import { CmsPlugin } from '../../cms/cms.plugin';
+import { ReviewsPlugin } from '../../reviews/reviews-plugin';
+import { SubscriptionPlugin } from '../../subscription/subscription.plugin';
 import { E2E_INITIAL_DATA } from '../../tenant-plugin/e2e/fixtures/e2e-initial-data';
 
 // ─── Postgres initializer — isolated schema ────────────────────────────────
@@ -58,17 +61,6 @@ const REGISTER_NEW_TENANT = gql`
       channelId
       channelToken
       administratorId
-    }
-  }
-`;
-
-const CREATE_BBB_ORGANIZATION = gql`
-  mutation CreateBbbOrganization($input: CreateBbbOrganizationInput!) {
-    createBbbOrganization(input: $input) {
-      id
-      channelId
-      slug
-      name
     }
   }
 `;
@@ -119,6 +111,15 @@ describe('BBB Channel Isolation (Phase A)', () => {
   const { server, adminClient, shopClient } = createTestEnvironment(
     mergeConfig(testConfig, {
       apiOptions: { port: 3071 },
+      authOptions: {
+        // BUG-037 root-cause fix (same class as BUG-033): registerNewTenant
+        // creates admins with user.verified=false, and testConfig defaults
+        // authOptions.requireVerification=true, so tenant-channel logins return
+        // a null CurrentUser ("Cannot return null for non-nullable field
+        // CurrentUser.id"). This suite authenticates tenant admins via
+        // asUserWithCredentials, so verification must be disabled here too.
+        requireVerification: false,
+      },
       dbConnectionOptions: {
         type: 'postgres',
         host: process.env.DB_HOST ?? 'localhost',
@@ -130,17 +131,40 @@ describe('BBB Channel Isolation (Phase A)', () => {
         schema: 'e2e_bbb_isolation',
         synchronize: true,
       },
-      plugins: [TenantPlugin, BigBlueButtonPlugin],
+      plugins: [
+        TenantPlugin,
+        BigBlueButtonPlugin,
+        // BUG-037: TENANT_ADMIN_ROLE_PERMISSIONS grants CMS (CreateCmsArticle,
+        // …), Reviews ( REVIEW_ADMIN_PERMISSION) and relies on the subscription
+        // tables (ADR-043 theming/entitlement gate reads them via
+        // TransactionalConnection). Vendure rejects any permission that no
+        // loaded plugin has registered — with only TenantPlugin +
+        // BigBlueButtonPlugin, registerNewTenant failed with
+        // 'The permission "CreateCmsArticle" may not be assigned', which
+        // cascaded into every downstream case. This mirrors the plugin set of
+        // the green tenant-plugin.e2e-spec.ts.
+        CmsPlugin,
+        ReviewsPlugin,
+        SubscriptionPlugin.init({}) as any,
+      ],
     }),
   );
 
   // Shared state populated during tests
+  //
+  // Two forms of each channel id are needed, because the API boundary encodes
+  // ids (TestingEntityIdStrategy: `T_2`) while the BbbOrganization.channelId
+  // *column* stores the decoded internal form (`2`) — the same distinction
+  // marketplace.e2e-spec.ts documents. GraphQL assertions use the encoded form;
+  // repository reads (and the tenant-plugin invariant) use the internal one.
   let tenantAChannelId: string;
+  let tenantAChannelIdEncoded: string;
   let tenantAChannelToken: string;
   let tenantAAdminId: string;
   let tenantAEmail: string;
 
   let tenantBChannelId: string;
+  let tenantBChannelIdEncoded: string;
   let tenantBChannelToken: string;
   let tenantBEmail: string;
 
@@ -194,6 +218,7 @@ describe('BBB Channel Isolation (Phase A)', () => {
       expect(administratorId).toBeTruthy();
 
       tenantAChannelId = channelId.replace(/^T_/, '');
+      tenantAChannelIdEncoded = channelId;
       tenantAChannelToken = channelToken;
       tenantAAdminId = administratorId;
     });
@@ -217,46 +242,78 @@ describe('BBB Channel Isolation (Phase A)', () => {
       expect(channelToken).not.toEqual(tenantAChannelToken);
 
       tenantBChannelId = channelId.replace(/^T_/, '');
+      tenantBChannelIdEncoded = channelId;
       tenantBChannelToken = channelToken;
     });
   });
 
   // ═══════════════════════════════════════════════════════════════════════
-  // 2. Create a BbbOrganization for each tenant (SuperAdmin platform op)
+  // 2. BbbOrganization provisioning — one org per tenant channel
   // ═══════════════════════════════════════════════════════════════════════
 
-  describe('createBbbOrganization (SuperAdmin)', () => {
-    beforeAll(() => {
-      adminClient.asSuperAdmin();
-      adminClient.setChannelToken('');
-    });
+  /**
+   * BUG-037: this phase used to *create* the org with
+   * `createBbbOrganization` as SuperAdmin, which could never pass:
+   *
+   *  - `beforeAll` called `adminClient.asSuperAdmin()` **without await**. That
+   *    is a login round-trip (`createTestEnvironment` does not pre-authenticate
+   *    the admin client), so the mutation raced the login, ran unauthenticated,
+   *    and Vendure answered "You are not currently authorized to perform this
+   *    action" (RequestContext.userHasPermissions() is false with no user).
+   *  - it then called `setChannelToken('')`, leaving ctx.channelId unset, which
+   *    makes its own call to userHasPermissions() return false unconditionally —
+   *    so even an authenticated SuperAdmin failed every @Allow(...) check.
+   *  - the org already existed by then anyway: BBB owns org provisioning via
+   *    `BbbTenantProvisioningListener`, which creates it on TenantRegisteredEvent
+   *    using a ctx scoped to the tenant channel — required, because
+   *    `BbbOrganizationService.create()` calls `assignToCurrentChannel()`, so a
+   *    default-channel ctx would mis-assign the org's channels manyToMany.
+   *
+   * This phase therefore asserts the real production path instead: each tenant
+   * channel gets exactly one org, and it resolves the GraphQL ids the remaining
+   * isolation phases operate on. The listener is asynchronous, so poll until the
+   * row appears (same pattern as marketplace.e2e-spec.ts's `ensureOrg`).
+   */
+  describe('BbbOrganization provisioning (per tenant channel)', () => {
+    const waitForChannelOrgId = async (
+      channelIdEncoded: string,
+      token: string,
+    ) => {
+      adminClient.setChannelToken(token);
+      const deadline = Date.now() + 20_000;
+      for (;;) {
+        const { bbbOrganizations } = await adminClient.query(BBB_ORGANIZATIONS);
+        if (bbbOrganizations.totalItems > 0) {
+          // Exactly one org for this tenant, and it belongs to this channel.
+          expect(bbbOrganizations.totalItems).toBe(1);
+          expect(bbbOrganizations.items[0].channelId).toBe(channelIdEncoded);
+          return bbbOrganizations.items[0].id as string;
+        }
+        if (Date.now() > deadline) {
+          throw new Error(
+            `No BbbOrganization provisioned for channel ${channelIdEncoded}`,
+          );
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    };
 
-    it('creates an organization for tenant A channel', async () => {
-      const result = await adminClient.query(CREATE_BBB_ORGANIZATION, {
-        input: {
-          channelId: tenantAChannelId,
-          slug: `academy-a-${Date.now()}`,
-          name: 'Academy A',
-        },
-      });
-
-      orgAId = result.createBbbOrganization.id;
+    it('provisions an organization for tenant A channel', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      orgAId = await waitForChannelOrgId(
+        tenantAChannelIdEncoded,
+        tenantAChannelToken,
+      );
       expect(orgAId).toBeTruthy();
-      expect(result.createBbbOrganization.channelId).toBe(tenantAChannelId);
     });
 
-    it('creates an organization for tenant B channel', async () => {
-      const result = await adminClient.query(CREATE_BBB_ORGANIZATION, {
-        input: {
-          channelId: tenantBChannelId,
-          slug: `academy-b-${Date.now()}`,
-          name: 'Academy B',
-        },
-      });
-
-      orgBId = result.createBbbOrganization.id;
+    it('provisions an organization for tenant B channel', async () => {
+      await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
+      orgBId = await waitForChannelOrgId(
+        tenantBChannelIdEncoded,
+        tenantBChannelToken,
+      );
       expect(orgBId).toBeTruthy();
-      expect(result.createBbbOrganization.channelId).toBe(tenantBChannelId);
     });
   });
 
@@ -276,7 +333,7 @@ describe('BBB Channel Isolation (Phase A)', () => {
         id: orgAId,
       });
       expect(bbbOrganization).toBeTruthy();
-      expect(bbbOrganization.channelId).toBe(tenantAChannelId);
+      expect(bbbOrganization.channelId).toBe(tenantAChannelIdEncoded);
     });
 
     it('can update its own organization', async () => {
@@ -291,7 +348,7 @@ describe('BBB Channel Isolation (Phase A)', () => {
       const { bbbOrganizations } = await adminClient.query(BBB_ORGANIZATIONS);
       expect(bbbOrganizations.totalItems).toBe(1);
       expect(bbbOrganizations.items[0].id).toBe(orgAId);
-      expect(bbbOrganizations.items[0].channelId).toBe(tenantAChannelId);
+      expect(bbbOrganizations.items[0].channelId).toBe(tenantAChannelIdEncoded);
     });
   });
 

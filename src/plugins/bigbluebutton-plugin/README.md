@@ -133,11 +133,13 @@ Organization "Acme Academy"
 
 **Rules:**
 - Grants are picked **earliest-expiry-first** at provisioning time (not billing time)
+- Only **tenant-selectable** source types are considered (`order`, `subscription`). `internal_overhead` capacity is ops/internal headroom — it is never selected for a tenant session (BUG-036)
 - Once a meeting is provisioned, it is **permanently linked** to that grant (`grantId` is immutable). Mid-meeting grant changes do not affect billing
 - A meeting under 2 minutes is **not billed** (fair billing guard)
 - Usage is billed in **whole minutes** — actual duration, not rounded hours
-- When `consumedMinutes >= grantedMinutes`, the grant is marked `exhausted = true` and excluded from future provisioning
-- If no active non-exhausted grant exists → provisioning fails with `"No minutes remaining on plan"`
+- When `consumedMinutes >= grantedMinutes`, the grant is marked `exhausted = true` and excluded from future provisioning. `isUnbounded` grants never exhaust and report Infinity remaining (`grantedMinutes: -1` is a sentinel, not a quantity)
+- If no selectable grant exists in-window → provisioning fails with `"No active capacity grant found for this organization. Please purchase or renew a plan."`
+- If an in-window commercial grant exists but is exhausted → provisioning fails with `"Your plan's meeting minutes for this period are exhausted. Please purchase or renew a plan to continue."` (distinct from "no grant at all" since `d711940`)
 
 **Managing grants from the Admin UI:**
 
@@ -155,10 +157,10 @@ Go to Admin UI → Plans. You can:
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `"No minutes remaining on plan"` in meeting log | All capacity grants exhausted or expired | Admin UI → Plans → Add Plan |
+| `"Your plan's meeting minutes for this period are exhausted…"` in meeting log | An in-window commercial grant is exhausted (`consumedMinutes >= grantedMinutes`) | Admin UI → Plans → Add Plan |
+| `"No active capacity grant found for this organization"` | No *tenant-selectable* grant in-window — all expired, or the org has only its auto-created `internal_overhead` grant | Add a new grant in Admin UI → Plans |
 | `"Couldn't start session"` on storefront | Room stuck in `Failed` state | Admin UI → Rooms → (room is in Failed state — `resetBbbRoom` mutation or delete+recreate) |
 | Meeting stays in `Pending` forever | Provisioning job lost (worker restart during job) | Reconciliation worker auto-retries after 5 min. Check worker logs. |
-| `"No active capacity grant found"` | Grant expired (past `validUntil`) | Add a new grant in Admin UI → Plans |
 | Room shows `retryCount: 3`, no Retry button effect | `maxAutoRetries` reached; room is in `Failed` | Use `resetBbbRoom` mutation from GraphiQL, then try again |
 | Student can't join after buying | `BbbProductAccess` not mapped to the variant | Admin UI → Enrollments → Add Mapping for the variant |
 | Trainer joins as attendee, not moderator | Customer not added as Staff member | Admin UI → Staff → Add Staff Member with TRAINER role |
@@ -545,8 +547,12 @@ Webhook endpoint: `POST /bbb/webhook`
 2. BullMQ Worker (doProvisionMeeting)
    → Transition PENDING → PROVISIONING
    → Select least-loaded healthy BBB server
-   → Find earliest-expiring non-exhausted grant
-   → Guard: remainingMinutes > 0 (else throw "No minutes remaining on plan")
+   → Find earliest-expiring non-exhausted grant with sourceType IN (order, subscription)
+     (`internal_overhead` capacity is ops headroom and is never selected — BUG-036)
+   → Guard: hasProvisionableMinutes(grant) — Infinity semantics for isUnbounded grants
+     else throw "Your plan's meeting minutes for this period are exhausted…"
+   → If nothing selectable: "No active capacity grant found…", or the exhausted
+     message above when an in-window exhausted commercial grant exists
    → Call BBB createMeeting API (OpenTelemetry traced)
    → AES-256-GCM encrypt attendee + moderator passwords
    → Store grantId (immutable — billing uses this even if grants change later)
