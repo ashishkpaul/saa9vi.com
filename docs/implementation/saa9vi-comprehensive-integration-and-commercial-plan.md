@@ -1,9 +1,10 @@
 # Saa9vi — Free Basic Plan + Storefront Commercial Integration (v3, evidence-verified)
 
 **Repo:** `ashishkpaul/saa9vi.com` · **Branch:** `main`
-**Verified HEAD (local clone):** `4f3a9cf` = `4f3a9cfac502152e86fdc0e1989750cf1f05b482`
-**Working tree at review:** clean except untracked `.kiro/` and this document
-**Verification date:** 2026-09-22 · **Method:** local clone — `git rev-parse`, `git merge-base --is-ancestor`, `grep`/`sed` over `src/`, `docs/`, `schema-shop.graphql`, `node_modules/@vendure/core`
+**Verified HEAD (local clone):** `ec866fe` = `ec866fec984b2723ec8397ecbd932ec86aadefd9`
+**Working tree at review:** clean
+**Verification date:** 2026-09-24 · **Method:** local clone — `git rev-parse`, `git merge-base --is-ancestor`, `grep`/`sed` over `src/`, `docs/`, `schema-shop.graphql`, `node_modules/@vendure/core`
+**Baseline note:** the §0/§2/§6 evidence tables were written at `4f3a9cf` (2026-09-22) and are retained unchanged as the record of that review; this header and §3.5 were reconciled to `ec866fe` on 2026-09-24 after slice 8 shipped.
 
 > **Evidence rule.** Every claim in §0/§2 carries a `file:line` reference that was read at the verified HEAD.
 > Classification vocabulary: `CONFIRMED` (repo evidence) · `UNVERIFIED` (plausible, not proven) · `PROPOSED` (design, needs an ADR) · `DRIFT` (doc ≠ code).
@@ -248,20 +249,31 @@ ADR-042 is accepted; implement it as written — do not redesign it.
 
 ### 3.5 G-5 — Tenant-facing Shop commercial API (read-only)
 
-Per 0.11 the storefront may read subscription state and must not mutate it. Required surface:
+Per 0.11 the storefront may read subscription state and must not mutate it. Shipped surface (`schema-shop.graphql` at `ec866fe`):
 
 ```text
-mySubscription              plan (name/slug/price), status, currentPeriodStart/End,
-                            providerStatus, providerShortUrl, marketplaceGraceUntil
-myLiveUsage                 daily allowance + remaining, billing-period grant remaining
-availableSubscriptionPlans  catalogue for the upgrade CTA (prices from Saa9vi, never computed client-side)
+availableSubscriptionPlans  Permission.Public — platform-global catalogue, projected as SubscriptionPlanPublic:
+                            id, name, slug, description, monthlyPriceInPaise, includedBbbMinutes,
+                            maxStudents, customDomainEnabled, whitelabelEnabled, marketplaceListingEnabled
+                            (prices from Saa9vi, never computed client-side)
+mySubscription              Permission.Authenticated + TenantBusinessAccountService.assertBusinessAccount(ctx):
+                            plan (SubscriptionPlanPublic), status, currentPeriodStart, currentPeriodEnd,
+                            cancelAtPeriodEnd, cancelledAt, marketplaceEligible
+myLiveUsage                 Permission.Authenticated + assertBusinessAccount(ctx):
+                            periodStart, periodEnd, includedMinutes, consumedMinutes,
+                            remainingMinutes (null when isUnbounded), isUnbounded
 ```
+
+> The earlier proposed contract for `mySubscription` also listed `providerStatus`, `providerShortUrl` and `marketplaceGraceUntil`. Slice 8 deliberately **does not** expose them: provider internals (`providerPlanId`, `providerStatus`, `providerShortUrl`, `billingCustomerId`, `dunningRetryCount`) live on the Admin surface only, and the ADR-042 grace window is an internal eligibility input folded into the shared `marketplaceEligible` verdict — not a storefront field. (Reconciled 2026-09-24; this section now records the shipped projection.)
 
 Rules:
 
 - Resolve the tenant from `RequestContext` (`ctx.channelId`) only. No `channelId` argument — replicating the Admin mutation's signature into the Shop API is explicitly forbidden by UI-1.
 - Do not expose plugin-internal persistence rows (bindings, billing attempts, incidents) through the storefront contract.
 - No upgrade mutation in this slice. The CTA links to the current phase's admin-mediated flow; the mutation lands with G-1 under its own ADR.
+- `Authenticated` is not ownership: the business-account assertion (Administrator whose role is channel-assigned to `ctx.channelId`) runs resolver-side and fails closed for Customer sessions. Business accounts authenticate on the **Admin API** (this Vendure's Shop `login` resolves through the `customer` table, so administrators receive `INVALID_CREDENTIALS_ERROR` on Shop); sessions are not api-type-scoped, so the Admin session token serves the Shop reads.
+
+✅ **SHIPPED 2026-09-24 (`ec866fe`)** — read-only, no mutations; `subscription-shop.e2e-spec.ts` **12/12** on real Postgres.
 
 ### 3.6 G-6 — Freeze the commercial matrix (with enforcement status)
 
