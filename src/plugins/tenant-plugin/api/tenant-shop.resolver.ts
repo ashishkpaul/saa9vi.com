@@ -51,10 +51,13 @@ export class TenantShopResolver {
   /**
    * Self-serve tenant/seller registration.
    *
-   * NOT SAFE FOR PRODUCTION UNTIL SEC-004 LANDS: this is a public mutation
-   * with no rate limiting, and each call provisions a Seller, Channel, Role
-   * and Administrator. See TenantRegistrationService for the full caveats
-   * (also: no email verification yet).
+   * Public mutation: each call provisions a Seller, Channel, Role and
+   * Administrator. SEC-003/SEC-004 are implemented — `rate-limiter.middleware.ts`
+   * throttles registerNewTenant (5/hour per IP) and the Administrator is created
+   * unverified (verification email via AccountRegistrationEvent; login blocked
+   * until verified). Remaining onboarding caveats (hostname contract, production
+   * custom-domain routing) are tracked in TenantRegistrationService and
+   * docs/implementation/integration-gaps-worklist.md.
    */
   @Mutation()
   @Allow(Permission.Public)
