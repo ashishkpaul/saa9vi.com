@@ -3,6 +3,7 @@ import { EventBus, Logger, RequestContext, TransactionalConnection } from "@vend
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbPlatformCapacityPolicyService } from "../services/bbb-platform-capacity-policy.service";
+import { BbbDailyAllowanceService } from "../services/bbb-daily-allowance.service";
 import {
   SubscriptionPlanChangedEvent,
   SubscriptionRenewedEvent,
@@ -16,6 +17,7 @@ export class BbbSubscriptionListener implements OnModuleInit {
     private readonly eventBus: EventBus,
     private readonly connection: TransactionalConnection,
     private readonly capacityPolicyService: BbbPlatformCapacityPolicyService,
+    private readonly dailyAllowanceService: BbbDailyAllowanceService,
   ) {}
 
   onModuleInit() {
@@ -119,6 +121,32 @@ export class BbbSubscriptionListener implements OnModuleInit {
         }
 
         await this.convergeConcurrentMeetingLimit(event.ctx, org, event.cause);
+
+        // ─── Slice 6: daily allowance for a provider-free plan ───────────────
+        //
+        // Second trigger for the SAME writer. `BbbDailyAllowanceService` owns
+        // the daily grant; this consumer only asks it to materialise today's
+        // grant the moment the plan identity is committed, so a tenant's very
+        // first meeting does not depend on waiting for the hourly sweep.
+        //
+        // Fail-soft and separate from the convergence above: a free-plan
+        // registration must not fail because a grant could not be written, and
+        // a capacity fault must not mask an allowance fault. The scheduled sweep
+        // is the healing path for both, exactly as ADR-031 Decision 5 prescribes
+        // for plan-derived capacity.
+        try {
+          await this.dailyAllowanceService.ensureDailyGrantForChannel(
+            event.channelId,
+            `plan-changed:${event.cause}`,
+          );
+        } catch (err: any) {
+          Logger.error(
+            `Daily allowance ensure failed for channel ${event.channelId} ` +
+              `(cause ${event.cause}, plan ${event.planId}): ${err?.message ?? err}. ` +
+              `The scheduled daily-allowance sweep will retry.`,
+            loggerCtx,
+          );
+        }
       } catch (err: any) {
         Logger.error(
           `Failed to process SubscriptionPlanChangedEvent for channel ${event.channelId} ` +

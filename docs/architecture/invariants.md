@@ -368,3 +368,66 @@ Hostname configuration (`tenantSlug`, `customDomain`), Razorpay `providerStatus`
 - The marketplace surface always renders with the Saa9vi platform theme regardless of which tenant's sessions are displayed.
 
 **Rejection criterion:** Any code path that applies tenant theme data to the admin portal, marketplace pages, or another tenant's storefront — that permits two active themes per channel, that mutates a published version in place, that serves a tenant theme to a commercially ineligible tenant (other than the always-permitted reset), or that accepts a logo asset from another channel — is rejected.
+
+---
+
+## INV-026: The Daily Live Allowance Is a Server-Day Grant with Exactly One Writer (ADR-045)
+
+**Rule:** A plan's live allowance is delivered through exactly one mechanism, selected by the
+plan's provider identity, and the two mechanisms are **disjoint**:
+
+- `SubscriptionPlan.providerPlanId IS NULL` (provider-free / Free Basic) → a **60-minute
+  `BbbCapacityGrant(sourceType = 'subscription')` per Saa9vi server day**, written by
+  `BbbDailyAllowanceService`. The plan receives **no** billing-period allowance.
+- `providerPlanId IS NOT NULL` (provider-backed / paid) → an `includedBbbMinutes` pool written
+  by the renewal path. The plan receives **no** daily grant, even when the pool is exhausted.
+
+`BbbDailyAllowanceService` is the **only** writer of daily grants. Triggers are plural and
+read-only with respect to the grant table: the hourly scheduled task
+(`bbb-daily-allowance`, `cron.every(1).hours()`) and the `SubscriptionPlanChangedEvent`
+consumer in `BbbSubscriptionListener` both call the service and never write grants themselves.
+
+**Corollaries:**
+- The identity of a daily grant is `(organizationId, validFrom = startOfServerDay(now),
+  sourceType = 'subscription')`. A second grant for the same organization and server day MUST
+  NOT be written — the `myLiveUsage` sum would silently report 120 minutes for a 60-minute day.
+- `validFrom` is the server-clock midnight of the day and `validUntil` is the last millisecond
+  of that same day (one millisecond before the next midnight), never the next day's `validFrom`.
+  Both bounds are tested inclusively, so the windows of consecutive days are strictly disjoint.
+- The one-writer rule is enforced by a read-then-insert existence check under a **per-key
+  PostgreSQL advisory lock** (`pg_advisory_xact_lock(hashtextextended(key, 0))`) inside one
+  transaction, so concurrent sweeps cannot both miss the check. The advisory lock is the
+  current mechanism; a partial unique index on `(organizationId, validFrom, sourceType)
+  WHERE sourceType = 'subscription'` is the recorded stronger form and is deferred (see
+  ADR-045 residual).
+- The server clock is authoritative for day boundaries. No per-tenant timezone is consulted,
+  and no clock other than the one that computed `validFrom`/`validUntil` evaluates
+  `validFrom <= now AND validUntil >= now` at read or provisioning time.
+- Daily grants are ordinary commercial grants: `sourceType = 'subscription'`,
+  `isUnbounded = false`, `grantedMinutes = DAILY_ALLOWANCE_MINUTES`, `exhausted = false`,
+  `consumedMinutes = 0`. They are **not** the `internal_overhead` sentinel and MUST NOT be
+  excluded from tenant-selectable source types.
+- The daily set is read from the subscription table with `status IN ('trialing', 'active')`,
+  mirroring plan-derived capacity's plan lookup (one definition of "the plan in force").
+  `past_due` is a paid-only state and is excluded.
+- A missing `BbbOrganization`, or a write failure, is fail-soft: the trigger logs and the
+  hourly sweep retries. A daily allowance fault MUST NOT fail a tenant registration or abort a
+  sweep, and MUST NOT mask a capacity-convergence fault.
+- No backfill: a day whose window has closed is never re-granted.
+- Allowance enforcement is unchanged — the daily grant is consumed and gated by the existing
+  provisioning selection. No pre-enqueue allowance check may be added (D-6: the meeting FSM
+  owns terminality; an exhausted allowance lands the meeting in terminal `Failed`).
+
+**Rejection criterion:** Any code path that writes a daily allowance grant outside
+`BbbDailyAllowanceService`, that grants a daily allowance to a provider-backed plan, that
+grants a billing-period allowance to a provider-free plan, that grants twice for the same
+organization and server day, that reads a day boundary from a clock other than the server
+clock, or that blocks meeting enqueueing on allowance grounds — is rejected.
+
+**Structural checker (since 2026-09-25):** `AdrChecker.dailyAllowanceInvariants()`
+(`src/platform/invariants/adr.checker.ts`) — verifies the constant and discriminator exist, the
+window is half-open-free and disjoint, the per-key advisory lock and the idempotency key are
+present, the writer is the only module writing daily grants, the task is hourly and registered,
+both triggers call the writer, the paid-plan ban is in the writer, the read model is unchanged,
+and no pre-enqueue allowance probe was added. Runs under `npm run verify:invariants`.
+

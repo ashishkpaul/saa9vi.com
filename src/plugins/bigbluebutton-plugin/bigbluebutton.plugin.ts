@@ -51,6 +51,8 @@ import { BbbEntitlementService } from "./services/bbb-entitlement.service";
 import { BbbDeletionService } from "./services/bbb-deletion.service";
 import { BbbMembershipService } from "./services/bbb-membership.service";
 import { GrantReaderService } from "./services/grant-reader.service";
+import { BbbDailyAllowanceService } from "./services/bbb-daily-allowance.service";
+import { bbbDailyAllowanceTask } from "./jobs/bbb-daily-allowance.task";
 import { LearningDashboardService } from "./services/learning-dashboard.service";
 import { CapacityIntelligenceService } from "./services/capacity-intelligence.service";
 import { AttendanceAnalyticsService } from "./services/attendance-analytics.service";
@@ -140,6 +142,11 @@ import {
     BbbDeletionService,
     BbbMembershipService,
     GrantReaderService,
+    // Slice 6 — the single writer of daily live-allowance grants (ADR-045 /
+    // INV-026). Provider-free plans get a 60-minute grant per server day; every
+    // consumer of "today's allowance" reads it back from BbbCapacityGrant, so
+    // there is no parallel allowance store.
+    BbbDailyAllowanceService,
     LearningDashboardService,
     BbbPlatformCapacityPolicyService,
     BbbJoinUrlService,
@@ -187,6 +194,15 @@ import {
       config.schedulerOptions.tasks = [
         ...(config.schedulerOptions.tasks ?? []),
         bbbCapacityAlertTask,
+      ];
+    }
+    // Slice 6 / D-7: the daily-allowance refresh. Idempotent, so duplicate
+    // registration or an extra run can never hand out a second allowance for
+    // the same day; the guard is the same id-dedupe every other task here uses.
+    if (!existingIds.has(bbbDailyAllowanceTask.id)) {
+      config.schedulerOptions.tasks = [
+        ...(config.schedulerOptions.tasks ?? []),
+        bbbDailyAllowanceTask,
       ];
     }
     // Register rate limiters (SEC-004)

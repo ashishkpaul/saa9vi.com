@@ -830,3 +830,80 @@ Tenant Channel (test-academy-f9hmus)
 1. `add-tenant-theme` ✅
 2. `tenant-theme-one-active-per-channel` ✅
 3. `add-custom-css-enabled-to-plan` (future, L3)
+
+---
+
+## ADR-044: Local Plan-Change and Cancellation Capability
+
+**Status:** Accepted (2026-09-22)  
+**Full record:** `docs/architecture/adr-044-local-plan-change-and-cancellation.md`
+
+> *Reconciliation note (2026-09-25):* ADR-044 shipped with its full record but no entry in this
+> archive. The condensed entry is added here so the archive and the ADR files do not drift.
+
+**Core decision:** Local, transactional, FSM-aware plan change and cancellation, built on the
+provider primitives that already existed (`cancelSubscription` / `pauseSubscription` /
+`resumeSubscription`) rather than on new provider integration.
+
+**Key decisions:**
+- **Supersede-in-place** is the canonical plan-change model: one active subscription per channel
+  is an invariant, so changing plan rewrites the existing row's `planId`/price in a single
+  transaction (cancel-then-recreate would strand the provider binding and break the partial
+  unique index mid-flight).
+- Two new SuperAdmin Admin mutations: `changeOrganizationSubscriptionPlan(channelId, planId)`
+  and `cancelOrganizationSubscription(channelId, atPeriodEnd)`.
+- Immediate cancellation (atPeriodEnd: false) cancels locally *and* calls the provider; the local
+  FSM transition never waits on a webhook. `cancelAtPeriodEnd: true` sets the flag **and** calls
+  the provider (`cancelAtCycleEnd`) — the provider call is mandatory, because Razorpay owns
+  recurring execution. `SubscriptionRenewalService.executeRenewal()` gained an explicit
+  `cancelAtPeriodEnd` branch so the sweep can never bill an already-cancelled row.
+- Provider-free rows (`plan.providerPlanId IS NULL`) never call provider primitives; for them
+  `atPeriodEnd` is not representable, so both variants cancel locally and immediately.
+- `changeOrganizationSubscriptionPlan` rejects a `cancelled` current subscription and a
+  `trialing` → downgrade when the price increases; a same-plan change short-circuits before any
+  provider call.
+
+---
+
+## ADR-045: Daily Live Allowance Is a Server-Day Grant with One Writer
+
+**Status:** Accepted (2026-09-25)  
+**Full record:** `docs/architecture/adr-045-daily-live-allowance.md`
+
+**Core decision:** The free tier's live allowance (§3.6: **60 minutes per server day**) is
+materialised as an ordinary `BbbCapacityGrant` by a single writer,
+`BbbDailyAllowanceService`. It resolves the plan's three open decisions **D-6/D-7/D-8** and
+changes **no schema**.
+
+**Key decisions:**
+- **One writer, plural triggers** — the hourly `bbb-daily-allowance` task and the
+  `SubscriptionPlanChangedEvent` consumer both call the service and never write grants
+  themselves, so the frozen `(organization, validFrom = startOfDay, sourceType)` key is never
+  written twice.
+- **Discriminator `providerPlanId IS NULL`** — no new plan flag; daily and period allowances are
+  **disjoint by plan**, so the scheduled daily writer and the renewal writer can never race.
+- **Day window** — `validFrom` = server-clock midnight, `validUntil` = last millisecond of that
+  day (strictly disjoint windows, both bounds inclusive).
+- **Idempotency** — existence check under a per-key PostgreSQL advisory lock; a partial unique
+  index is the recorded (deferred) stronger form.
+- **D-7** — hourly, Saa9vi server clock, no backfill; the idempotent write *is* the catch-up.
+- **D-8** — provider-free plans are daily-only; period grants stay renewal-owned. Provider-backed
+  plans never get a daily grant.
+- **D-6** — no pre-enqueue gate: an exhausted allowance lands the meeting in terminal `Failed` at
+  provisioning with `MeetingFailedEvent` published.
+
+**Key additions:** `services/daily-allowance.policy.ts` (pure), `services/bbb-daily-allowance.service.ts`,
+`jobs/bbb-daily-allowance.task.ts`, `listeners/bbb-subscription.listener.ts` (second trigger),
+`__tests__/daily-allowance.policy.spec.ts` (14/14), `e2e/daily-allowance.e2e-spec.ts` (7/7,
+`DAILY_ALLOWANCE_E2E=true`). INV-026 added to `invariants.md`.
+
+**Migrations required:** none — deliberate (frozen Slice-5 schema).
+
+
+**Key additions:** no schema change (`cancelAtPeriodEnd` / `cancelledAt` already existed).
+
+**Consequences:** unblocks Free Basic auto-provisioning (a free row is always supersedable);
+amends ADR-039's "only provider webhooks drive → active" FSM text with documented local
+exceptions; `SubscriptionProviderBinding` (not `providerPlanId`) identifies a *live* provider
+subscription, while `providerPlanId IS NULL` remains the definitive *provider-free* test.
+

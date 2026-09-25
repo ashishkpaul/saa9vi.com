@@ -14,6 +14,7 @@ export class AdrChecker implements Checker {
       this.administratorVisibility(),
       this.tenantThemeInvariants(),
       this.marketplaceEntitlementInvariants(),
+      this.dailyAllowanceInvariants(),
     ];
 
     const results = await Promise.all(checks);
@@ -356,6 +357,211 @@ export class AdrChecker implements Checker {
         ? 'Marketplace listing entitlement structural invariants present (INV-024)'
         : failures.join('; '),
       details: 'INV-024: plan flag default-false, subscription grace deadline, one shared policy evaluator, indexer enforcement, FSM-owned transitions, no prohibited signals',
+    };
+  }
+
+  /**
+   * INV-026 (ADR-045) — structural verification of the daily live-allowance
+   * invariant. Structural only: it proves the *shape* the invariant depends on
+   * still exists (one writer, per-key advisory lock, server-day window,
+   * disjointness, disjoint plan sets, unchanged read model, no pre-enqueue
+   * probe). Runtime behaviour is covered by the gated e2e suite, not here.
+   */
+  private async dailyAllowanceInvariants(): Promise<CheckResult> {
+    const srcDir = path.join(__dirname, '../../..');
+    const failures: string[] = [];
+
+    const readOrEmpty = (relPath: string): string => {
+      try {
+        return readFileContent(path.join(srcDir, relPath));
+      } catch {
+        return '';
+      }
+    };
+
+    const policyPath = 'src/plugins/bigbluebutton-plugin/services/daily-allowance.policy.ts';
+    const policy = readOrEmpty(policyPath);
+    if (!policy) {
+      failures.push(`Missing daily-allowance policy module (${policyPath})`);
+    } else {
+      // The frozen commercial value (§3.6) must be a constant here, not inline
+      // at any call site — the writer and both specs read it from this export.
+      if (!/export\s+const\s+DAILY_ALLOWANCE_MINUTES\s*=\s*60\s*;/.test(policy)) {
+        failures.push('DAILY_ALLOWANCE_MINUTES must be exported as 60 (plan §3.6, frozen)');
+      }
+      if (
+        !/DAILY_ALLOWANCE_SOURCE_TYPE\s*:\s*GrantSourceType\s*=\s*["']subscription["']/.test(
+          policy,
+        )
+      ) {
+        failures.push(
+          "DAILY_ALLOWANCE_SOURCE_TYPE must be the existing 'subscription' grant kind (F-6: no second grant semantics)",
+        );
+      }
+      // Discriminator: providerPlanId IS NULL — no new flag (ADR-045 decision 2).
+      if (!/function\s+isDailyOnlyPlan[\s\S]{0,220}providerPlanId/.test(policy)) {
+        failures.push('isDailyOnlyPlan() must discriminate on providerPlanId (ADR-039/044)');
+      }
+      // Disjointness: end = next midnight − 1ms, never the next validFrom.
+      if (!/nextStart\.getTime\(\)\s*-\s*1/.test(policy)) {
+        failures.push(
+          'dailyAllowanceWindowFor() must end one millisecond before the next server-day start (disjoint windows)',
+        );
+      }
+      if (!/export\s+function\s+dailyAllowanceIdempotencyKey/.test(policy)) {
+        failures.push('dailyAllowanceIdempotencyKey() must be exported from the policy module');
+      }
+    }
+
+    const servicePath = 'src/plugins/bigbluebutton-plugin/services/bbb-daily-allowance.service.ts';
+    const service = readOrEmpty(servicePath);
+    if (!service) {
+      failures.push(`Missing daily-allowance writer service (${servicePath})`);
+    } else {
+      if (!/pg_advisory_xact_lock/.test(service) || !/hashtextextended/.test(service)) {
+        failures.push(
+          'BbbDailyAllowanceService must serialise concurrent writers with a per-key advisory lock',
+        );
+      }
+      if (!/dailyAllowanceIdempotencyKey\(/.test(service)) {
+        failures.push('BbbDailyAllowanceService must derive its lock key from dailyAllowanceIdempotencyKey()');
+      }
+      if (!/sourceType:\s*DAILY_ALLOWANCE_SOURCE_TYPE/.test(service)) {
+        failures.push('Daily grants must be written with sourceType = DAILY_ALLOWANCE_SOURCE_TYPE');
+      }
+      // The paid-tier ban lives in the writer so every caller inherits it.
+      if (!/isDailyOnlyPlan\(/.test(service)) {
+        failures.push(
+          'BbbDailyAllowanceService must refuse provider-backed plans via isDailyOnlyPlan() (D-8: no daily grant for paid plans)',
+        );
+      }
+      // Tier-2 precedent (BUG-039): the subscription lookup must be schema-qualified.
+      if (!/rawConnection\.options[\s\S]{0,120}schema/.test(service)) {
+        failures.push(
+          'The subscription lookup must read the connection schema (BUG-039: raw SQL resolves via search_path)',
+        );
+      }
+      if (!/organization_subscription/.test(service)) {
+        failures.push('The subscription lookup must query the organization_subscription table');
+      }
+    }
+
+    // ── Single writer (the core of the invariant) ────────────────────────────
+    // Only the policy module and the writer service may name the daily grant
+    // constants. A second module naming them is a second writer in the making —
+    // the exact failure F-6's closure and plan §3.3 forbid.
+    const allowedConstantOwners = new Set([policyPath, servicePath]);
+    const pluginFiles = findFiles(['src/plugins/**/*.ts'], srcDir);
+    const secondWriters: string[] = [];
+    for (const file of pluginFiles) {
+      const rel = path.relative(srcDir, file).split(path.sep).join('/');
+      if (allowedConstantOwners.has(rel)) continue;
+      if (/\.spec\.ts$|\.e2e-spec\.ts$|^src\/plugins\/[^/]+\/(e2e|__tests__)\//.test(rel)) continue;
+      const content = readFileContent(file);
+      if (/DAILY_ALLOWANCE_MINUTES|DAILY_ALLOWANCE_SOURCE_TYPE/.test(content)) {
+        secondWriters.push(rel);
+      }
+    }
+    if (secondWriters.length > 0) {
+      failures.push(
+        `Daily-grant constants referenced outside the policy module and its writer (second writer): ${secondWriters.join(', ')}`,
+      );
+    }
+
+    // ── Triggers are plural, the writer is singular ───────────────────────────
+    const taskPath = 'src/plugins/bigbluebutton-plugin/jobs/bbb-daily-allowance.task.ts';
+    const task = readOrEmpty(taskPath);
+    if (!task) {
+      failures.push(`Missing daily-allowance scheduled task (${taskPath})`);
+    } else {
+      if (!/id:\s*["']bbb-daily-allowance["']/.test(task)) {
+        failures.push('The daily-allowance task id must be "bbb-daily-allowance"');
+      }
+      if (!/every\(1\)\.hours\(\)/.test(task)) {
+        failures.push('The daily-allowance task must run hourly (D-7)');
+      }
+      if (!/refreshDailyAllowance\(/.test(task)) {
+        failures.push('The scheduled task must call BbbDailyAllowanceService.refreshDailyAllowance()');
+      }
+    }
+
+    const pluginPath = 'src/plugins/bigbluebutton-plugin/bigbluebutton.plugin.ts';
+    const plugin = readOrEmpty(pluginPath);
+    if (!/BbbDailyAllowanceService/.test(plugin)) {
+      failures.push('BbbDailyAllowanceService must be registered in the plugin providers');
+    }
+    if (!/bbbDailyAllowanceTask/.test(plugin)) {
+      failures.push('bbbDailyAllowanceTask must be registered in the plugin scheduler');
+    }
+
+    const listenerPath = 'src/plugins/bigbluebutton-plugin/listeners/bbb-subscription.listener.ts';
+    const listener = readOrEmpty(listenerPath);
+    if (!/ensureDailyGrantForChannel\(/.test(listener)) {
+      failures.push(
+        'BbbSubscriptionListener must be the second (event) trigger, via the writer service — not a grant writer',
+      );
+    }
+    if (/DAILY_ALLOWANCE_MINUTES|DAILY_ALLOWANCE_SOURCE_TYPE/.test(listener)) {
+      failures.push('BbbSubscriptionListener must not write a grant directly (ADR-045 decision 1)');
+    }
+
+    // ── The read model must stay unchanged (zero SDL/codegen churn) ───────────
+    const shopPath = 'src/plugins/subscription/services/subscription-shop.service.ts';
+    const shop = readOrEmpty(shopPath);
+    if (!/findMyLiveUsage/.test(shop)) {
+      failures.push('findMyLiveUsage() must remain the daily allowance read model');
+    }
+    if (!/validFrom\s*<=\s*:now/.test(shop) || !/validUntil\s*>=\s*:now/.test(shop)) {
+      failures.push('findMyLiveUsage() must keep the inclusive in-window predicate the daily grant relies on');
+    }
+    if (/DAILY_ALLOWANCE_MINUTES|DAILY_ALLOWANCE_SOURCE_TYPE/.test(shop)) {
+      failures.push(
+        'The read model must not special-case daily grants — they are ordinary in-window subscription grants',
+      );
+    }
+
+    // ── D-6: exhaustion is decided at provisioning, not at enqueue ────────────
+    const resolverFiles = findFiles(
+      ['src/plugins/bigbluebutton-plugin/api/*.resolver.ts', 'src/plugins/bigbluebutton-plugin/api/**/*.resolver.ts'],
+      srcDir,
+    );
+    for (const file of resolverFiles) {
+      const content = readFileContent(file);
+      const rel = path.relative(srcDir, file).split(path.sep).join('/');
+      if (/DAILY_ALLOWANCE_MINUTES|PROVISIONING_ALLOWANCE_EXHAUSTED_ERROR/.test(content)) {
+        failures.push(`${rel} must not probe the allowance before enqueueing (D-6: terminal Failed at provisioning)`);
+      }
+    }
+
+    const workerPath = 'src/plugins/bigbluebutton-plugin/services/bbb-provisioning-worker.service.ts';
+    const worker = readOrEmpty(workerPath);
+    if (!/MEETING_STATE\.FAILED/.test(worker) || !/failureReason:/.test(worker)) {
+      failures.push(
+        'doProvisionMeeting() must still land an unavailable allowance in terminal Failed with a failureReason (D-6)',
+      );
+    }
+
+    // ── Documentation registration (drift detection) ──────────────────────────
+    const invariantsDoc = readOrEmpty('docs/architecture/invariants.md');
+    if (!/INV-026/.test(invariantsDoc)) {
+      failures.push('INV-026 must be documented in docs/architecture/invariants.md');
+    }
+    const adrDoc = readOrEmpty('docs/architecture/adr-045-daily-live-allowance.md');
+    if (!adrDoc) {
+      failures.push('docs/architecture/adr-045-daily-live-allowance.md must exist');
+    }
+
+    return {
+      checker: this.name,
+      name: 'daily-allowance-invariants',
+      passed: failures.length === 0,
+      severity: 'error',
+      message:
+        failures.length === 0
+          ? 'Daily live-allowance structural invariants present (INV-026)'
+          : failures.join('; '),
+      details:
+        'INV-026: one writer + plural triggers, server-day disjoint window, per-key advisory lock, provider-free-only grants, unchanged read model, no pre-enqueue probe',
     };
   }
 
