@@ -60,6 +60,15 @@
   - E2E: 4/4 pass on real PostgreSQL (PRESENT/NO_SHOW, idempotency, late-event recompute, channel-scoped summary).
   - Channel fix: `BbScheduledSession` has no `channelId` — resolved via linked `BbOrganization` to preserve Channel=Tenant invariant.
 
+### Docs
+
+- **Slice-5 documentation reconciliation (2026-09-25, docs-only — no source changes):** four consistency fixes arising from the review of `0a6b433`. Slice 5 itself stays closed; nothing here reopens it.
+  - `docs/product/glossary.md` — INV-015 read "⚠️ Proposed — see ADR-031" while ADR-031 is **Active** and INV-015 is **Live** (and the same file already listed `BbbPlatformCapacityPolicy` as Live). Corrected to **✅ Live — see ADR-031**.
+  - `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` §3.6 — the **frozen Free Basic policy row** omitted `maxConcurrentMeetings`; added as **`1`**, with a note that it is the one field in that row which already has a live enforcement consumer (contrast the `5/5/5` participants triple, where `maxConcurrentParticipants` still has none). Row **0.15**'s "it governs room participant capacity only … not concurrent meeting count" was falsified by Slice 5 and is now marked partly superseded. The header's `Verified HEAD: fbcdce9` is relabelled to an **evidence-table boundary** (current HEAD `0a6b433` recorded separately), so the 2026-09-24 verification boundary is no longer readable as the implementation tip. The §4 slice-5 row now states its **evidence classification**: Tier-2 resolution, the `EventBus` consumer, cache sync, convergence/reconciliation and Tier 3/4 non-overwrite are **runtime verified**; the Admin plan-change *producer* path is **code-verified only**, because the spec mutates the subscription row and publishes the event itself rather than calling the GraphQL mutation.
+  - `docs/implementation/integration-gaps-worklist.md` — the "all test/application data mutations MUST use GraphQL" rule is now scoped in three tiers, so the repository's established isolated-E2E fixture pattern (21 of 23 e2e specs build fixtures via `connection.getRepository(...)` inside a schema the suite owns) is explicitly permitted, while direct SQL mutation stays forbidden everywhere. A corollary requires consumer-path and producer-path evidence to be claimed separately.
+  - The remaining `assertCanCreateMeeting` runtime-throw gap is **still open**, and remains explicitly labelled in all three tracking documents (`saa9vi-comprehensive-integration-and-commercial-plan.md` — F-3 and §4 row 5, "Still open"; `what-next.md` — "Still open inside the slice's original scope"; `integration-gaps-worklist.md` item 5 — "Residual"). This pass deliberately did **not** close it: it stays a known, labelled gap rather than being silently dropped.
+
+
 ### Changed (breaking)
 
 - **3D.2 — Shop API:** removed the dead `city` input from `MarketplaceSearchInput`. It was never consumed by the resolver and no location field exists anywhere in the data model. External storefronts must stop sending `city`; `schema-shop.graphql` and all plugin codegen types have been regenerated.

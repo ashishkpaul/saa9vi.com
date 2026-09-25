@@ -45,4 +45,4 @@
 | **Academy commercial capacity** | How many customers can buy a product. Controlled by Tenant Admin via `ProductVariant.stockLevel`. |
 | **Session enrollment capacity** | How many students can attend a scheduled session. Controlled by Tenant Admin via `BbbScheduledSession.maxAttendees`. |
 | **INV-014** | BBB infrastructure capacity is a single mutable integer per organization (current). |
-| **INV-015** | ⚠️ Proposed — see ADR-031. BBB infrastructure capacity is platform-controlled via `BbbPlatformCapacityPolicy`. |
+| **INV-015** | ✅ Live — see ADR-031. BBB infrastructure capacity is platform-controlled via `BbbPlatformCapacityPolicy`. |

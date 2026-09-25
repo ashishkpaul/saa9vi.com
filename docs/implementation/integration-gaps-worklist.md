@@ -30,6 +30,18 @@ All test/application data mutations MUST use the Vendure Admin GraphQL API or Ve
 
 Do **not** use `INSERT` / `UPDATE` / `DELETE` against application tables to create or modify fixtures. Read-only database inspection is permitted when necessary for verification.
 
+**Scope of this rule (clarified 2026-09-25).** It governs how *evidence is produced*, and it has three tiers:
+
+| Tier | Permitted? | What it covers |
+|---|---|---|
+| Business/application runtime mutation | **GraphQL/API only** | Any state a real user, Admin or tenant could cause: tenants, orders, subscriptions, capacity policies, entitlements. Verify/smoke scripts (`scripts/verify/*.sh`, `scripts/smoke/*.sh`) and runtime assertions must drive these through Admin/Shop GraphQL with `curl`. |
+| Isolated E2E fixture construction | **Sanctioned service layer, or a repository the suite owns** | Jest/Vitest specs that own a dedicated schema may build prerequisites the public GraphQL contract cannot construct — a `SubscriptionPlan` row, an `OrganizationSubscription` in a chosen status, a seeded `BbbPlatformCapacityPolicy` — via `connection.getRepository(...)`, and may publish the matching domain event on the real `EventBus`. This is the established, dominant pattern (21 of 23 e2e specs, e.g. `marketplace/e2e/*`, `subscription/__tests__/*`, `bigbluebutton-plugin/e2e/plan-derived-concurrency.e2e-spec.ts`). |
+| Direct SQL mutation | **Forbidden everywhere** | `INSERT`/`UPDATE`/`DELETE` typed against application tables, in any script or test, for any reason. `SELECT` inspection stays permitted. |
+
+The distinction that matters is *fixture* vs *business state*: a spec standing up its own isolated world is not "modifying business data", whereas a verifier mutating a running instance's data by SQL is. When in doubt, drive it through GraphQL or the service layer — never SQL.
+
+**Corollary for evidence labelling:** a spec that builds its fixtures through the service layer and publishes the real event verifies the *consumer/convergence* path at runtime; it does not, by itself, verify the *public producer* path (e.g. Admin GraphQL mutation → service → event). Claim those separately.
+
 ### Schema changes
 
 If a database schema change is actually required, use the Vendure CLI migration workflow (`npx vendure migrate`). Do not manually execute `ALTER TABLE`, create/drop application tables, or edit migration history.
