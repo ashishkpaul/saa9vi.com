@@ -43,9 +43,9 @@ Then, in **plan §4 order** (slice numbers are the plan's canonical ones; the FR
 
 ## Remaining backlog — plan §4 build order
 
-**Table created at HEAD `fbcdce9` (2026-09-24); state rows maintained through `0e399a6` (2026-09-25).** Slice numbers are the plan's canonical ones (§4 table); the `integration-gaps-worklist.md` FREE-1 list uses the same order. This is the recommended execution order.
+**Table created at HEAD `fbcdce9` (2026-09-24); state rows maintained through `cd943b7` (2026-09-25).** Slice numbers are the plan's canonical ones (§4 table); the `integration-gaps-worklist.md` FREE-1 list uses the same order. This is the recommended execution order.
 
-| Plan §4 # | Workstream | State (through `0e399a6`) | Blocker / dependency |
+| Plan §4 # | Workstream | State (through `cd943b7`) | Blocker / dependency |
 |---|---|---|---|
 | 5 | **Grant-selection correctness** (§3.3 prerequisites) — BUG-036 | ✅ **DONE 2026-09-25** (plan §4 row 5) — BUG-036 fixed `d711940` (incl. dead-seam `findEarliestValidGrant` removal); runtime-reproduced 2026-09-23/24; isolation harness repaired `30d245a` (BUG-037); **plan-derived `concurrentMeetingLimit` sync delivered** (entity + migration `1790319702564`, `syncConcurrentMeetingLimit()`, `SubscriptionPlanChangedEvent`, startup reconciliation, Admin field, new `plan-derived-concurrency.e2e-spec.ts` **5/5**), which surfaced and fixed **BUG-039**; `known-bugs.md` Active = None | `grant-selection.policy.ts` positive `IN` list is the single home (provisioning gate + slice 8's `myLiveUsage`); the concurrency write-through is now `syncConcurrentMeetingLimit()`, converging rather than depending on listener order (ADR-031 Decision 5) |
 | 6 | **Daily live allowance** (§3.3) | ✅ **DONE 2026-09-25** (`07aa9d6`) — ADR-045 / INV-026: one writer (`BbbDailyAllowanceService`, advisory-lock read-then-insert), hourly `bbb-daily-allowance` task + `SubscriptionPlanChangedEvent` trigger, `providerPlanId IS NULL` discriminator, disjoint server-day windows; policy spec **14/14** + gated e2e **7/7** (`npm run test:e2e:daily-allowance`); no migration/SDL/codegen | Closed — D-6/D-7/D-8 resolved by ADR-045; `BbbSubscriptionListener` reused, no second grant writer |

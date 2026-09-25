@@ -8,7 +8,9 @@ import { BbbOrganization } from "./bbb-organization.entity";
  * 'internal_overhead' grant when a BbbOrganization is first provisioned.
  *
  * sourceType discriminator (FEAT-002 / ADR §8A OP-005):
- * - 'order'             — created by BbbOrderFulfillmentListener on purchase
+ * - 'order'             — written by bbbFulfillmentHandler when an order line is
+ *                         fulfilled (addFulfillmentToOrder). BbbOrderFulfillmentListener
+ *                         on PaymentSettled writes the BbbEntitlement, not this grant
  * - 'subscription'      — written by BbbSubscriptionListener on SubscriptionRenewedEvent
  *                         (RFC-001 §4 amendment 2026-09-24: the sourceType discriminator
  *                         shipped instead of a separate RecurringCapacityGrant entity)
