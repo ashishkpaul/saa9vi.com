@@ -27,7 +27,9 @@
 
 ---
 
-## Free Basic plan + storefront commercial integration (programme) — ⏳ IN PROGRESS (plan §4 slices 1–4, 7–9 done; slice 5 partial — BUG-036/035/037 closed, plan-derived `concurrentMeetingLimit` sync remains; **next: slice 10 (R4 runtime evidence)**; slice 6 still open behind that sync item)
+## Free Basic plan + storefront commercial integration (programme) — ⏳ IN PROGRESS (plan §4 slices 1–4, 7–9 **and 10** done; slice 5 partial — BUG-036/035/037/038 closed, plan-derived `concurrentMeetingLimit` sync remains; **next: slice 6 (daily live allowance)**; slice 11 is an independent gate)
+
+> **Slice 10 — R4 runtime evidence ✅ DONE 2026-09-25 (`4870251`).** `R4_E2E=true` → **10/10** on real Postgres: the commercial → payment → entitlement → BBB → usage-ledger chain proved end to end, one `[R4-nn EVIDENCE]` line per case. Producing it found and fixed **BUG-038** — `bbbFulfillmentHandler` resolved its lines from `order.lines`, which Vendure never loads in a fulfillment handler, so the purchase path had never written an `order`-source capacity grant. R4 evidence: §10 of `production-readiness.md`; refund/reversal semantics and reconciliation remain open there.
 
 **Canonical plan:** `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` (v3, evidence-verified at `4f3a9cf`; header/§3.5/§3.8 reconciled through `ec866fe` to `fbcdce9` with frontend baseline `2bba7e2` on 2026-09-24 after slice 9; its §6 preflight was executed 2026-09-22 and recorded in §6.1). Worklist entry: `integration-gaps-worklist.md` **FREE-1**.
 

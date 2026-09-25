@@ -586,7 +586,7 @@ No documentation says a feature is `complete`, `accepted`, `implemented`, or `ve
 
 ## FREE-1 — Provider-free Free Basic plan (programme)
 
-**Priority:** P0 — **Status:** IN PROGRESS — slices 1–4, 7–9 done; slice 5 partial (BUG-036/035/037 closed, plan-derived `concurrentMeetingLimit` sync remains); next slice 10 (R4 runtime evidence), then 6 and 11. **Canonical plan:** `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` (v3, evidence-verified at `4f3a9cf`; header/§3.5/§3.8 reconciled through `ec866fe` to the post-slice-9 state (`fbcdce9`, frontend `2bba7e2`) on 2026-09-24; its §6 preflight was executed and recorded in §6.1).
+**Priority:** P0 — **Status:** IN PROGRESS — slices 1–4, 7–9 **and 10** done; slice 5 partial (BUG-036/035/037/038 closed, plan-derived `concurrentMeetingLimit` sync remains); next slice 6 (daily live allowance), then 11. **Canonical plan:** `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` (v3, evidence-verified at `4f3a9cf`; header/§3.5/§3.8 reconciled through `ec866fe` to the post-slice-9 state (`fbcdce9`, frontend `2bba7e2`) on 2026-09-24; §3.10/§4 row 10 and reviewer row 0.17 reconciled 2026-09-25 to the R4 runtime evidence at `4870251`; its §6 preflight was executed and recorded in §6.1).
 
 **Product decision:** every tenant lands on a permanent **Free Basic** plan at registration — no card, no trial clock, no "no subscription" state. Paid plans add capacity (concurrent live rooms, daily live minutes, participants, staff, students) and entitlements (hosted academy / custom domain, white-label theming, marketplace listing per ADR-042).
 

@@ -211,10 +211,12 @@ must remain independently attributable.
   R3 one-time commerce    **OPEN**                Current payment handler is
                                                   not production-ready
 
-  R4 BBB paid access /    **OPEN**                End-to-end
-  usage                                           payment-to-entitlement
-                                                  evidence not yet
-                                                  established
+  R4 BBB paid access /    **VERIFIED**            End-to-end payment-to-
+  usage                   (2026-09-25)            entitlement evidence
+                                                  established on real
+                                                  Postgres (§10); refund/
+                                                  reversal + reconciliation
+                                                  still outstanding
 
   Marketplace purchases   **DEFERRED**            Outside initial launch
                                                   scope
@@ -1054,11 +1056,52 @@ reconciliation
 
 ### Current status
 
-**NOT COMPLETE**
+**CLOSED 2026-09-25 — the lifecycle is verified end to end at runtime; two
+verification items remain open.**
 
 The existence of BBB entitlement and ledger entities does not prove that
 successful payment actually creates the correct entitlement or that the
-entire paid-access path works at runtime.
+entire paid-access path works at runtime. That proof now exists — and
+building it surfaced a real defect, which is precisely why it was worth
+demanding.
+
+**Runtime evidence** — `src/plugins/bigbluebutton-plugin/e2e/r4-runtime-lifecycle.e2e-spec.ts`
+(`R4_E2E=true`), real Postgres + stubbed BBB transport, **10/10**, printing
+one `[R4-nn EVIDENCE]` line per case so the evidence is in the log rather
+than inferred from a green tick:
+
+| Case | Proven |
+| --- | --- |
+| R4-01 | `PaymentSettled` → `BbbOrderFulfillmentListener` → `BbbEntitlement(source='purchase')`, after an explicit Admin `settlePayment` (`dummyPaymentHandler.automaticSettle` is `false`) |
+| R4-02 | Admin `addFulfillmentToOrder` → `bbbFulfillmentHandler` → `BbbCapacityGrant(sourceType='order')` |
+| R4-03 | `SubscriptionRenewedEvent` → `BbbSubscriptionListener` → `BbbCapacityGrant(sourceType='subscription')` |
+| R4-04 | provisioning selects the commercial grant, **not** the auto-provisioned `internal_overhead` grant (BUG-036 excludes it from tenant-selectable sources, making R4-02 a hard prerequisite of R4-04) |
+| R4-05 | the entitled learner receives a checksum-signed attendee join URL |
+| R4-06 | an authenticated but unentitled learner is refused **at the entitlement gate** |
+| R4-07 | an anonymous caller is refused earlier, **at `@Allow(Authenticated)`** — a provably distinct denial layer |
+| R4-08 | meeting completion writes exactly **one** immutable ledger fact bound to the `order` grant and rolls it into `consumedMinutes` |
+| R4-09 | replaying the same `(meetingId, grantId)` sequentially and as six concurrent racers never double-bills |
+| R4-10 | a tenant-B customer cannot reach tenant-A's meeting or entitlement, while tenant A's own learner still can |
+
+**Defect found and fixed — BUG-038.** `bbbFulfillmentHandler.createFulfillment()`
+resolved its order lines from `order.lines`, which Vendure never loads in a
+fulfillment handler (`getOrdersFromLines()` loads `['order', 'order.channels']`
+only), so **every** `addFulfillmentToOrder` call threw and capacity-grant
+writer (B) — the purchase path — had never worked. Nothing above R4-02 was
+reachable until it was fixed; see `known-bugs.md` BUG-038.
+
+**Required-verification coverage.** Mapping §10's list onto the cases above:
+payment/order → `BbbEntitlement` linkage (R4-01), entitlement validity
+(R4-01, R4-06), meeting join authorization (R4-05/06/07/10), usage capture
+(R4-08), immutable `BbbUsageLedger` (R4-08 + R4-09's no-double-bill), and
+tenant/channel isolation (R4-10) are all covered on real Postgres.
+
+**Still outstanding — deliberately not claimed by the above:**
+
+- **failure / refund / reversal semantics** — no refund or reversal path is
+  exercised; a settled payment that is later refunded has no R4 case.
+- **reconciliation** — the final arrow in the lifecycle diagram: ledger facts
+  reconciled against BBB's own usage reports is unbuilt and unverified.
 
 ------------------------------------------------------------------------
 
