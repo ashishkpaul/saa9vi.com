@@ -863,6 +863,13 @@ provider primitives that already existed (`cancelSubscription` / `pauseSubscript
   `trialing` → downgrade when the price increases; a same-plan change short-circuits before any
   provider call.
 
+**Key additions:** no schema change (`cancelAtPeriodEnd` / `cancelledAt` already existed).
+
+**Consequences:** unblocks Free Basic auto-provisioning (a free row is always supersedable);
+amends ADR-039's "only provider webhooks drive → active" FSM text with documented local
+exceptions; `SubscriptionProviderBinding` (not `providerPlanId`) identifies a *live* provider
+subscription, while `providerPlanId IS NULL` remains the definitive *provider-free* test.
+
 ---
 
 ## ADR-045: Daily Live Allowance Is a Server-Day Grant with One Writer
@@ -898,12 +905,4 @@ changes **no schema**.
 `DAILY_ALLOWANCE_E2E=true`). INV-026 added to `invariants.md`.
 
 **Migrations required:** none — deliberate (frozen Slice-5 schema).
-
-
-**Key additions:** no schema change (`cancelAtPeriodEnd` / `cancelledAt` already existed).
-
-**Consequences:** unblocks Free Basic auto-provisioning (a free row is always supersedable);
-amends ADR-039's "only provider webhooks drive → active" FSM text with documented local
-exceptions; `SubscriptionProviderBinding` (not `providerPlanId`) identifies a *live* provider
-subscription, while `providerPlanId IS NULL` remains the definitive *provider-free* test.
 

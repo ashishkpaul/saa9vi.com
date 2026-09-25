@@ -27,7 +27,7 @@
 
 ---
 
-## Free Basic plan + storefront commercial integration (programme) — ⏳ IN PROGRESS (plan §4 slices 1–5, 7–9 **and 10** done; BUG-036/035/037/038/**039** closed; **next: slice 6 (daily live allowance)**; slice 11 is an independent gate)
+## Free Basic plan + storefront commercial integration (programme) — ⏳ IN PROGRESS (plan §4 **slices 1–10 all done**, incl. **slice 6 daily live allowance ✅ 2026-09-25**; BUG-036/035/037/038/**039** closed; **next: slice 11 (R3 one-time payment handler)** — the independent gate)
 
 > **Slice 10 — R4 runtime evidence ✅ DONE 2026-09-25 (`4870251`).** `R4_E2E=true` → **10/10** on real Postgres: the commercial → payment → entitlement → BBB → usage-ledger chain proved end to end, one `[R4-nn EVIDENCE]` line per case. Producing it found and fixed **BUG-038** — `bbbFulfillmentHandler` resolved its lines from `order.lines`, which Vendure never loads in a fulfillment handler, so the purchase path had never written an `order`-source capacity grant. R4 evidence: §10 of `production-readiness.md`; refund/reversal semantics and reconciliation remain open there.
 
@@ -82,7 +82,7 @@ Acceptance: honour `isUnbounded` at the provisioning gate (Infinity semantics, m
 - **No mutations** — UI-1 defers tenant self-serve upgrade pending its own ADR.
 - In-tree patterns to follow: `bigbluebutton-plugin/api/schema/bbb-shop.schema.ts`, `cms/api/api-extensions.ts`, `marketplace/api/marketplace-schema.ts`.
 - After the GraphQL change: `npx vendure schema --api shop` → `npm run codegen` → `npm run build`.
-- Keep the period fields stable now, so that if slice 6 later adds daily-grant fields to `myLiveUsage` the contract does not churn.
+- Keep the period fields stable. Slice 6 shipped **without** adding daily-grant fields to `myLiveUsage` — the daily grant is an ordinary in-window `subscription` grant that the existing read model already sums (ADR-045 decision 8) — so the frozen contract held; any daily-grant-specific field remains a deliberate, separately-versioned change rather than a forced one.
 - Gate: A/B isolation (A's token on B's hostname never returns B's data), unknown hostname fails closed, no-subscription channel → `mySubscription: null`.
 
 ### Housekeeping (non-blocking, any spare cycle)
