@@ -217,16 +217,32 @@ export class BbbOrganizationService {
     await this.channelService.assignToCurrentChannel(org, ctx);
     const saved = await this.connection.getRepository(ctx, BbbOrganization).save(org);
 
-    // ADR-031: org.maxParticipantsPerMeeting is a denormalized cache of the
-    // effective platform capacity policy limit. Policy wins once adopted
-    // (any policy row exists); before that, the legacy form-supplied value
-    // above is preserved (opt-in adoption, same guard as room creation).
+    // ADR-031 / INV-015: the organization's capacity fields are denormalized
+    // caches of the effective platform capacity policy.
+    //   • maxParticipantsPerMeeting ← defaultRoomCapacity
+    //   • concurrentMeetingLimit    ← maxConcurrentMeetings
+    // Policy wins once adopted (any policy row exists); before that the legacy
+    // form-supplied values above are preserved (opt-in adoption, same guard as
+    // room creation).
+    //
+    // Ordering note (ADR-031 amendment, Decision 5): at tenant registration
+    // this runs under BbbTenantProvisioningListener, which is registered
+    // BEFORE the subscription plugin's FreePlanProvisioningListener, so the
+    // Free Basic subscription row may not exist yet — Tier 2 then cannot match
+    // and `syncConcurrentMeetingLimit()` correctly declines to write. The
+    // plan-derived value is applied later by BbbPlanCapacitySyncListener /
+    // the startup reconciliation pass. Convergence, never ordering.
     if (await this.capacityPolicyService.hasAnyPolicy(ctx)) {
       const policy = await this.capacityPolicyService.getEffectivePolicy(
         ctx,
         saved.channelId,
       );
       await this.capacityPolicyService.syncOrganizationCache(ctx, saved, policy);
+      await this.capacityPolicyService.syncConcurrentMeetingLimit(
+        ctx,
+        saved,
+        policy,
+      );
     }
 
     // FEAT-002: Auto-provision an internal_overhead grant for this org.
@@ -259,7 +275,30 @@ export class BbbOrganizationService {
       id,
     );
     Object.assign(org, input);
-    return this.connection.getRepository(ctx, BbbOrganization).save(org);
+    const saved = await this.connection
+      .getRepository(ctx, BbbOrganization)
+      .save(org);
+
+    // ADR-031 amendment (Decision 4): once a plan-derived policy row exists the
+    // policy is authoritative. A manual `concurrentMeetingLimit` edit is
+    // accepted by the mutation but immediately re-synced from the policy, and
+    // the caller receives the authoritative value — so the effective limit can
+    // never drift away from what the tier grants. This mirrors INV-015's
+    // existing "manual form edits are then overridden by policy" contract for
+    // maxParticipantsPerMeeting.
+    if (await this.capacityPolicyService.hasAnyPolicy(ctx)) {
+      const policy = await this.capacityPolicyService.getEffectivePolicy(
+        ctx,
+        saved.channelId,
+      );
+      await this.capacityPolicyService.syncConcurrentMeetingLimit(
+        ctx,
+        saved,
+        policy,
+      );
+    }
+
+    return saved;
   }
 
   async delete(ctx: RequestContext, id: ID): Promise<void> {

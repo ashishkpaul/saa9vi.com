@@ -1113,11 +1113,21 @@ export class BbbAdminResolver {
       defaultRoomCapacity: number;
       maxRoomCapacity: number;
       maxConcurrentParticipants: number;
+      /**
+       * Optional by design: callers that predate plan-derived concurrency omit
+       * it and keep the stored value (fresh rows take the column default, 5).
+       */
+      maxConcurrentMeetings?: number | null;
     },
   ): Promise<BbbPlatformCapacityPolicy> {
     if (input.maxRoomCapacity < input.defaultRoomCapacity) {
       throw new Error(
         `maxRoomCapacity (${input.maxRoomCapacity}) must be >= defaultRoomCapacity (${input.defaultRoomCapacity})`,
+      );
+    }
+    if (input.maxConcurrentMeetings != null && input.maxConcurrentMeetings < 1) {
+      throw new Error(
+        `maxConcurrentMeetings (${input.maxConcurrentMeetings}) must be >= 1; a tenant cannot be granted zero simultaneous meetings`,
       );
     }
     const repo = this.connection.getRepository(ctx, BbbPlatformCapacityPolicy);
@@ -1128,6 +1138,11 @@ export class BbbAdminResolver {
       existing.defaultRoomCapacity = input.defaultRoomCapacity;
       existing.maxRoomCapacity = input.maxRoomCapacity;
       existing.maxConcurrentParticipants = input.maxConcurrentParticipants;
+      // Omitted ⇒ leave the stored value untouched (never silently reset an
+      // Admin's paid-tier number back to the column default).
+      if (input.maxConcurrentMeetings != null) {
+        existing.maxConcurrentMeetings = input.maxConcurrentMeetings;
+      }
       return repo.save(existing);
     }
     return repo.save(
@@ -1136,6 +1151,11 @@ export class BbbAdminResolver {
         defaultRoomCapacity: input.defaultRoomCapacity,
         maxRoomCapacity: input.maxRoomCapacity,
         maxConcurrentParticipants: input.maxConcurrentParticipants,
+        // Omitted ⇒ column default (5). TypeORM applies the DB default, so
+        // pass the property only when explicitly supplied.
+        ...(input.maxConcurrentMeetings != null
+          ? { maxConcurrentMeetings: input.maxConcurrentMeetings }
+          : {}),
       }),
     );
   }

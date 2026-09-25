@@ -35,6 +35,24 @@ export class BbbPlatformCapacityPolicy extends VendureEntity {
   maxConcurrentParticipants: number;
 
   /**
+   * Simultaneous live rooms (meetings in PROVISIONING or ACTIVE) this tenant
+   * may hold at once. Denormalized onto
+   * `BbbOrganization.concurrentMeetingLimit`, which remains the single
+   * enforcement surface — see ADR-031's 2026-09-25 amendment.
+   *
+   * This is a *packaging ceiling* (how many at once), not a *consumption
+   * allowance* (how much per day) — daily live minutes belong to
+   * `BbbCapacityGrant`, never here. The two must not be conflated.
+   *
+   * Default 5 matches the value every organization received before this
+   * column existed, so migrating does not change any tenant's effective
+   * limit. Only Free Basic's ceiling of 1 is a frozen product decision;
+   * paid-tier numbers remain Admin-set and are deliberately not encoded.
+   */
+  @Column({ default: 5 })
+  maxConcurrentMeetings: number;
+
+  /**
    * String FK to SubscriptionPlan.id (cross-plugin, string-FK pattern).
    * NULL = platform-default policy or channel override.
    */

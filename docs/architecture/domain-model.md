@@ -204,7 +204,7 @@ DRAFT → CANCELLED  (direct cancel before publishing)
 
 ## BbbPlatformCapacityPolicy ✅ Implemented
 
-> **Status:** Implemented (Phase 2, per ADR-031; corrected 2026-09-04 — this section previously said "Proposed — Not Yet Implemented").
+> **Status:** Active (ADR-031; this section previously said "Proposed — Not Yet Implemented", corrected 2026-09-04 when the entity shipped; amended 2026-09-25 with the plan-derived concurrent-rooms ceiling).
 
 | Property | Value |
 |---|---|
@@ -212,17 +212,21 @@ DRAFT → CANCELLED  (direct cancel before publishing)
 | **Table** | `bbb_platform_capacity_policy` |
 | **Purpose** | Platform-level BBB capacity policy controlled by Portal Admin and resolved from the organization's subscription plan. |
 
-**Fields:** `defaultRoomCapacity`, `maxRoomCapacity`, `maxConcurrentParticipants`, `subscriptionPlanId`
+**Fields:** `defaultRoomCapacity`, `maxRoomCapacity`, `maxConcurrentParticipants`, `maxConcurrentMeetings`, `subscriptionPlanId`, `channelId`
 
 **Lifecycle:**
-- Created or updated by Portal Admin through the platform capacity-policy API
-- Effective policy resolved from the organization's subscription plan
+- Created or updated by Portal Admin through the platform capacity-policy API (`upsertPlatformCapacityPolicy` validates `maxConcurrentMeetings >= 1` and preserves the stored value when the field is omitted)
+- Effective policy resolved from the organization's subscription plan — 4-tier cascade: channel override → plan-matched (active/trialing subscription) → platform default → neutral fallback
 - Applied when provisioning rooms (sets `BbbRoom.maxParticipants`)
 - `BbbOrganization.maxParticipantsPerMeeting` is synchronized as a write-through policy cache
+- `BbbOrganization.concurrentMeetingLimit` is synchronized the same way by `syncConcurrentMeetingLimit()` — invoked from org create/update, from `SubscriptionPlanChangedEvent`, and from a startup reconciliation pass, so the value **converges regardless of listener ordering** (ADR-031 Decision 5)
 
 **Invariants:**
 - `defaultRoomCapacity <= maxRoomCapacity`
+- `maxConcurrentMeetings >= 1`
 - `BbbOrganization.maxParticipantsPerMeeting` becomes a denormalized cache of the policy limit
+- The concurrency write-through is **tier-aware**: only a plan-derived resolution (channel override / plan-matched) may overwrite `BbbOrganization.concurrentMeetingLimit`, so a platform-default or fallback resolution can never displace an Admin-set value
+- `maxConcurrentMeetings` is a *packaging ceiling* (rooms at once), **not** a *consumption allowance* (minutes per day) — daily live minutes belong to `BbbCapacityGrant` and must never be encoded here
 - `BbbRoom.maxParticipants` is the BBB infrastructure limit — distinct from `ProductVariant.stockLevel` (commercial) and `BbbScheduledSession.maxAttendees` (session enrollment)
 
 ---

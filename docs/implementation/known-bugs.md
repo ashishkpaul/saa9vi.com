@@ -6,7 +6,7 @@
 
 ## Active Bugs
 
-_None._ BUG-036 (provisioning capacity/`isUnbounded`) was fixed and runtime-reproduced on 2026-09-23 in `d711940`; BUG-037 (the `bbb-channel-isolation` e2e harness could not pass) was found and fixed on 2026-09-24; BUG-038 (`bbbFulfillmentHandler` read the never-loaded `order.lines`, so no `order`-source capacity grant could ever be written) was found and fixed on 2026-09-25 while producing the Slice 10 / R4 runtime-lifecycle evidence. All three archived entries are below; the fixes are recorded in `release-notes.md`.
+_None._ BUG-036 (provisioning capacity/`isUnbounded`) was fixed and runtime-reproduced on 2026-09-23 in `d711940`; BUG-037 (the `bbb-channel-isolation` e2e harness could not pass) was found and fixed on 2026-09-24; BUG-038 (`bbbFulfillmentHandler` read the never-loaded `order.lines`, so no `order`-source capacity grant could ever be written) was found and fixed on 2026-09-25 while producing the Slice 10 / R4 runtime-lifecycle evidence; BUG-039 (Tier 2 of the capacity-policy cascade ran schema-blind raw SQL, so plan-derived concurrency silently resolved to `fallback` whenever `dbConnectionOptions.schema` was set) was found and fixed on 2026-09-25 while producing the Slice 5 plan-derived-concurrency evidence. All four archived entries are below; the fixes are recorded in `release-notes.md`.
 
 ---
 
@@ -184,6 +184,67 @@ BUG-036 declared `internal_overhead` unselectable, which is what makes R4-02 a h
 
 ---
 
+## BUG-039 — Tier 2 of the capacity-policy cascade was schema-blind: the raw `organization_subscription` query resolved through `search_path` instead of the configured schema — ✅ FIXED (2026-09-25)
+
+> **Status:** fixed and runtime-reproduced 2026-09-25. Found while producing the
+> Slice 5 plan-derived-concurrency evidence; the pre-fix failure is reproduced by
+> three cases of `plan-derived-concurrency.e2e-spec.ts`.
+
+**Severity:** High (silently wrong resolution — no error, no log) · **Discovered:** 2026-09-25 (runtime, while producing the Slice 5 evidence) · **Components:** `src/plugins/bigbluebutton-plugin/services/bbb-platform-capacity-policy.service.ts` (`getEffectivePolicy`, Tier 2 only) — no entity, no migration
+
+**What the code did.** Tier 2 of the 4-tier cascade looks up the channel's active subscription with a raw query:
+
+```ts
+const subRows = await this.connection.rawConnection.query(
+  `SELECT "planId" FROM "organization_subscription"
+    WHERE "channelId" = $1 AND "status" IN ('trialing', 'active')
+    ORDER BY "updatedAt" DESC LIMIT 1`,
+  [channelId],
+);
+```
+
+The two paths disagree about schema resolution:
+
+| Path | Resolves via | Result when `dbConnectionOptions.schema` is set |
+|---|---|---|
+| TypeORM **entity** query (`repo.findOne`) | the connection's `schema` option | `"e2e_plan_capacity"."organization_subscription"` |
+| **Raw SQL** string | the connection's `search_path` | `public.organization_subscription` |
+
+`search_path` is **not** derived from `schema` — TypeORM sets `searchSchema` from the DB's `current_schema()`, so the two never agree once a schema is configured.
+
+**Failure modes.**
+
+1. **Silent wrong resolution.** In any schema-configured deployment the raw query reads a table that has no matching row, so `planId` comes back `undefined`, Tier 2 declines, and the cascade falls through to Tier 3/4 — `source` resolves to `fallback` instead of `plan` and the plan-derived ceiling never applies. No throw, no log line; the code path looks exercised and correct.
+2. **Downgraded failure.** If the bare table does not exist in `search_path` at all, the `relation does not exist` throw is caught by Tier 2's own `try/catch` and reduced to a `Logger.warn` — so even the error case is silent, and the cascade continues as if the subscription had simply not matched.
+
+**Why it matters now.** Slice 5's entire mechanism *is* Tier 2: Free Basic = 1 concurrent room is read from the plan-matched policy row. Under this bug the feature only ever worked when `schema` was left unset, which is the production default — so the defect was invisible in production and only surfaced on the first schema-isolated e2e run. Any deployment that does set `dbConnectionOptions.schema` would have shipped a plan-derived limit that never converges.
+
+**Diagnosis (2026-09-25).** A direct SQL probe settled it rather than inference: the seeded rows were in `e2e_plan_capacity.organization_subscription` while `public.organization_subscription` held no row for that channel — exactly the split the table above predicts.
+
+**Fix (2026-09-25).** A private `subscriptionTableRef` getter qualifies the table name with `connection.rawConnection.options.schema` when one is configured, and falls back to the bare name when it is not:
+
+```ts
+private get subscriptionTableRef(): string {
+  const schema = (this.connection.rawConnection.options as { schema?: string }).schema;
+  return schema
+    ? `"${schema}"."organization_subscription"`
+    : `"organization_subscription"`;
+}
+```
+
+Tier 2's query interpolates `${this.subscriptionTableRef}`. Production (no `schema` configured) is byte-for-byte the same statement as before; schema-configured runs now read the same table the entity path does. This is the **only** raw query under `src/` outside migrations — verified by search — so the fix covers the whole raw-SQL surface.
+
+**Runtime reproduction and verification (2026-09-25).** `PLAN_CAPACITY_E2E=true npx vitest run … plan-derived-concurrency.e2e-spec.ts` against real Postgres:
+
+| | Result | Failing cases |
+|---|---|---|
+| Pre-fix | **2 passed / 3 failed** | derives Free Basic (tier 1) `concurrentMeetingLimit = 1` from the plan policy; re-derives the new ceiling when the plan changes; startup reconciliation repairs stragglers and is idempotent |
+| Post-fix | **5 passed / 5** | — |
+
+The two that passed pre-fix are the `isPlanDerived()` guard truth-table case (a pure predicate, no DB) and the Admin-value-preservation case (its Tier 2 lookup finds a plan that has **no** policy row, so the cascade falls through to Tier 3/4 whether or not the raw query succeeds) — neither assertion is sensitive to the defect, making them a clean control group for the diagnosis. Gates on the fixed tree: `npx tsc --noEmit` 0, `npm run lint` 0, `npm run build` 0, `npm run verify:invariants` convergence **100/100** with **0 warnings**.
+
+---
+
 ## BUG C — `subscribeToPlan` Initial Period Blocked ADR-041 CAS (fixed 2026-09-20)
 
 | Field | Detail |
@@ -310,4 +371,5 @@ BBB destroys meetings that are never joined after a server-side timeout. `BbbRec
 | INV-008 | P1 | `src/lib/vendure/session-cta.ts` (deleted) + `learning-dashboard.service.ts` — `getSessionCta()` was a client-side entitlement isolation layer containing business logic (joinUrl precedence, trial eligibility, registration status) that violated the entitlement-only access invariant. Fixed by moving the CTA decision server-side: `LearningCourse` now carries server-driven `ctaAction`/`ctaLabel` computed in `LearningDashboardService.getDashboard()`. `course-card.tsx` renders these fields instead of re-deriving eligibility from the clock. `session-cta.ts` deleted. | ✅ Fixed |
 | BUG-037 | High | `src/plugins/bigbluebutton-plugin/__tests__/bbb-channel-isolation.e2e-spec.ts` — the INV-001 "Phase A isolation" suite could not pass (7 failed / 6 skipped), so the isolation evidence cited by `security.md` §SEC-002 and `platform-adr.md` rested on a suite that could not execute. Three harness-only causes: (1) the spec loaded only `TenantPlugin` + `BigBlueButtonPlugin`, but `TENANT_ADMIN_ROLE_PERMISSIONS` grants CMS/Reviews permissions no loaded plugin had registered, so `registerNewTenant` failed with `The permission "CreateCmsArticle" may not be assigned`; (2) the spec never received the BUG-033 `requireVerification: false` fix, so tenant-channel logins returned a null `CurrentUser`; (3) phase 2 created the org as SuperAdmin via an **un-awaited** `adminClient.asSuperAdmin()` (login race → unauthenticated request → generic `ForbiddenError`) and `setChannelToken('')` (unset `ctx.channelId` → Vendure's `userHasPermissions()` returns false → every `@Allow` fails), while the org already existed — `BbbTenantProvisioningListener` provisions it on `TenantRegisteredEvent` with a tenant-scoped ctx, as `assignToCurrentChannel()` requires. Fix: load `CmsPlugin`/`ReviewsPlugin`/`SubscriptionPlugin` (the set the green tenant-plugin spec uses), add `requireVerification: false`, replace the creation phase with resolution of the real provisioning path (polled), and compare GraphQL `channelId` against the **encoded** form while repository reads use the decoded one. No product code changed. Verified: `npm run test:e2e:bbb-isolation` → **13/13** real Postgres (pre-fix 7 failed/6 skipped → 5 failed/8 passed → 13/13); `npx tsc --noEmit` exit 0. | ✅ Fixed |
 | BUG-038 | Critical | `src/plugins/bigbluebutton-plugin/config/bbb-fulfillment.ts` — `createFulfillment()` resolved each line's product variant via `order.lines.find(...)`, but Vendure's `FulfillmentService.getOrdersFromLines()` hands the handler an order loaded with `relations: ['order', 'order.channels']` **only** — `order.lines` is `undefined`, so the `?.` chain never guarded and the call threw `TypeError: Cannot read properties of undefined (reading 'find')`. Vendure wrapped it, so the Admin caller saw only `CREATE_FULFILLMENT_ERROR` with no stack, and the sole consumed effect (an idempotent, `info`-level `BbbCapacityGrant` write) failed silently — meaning capacity-grant writer (B) `addFulfillmentToOrder → bbbFulfillmentHandler → BbbCapacityGrant(sourceType:'order')` was dead. With BUG-036 also making `internal_overhead` non-selectable, a customer who paid for a session could not provision a meeting at all. **Fix:** resolve lines from the handler's own `lines` input — `find({ where: { id: In(lines.map(l => String(l.orderLineId))) }, relations: { productVariant: true } })` — hoisted out of the per-line loop into one batched query, mirroring Vendure's canonical `digitalFulfillmentHandler` (Digital Products guide); `order.lines` is no longer read anywhere in the handler. Found and runtime-reproduced while writing the Slice 10 / R4 evidence: pre-fix R4-02 fails with `CREATE_FULFILLMENT_ERROR`; post-fix `[R4-02] grant=2 sourceType=order grantedMinutes=600 orderLineId=1 fulfillment=T_1`, and R4-04 proves it is load-bearing by provisioning `meeting=1 state=Active session=1 status=LIVE grantId=2` (the `order` grant, not `internal_overhead`), with R4-08 binding the ledger to the same grant. | ✅ Fixed |
+| BUG-039 | High | `src/plugins/bigbluebutton-plugin/services/bbb-platform-capacity-policy.service.ts` — `getEffectivePolicy()`'s Tier 2 resolved the channel's active subscription with a **raw** `SELECT "planId" FROM "organization_subscription"`, which Postgres resolves through the connection's `search_path`, while every TypeORM **entity** query is qualified with the connection's `schema` option — and TypeORM does not derive `search_path` from `schema`. With `dbConnectionOptions.schema` set (every schema-isolated e2e run, and any such deployment) the raw query read a table holding no matching row, so `planId` came back `undefined`, Tier 2 declined, and the cascade fell through to Tier 3/4: `source` resolved to `fallback` instead of `plan` and plan-derived concurrency never applied — with no throw and no log. Had the bare table been absent from `search_path` entirely, Tier 2's own `try/catch` would have downgraded the error to a `Logger.warn` and continued anyway. Slice 5's whole mechanism *is* Tier 2, so the feature only worked while `schema` was unset (the production default), which is why it survived until the first schema-isolated e2e run. **Fix:** private `subscriptionTableRef` getter that qualifies the table with `rawConnection.options.schema` when configured and falls back to the bare name when not; Tier 2 interpolates it. No `schema` configured ⇒ byte-identical statement, so production is unchanged. Verified this is the only raw query under `src/` outside migrations, so the fix covers the whole raw-SQL surface. Diagnosis was direct SQL, not inference: the seeded rows sat in `e2e_plan_capacity.organization_subscription` while `public.organization_subscription` was empty for that channel. Found and runtime-reproduced while writing the Slice 5 evidence: pre-fix `plan-derived-concurrency.e2e-spec.ts` **2 passed / 3 failed** (the three Tier-2-dependent cases: Free Basic ⇒ 1, re-derive on plan change, startup reconciliation); the two that passed are insensitive to the defect by construction and act as a control group. Post-fix **5/5**; gates `tsc` 0, `lint` 0, `build` 0, `verify:invariants` 100/100 with 0 warnings. | ✅ Fixed |
 

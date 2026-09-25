@@ -544,7 +544,7 @@ The client carries a signed reference but **cannot** choose `orderSource = 'mark
 
 ## ADR-031: Platform-Owned BBB Capacity Policy
 
-**Status:** Proposed
+**Status:** Active (implemented in Phase 2; extended 2026-09-25 with a plan-derived concurrent-rooms ceiling — see the amendment below)
 
 **Decision:** BBB infrastructure capacity limits are controlled by Portal Admin through a platform-level `BbbPlatformCapacityPolicy`. Tenant administrators can manage courses and commercial enrollment but cannot increase BBB resource limits beyond what the policy allows.
 
@@ -572,11 +572,13 @@ BbbPlatformCapacityPolicy
 
 **Plan-Based Capacity (Recommended):** Capacity limits are tied to subscription plans:
 
-| Plan | Default Room Capacity | Max Room Capacity | Max Concurrent Participants |
-|---|---|---|---|
-| Starter | 50 | 100 | 500 |
-| Growth | 200 | 500 | 2000 |
-| Enterprise | 500 | 1000 | 5000 |
+| Plan | Default Room Capacity | Max Room Capacity | Max Concurrent Participants | Max Concurrent Rooms |
+|---|---|---|---|---|
+| Starter | 50 | 100 | 500 | *not frozen — Admin-set* |
+| Growth | 200 | 500 | 2000 | *not frozen — Admin-set* |
+| Enterprise | 500 | 1000 | 5000 | *not frozen — Admin-set* |
+
+> The `maxConcurrentMeetings` column carries **no tier numbers**: only **Free Basic = 1** is frozen (plan §3.6, 2026-09-22 sign-off). Paid tiers stay Admin-set until commercial concurrency limits are explicitly frozen — see the 2026-09-25 amendment.
 
 **Entity Design:**
 
@@ -591,6 +593,10 @@ export class BbbPlatformCapacityPolicy extends VendureEntity {
 
   @Column({ default: 1000 })
   maxConcurrentParticipants: number; // across all rooms for this tenant
+
+  @Column({ default: 5 })
+  maxConcurrentMeetings: number;     // simultaneous live rooms for this tenant
+                                     // (added 2026-09-25 — see amendment)
 
   @Column({ nullable: true })
   subscriptionPlanId: string | null; // FK to SubscriptionPlan (Phase 2)
@@ -609,6 +615,36 @@ export class BbbPlatformCapacityPolicy extends VendureEntity {
 - Tenant-controlled BBB capacity (resource abuse risk, unpredictable infrastructure costs)
 - Fixed hardcoded capacity in code (not adaptable to different plan tiers)
 - BBB server as only capacity authority (too late — impacts user experience at join time)
+
+### Amendment — 2026-09-25: plan-derived concurrent-rooms ceiling
+
+**Problem.** `BbbOrganization.concurrentMeetingLimit` was form-supplied with a hardcoded default of `5`, so no tier could express its own simultaneous-live-room ceiling — the free tier's frozen **"1 concurrent live room"** had no mechanism behind it (plan finding **F-3**, `saa9vi-comprehensive-integration-and-commercial-plan.md:52`). `BbbPlatformCapacityPolicy` could not model concurrent meetings and `syncOrganizationCache()` synced only `maxParticipantsPerMeeting`.
+
+**Decision 1 — it belongs in the policy, not the plan.** `maxConcurrentMeetings` is added to `BbbPlatformCapacityPolicy`. `SubscriptionPlan` continues to store **no** capacity limits, consistent with its own contract and with ADR-031's rule that capacity is Portal-Admin-governed. This also gives the value the existing 4-tier cascade for free.
+
+**Decision 2 — "ceiling" and "allowance" stay separate concepts.** A concurrent-rooms ceiling is a *packaging* limit, like `defaultRoomCapacity`; a daily-minutes figure is a *consumption allowance* and lives in `BbbCapacityGrant` (plan §3.3). Concurrency therefore belongs here; daily minutes do not.
+
+**Decision 3 — the org field remains the single enforcement surface.** `BbbOrganization.concurrentMeetingLimit` is **not** replaced by a live policy lookup. It stays a write-through denormalized cache — exactly as `maxParticipantsPerMeeting` already is — synced from the policy:
+
+```text
+BbbPlatformCapacityPolicy.maxConcurrentMeetings
+        │  resolve Tier 1 (channel override) / Tier 2 (plan-matched) only
+        ▼
+BbbOrganization.concurrentMeetingLimit   (cache)
+        ▼
+assertCanCreateMeeting() / reserveProvisioningCapacity()   (unchanged)
+```
+
+**Decision 4 — the sync is tier-aware.** The limit is applied **only** when the resolution source is `channel-override` or `plan`. A Tier 3 (platform-default) or Tier 4 (hardcoded fallback) resolution must **never** overwrite a paid tenant's Admin-set value: `getEffectivePolicy()` always returns *something*, so a blind sync would silently reset every paid tenant without a plan-specific policy row. This is enforced by a named `isPlanDerived(policy)` guard rather than an inline source comparison.
+
+**Decision 5 — convergence, not listener ordering.** `BbbTenantProvisioningListener` and `FreePlanProvisioningListener` both subscribe to `TenantRegisteredEvent`, and `BigBlueButtonPlugin` is registered **before** `SubscriptionPlugin` (`vendure-config.ts:234`, `:285`). The org-creation sync can therefore legitimately resolve before the Free Basic subscription row exists, miss Tier 2, and cache the wrong value. Ordering is not treated as a contract: the org-creation sync is complemented by a `SubscriptionPlanChangedEvent` (published on activation, plan change, and renewal) consumed by a BBB-side listener, plus a startup reconciliation pass. Whichever order the two `TenantRegisteredEvent` handlers run in, the org converges to the plan-derived value.
+
+**Consequences:**
+
+- `BbbOrganization.concurrentMeetingLimit` becomes a denormalized cache of the effective policy ceiling, synced on org creation and on any subscription-plan event, with a startup reconciliation pass healing missed events (INV-015).
+- Free Basic resolves to **1** via its plan-matched policy row (`channelId NULL`, `subscriptionPlanId` = the Free Basic plan) — the row is a Portal-Admin configuration step through the existing `upsertPlatformCapacityPolicy` mutation, not a seed.
+- Paid tenants with no plan-matched policy row keep their Admin-set value indefinitely. Freezing paid-tier concurrency numbers remains an open commercial decision; none are invented here.
+- The "allowance exhausted" UX at the *provisioning* boundary (`reserveProvisioningCapacity` returns `false`, leaving the meeting silently `PENDING`) is a **separate** product/UX question (plan §3.3 item 2) and is explicitly out of scope for this amendment.
 
 ---
 

@@ -1,6 +1,7 @@
 import { Inject, Injectable } from "@nestjs/common";
 import {
   Channel,
+  EventBus,
   Logger,
   RequestContext,
   TransactionalConnection,
@@ -9,6 +10,7 @@ import {
 import { SUBSCRIPTION_PLUGIN_OPTIONS, loggerCtx } from "../constants";
 import { OrganizationSubscription } from "../entities/organization-subscription.entity";
 import { SubscriptionPlan } from "../entities/subscription-plan.entity";
+import { SubscriptionPlanChangedEvent } from "../events/subscription.events";
 import { PluginInitOptions } from "../types";
 
 /** Default catalogue slug of the provider-free entry-tier plan. */
@@ -48,7 +50,10 @@ export const DEFAULT_FREE_PLAN_SLUG = "free-basic";
  *    plan's live allowance is a DAILY grant created by the scheduled job in
  *    slice 6 (`sourceType: 'subscription'`). Creating a billing-period grant
  *    here would be a second writer against the same idempotency key.
- *  - **no `concurrentMeetingLimit` sync** — plan-derived sync is slice 5.
+ *  - **no `concurrentMeetingLimit` sync.** Kept here as a deliberate boundary:
+ *    the plan-derived capacity cache is written by the BBB plugin, which owns
+ *    the organisation, so this service only *announces* the activation (see
+ *    `SubscriptionPlanChangedEvent` below) and the BBB listener converges.
  */
 @Injectable()
 export class FreePlanProvisioningService {
@@ -56,6 +61,7 @@ export class FreePlanProvisioningService {
     private readonly connection: TransactionalConnection,
     @Inject(SUBSCRIPTION_PLUGIN_OPTIONS)
     private readonly options: PluginInitOptions,
+    private readonly eventBus: EventBus,
   ) {}
 
   /** Configured provider-free plan slug (falls back to the catalogue default). */
@@ -195,6 +201,7 @@ export class FreePlanProvisioningService {
           `'${freePlan.slug}' (provider-free; status active; no provider call; no binding)`,
         loggerCtx,
       );
+      this.announceActivation(ctx, saved);
       return saved;
     } catch (err: unknown) {
       // Backstop for a lost race: the partial unique index is the DB guard, so a
@@ -207,6 +214,10 @@ export class FreePlanProvisioningService {
             `adopted existing subscription ${again.id}`,
           loggerCtx,
         );
+        // Announced too: whoever won the race may have published before this
+        // caller's transaction began, and a duplicate announce is harmless —
+        // the consumer's re-sync is idempotent (ADR-031 amendment).
+        this.announceActivation(ctx, again);
         return again;
       }
       const msg = err instanceof Error ? err.message : String(err);
@@ -218,5 +229,56 @@ export class FreePlanProvisioningService {
       );
       return null;
     }
+  }
+
+  /**
+   * Announce that this channel is now on the free plan, so plan-derived tenant
+   * capacity converges (ADR-031 amendment, Decision 5).
+   *
+   * Load-bearing for the seeded case: `BbbTenantProvisioningListener` creates
+   * the organisation during registration and is registered BEFORE
+   * `FreePlanProvisioningListener`, so when the organisation is created there is
+   * usually no subscription row yet and the plan-matched tier cannot resolve —
+   * the organisation keeps the column default instead of Free Basic's frozen
+   * ceiling of 1. This event is what closes that gap.
+   *
+   * Warn-and-continue by design: a capacity-cache fault must never fail a
+   * registration (the class contract above is explicit that this path is
+   * fail-soft), and a lost announce is healed by the BBB startup reconciliation
+   * pass. Non-blocking `ofType` consumers mean convergence is eventual.
+   */
+  private announceActivation(
+    ctx: RequestContext,
+    subscription: OrganizationSubscription,
+  ): void {
+    const planId = subscription.plan ? String(subscription.plan.id) : "";
+    if (!planId) {
+      Logger.warn(
+        `Not announcing free-plan activation for channel ${subscription.channelId}: ` +
+          `subscription ${subscription.id} has no plan loaded`,
+        loggerCtx,
+      );
+      return;
+    }
+    void this.eventBus
+      .publish(
+        new SubscriptionPlanChangedEvent(
+          ctx,
+          subscription,
+          subscription.channelId,
+          planId,
+          null,
+          "activated",
+        ),
+      )
+      .catch((err: unknown) => {
+        Logger.error(
+          `SubscriptionPlanChangedEvent consumer failed for channel ${subscription.channelId} ` +
+            `(free-plan activation, plan ${planId}): ` +
+            `${err instanceof Error ? err.message : String(err)}. ` +
+            `Plan-derived capacity will be re-synced by the BBB startup reconciliation pass.`,
+          loggerCtx,
+        );
+      });
   }
 }

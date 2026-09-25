@@ -61,6 +61,7 @@ import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.liste
 import { BbbSubscriptionListener } from "./listeners/bbb-subscription.listener";
 import { BbbSessionProvisioningListener } from "./listeners/bbb-session-provisioning.listener";
 import { BbbTenantProvisioningListener } from "./listeners/bbb-tenant-provisioning.listener";
+import { BbbPlanCapacityReconciliationBootstrap } from "./listeners/bbb-plan-capacity-reconciliation.bootstrap";
 
 import { PlatformTracingModule } from "../../platform/tracing/platform-tracing.module";
 import { CorrelationInterceptor } from "../../platform/tracing/correlation-interceptor";
@@ -150,6 +151,10 @@ import {
     BbbSubscriptionListener,
     BbbSessionProvisioningListener,
     BbbTenantProvisioningListener,
+    // ADR-031 amendment (Decision 5): the third convergence trigger — repairs
+    // any organisation whose plan-derived concurrentMeetingLimit cache missed an
+    // event or predates plan-derived capacity.
+    BbbPlanCapacityReconciliationBootstrap,
   ],
 
   adminApiExtensions: {

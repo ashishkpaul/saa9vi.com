@@ -241,17 +241,23 @@ Related constraints:
 
 **Status:** Live (ADR-031).
 
-**Rule:** BBB infrastructure capacity limits (`BbbRoom.maxParticipants`, `BbbOrganization.maxParticipantsPerMeeting`) are governed by `BbbPlatformCapacityPolicy` controlled by Portal Admin. Tenant administrators control commercial capacity (`ProductVariant.stockLevel`) but cannot increase BBB resource limits beyond what the platform policy allows.
+**Rule:** BBB infrastructure capacity limits (`BbbRoom.maxParticipants`, `BbbOrganization.maxParticipantsPerMeeting`, `BbbOrganization.concurrentMeetingLimit`) are governed by `BbbPlatformCapacityPolicy` controlled by Portal Admin. Tenant administrators control commercial capacity (`ProductVariant.stockLevel`) but cannot increase BBB resource limits beyond what the platform policy allows.
 
-**Three distinct capacity layers (proposed):**
+**Three distinct capacity layers (live):**
 
 | Layer | What it controls | Who controls | Entity |
 |---|---|---|---|
-| Platform infrastructure | BBB server load, concurrent participants | Portal Admin | `BbbPlatformCapacityPolicy` |
+| Platform infrastructure | BBB server load, concurrent participants, simultaneous live rooms | Portal Admin | `BbbPlatformCapacityPolicy` |
 | Academy commercial | How many customers can buy | Tenant Admin | `ProductVariant.stockLevel` |
 | Session enrollment | How many students can attend a session | Tenant Admin (capped by policy) | `BbbScheduledSession.maxAttendees` |
 
-**Rejection criterion (future):** Any code path that allows a tenant administrator to set `BbbRoom.maxParticipants` or `BbbOrganization.maxParticipantsPerMeeting` above the `BbbPlatformCapacityPolicy.maxRoomCapacity` limit is rejected.
+**Packaging ceiling vs consumption allowance (added 2026-09-25).** A *packaging* ceiling — how many things may exist **at once** (`defaultRoomCapacity`, `maxRoomCapacity`, `maxConcurrentParticipants`, `maxConcurrentMeetings`) — lives in `BbbPlatformCapacityPolicy` and is denormalized onto the organization. A *consumption* allowance — how much may be **used** per day or per billing period — lives in `BbbCapacityGrant` and is never a policy field. Concurrency is a ceiling; daily live minutes are an allowance. The two must not be conflated (ADR-031 amendment).
+
+**Write-through caches are tier-aware.** `BbbOrganization.maxParticipantsPerMeeting` caches `defaultRoomCapacity`; `BbbOrganization.concurrentMeetingLimit` caches `maxConcurrentMeetings`. Both are synced from the policy, and a value is applied **only** when resolution came from Tier 1 (channel override) or Tier 2 (plan-matched). A Tier 3 platform-default or Tier 4 hardcoded fallback must **never** overwrite an Admin-set organisation value — `getEffectivePolicy()` always returns a policy, so an unconditional sync would silently reset every paid tenant lacking a plan-specific row.
+
+**Convergence, not listener ordering (added 2026-09-25).** `TenantRegisteredEvent` has two independent subscribers in different plugins with no guaranteed relative order, so an org-creation sync may legitimately resolve before the subscription row exists. Plan-derived values therefore converge: org-creation sync, a `SubscriptionPlanChangedEvent` consumed by a BBB-side listener, and a startup reconciliation pass. No part of this invariant may depend on subscriber ordering.
+
+**Rejection criterion:** Any code path that allows a tenant administrator to set `BbbRoom.maxParticipants`, `BbbOrganization.maxParticipantsPerMeeting`, or `BbbOrganization.concurrentMeetingLimit` above the corresponding `BbbPlatformCapacityPolicy` limit is rejected. A policy value may additionally be applied *downward* (a free tier's ceiling of 1 lowers a default of 5).
 
 ---
 

@@ -2,6 +2,7 @@ import { Injectable, Inject } from "@nestjs/common";
 import {
   Channel,
   DeepPartial,
+  EventBus,
   ID,
   ListQueryBuilder,
   Logger,
@@ -13,6 +14,7 @@ import { loggerCtx, RECURRING_BILLING_PROVIDER } from "../constants";
 import { OrganizationSubscription } from "../entities/organization-subscription.entity";
 import { SubscriptionPlan } from "../entities/subscription-plan.entity";
 import { SubscriptionProviderBinding } from "../entities/subscription-provider-binding.entity";
+import { SubscriptionPlanChangedEvent } from "../events/subscription.events";
 import {
   CreateRecurringSubscriptionInput,
   ProviderSubscription,
@@ -39,6 +41,7 @@ export class SubscriptionService {
     // without a configured provider (dev without Redis-style fallbacks).
     @Inject(RECURRING_BILLING_PROVIDER)
     private readonly billingProvider: RecurringBillingProvider | null,
+    private readonly eventBus: EventBus,
   ) {}
 
   async findAllPlans(ctx: RequestContext): Promise<SubscriptionPlan[]> {
@@ -249,7 +252,66 @@ export class SubscriptionService {
         `(pending_provider_auth; provider sub ${providerSub.providerSubscriptionId})`,
       loggerCtx,
     );
+    this.announcePlanChange(ctx, saved, null, "subscribed");
     return saved;
+  }
+
+  /**
+   * Announce that a channel's plan identity was established or changed.
+   *
+   * ADR-031 amendment (Decision 5): plan-derived tenant capacity
+   * (`BbbOrganization.concurrentMeetingLimit`) converges from this event rather
+   * than from listener ordering. Called AFTER the local transaction has
+   * committed, so consumers observe the row that actually exists.
+   *
+   * Failure mode is deliberately warn-and-continue. Vendure's EventBus awaits
+   * blocking handlers and does NOT swallow their errors, so an unguarded
+   * `await publish()` would let a capacity-sync fault fail the subscription
+   * mutation — inverting the dependency (a cache must never break the source of
+   * truth). Lost events are healed by the BBB plugin's startup reconciliation
+   * pass, which re-derives every organization from the same code path.
+   *
+   * Note this hands off to the non-blocking `ofType` subscribers the rest of
+   * this codebase uses, so it is fire-and-forget by construction: it returns
+   * without waiting for consumers, and convergence is eventual, not synchronous.
+   */
+  private announcePlanChange(
+    ctx: RequestContext,
+    subscription: OrganizationSubscription,
+    previousPlanId: string | null,
+    cause: SubscriptionPlanChangedEvent["cause"],
+  ): void {
+    const planId = subscription.plan ? String(subscription.plan.id) : "";
+    if (!planId) {
+      // Unreachable for a persisted row, but never publish a malformed event.
+      Logger.warn(
+        `Not announcing plan change for channel ${subscription.channelId}: ` +
+          `subscription ${subscription.id} has no plan loaded`,
+        loggerCtx,
+      );
+      return;
+    }
+    void this.eventBus
+      .publish(
+        new SubscriptionPlanChangedEvent(
+          ctx,
+          subscription,
+          subscription.channelId,
+          planId,
+          previousPlanId,
+          cause,
+        ),
+      )
+      .catch((err: unknown) => {
+        Logger.error(
+          `SubscriptionPlanChangedEvent consumer failed for channel ${subscription.channelId} ` +
+            `(plan ${planId}, cause ${cause}): ` +
+            `${err instanceof Error ? err.message : String(err)}. ` +
+            `Plan-derived capacity will be re-synced on the next subscription change ` +
+            `or by the BBB startup reconciliation pass.`,
+          loggerCtx,
+        );
+      });
   }
 
   /**
@@ -481,6 +543,9 @@ export class SubscriptionService {
           : `; provider-free)`),
       loggerCtx,
     );
+    // Announce after commit so the plan-derived capacity cache converges on the
+    // NEW plan (ADR-031 amendment; free → paid and paid → free both re-derive).
+    this.announcePlanChange(ctx, saved, String(current.plan.id), "changed");
     return saved;
   }
 

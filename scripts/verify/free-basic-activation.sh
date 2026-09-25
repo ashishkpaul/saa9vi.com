@@ -116,12 +116,15 @@ check "free plan is provider-free (providerPlanId IS NULL)" \
   "{ [ \"$FREE_PP\" = 'null' ] || [ \"$FREE_PP\" = 'None' ]; }" \
   "got $FREE_PP - a providerPlanId here makes provisioning refuse (by design)"
 
-echo "=== 2. Ensure the free-tier capacity policy row exists (5/5/5, §3.6 freeze) ==="
+echo "=== 2. Ensure the free-tier capacity policy row exists (5/5/5 + 1 concurrent, §3.6 freeze) ==="
 gql mkpolicy "$ADMIN_API" "$AUTH" \
-  'mutation($i:PlatformCapacityPolicyInput!){ upsertPlatformCapacityPolicy(input:$i){ id subscriptionPlanId defaultRoomCapacity maxRoomCapacity maxConcurrentParticipants } }' \
-  "{\"i\":{\"subscriptionPlanId\":\"$FREE_PLAN_ID\",\"defaultRoomCapacity\":5,\"maxRoomCapacity\":5,\"maxConcurrentParticipants\":5}}"
+  'mutation($i:PlatformCapacityPolicyInput!){ upsertPlatformCapacityPolicy(input:$i){ id subscriptionPlanId defaultRoomCapacity maxRoomCapacity maxConcurrentParticipants maxConcurrentMeetings } }' \
+  "{\"i\":{\"subscriptionPlanId\":\"$FREE_PLAN_ID\",\"defaultRoomCapacity\":5,\"maxRoomCapacity\":5,\"maxConcurrentParticipants\":5,\"maxConcurrentMeetings\":1}}"
 POLICY_ROOM=$(jget "$OUTDIR/mkpolicy.json" "data.upsertPlatformCapacityPolicy.defaultRoomCapacity")
 check "free-tier policy row upserted at 5/5/5" "[ \"$POLICY_ROOM\" = '5' ]" "defaultRoomCapacity=$POLICY_ROOM (see $OUTDIR/mkpolicy.json)"
+POLICY_CONC=$(jget "$OUTDIR/mkpolicy.json" "data.upsertPlatformCapacityPolicy.maxConcurrentMeetings")
+check "free-tier concurrent ceiling = 1 (§3.6 freeze; the 5/5/5 triple is participants only)" \
+  "[ \"$POLICY_CONC\" = '1' ]" "maxConcurrentMeetings=$POLICY_CONC (see $OUTDIR/mkpolicy.json)"
 
 echo "=== 3. Register a tenant (shop API) → Free Basic must be provisioned ==="
 gql register "$SHOP_API" "" \
@@ -175,6 +178,48 @@ gql attempts "$ADMIN_API" "$AUTH" \
 check "providerPaymentAttempts total = 0" \
   "[ \"$(jget "$OUTDIR/attempts.json" "data.providerPaymentAttempts.total")\" = '0' ]" \
   "got $(jget "$OUTDIR/attempts.json" "data.providerPaymentAttempts.total")"
+
+echo "=== 6b. Plan-derived concurrency converged onto the organization (ADR-031 amendment) ==="
+# Why this can't be asserted from the registration response: the organisation is
+# created by BbbTenantProvisioningListener, and this BBB plugin is registered
+# BEFORE the subscription plugin, so at creation time the free-plan subscription
+# row does not exist yet and the plan-matched (Tier 2) policy cannot resolve —
+# the organisation starts at the column default. FreePlanProvisioningService
+# therefore ANNOUNCES the activation (SubscriptionPlanChangedEvent) and
+# BbbSubscriptionListener converges the cache afterwards. Convergence is
+# EVENTUAL by design (the announce is fire-and-forget), so POLL instead of
+# sampling one instant.
+gql effpolicy "$ADMIN_API" "$AUTH" \
+  'query($c:ID!){ effectiveCapacityPolicy(channelId:$c){ defaultRoomCapacity maxRoomCapacity maxConcurrentParticipants maxConcurrentMeetings source } }' \
+  "{\"c\":\"$CH\"}"
+EFF_SOURCE=$(jget "$OUTDIR/effpolicy.json" "data.effectiveCapacityPolicy.source"); EFF_SOURCE="${EFF_SOURCE//\"/}"
+EFF_CONC=$(jget "$OUTDIR/effpolicy.json" "data.effectiveCapacityPolicy.maxConcurrentMeetings")
+check "effective policy for the channel resolves to the plan tier (source=plan)" \
+  "[ \"$EFF_SOURCE\" = 'plan' ]" "got source=$EFF_SOURCE (see $OUTDIR/effpolicy.json)"
+check "effective policy maxConcurrentMeetings = 1" "[ \"$EFF_CONC\" = '1' ]" "got $EFF_CONC"
+
+org_limit() { python3 -c "
+import json
+d = json.load(open('$OUTDIR/orgs.json'))
+items = ((d.get('data') or {}).get('bbbOrganizations') or {}).get('items') or []
+rows = [o for o in items if str(o['channelId']) == '$CH']
+print(rows[0]['concurrentMeetingLimit'] if rows else '')"; }
+for attempt in $(seq 1 10); do
+  gql orgs "$ADMIN_API" "$AUTH" \
+    'query{ bbbOrganizations{ items{ id channelId slug concurrentMeetingLimit } totalItems } }'
+  ORG_LIMIT=$(org_limit)
+  [ "$ORG_LIMIT" = '1' ] && break
+  sleep 1
+done
+ORG_COUNT=$(python3 -c "
+import json
+d = json.load(open('$OUTDIR/orgs.json'))
+items = ((d.get('data') or {}).get('bbbOrganizations') or {}).get('items') or []
+print(len([o for o in items if str(o['channelId']) == '$CH']))")
+check "exactly ONE organization exists for the channel" "[ \"$ORG_COUNT\" = '1' ]" "got $ORG_COUNT"
+check "org.concurrentMeetingLimit = 1 (Free Basic frozen ceiling, derived from the plan policy)" \
+  "[ \"$ORG_LIMIT\" = '1' ]" \
+  "got $ORG_LIMIT after polling; expected the plan-derived 1. See $OUTDIR/orgs.json — a value of 5 means the plan-derived sync never ran (event missed AND no startup reconciliation)."
 
 echo "=== 7. The free row does NOT block the paid path (ADR-044 regression check) ==="
 gql subblocked "$ADMIN_API" "$AUTH" \

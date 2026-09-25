@@ -23,6 +23,14 @@ export const adminApiExtensions = gql`
     ownerUserId: ID
     slug: String!
     name: String!
+    """
+    Simultaneous live meetings this organization may run. Sole ENFORCEMENT
+    surface for concurrency (ADR-031) — resolved from the plan's
+    BbbPlatformCapacityPolicy.maxConcurrentMeetings and cached here, never
+    resolved at enforcement time. Free Basic is frozen at 1; paid tiers are
+    Portal-Admin-set. Optional on input: omitting it preserves the current
+    value.
+    """
     concurrentMeetingLimit: Int!
     maxParticipantsPerMeeting: Int!
     maxSessionsPerOrg: Int!
@@ -653,6 +661,13 @@ export const adminApiExtensions = gql`
     defaultRoomCapacity: Int!
     maxRoomCapacity: Int!
     maxConcurrentParticipants: Int!
+    """
+    Simultaneous live meetings the plan grants. Denormalized onto the
+    organization as BbbOrganization.concurrentMeetingLimit, which remains the
+    enforcement surface. Free Basic (tier 1) is frozen at 1; paid tiers are
+    Portal-Admin-set. Column default 5.
+    """
+    maxConcurrentMeetings: Int!
     "Null = platform-default policy for tenants without a matching plan."
     subscriptionPlanId: ID
   }
@@ -663,6 +678,12 @@ export const adminApiExtensions = gql`
     defaultRoomCapacity: Int!
     maxRoomCapacity: Int!
     maxConcurrentParticipants: Int!
+    """
+    Omit to keep the stored value (default 5 on a fresh row). Deliberately
+    optional so existing callers that predate plan-derived concurrency keep
+    working unchanged.
+    """
+    maxConcurrentMeetings: Int
   }
 
   # ─── Attendance Analytics (3D.3d) ────────────────────────────────────────────
@@ -748,6 +769,13 @@ export const adminApiExtensions = gql`
     defaultRoomCapacity: Int!
     maxRoomCapacity: Int!
     maxConcurrentParticipants: Int!
+    """
+    Simultaneous live meetings granted by this resolution. Mirrored onto
+    BbbOrganization.concurrentMeetingLimit — but only when 'source' is
+    plan-derived ('plan' or 'channel-override'); a 'platform-default' or
+    'fallback' answer never overwrites an Admin-set organization value.
+    """
+    maxConcurrentMeetings: Int!
     source: String!
   }
 
