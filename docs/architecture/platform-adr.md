@@ -580,18 +580,20 @@ BbbPlatformCapacityPolicy
 
 > The `maxConcurrentMeetings` column carries **no tier numbers**: only **Free Basic = 1** is frozen (plan §3.6, 2026-09-22 sign-off). Paid tiers stay Admin-set until commercial concurrency limits are explicitly frozen — see the 2026-09-25 amendment.
 
+> **Correction (2026-09-25, second review pass).** The room-capacity figures in the table above are **non-binding recommendations**, not frozen decisions and **not** the values that ship. The implemented reference defaults are `PLAN_TIER_DEFAULTS` — starter **25 / 100 / 250**, growth **100 / 300 / 1000**, enterprise **250 / 1000 / 5000** (`defaultRoomCapacity / maxRoomCapacity / maxConcurrentParticipants`) — matching the entity column defaults **25 / 100 / 250** (`bbb-platform-capacity-policy.entity.ts`) and the Tier-4 `PLATFORM_CAPACITY_FALLBACK`. No seed creates paid-tier rows, and `PLAN_TIER_DEFAULTS` is **exported with no runtime consumer** (`grep -rn PLAN_TIER_DEFAULTS src/` → definition only, 2026-09-25), so it is Portal-Admin reference data only. This is a **documented exception** to "update code to match the ADR" (`.clinerules` §10): adopting `50/200/500` as shipped defaults would encode paid-tier numbers this ADR calls *not frozen* and would need a migration to change fresh-row defaults — while plan §3.6 explicitly labels in-code capacity numbers as seed/fallback values.
+
 **Entity Design:**
 
 ```typescript
 @Entity('bbb_platform_capacity_policy')
 export class BbbPlatformCapacityPolicy extends VendureEntity {
-  @Column({ default: 100 })
+  @Column({ default: 25 })
   defaultRoomCapacity: number;       // applied when tenant creates a room
 
-  @Column({ default: 500 })
+  @Column({ default: 100 })
   maxRoomCapacity: number;           // tenant cannot exceed this
 
-  @Column({ default: 1000 })
+  @Column({ default: 250 })
   maxConcurrentParticipants: number; // across all rooms for this tenant
 
   @Column({ default: 5 })

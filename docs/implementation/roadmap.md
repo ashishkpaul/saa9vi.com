@@ -49,7 +49,7 @@
 
 - [x] `SubscriptionPlan` and `OrganizationSubscription` entities — platform-global plan catalogue + channel-scoped organization subscriptions.
 - [x] `BbbPlatformCapacityPolicy` entity and Portal Admin API — `upsertPlatformCapacityPolicy`, `platformCapacityPolicies`, `effectiveCapacityPolicy`.
-- [x] Plan-based capacity tiers — Starter 50 / Growth 200 / Enterprise 500 default room capacity, represented as policy data rows keyed by `subscriptionPlanId`, not hard-coded control-flow branches.
+- [x] Plan-based capacity tiers — represented as policy data rows keyed by `subscriptionPlanId`, not hard-coded control-flow branches. **No seed ships** (Portal Admin creates rows through `upsertPlatformCapacityPolicy`); the in-code reference defaults are `PLAN_TIER_DEFAULTS` (25/100/250 · 100/300/1000 · 250/1000/5000) plus the entity column defaults 25/100/250. The earlier "Starter 50 / Growth 200 / Enterprise 500" figures were **recommendations that were never encoded** — corrected 2026-09-25 (second review pass) to remove the overclaim.
 - [x] `BbbRoom.maxParticipants` policy enforcement — effective policy resolved on room creation; tenant value may not exceed the policy ceiling. Zero policy rows preserve legacy INV-014 behaviour.
 - [x] `BbbOrganization.maxParticipantsPerMeeting` write-through policy cache — synchronized from effective policy during organization creation / room provisioning.
 - [x] Portal Admin capacity-policy dashboard and infrastructure permission boundary.

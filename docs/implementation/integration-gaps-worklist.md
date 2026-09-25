@@ -622,6 +622,17 @@ No documentation says a feature is `complete`, `accepted`, `implemented`, or `ve
 
 **Scope exclusions:** no `marketplacePromotionEnabled` (promotion is a separate subsystem); no tenant-facing upgrade mutation (UI-1 defers it pending an ADR); no external headless CMS as a core dependency.
 
+### Open API-completeness gap (not a slice) — Tier-1 channel capacity override has no write surface
+
+Found 2026-09-25 (second reconciliation pass, review of `6e4467a`). `BbbPlatformCapacityPolicyService.getEffectivePolicy()` resolves **Tier 1 = channel override** (`repo.findOne({ where: { channelId } })` — `bbb-platform-capacity-policy.service.ts:120-126`), and ADR-031 documents the 4-tier cascade as live. But the Admin GraphQL surface exposes only:
+
+- `upsertPlatformCapacityPolicy(input: PlatformCapacityPolicyInput!)` — the input carries `subscriptionPlanId` and **no `channelId`** (`bbb-admin.schema.ts:675-687`), and the resolver looks the row up by `{ subscriptionPlanId: input.subscriptionPlanId ?? null }` alone (`bbb-admin.resolver.ts:1108+`).
+- `deletePlatformCapacityPolicy(id: ID!)` — needs an id nobody can obtain.
+
+So a channel-scoped row **cannot be created or updated through the API**, and application-table SQL writes are forbidden. Tier 1 is therefore *resolve-only*: reachable in code, unreachable in practice.
+
+**Impact on shipped scope: none.** Free Basic resolves at **Tier 2** (plan-matched), which is exactly what Slice 5 implements and what `scripts/verify/free-basic-activation.sh` asserts. This is an API-completeness gap, not a correctness bug. Closing it needs either a `channelId` field on `PlatformCapacityPolicyInput` (SDL + codegen change, plus a redefined upsert key so a channel row cannot collide with the plan row) or an explicit decision to drop Tier 1 from the cascade.
+
 ---
 
 # Final Cline Execution Gate
