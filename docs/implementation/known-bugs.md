@@ -6,7 +6,7 @@
 
 ## Active Bugs
 
-_None._ BUG-036 (provisioning capacity/`isUnbounded`) was fixed and runtime-reproduced on 2026-09-23 in `d711940`; BUG-037 (the `bbb-channel-isolation` e2e harness could not pass) was found and fixed on 2026-09-24. Both archived entries are below; the fixes are recorded in `release-notes.md`.
+_None._ BUG-036 (provisioning capacity/`isUnbounded`) was fixed and runtime-reproduced on 2026-09-23 in `d711940`; BUG-037 (the `bbb-channel-isolation` e2e harness could not pass) was found and fixed on 2026-09-24; BUG-038 (`bbbFulfillmentHandler` read the never-loaded `order.lines`, so no `order`-source capacity grant could ever be written) was found and fixed on 2026-09-25 while producing the Slice 10 / R4 runtime-lifecycle evidence. All three archived entries are below; the fixes are recorded in `release-notes.md`.
 
 ---
 
@@ -140,6 +140,50 @@ The fix is runtime-verified by the R2-E run (2026-09-20):
 
 ---
 
+## BUG-038 — `bbbFulfillmentHandler` read `order.lines`, which Vendure never loads — **every** `addFulfillmentToOrder` failed with `CREATE_FULFILLMENT_ERROR` — ✅ FIXED (2026-09-25)
+
+> **Status:** fixed and runtime-verified 2026-09-25. Found while producing the
+> Slice 10 / R4 runtime-lifecycle evidence (case **R4-02**); the pre-fix failure
+> was reproduced at runtime before the fix.
+
+**Severity:** Critical (the `order`-source capacity grant could never be written, so a paid order could never provision a meeting) · **Discovered:** 2026-09-25 (runtime) · **Components:** `src/plugins/bigbluebutton-plugin/config/bbb-fulfillment.ts` (`createFulfillment` only — no entity, no migration)
+
+**What the code did.** `createFulfillment()` derived each line's product variant from the `order` object it is handed:
+
+```ts
+const orderLine = order.lines.find((l) => String(l.id) === String(line.orderLineId));
+const productVariantId = orderLine?.productVariant?.id;
+```
+
+Vendure does not give a fulfillment handler an order with `lines` loaded. The `order` arrives from `FulfillmentService.getOrdersFromLines()`, which loads `relations: ['order', 'order.channels']` **only** — `order.lines` is `undefined`. The `&&` chain therefore never defended anything: `.find` is called on `undefined` and throws `TypeError: Cannot read properties of undefined (reading 'find')`.
+
+**Why nobody noticed.** The throw happens *inside* the handler, so Vendure wraps it and the Admin caller only sees `CREATE_FULFILLMENT_ERROR` with no stack — indistinguishable from a bad input. The only consumed consequence, the `BbbCapacityGrant` write, is intentionally idempotent and silent (it logs at `info`), so nothing downstream failed loudly: the fulfillment row was simply never created and no capacity was granted.
+
+**Why it matters.** Writer (B) of the three capacity-grant writers is the *purchase* path — `addFulfillmentToOrder` → `bbbFulfillmentHandler` → `BbbCapacityGrant(sourceType: 'order')`. With it dead, the only grants any tenant organization could hold were the auto-created `internal_overhead` grant and subscription grants. Combined with BUG-036's rule that `internal_overhead` is never tenant-selectable, a customer who paid for a session could not provision a meeting **at all** — the purchase → entitlement → BBB chain was severed at exactly the point Slice 10 exists to prove.
+
+**Fixed.** The line is now resolved from the handler's own `lines` input, following Vendure's canonical `digitalFulfillmentHandler` in the Digital Products guide, and hoisted **out of the per-line loop** into a single batched query:
+
+```ts
+const resolvedLines = await connection.getRepository(ctx, OrderLine).find({
+  where: { id: In(lines.map((l) => String(l.orderLineId))) },
+  relations: { productVariant: true },
+});
+```
+
+`order.lines` is no longer read anywhere in the handler. One query regardless of line count, and `productVariant` is loaded explicitly because the fulfillment handler has no other reason to have it.
+
+**Runtime reproduction and verification (2026-09-25).** R4-02 calls the real Admin `addFulfillmentToOrder` against real Postgres. Pre-fix it fails with `CREATE_FULFILLMENT_ERROR`; post-fix it writes the grant and the change is causally load-bearing — R4-04 then provisions a meeting selecting **`grantId` of the `order` grant, not the overhead grant**:
+
+| Evidence (real Postgres, `R4_E2E=true`) | Observed |
+|---|---|
+| R4-02 — Admin `addFulfillmentToOrder` | `grant=2 sourceType=order grantedMinutes=600 orderLineId=1 fulfillment=T_1` |
+| R4-04 — provisioning selects it over `internal_overhead` | `meeting=1 state=Active session=1 status=LIVE grantId=2` |
+| R4-08 — usage ledger binds to that same grant | `ledgerRows=1 consumedMinutes=11 grant=2 grant.consumedMinutes=11 session=FINISHED` |
+
+BUG-036 declared `internal_overhead` unselectable, which is what makes R4-02 a hard prerequisite of R4-04: had the grant write still been broken, provisioning would have failed on an empty selectable set rather than silently borrowing ops headroom.
+
+---
+
 ## BUG C — `subscribeToPlan` Initial Period Blocked ADR-041 CAS (fixed 2026-09-20)
 
 | Field | Detail |
@@ -265,3 +309,5 @@ BBB destroys meetings that are never joined after a server-side timeout. `BbbRec
 | BUG-035 | High | `src/plugins/marketplace/e2e/commission.e2e-spec.ts` line 261 — the order-hydration query after `setOrderAddress` fetched the order without `relations: ['lines', 'surcharges']`, so `Order.lines` was empty. The INV-008 forged-reference test (`$0-row`) asserts that a forged `marketplaceRef` on an order with no matching resource lines is rejected; with an empty `lines` array the assertion `order.lines.some(l => l.productVariant.id === resourceVariantId)` always returned `false`, making the test pass for the wrong reason on a green-field DB but fail on any DB where real order lines existed from prior runs. **Root cause:** the hydration step was copied from a simpler fixture that didn't need line-level access and the relations array was never extended. **Fix:** added `relations: ['lines', 'surcharges']` to the order-hydration query. Verified: commission E2E **6/6 pass**, including the INV-008 forge case now correctly exercising the line-matching path. | ✅ Fixed |
 | INV-008 | P1 | `src/lib/vendure/session-cta.ts` (deleted) + `learning-dashboard.service.ts` — `getSessionCta()` was a client-side entitlement isolation layer containing business logic (joinUrl precedence, trial eligibility, registration status) that violated the entitlement-only access invariant. Fixed by moving the CTA decision server-side: `LearningCourse` now carries server-driven `ctaAction`/`ctaLabel` computed in `LearningDashboardService.getDashboard()`. `course-card.tsx` renders these fields instead of re-deriving eligibility from the clock. `session-cta.ts` deleted. | ✅ Fixed |
 | BUG-037 | High | `src/plugins/bigbluebutton-plugin/__tests__/bbb-channel-isolation.e2e-spec.ts` — the INV-001 "Phase A isolation" suite could not pass (7 failed / 6 skipped), so the isolation evidence cited by `security.md` §SEC-002 and `platform-adr.md` rested on a suite that could not execute. Three harness-only causes: (1) the spec loaded only `TenantPlugin` + `BigBlueButtonPlugin`, but `TENANT_ADMIN_ROLE_PERMISSIONS` grants CMS/Reviews permissions no loaded plugin had registered, so `registerNewTenant` failed with `The permission "CreateCmsArticle" may not be assigned`; (2) the spec never received the BUG-033 `requireVerification: false` fix, so tenant-channel logins returned a null `CurrentUser`; (3) phase 2 created the org as SuperAdmin via an **un-awaited** `adminClient.asSuperAdmin()` (login race → unauthenticated request → generic `ForbiddenError`) and `setChannelToken('')` (unset `ctx.channelId` → Vendure's `userHasPermissions()` returns false → every `@Allow` fails), while the org already existed — `BbbTenantProvisioningListener` provisions it on `TenantRegisteredEvent` with a tenant-scoped ctx, as `assignToCurrentChannel()` requires. Fix: load `CmsPlugin`/`ReviewsPlugin`/`SubscriptionPlugin` (the set the green tenant-plugin spec uses), add `requireVerification: false`, replace the creation phase with resolution of the real provisioning path (polled), and compare GraphQL `channelId` against the **encoded** form while repository reads use the decoded one. No product code changed. Verified: `npm run test:e2e:bbb-isolation` → **13/13** real Postgres (pre-fix 7 failed/6 skipped → 5 failed/8 passed → 13/13); `npx tsc --noEmit` exit 0. | ✅ Fixed |
+| BUG-038 | Critical | `src/plugins/bigbluebutton-plugin/config/bbb-fulfillment.ts` — `createFulfillment()` resolved each line's product variant via `order.lines.find(...)`, but Vendure's `FulfillmentService.getOrdersFromLines()` hands the handler an order loaded with `relations: ['order', 'order.channels']` **only** — `order.lines` is `undefined`, so the `?.` chain never guarded and the call threw `TypeError: Cannot read properties of undefined (reading 'find')`. Vendure wrapped it, so the Admin caller saw only `CREATE_FULFILLMENT_ERROR` with no stack, and the sole consumed effect (an idempotent, `info`-level `BbbCapacityGrant` write) failed silently — meaning capacity-grant writer (B) `addFulfillmentToOrder → bbbFulfillmentHandler → BbbCapacityGrant(sourceType:'order')` was dead. With BUG-036 also making `internal_overhead` non-selectable, a customer who paid for a session could not provision a meeting at all. **Fix:** resolve lines from the handler's own `lines` input — `find({ where: { id: In(lines.map(l => String(l.orderLineId))) }, relations: { productVariant: true } })` — hoisted out of the per-line loop into one batched query, mirroring Vendure's canonical `digitalFulfillmentHandler` (Digital Products guide); `order.lines` is no longer read anywhere in the handler. Found and runtime-reproduced while writing the Slice 10 / R4 evidence: pre-fix R4-02 fails with `CREATE_FULFILLMENT_ERROR`; post-fix `[R4-02] grant=2 sourceType=order grantedMinutes=600 orderLineId=1 fulfillment=T_1`, and R4-04 proves it is load-bearing by provisioning `meeting=1 state=Active session=1 status=LIVE grantId=2` (the `order` grant, not `internal_overhead`), with R4-08 binding the ledger to the same grant. | ✅ Fixed |
+

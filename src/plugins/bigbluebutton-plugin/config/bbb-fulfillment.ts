@@ -3,11 +3,13 @@ import {
   LanguageCode,
   Logger,
   Order,
+  OrderLine,
   OrderProcess,
   OrderService,
   RequestContext,
   TransactionalConnection,
 } from "@vendure/core";
+import { In } from "typeorm";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbProductAccess } from "../entities/bbb-product-access.entity";
 import { BbbOrganizationService } from "../services/bbb-organization.service";
@@ -62,6 +64,29 @@ export const bbbFulfillmentHandler = new FulfillmentHandler({
   async createFulfillment(ctx, orders, lines, args) {
     const order = orders[0];
 
+    // ── 0. Resolve the order lines ONCE ────────────────────────────────────
+    // The `order` handed to this handler comes from Vendure's
+    // getOrdersFromLines(), which loads relations ['order', 'order.channels']
+    // only — its `lines` relation is undefined. Reading `order.lines.find`
+    // therefore threw "Cannot read properties of undefined (reading 'find')",
+    // making EVERY addFulfillmentToOrder call fail with CREATE_FULFILLMENT_ERROR
+    // so no order-source capacity grant could ever be written
+    // (proved by R4-02, 2026-09-25).
+    //
+    // This is the documented Vendure pattern: load the OrderLines from the
+    // `lines` input rather than from `order.lines` — see the canonical
+    // `digitalFulfillmentHandler` in the Digital Products guide, which does the
+    // same `find({ where: { id: In(lines.map(l => l.orderLineId)) },
+    // relations: { productVariant: true } })`.
+    const orderLinesById = new Map<string, OrderLine>();
+    const resolvedLines = await connection.getRepository(ctx, OrderLine).find({
+      where: { id: In(lines.map((l) => String(l.orderLineId))) },
+      relations: { productVariant: true },
+    });
+    for (const l of resolvedLines) {
+      orderLinesById.set(String(l.id), l);
+    }
+
     for (const line of lines) {
       const org = await orgService.findByChannelId(ctx);
       if (!org) {
@@ -71,6 +96,11 @@ export const bbbFulfillmentHandler = new FulfillmentHandler({
         );
         continue;
       }
+
+      const orderLine = orderLinesById.get(String(line.orderLineId));
+      const productVariantId = orderLine?.productVariant
+        ? String(orderLine.productVariant.id)
+        : undefined;
 
       // ── 1. Capacity grant (existing, idempotent) ──────────────────────────
       // Guard against fulfillment retries creating duplicate grants.
@@ -83,13 +113,6 @@ export const bbbFulfillmentHandler = new FulfillmentHandler({
         const validUntil = new Date(
           Date.now() + (args.validityDays as number) * 24 * 60 * 60 * 1000,
         );
-        // Resolve productVariantId from the order line for traceability
-        const orderLine = order.lines.find(
-          (l) => String(l.id) === String(line.orderLineId),
-        );
-        const productVariantId = orderLine
-          ? String(orderLine.productVariant.id)
-          : undefined;
         const grant = new BbbCapacityGrant({
           organization: org,
           orderId: String(order.id),
@@ -114,16 +137,13 @@ export const bbbFulfillmentHandler = new FulfillmentHandler({
       }
 
       // ── 2. Room entitlement (INV-003) ──────────────────────────────────────
-      // Resolve the productVariantId from the order lines.
-      const orderLine = order.lines.find(
-        (l) => String(l.id) === String(line.orderLineId),
-      );
-      if (!orderLine) continue;
+      // Uses the line resolved in step 0 (see the note there).
+      if (!productVariantId) continue;
 
       const productAccess = await connection
         .getRepository(ctx, BbbProductAccess)
         .findOne({
-          where: { productVariantId: String(orderLine.productVariant.id) },
+          where: { productVariantId },
           relations: ["room"],
         });
 
