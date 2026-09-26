@@ -190,13 +190,16 @@ provider-webhook-processing job
   │                version race, target still ahead → retry (max 3, safe — no charge)
   │                retry exhausted      → reconciliation incident
   │
-  ├─ Mark ProviderWebhookEvent { status: 'processed', processedAt }
+  ├─ Mark ProviderWebhookEvent { status: 'processed', processedAt, channelId }
   │
   ├─ On exception (including MissingProviderCycleError) + attempts left:
+  │    ├─ Persist binding-resolved channelId + errorMessage (INV-001: a retrying
+  │    │    inbox event stays tenant-attributable)
   │    └─ Keep status: 'pending', rethrow for BullMQ retry
   │
   └─ On exception + MAX_ATTEMPTS exhausted:
-       └─ Mark ProviderWebhookEvent { status: 'failed', failedAt } (terminal)
+       └─ Mark ProviderWebhookEvent { status: 'failed', failedAt } (terminal),
+            retaining channelId + errorMessage for per-tenant triage
 ```
 
 ### Failure Semantics

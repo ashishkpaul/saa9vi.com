@@ -89,6 +89,12 @@ export class ProviderWebhookQueueService implements OnModuleInit {
      *   4. Resolve channel from binding
      *   5. Process event
      *   6. Persist resolved channel + processed status
+     *
+     * The resolved channel is persisted on EVERY terminal outcome of the
+     * attempt — success, retryable failure and terminal failure — never only
+     * on success. `channelId` is the binding-derived tenant attribution of the
+     * inbox record, so an operator triaging a failed/retrying event must still
+     * be able to tell which tenant it belongs to.
      */
     private async processWebhookEvent(eventId: number): Promise<void> {
         const ctx = await this.requestContextService.create({ apiType: 'admin' });
@@ -109,6 +115,11 @@ export class ProviderWebhookQueueService implements OnModuleInit {
         event.attemptCount += 1;
         await repo.save(event);
 
+        // Binding-derived tenant attribution (INV-001). Hoisted out of the try so
+        // the failure paths below persist it too: a successfully resolved channel
+        // must never be lost just because processing failed.
+        let resolvedChannelId: string | null = null;
+
         try {
             // Resolve channel from binding BEFORE processing (INV-001).
             // Inside the try: a DB/infrastructure exception during channel
@@ -116,7 +127,7 @@ export class ProviderWebhookQueueService implements OnModuleInit {
             // bookkeeping as any other worker failure — the failure state
             // machine covers the WHOLE worker path, not just business
             // processing.
-            const resolvedChannelId = await this.resolveChannelFromBinding(ctx, event);
+            resolvedChannelId = await this.resolveChannelFromBinding(ctx, event);
 
             // Route to the appropriate provider processor — validate provider first,
             // then enforce INV-018 channel-scoped context for supported providers.
@@ -149,7 +160,8 @@ export class ProviderWebhookQueueService implements OnModuleInit {
                 throw new Error(`Unsupported provider: ${event.provider}`);
             }
 
-            // Persist resolved channel
+            // Persist resolved channel (INV-001) — the failure paths assign the
+            // same value in the catch block; this covers the success path.
             if (resolvedChannelId) {
                 event.channelId = resolvedChannelId;
             }
@@ -163,6 +175,14 @@ export class ProviderWebhookQueueService implements OnModuleInit {
 
             Logger.log(`Webhook event ${eventId} processed successfully`, loggerCtx);
         } catch (err: any) {
+            // Preserve the binding-derived tenant attribution (INV-001) on the
+            // retry and terminal-failure paths. Without this, a failed event is
+            // stored with channelId = NULL and cannot be triaged per tenant,
+            // even though the binding resolved the channel successfully.
+            if (resolvedChannelId) {
+                event.channelId = resolvedChannelId;
+            }
+
             // Update error message for operational visibility
             event.errorMessage = err?.message || 'Unknown error';
 
