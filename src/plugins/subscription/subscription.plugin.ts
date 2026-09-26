@@ -81,8 +81,8 @@ import { PluginInitOptions } from './types';
         // TenantRegisteredEvent and is deliberately fail-soft.
         FreePlanProvisioningService,
         FreePlanProvisioningListener,
-        // Tenant-facing commercial READ surface (plan §3.5, slice 8).
-        // Read-only: self-serve upgrade/cancel stays deferred (UI-1).
+        // Tenant-facing commercial surface (plan §3.5 + ADR-046): reads plus
+        // self-serve plan change/cancellation. Provider internals stay Admin-only.
         SubscriptionShopService,
         TenantSelfServeSubscriptionCooldownService,
         // Razorpay services (default provider)
