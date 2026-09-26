@@ -48,7 +48,7 @@ export const shopApiExtensions = gql`
 
   """
   Result of a tenant self-serve subscription lifecycle mutation.
-  `authorizationUrl` is invocation-scoped provider authorization data and is
+  authorizationUrl is invocation-scoped provider authorization data and is
   never persisted on the MySubscription read model.
   """
   type MySubscriptionChangeResult {
