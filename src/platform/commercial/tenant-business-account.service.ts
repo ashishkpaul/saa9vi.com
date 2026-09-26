@@ -3,6 +3,7 @@ import {
   AdministratorService,
   ForbiddenError,
   Logger,
+  Permission,
   RequestContext,
 } from "@vendure/core";
 
@@ -48,6 +49,8 @@ import {
  * billing fact — the same reason `CommercialEntitlementService` is shared.
  */
 @Injectable()
+export type TenantSelfServeActor = "tenant-self-serve" | "platform-superadmin";
+
 export class TenantBusinessAccountService {
   private static readonly loggerCtx = "TenantBusinessAccountService";
 
@@ -79,6 +82,35 @@ export class TenantBusinessAccountService {
         (channel) => String(channel.id) === String(ctx.channelId),
       ),
     );
+  }
+
+  /**
+   * Authorization + provenance gate for tenant-facing billing mutations.
+   *
+   * SuperAdmin access remains available for operational support, but is returned
+   * as a distinct actor so Shop mutations cannot mislabel portal interventions
+   * as tenant self-serve activity.
+   */
+  async assertTenantSelfServeBusinessAccount(
+    ctx: RequestContext,
+  ): Promise<TenantSelfServeActor> {
+    if (!ctx.activeUserId || !ctx.channelId) {
+      throw new ForbiddenError();
+    }
+
+    if (ctx.userHasPermissions([Permission.SuperAdmin])) {
+      return "platform-superadmin";
+    }
+
+    if (!(await this.isBusinessAccount(ctx))) {
+      Logger.debug(
+        `Denied self-serve commercial mutation for user ${ctx.activeUserId} on channel ${ctx.channelId}` ,
+        TenantBusinessAccountService.loggerCtx,
+      );
+      throw new ForbiddenError();
+    }
+
+    return "tenant-self-serve";
   }
 
   /**
