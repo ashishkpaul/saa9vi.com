@@ -15,6 +15,7 @@ import { CmsPlugin } from "../../cms/cms.plugin";
 import { ReviewsPlugin } from "../../reviews/reviews-plugin";
 import { BigBlueButtonPlugin } from "../../bigbluebutton-plugin";
 import { SubscriptionPlugin } from "../subscription.plugin";
+import { E2E_INITIAL_DATA } from "../../tenant-plugin/e2e/fixtures/e2e-initial-data";
 import { RazorpaySubscriptionProvider } from "../providers/razorpay/razorpay-subscription.provider";
 import { TenantSelfServeSubscriptionCooldownService } from "../services/tenant-self-serve-subscription-cooldown.service";
 
@@ -168,7 +169,7 @@ describe("ADR-046 — tenant self-serve subscription Shop API", () => {
   const loggerInfo = vi.spyOn(Logger, "info");
 
   beforeAll(async () => {
-    await server.init();
+    await server.init({ initialData: E2E_INITIAL_DATA });
 
     // This E2E exercises the Shop contract while keeping Redis/provider
     // externalities deterministic. The cooldown unit itself is covered by the
