@@ -9,8 +9,7 @@ import { TenantBusinessAccountService } from "../../../platform/commercial/tenan
 /**
  * Shop API (tenant-facing) commercial reads — plan §3.5, slice 8.
  *
- * READ-ONLY: no `@Mutation()` exists in this resolver, deliberately (UI-1 —
- * self-serve upgrade/cancel stays deferred pending its own ADR).
+ * Tenant-facing commercial reads plus ADR-046 self-serve billing mutations.
  *
  * PERMISSION MODEL (locked):
  *   - `availableSubscriptionPlans` is Public: the plan catalogue is
@@ -24,7 +23,7 @@ import { TenantBusinessAccountService } from "../../../platform/commercial/tenan
  *     what protects the tenant's commercial state.
  *
  * The tenant is always `ctx.channelId` (hostname-resolved by the storefront).
- * No query takes a `channelId` argument.
+ * No Shop operation takes a `channelId` argument; mutations resolve the tenant from `ctx.channelId`.
  */
 @Resolver()
 export class SubscriptionShopResolver {
@@ -52,6 +51,7 @@ export class SubscriptionShopResolver {
   async myLiveUsage(@Ctx() ctx: RequestContext) {
     return this.subscriptionShopService.findMyLiveUsage(ctx);
   }
+
   /**
    * ADR-046: tenant-scoped self-serve plan change.
    *
