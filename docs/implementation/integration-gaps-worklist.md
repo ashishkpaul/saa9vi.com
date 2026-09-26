@@ -668,32 +668,44 @@ Cline MUST stop and report rather than improvise when:
 
 **Do not silently convert an unverified claim into an implementation requirement.**
 
-## UI-1 — Subscription UI (post-ADR-039): ACTOR MODEL DECIDED
+## UI-1 — Subscription UI (post-ADR-046): IMPLEMENTATION IN PROGRESS
 
-**Priority:** P2 — **Status:** Decision recorded 2026-09-16; UI implementation gated on it. Audit evidence: `docs/implementation/storefront-subscription-ui-audit.md`.
+**Priority:** P2 — **Status:** ADR-046 accepted 2026-09-26; self-serve Shop API implementation is now on
+`feat/adr-046-self-serve-subscription`. Audit discovery remains preserved in
+`docs/implementation/storefront-subscription-ui-audit.md`.
 
-### Decision (product decision, not a permanent architecture constraint)
+### Decision
 
-**Current phase: option (b) — Portal Admin subscribes tenants via the Admin API.**
-
-The tenant owner does not subscribe from the storefront in this phase. The flow is:
+ADR-046 accepts **tenant self-service via authenticated Shop API mutations**:
 
 ```text
-Portal Admin → Admin API subscribeToPlan(channelId, planId)
-  → Razorpay subscription created → providerShortUrl returned
-  → tenant owner authorizes at the Razorpay short_url
-  → Razorpay webhook → binding → pending_provider_auth → active
+Tenant Administrator / platform SuperAdmin
+  → Shop API requestMySubscriptionPlanChange(planId)
+  → channel = ctx.channelId
+  → tenant business-account/provenance guard
+  → Redis SET NX EX 300 cooldown
+  → existing ADR-044 SubscriptionService plan-change operation
+  → MySubscriptionChangeResult { subscription, authorizationUrl? }
+  → provider webhook remains authoritative for activation
 ```
 
-No subscription UI is implemented in the storefront this phase; the storefront may READ the tenant's own subscription state (status, providerStatus, providerShortUrl) but performs no subscription mutations.
+Cancellation is exposed symmetrically through `cancelMySubscription(atPeriodEnd)`, with
+`atPeriodEnd = true` as the default.
 
-### Explicitly deferred (requires a NEW ADR before implementation)
+### Accepted implementation rules
 
-Option (c) — self-service tenant-owner subscription via an authenticated **Shop API** mutation. This changes the actor authorization boundary (channel/tenant identity must derive from the authenticated RequestContext, never a client-supplied channelId). Do not expose the existing Admin `subscribeToPlan(channelId, planId)` through the Shop API. Option (a) Dashboard-only remains technically available at any time without new backend surface.
+1. **Trust boundary:** returning from Razorpay authorization does NOT mean active. The frontend re-queries Saa9vi state; only the webhook-driven `pending_provider_auth → active` transition is authoritative.
+2. **Provider-internals boundary:** `MySubscription` never exposes `providerPlanId`, `providerStatus`, `providerShortUrl`, or `billingCustomerId`. `authorizationUrl` is transient and originates only from the provider operation performed by that mutation invocation.
+3. **Tenant boundary:** no Shop mutation accepts `channelId`; tenant identity comes only from `ctx.channelId`. Customer/learner and cross-channel Administrator sessions are refused. SuperAdmin intervention is explicitly attributed as `platform-superadmin`.
+4. **Cooldown:** self-serve plan changes use Redis `SET key NX EX 300`, before the provider call, and fail closed when Redis protection is unavailable.
+5. **codegen sequencing:** backend GraphQL contract → `npm run codegen` → generated types → storefront UI. The current branch includes the contract refresh; runtime codegen must still be executed in the local checkout before merge.
+6. **Scope separation:** normal-checkout `PaymentMethodHandler` (one-time commerce) remains separate from recurring subscription UX.
 
-### Implementation rules when UI work starts
+### Evidence required before merge
 
-1. **Trust boundary:** returning from the Razorpay authorization page does NOT mean active. The frontend re-queries Saa9vi subscription state; only the webhook-driven `pending_provider_auth → active` transition is authoritative.
-2. **codegen sequencing:** actor decision → backend contract final → `npm run codegen` (gql.tada) → queries/types → UI. Never UI-first.
-3. **State machine to mirror:** `pending_provider_auth` → "Complete Payment Authorization" CTA linking the tenant's own `providerShortUrl`; `active` → active plan; `past_due` → payment attention; `cancelled` → cancelled.
-4. **Scope separation:** normal-checkout `PaymentMethodHandler` (one-time commerce) is a separate integration per ADR-038 and must not be combined with the subscription UX.
+- ownership-boundary proof (learner + different-channel Administrator refused; actor provenance accurate);
+- cooldown/idempotency proof (second request within five minutes rejected before provider invocation);
+- transient redirect proof (new provider URL returned only for that invocation; same-plan returns null);
+- boundary-regression proof (post-change `mySubscription` contains no provider internals);
+- cancellation proof for both at-period-end and immediate paths.
+
