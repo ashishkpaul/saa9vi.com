@@ -47,6 +47,16 @@ export const shopApiExtensions = gql`
   }
 
   """
+  Result of a tenant self-serve subscription lifecycle mutation.
+  `authorizationUrl` is invocation-scoped provider authorization data and is
+  never persisted on the MySubscription read model.
+  """
+  type MySubscriptionChangeResult {
+    subscription: MySubscription!
+    authorizationUrl: String
+  }
+
+  """
   The active channel's own subscription. Readable only by the tenant's
   business account.
   """
@@ -103,5 +113,12 @@ export const shopApiExtensions = gql`
     "Null when the channel has no subscription at all."
     mySubscription: MySubscription
     myLiveUsage: MyLiveUsage!
+  }
+
+  extend type Mutation {
+    "Change the subscription for the authenticated business account's active tenant channel."
+    requestMySubscriptionPlanChange(planId: ID!): MySubscriptionChangeResult!
+    "Cancel the subscription for the authenticated business account's active tenant channel."
+    cancelMySubscription(atPeriodEnd: Boolean = true): MySubscriptionChangeResult!
   }
 `;
