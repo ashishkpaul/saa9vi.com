@@ -25,6 +25,24 @@ import { ChannelMultiSelect } from './components/channel-multiselect';
 import { PageSectionEditor } from './components/page-section-editor';
 import { useState } from 'react';
 
+/**
+ * NOTE: `customFields` is deliberately NOT selected here.
+ *
+ * Vendure only attaches the `customFields: JSON` field to a GraphQL type whose
+ * name matches a key in `config.customFields`. The CMS page entity declares its
+ * custom-field config under its *class* name `Page` (`customFields: { Page: [] }`
+ * in vendure-config.ts), while its GraphQL type is namespaced `CmsPage` (see
+ * cms/api/api-extensions.ts). Those names do not match, so the Admin schema has
+ * no `customFields` field on `CmsPage` and selecting it invalidates the whole
+ * operation — which previously surfaced only as a blank detail form because the
+ * error was collapsed into an empty dataset.
+ *
+ * `Article` and `Banner` are unaffected: their entity class names and GraphQL
+ * type names match, so Vendure does attach `customFields` to them.
+ *
+ * `CustomFieldsPageBlock entityType="CmsPage"` below is still mounted; it renders
+ * `null` while the server reports zero custom fields for the type.
+ */
 const cmsPageDetailDocument = graphql(`
     query GetCmsPageDetail($id: ID!) {
         cmsPage(id: $id) {
@@ -36,7 +54,6 @@ const cmsPageDetailDocument = graphql(`
             metaDescription
             isPublished
             sections
-            customFields
             channels {
                 id
                 code

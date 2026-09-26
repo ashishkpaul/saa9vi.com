@@ -1,10 +1,53 @@
-import { InvariantRunner, AdrChecker, RfcLifecycleChecker, StoryFlowChecker, CheckResult } from './index';
+import { createRequire } from 'module';
+
+import { InvariantRunner, AdrChecker, RfcLifecycleChecker, StoryFlowChecker, CheckResult, DashboardGraphqlContractChecker } from './index';
 import { RuntimeInvariantRunner } from './event-chain/runtime-invariant-runner';
 import { RuntimeTraceStore, RuntimeCausalityValidator } from '../tracing';
 import { CausalityGraphStore, CausalityQueryAPI, LayerReconciler } from '../causality';
 // NOTE: BUG-005 stress tests are now a standalone module and are not imported here
 // to keep the invariant verification CLI lightweight and free of unresolved module coupling.
 // Run stress tests via their own entry point or integration suite instead.
+
+/**
+ * Builds the Admin API schema straight from the Vendure config — the same
+ * mechanism the Dashboard build uses (`@vendure/dashboard/vite` schema-generator).
+ * No database connection is required.
+ */
+async function loadAdminSchema() {
+  const { GraphQLTypesLoader } = await import('@nestjs/graphql');
+  const {
+    getConfig,
+    getFinalVendureSchema,
+    resetConfig,
+    runPluginConfigurations,
+    setConfig,
+    VENDURE_ADMIN_API_TYPE_PATHS,
+  } = await import('@vendure/core');
+  const { buildSchema } = await import('graphql');
+  // `vendure-config` must be loaded lazily (it registers plugin entities and
+  // reads env at module scope) but cannot be reached through a relative ESM
+  // specifier: `import('../../vendure-config')` fails `tsc` because the server
+  // tsconfig is `module: nodenext` (relative ESM specifiers need an explicit
+  // extension), while `import('../../vendure-config.js')` is unresolvable at
+  // runtime under ts-node, where only the `.ts` source exists on disk. A CJS
+  // require resolves in both worlds: ts-node maps the extensionless specifier
+  // to the `.ts` source, and the compiled build maps it to `dist/vendure-config.js`.
+  const { config } = createRequire(__filename)('../../vendure-config');
+
+  resetConfig();
+  await setConfig(config as any);
+  const runtimeConfig = await runPluginConfigurations(getConfig());
+
+  const sdl = await getFinalVendureSchema({
+    config: runtimeConfig,
+    typePaths: VENDURE_ADMIN_API_TYPE_PATHS as unknown as string[],
+    typesLoader: new GraphQLTypesLoader(),
+    apiType: 'admin',
+    output: 'sdl',
+  });
+
+  return buildSchema(sdl);
+}
 
 async function main() {
   const runner = new InvariantRunner();
@@ -13,6 +56,10 @@ async function main() {
     new AdrChecker(),
     new RfcLifecycleChecker(),
     new StoryFlowChecker(),
+    // INV-015: every Dashboard GraphQL document must validate against the Admin
+    // schema. An unknown field rejects the whole operation, which the UI then
+    // renders as an empty dataset — a silently broken ledger.
+    new DashboardGraphqlContractChecker(process.cwd(), loadAdminSchema),
   ];
 
   console.log('=== Static Invariant Verification ===\n');

@@ -1,8 +1,19 @@
 import { useQuery } from '@tanstack/react-query';
 import { ExternalLinkIcon } from 'lucide-react';
 import { api, Badge, Card, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@vendure/dashboard';
+import { graphql } from '@/gql';
 
-const GET_SUBSCRIPTIONS = `
+/**
+ * NOTE: this query is intentionally global (no `channelId` argument).
+ *
+ * `organizationSubscriptions` is the SuperAdmin platform view of *which* tenant
+ * is on *which* plan — a set that only makes sense enumerated across all
+ * channels. Per-tenant financial ledgers (mandates, payment attempts,
+ * reconciliation incidents) ARE channel-scoped and take a required `channelId`.
+ * Treat the absence of a channel filter here as a documented exception
+ * (ADR-046 §OrganizationSubscriptions), not as a missing tenant boundary.
+ */
+const GET_SUBSCRIPTIONS = graphql(`
   query GetOrganizationSubscriptions {
     organizationSubscriptions {
       id
@@ -15,9 +26,9 @@ const GET_SUBSCRIPTIONS = `
       plan { id name slug monthlyPriceInPaise providerPlanId }
     }
   }
-`;
+`);
 
-const STATUS_VARIANT: Record<string, string> = {
+const STATUS_VARIANT: Record<string, 'warning' | 'success' | 'secondary' | 'destructive'> = {
   pending_provider_auth: 'warning',
   trialing: 'warning',
   active: 'success',
@@ -25,7 +36,7 @@ const STATUS_VARIANT: Record<string, string> = {
   cancelled: 'secondary',
 };
 
-function toRupees(paise: number) {
+function toRupees(paise: number | null | undefined) {
   return ((paise ?? 0) / 100).toFixed(2);
 }
 
@@ -51,6 +62,16 @@ export function SubscriptionsList() {
       <Card>
         {query.isLoading ? (
           <div className="p-4 space-y-3">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
+        ) : query.isError ? (
+          /* A failed GraphQL operation must never be rendered as "no
+             subscriptions found" — that would show an operator an empty
+             billing ledger when the ledger is in fact unreadable. */
+          <div className="p-6 text-center text-destructive" role="alert">
+            <p className="font-semibold">Unable to load organization subscriptions</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              {query.error instanceof Error ? query.error.message : 'GraphQL query error'}
+            </p>
+          </div>
         ) : subs.length === 0 ? (
           <div className="p-6 text-center text-muted-foreground">No subscriptions found.</div>
         ) : (
@@ -67,7 +88,7 @@ export function SubscriptionsList() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {subs.map((s: any) => (
+              {subs.map(s => (
                 <TableRow key={s.id}>
                   <TableCell className="font-medium">{s.plan?.name ?? '—'}</TableCell>
                   <TableCell className="text-sm">{s.channelId}</TableCell>

@@ -221,6 +221,22 @@ This extends INV-002 (append-only billing truth) to the advertising domain.
 
 **Rejection criterion:** Any service method that calls `.update()` on an `AdSpendLedger` row is rejected.
 
+### INV-015: Dashboard GraphQL Documents Must Validate Against the Admin Schema. Schema Rejections Are Never Rendered as Empty Datasets.
+
+Every GraphQL document issued by a Dashboard route must validate against the Admin API schema built from the Vendure config. A rejection must surface as an error state, never as an empty table.
+
+**Why:** GraphQL rejects an operation as a whole as soon as one selected field does not exist — the response then carries no `data` at all. A component that renders `data?.x?.items ?? []` cannot tell that rejection apart from "this tenant genuinely has no rows", so a broken ledger renders as a clean empty table and no error is surfaced anywhere.
+
+**Incidents fixed under this invariant:** the mandates and payment-attempt screens selected `providerCustomerId`, `mandateId`, `activatedAt`, `revokedAt`, `providerOrderId` and `providerTransactionId` — none of which exist on `ProviderMandate` / `ProviderPaymentAttempt`. The CMS page detail screen selected `customFields` on `CmsPage`; Vendure only attaches that field to a type whose name matches a `config.customFields` key, and the CMS page entity's key is its class name `Page` while its GraphQL type is namespaced `CmsPage`.
+
+**Enforcement:**
+- Static checker `DashboardGraphqlContractChecker` — `src/platform/invariants/graphql-contract.checker.ts`, registered in `src/platform/invariants/cli.ts` (`npm run verify:invariants`). It rebuilds the Admin schema from the Vendure config (no database required) and validates every document found under any plugin's `dashboard/` folder, typed and raw alike.
+- Regression spec — `src/plugins/subscription/__tests__/dashboard-graphql-contract.spec.ts`.
+- New Dashboard documents are declared with the typed `graphql()` helper from `@/gql` so `tsc -p tsconfig.dashboard.json` checks them at build time. The list of remaining untyped documents in the spec is a **ratchet**: it may only shrink.
+- Channel-scoped ledger queries (`providerMandates`, `providerPaymentAttempts`, `reconciliationIncidents`) must always pass `channelId` (INV-001). `organizationSubscriptions` is the documented global exception: the platform view of which tenant is on which plan is only meaningful across channels.
+
+**Rejection criterion:** Any Dashboard document referencing a field, argument or type absent from the Admin schema is rejected. Any ledger or list screen that renders a query failure as an empty dataset is rejected.
+
 ---
 
 
