@@ -18,6 +18,7 @@
  *      first (the service does that), `created`/`failed` never settle.
  */
 
+import * as crypto from 'crypto';
 import { describe, expect, it } from 'vitest';
 import {
   CAPTURABLE_PROVIDER_STATUSES,
@@ -30,6 +31,7 @@ import {
   isCapturableProviderStatus,
   isSettlingProviderStatus,
   verifyCheckoutSignature,
+  verifyWebhookSignature,
 } from '../razorpay-checkout.policy';
 
 const SECRET = 'test_secret_key';
@@ -258,5 +260,39 @@ describe('frozen provider-status sets', () => {
     expect([...CAPTURABLE_PROVIDER_STATUSES]).toEqual(['authorized']);
     expect(isCapturableProviderStatus('authorized')).toBe(true);
     expect(isCapturableProviderStatus('created')).toBe(false);
+  });
+});
+
+describe('verifyWebhookSignature', () => {
+  const secret = 'webhook-secret-xyz';
+  const body = '{"event":"payment.captured","payload":{}}';
+  const validSig = crypto.createHmac('sha256', secret).update(body).digest('hex');
+
+  it('accepts matching HMAC-SHA256 signature for string body', () => {
+    const r = verifyWebhookSignature({ rawBody: body, signature: validSig, webhookSecret: secret });
+    expect(r.ok).toBe(true);
+  });
+
+  it('accepts matching HMAC-SHA256 signature for Buffer body', () => {
+    const r = verifyWebhookSignature({ rawBody: Buffer.from(body, 'utf8'), signature: validSig, webhookSecret: secret });
+    expect(r.ok).toBe(true);
+  });
+
+  it('fails on missing secret', () => {
+    const r = verifyWebhookSignature({ rawBody: body, signature: validSig, webhookSecret: '' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('missing-secret');
+  });
+
+  it('fails on missing signature', () => {
+    const r = verifyWebhookSignature({ rawBody: body, signature: undefined, webhookSecret: secret });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('missing-signature');
+  });
+
+  it('fails on forged signature', () => {
+    const r = verifyWebhookSignature({ rawBody: body, signature: 'bad-sig', webhookSecret: secret });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('signature-mismatch');
   });
 });

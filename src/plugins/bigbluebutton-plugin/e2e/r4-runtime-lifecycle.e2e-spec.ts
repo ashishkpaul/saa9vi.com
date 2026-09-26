@@ -13,8 +13,11 @@
  *
  *   (A) PaymentSettled  → BbbOrderFulfillmentListener → BbbEntitlement(source='purchase')
  *       (order-fulfillment.listener.ts:37-45)             — NO capacity grant on this path
- *   (B) Admin addFulfillmentToOrder → bbbFulfillmentHandler → BbbCapacityGrant(sourceType='order')
- *       (config/bbb-fulfillment.ts:93-104)
+ *   (B) PaymentSettled → bbbOrderProcess.onTransitionEnd → automatic fulfilment →
+ *       bbbFulfillmentHandler → BbbCapacityGrant(sourceType='order')
+ *       (config/bbb-fulfillment.ts, Option A / R3 decision 1, 2026-09-26).
+ *       The Admin addFulfillmentToOrder path still exists and is idempotent
+ *       for an already-fulfilled order (asserted in R4-02).
  *   (C) SubscriptionRenewedEvent → BbbSubscriptionListener → BbbCapacityGrant(sourceType='subscription')
  *       (listeners/bbb-subscription.listener.ts:17-59)
  *
@@ -62,6 +65,7 @@ import {
   mergeConfig,
   PaymentMethodService,
   TransactionalConnection,
+  Fulfillment,
 } from '@vendure/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getSuperadminContext } from '@vendure/testing/lib/utils/get-superadmin-context';
@@ -1125,27 +1129,67 @@ describe('Slice 10 — R4 runtime lifecycle evidence', () => {
       expect(ent.source).toBe('purchase');
       expect(String(ent.channelId)).toBe(String(org.channelId));
 
-      // 5. And it is NOT a capacity grant — proving the topology in §2.
-      const orderGrantsBeforeFulfilment = await grantsFor(org.id, 'order');
-      expect(orderGrantsBeforeFulfilment).toHaveLength(0);
+      // 5. Two writers, two triggers, ONE transition: the entitlement came from
+      //    the PaymentSettled listener, while the capacity grant came from the
+      //    automatic fulfilment that same transition triggered (Option A, R3
+      //    decision 1, 2026-09-26). Before Option A this grant did not exist at
+      //    all — the listener never wrote one, and the manual path could be dead
+      //    without any test noticing (BUG-038).
+      const orderGrantsAfterSettle = await waitFor(
+        () => grantsFor(org.id, 'order'),
+        (g) => g.length === 1,
+        'BbbCapacityGrant(sourceType="order") produced automatically on PaymentSettled',
+      );
+      expect(orderGrantsAfterSettle[0].orderLineId).toBeTruthy();
 
       // eslint-disable-next-line no-console
       console.log(
         `[R4-01 EVIDENCE] order=${order.orderId} code=${order.orderCode} payment=${order.paymentId} ` +
           `preSettle=${order.preSettlePaymentState} settle=${order.settleState} ` +
-          `entitlement=${ent.id} source=${ent.source} channel=${ent.channelId} session=${sessionId}`,
+          `entitlement=${ent.id} source=${ent.source} channel=${ent.channelId} session=${sessionId} ` +
+          `autoGrant=${orderGrantsAfterSettle[0].id}`,
       );
     }, 120_000);
 
-    // ═══ R4-02 — Admin fulfilment → capacity grant (topology path B) ═══════
-    it('R4-02: Admin addFulfillmentToOrder writes BbbCapacityGrant(sourceType="order")', async () => {
+    // ═══ R4-02 — AUTOMATIC fulfilment → capacity grant (Option A) ═══════════
+    it('R4-02: PaymentSettled auto-fulfillment writes BbbCapacityGrant(sourceType="order")', async () => {
+      // R3 decision 1 (Option A, 2026-09-26): R4-01's settlement already ran the
+      // automatic path, so no Admin call takes part here. That is the point of
+      // the decision — before it this grant had no automatic producer at all.
+      const grants = await waitFor(
+        () => grantsFor(org.id, 'order'),
+        (g) => g.length === 1,
+        'BbbCapacityGrant(sourceType="order") from the automatic fulfillment path',
+      );
+      orderGrantId = String(grants[0].id);
+
       const linesRes: any = await adminClient.query(ADMIN_ORDER_LINES, {
         id: encode(order.orderId),
       });
       const line = linesRes.order?.lines?.[0];
       if (!line?.id) fail('order.lines[0]', linesRes);
 
-      const fulfil: any = await adminClient.query(ADD_FULFILLMENT, {
+      // `sourceType` is the entity default — the handler does not set it.
+      expect(grants[0].sourceType).toBe('order');
+      expect(grants[0].orderLineId).toBe(decode(line.id));
+      expect(grants[0].grantedMinutes).toBe(600); // handler default 10h × 60
+
+      // The fulfillment itself exists and was written by THIS handler.
+      const fulfillments = await rawConn()
+        .getRepository(Fulfillment)
+        .createQueryBuilder('f')
+        .leftJoin('f.orders', 'o')
+        .where('o.id = :id', { id: decode(order.orderId) })
+        .getMany();
+      expect(fulfillments).toHaveLength(1);
+      expect(fulfillments[0].handlerCode).toBe('bbb-access-fulfillment');
+
+      // A redundant manual fulfilment must not double-grant: Vendure core's
+      // remaining-quantity guard rejects the redundant line quantity (returning
+      // ItemsAlreadyFulfilledError / undefined fulfillment id), preventing the
+      // handler from being invoked a second time. Handler-level orderLineId
+      // deduplication provides defense-in-depth.
+      const again: any = await adminClient.query(ADD_FULFILLMENT, {
         input: {
           lines: [{ orderLineId: line.id, quantity: 1 }],
           handler: {
@@ -1157,23 +1201,8 @@ describe('Slice 10 — R4 runtime lifecycle evidence', () => {
           },
         },
       });
-      if (!fulfil.addFulfillmentToOrder?.id) {
-        // CreateFulfillmentError carries the handler's real cause — surface it
-        // instead of the generic "An error occurred" wrapper.
-        fail('addFulfillmentToOrder', fulfil.addFulfillmentToOrder);
-      }
-
-      const grants = await waitFor(
-        () => grantsFor(org.id, 'order'),
-        (g) => g.length === 1,
-        'BbbCapacityGrant(sourceType="order") from bbbFulfillmentHandler',
-      );
-      orderGrantId = String(grants[0].id);
-
-      // `sourceType` is the entity default — the handler does not set it.
-      expect(grants[0].sourceType).toBe('order');
-      expect(grants[0].orderLineId).toBe(decode(line.id));
-      expect(grants[0].grantedMinutes).toBe(600); // 10h × 60
+      expect(again.addFulfillmentToOrder?.id).toBeUndefined();
+      expect(await grantsFor(org.id, 'order')).toHaveLength(1);
 
       // The entitlement (R4-01) and this grant are DIFFERENT writers on
       // DIFFERENT triggers — the §2 topology, asserted rather than assumed.
@@ -1186,7 +1215,7 @@ describe('Slice 10 — R4 runtime lifecycle evidence', () => {
       console.log(
         `[R4-02 EVIDENCE] grant=${orderGrantId} sourceType=${grants[0].sourceType} ` +
           `grantedMinutes=${grants[0].grantedMinutes} orderLineId=${grants[0].orderLineId} ` +
-          `fulfillment=${fulfil.addFulfillmentToOrder.id}`,
+          `fulfillment=${fulfillments[0].id} trigger=PaymentSettled(automatic, Option A)`,
       );
     }, 120_000);
 
@@ -1559,17 +1588,21 @@ describe('Slice 10 — R4 runtime lifecycle evidence', () => {
         ),
       );
 
+      // Slice 6 (ADR-045) may have already provisioned a 60-minute daily allowance
+      // grant for tenant B. The renewal event creates an additional period grant
+      // with grantedMinutes === granted (900).
       const grants = await waitFor(
         () => grantsFor(tenantBOrgId, 'subscription'),
-        (g) => g.length === 1,
-        'BbbCapacityGrant(sourceType="subscription") from BbbSubscriptionListener',
+        (g) => g.some((grant) => grant.grantedMinutes === granted),
+        'BbbCapacityGrant(sourceType="subscription") with 900 minutes from BbbSubscriptionListener',
       );
 
-      expect(grants[0].sourceType).toBe('subscription');
-      expect(grants[0].grantedMinutes).toBe(granted);
-      expect(String(grants[0].validFrom)).toBe(String(periodStart));
-      expect(String(grants[0].validUntil)).toBe(String(periodEnd));
-      expect(grants[0].isUnbounded).toBe(false);
+      const periodGrant = grants.find((g) => g.grantedMinutes === granted)!;
+      expect(periodGrant.sourceType).toBe('subscription');
+      expect(periodGrant.grantedMinutes).toBe(granted);
+      expect(String(periodGrant.validFrom)).toBe(String(periodStart));
+      expect(String(periodGrant.validUntil)).toBe(String(periodEnd));
+      expect(periodGrant.isUnbounded).toBe(false);
 
       // Canonical model only — the legacy RecurringCapacityGrant entity must
       // not exist as a product/runtime table.

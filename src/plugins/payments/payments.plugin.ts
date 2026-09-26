@@ -2,6 +2,9 @@ import { PluginCommonModule, RuntimeVendureConfig, VendurePlugin } from '@vendur
 import { razorpayPaymentHandler } from './config/razorpay-payment-handler';
 import { RazorpayOrdersClient } from './services/razorpay-orders.client';
 import { RazorpayCheckoutService } from './services/razorpay-checkout.service';
+import { razorpayShopApiExtensions } from './api/razorpay-shop.schema';
+import { RazorpayShopResolver } from './api/razorpay-shop.resolver';
+import { RazorpayPaymentsWebhookController } from './api/razorpay-payments-webhook.controller';
 
 /**
  * R3 — one-time commerce (plan §3.9; ADR-038 "One-time commerce" branch).
@@ -18,6 +21,11 @@ import { RazorpayCheckoutService } from './services/razorpay-checkout.service';
 @VendurePlugin({
   imports: [PluginCommonModule],
   providers: [RazorpayOrdersClient, RazorpayCheckoutService],
+  controllers: [RazorpayPaymentsWebhookController],
+  shopApiExtensions: {
+    schema: razorpayShopApiExtensions,
+    resolvers: [RazorpayShopResolver],
+  },
   configuration: (config: RuntimeVendureConfig) => {
     // Register alongside `dummyPaymentHandler`, which stays available for local
     // development and the existing e2e suites (it is the only handler that can
@@ -31,3 +39,4 @@ import { RazorpayCheckoutService } from './services/razorpay-checkout.service';
   compatibility: '^3.0.0',
 })
 export class PaymentsPlugin {}
+

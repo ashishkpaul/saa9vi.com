@@ -1,5 +1,7 @@
 import {
+  Fulfillment,
   FulfillmentHandler,
+  FulfillmentService,
   LanguageCode,
   Logger,
   Order,
@@ -12,6 +14,7 @@ import {
 import { In } from "typeorm";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbProductAccess } from "../entities/bbb-product-access.entity";
+import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbOrganizationService } from "../services/bbb-organization.service";
 import { BbbEntitlementService } from "../services/bbb-entitlement.service";
 
@@ -21,6 +24,7 @@ let connection: TransactionalConnection;
 let orgService: BbbOrganizationService;
 let entitlementService: BbbEntitlementService;
 let orderService: OrderService;
+let fulfillmentService: FulfillmentService;
 
 /**
  * Called when an order line with a BBB product variant is fulfilled.
@@ -110,15 +114,17 @@ export const bbbFulfillmentHandler = new FulfillmentHandler({
 
       if (!existingGrant) {
         const validFrom = new Date();
+        const validityDays = Number(args.validityDays) || 30;
+        const grantedHours = Number(args.grantedHours) || 10;
         const validUntil = new Date(
-          Date.now() + (args.validityDays as number) * 24 * 60 * 60 * 1000,
+          Date.now() + validityDays * 24 * 60 * 60 * 1000,
         );
         const grant = new BbbCapacityGrant({
           organization: org,
           orderId: String(order.id),
           orderLineId: String(line.orderLineId),
           productVariantId,
-          grantedMinutes: (args.grantedHours as number) * 60,
+          grantedMinutes: grantedHours * 60,
           consumedMinutes: 0,
           validFrom,
           validUntil,
@@ -197,23 +203,138 @@ export const bbbFulfillmentHandler = new FulfillmentHandler({
   },
 });
 
+/** Handler code declared above — the automatic path must use the same one. */
+const BBB_FULFILLMENT_HANDLER_CODE = "bbb-access-fulfillment";
+
+/**
+ * Option A (R3 decision 1, 2026-09-26) — AUTOMATIC FULFILLMENT.
+ *
+ * Before this, the order-source capacity grant had no automatic producer: the
+ * `PaymentSettled` listener wrote only the BbbEntitlement, and the grant required
+ * a manual Admin `addFulfillmentToOrder` (proved by R4-02, 2026-09-25). A paying
+ * customer therefore received access but **no minutes** unless an operator
+ * fulfilled the order.
+ *
+ * Now, when an order reaches `PaymentSettled`, the BBB-eligible lines are
+ * fulfilled automatically, which invokes this module's own
+ * `bbbFulfillmentHandler` and writes `BbbCapacityGrant(sourceType='order')`.
+ *
+ * Deliberate properties:
+ *   1. BBB-ONLY: a line is eligible when its variant maps to a room
+ *      (BbbProductAccess) or to a scheduled session (BbbScheduledSession).
+ *      Mixed orders leave their non-BBB lines to the normal shipping flow —
+ *      this hook must never ship a t-shirt.
+ *   2. IDEMPOTENT: an order that already has a fulfillment is skipped, so the
+ *      manual Admin path stays safe on top of the automatic one.
+ *   3. FAIL-SOFT: fulfillment runs after the payment transition is persisted, so
+ *      an error here must never surface as a failed checkout. It is logged at
+ *      error level and can be retried (Admin fulfillment / reconciliation); the
+ *      grant's absence is visible in the capacity ledger.
+ *   4. NO HIDDEN POLICY: handler arguments are left empty so the handler's
+ *      declared defaults (10h / 30d → 600 minutes) remain the single source of
+ *      truth for how much capacity a purchase grants.
+ */
+async function autoFulfillBbbOrder(ctx: RequestContext, order: Order): Promise<void> {
+  try {
+    const orderWithLines = await connection.getRepository(ctx, Order).findOne({
+      where: { id: order.id },
+      relations: { lines: { productVariant: true } },
+    });
+    if (!orderWithLines?.lines?.length) {
+      return;
+    }
+
+    // (2) idempotency — never fulfil an order twice.
+    const existingFulfillment = await connection
+      .getRepository(ctx, Fulfillment)
+      .findOne({ where: { orders: { id: String(order.id) } } });
+    if (existingFulfillment) {
+      Logger.debug(
+        `Option A: order ${order.code} already fulfilled (${existingFulfillment.id}); skipping`,
+        loggerCtx,
+      );
+      return;
+    }
+
+    // (1) eligibility
+    const variantIds = orderWithLines.lines
+      .map((l) => (l.productVariant ? String(l.productVariant.id) : ""))
+      .filter((id) => id.length > 0);
+    if (!variantIds.length) {
+      return;
+    }
+
+    const [roomAccess, sessions] = await Promise.all([
+      connection
+        .getRepository(ctx, BbbProductAccess)
+        .find({ where: { productVariantId: In(variantIds) } }),
+      connection
+        .getRepository(ctx, BbbScheduledSession)
+        .find({ where: { productVariantId: In(variantIds) } }),
+    ]);
+    const eligibleVariantIds = new Set<string>([
+      ...roomAccess.map((r) => String(r.productVariantId)),
+      ...sessions
+        .map((s) => (s.productVariantId ? String(s.productVariantId) : ""))
+        .filter((id) => id.length > 0),
+    ]);
+
+    const eligibleLines = orderWithLines.lines.filter(
+      (l) => l.productVariant && eligibleVariantIds.has(String(l.productVariant.id)),
+    );
+    if (!eligibleLines.length) {
+      return;
+    }
+
+    const result = await orderService.createFulfillment(ctx, {
+      lines: eligibleLines.map((l) => ({ orderLineId: String(l.id), quantity: l.quantity })),
+      handler: {
+        code: BBB_FULFILLMENT_HANDLER_CODE,
+        arguments: [
+          { name: "grantedHours", value: "10" },
+          { name: "validityDays", value: "30" },
+        ],
+      },
+    });
+
+    if ("id" in result && result.id) {
+      Logger.info(
+        `Option A auto-fulfillment: order ${order.code} → fulfillment ${result.id} (${eligibleLines.length} BBB line(s))`,
+        loggerCtx,
+      );
+    } else {
+      Logger.error(
+        `Option A auto-fulfillment returned an error for order ${order.code}: ${JSON.stringify(result)}`,
+        loggerCtx,
+      );
+    }
+  } catch (err) {
+    // (3) fail-soft — a completed payment must not be broken by delivery.
+    Logger.error(
+      `Option A auto-fulfillment failed for order ${order.code}: ${(err as Error).message}`,
+      loggerCtx,
+    );
+  }
+}
+
 /**
  * Hooks into the Vendure order lifecycle for BBB-specific processing.
  */
 export const bbbOrderProcess: OrderProcess<string> = {
   init(injector) {
     orderService = injector.get(OrderService);
+    fulfillmentService = injector.get(FulfillmentService);
   },
 
-  async onTransitionEnd(fromState, toState, { ctx, order }) {
-    if (
-      fromState === "ArrangingPayment" &&
-      (toState === "PaymentAuthorized" || toState === "PaymentSettled")
-    ) {
-      Logger.info(
-        `BBB OrderProcess: order ${order.code} reached ${toState} — fulfillment handler will write grant`,
-        loggerCtx,
-      );
+  async onTransitionEnd(_fromState, toState, { ctx, order }) {
+    if (toState !== "PaymentSettled") {
+      return;
     }
+
+    Logger.info(
+      `BBB OrderProcess: order ${order.code} reached PaymentSettled — automatic fulfillment (Option A)`,
+      loggerCtx,
+    );
+    await autoFulfillBbbOrder(ctx, order);
   },
 };

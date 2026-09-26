@@ -171,3 +171,40 @@ export function isSettlingProviderStatus(status: string): boolean {
 export function isCapturableProviderStatus(status: string): boolean {
   return (CAPTURABLE_PROVIDER_STATUSES as readonly string[]).includes(status);
 }
+
+/**
+ * Verifies Razorpay webhook signatures:
+ *   expected = HMAC-SHA256(rawBody, webhookSecret)
+ * Uses constant-time comparison to prevent timing attacks.
+ */
+export function verifyWebhookSignature(input: {
+  rawBody: Buffer | string;
+  signature?: string;
+  webhookSecret: string;
+}): Ok<{}> | Fail<'missing-secret' | 'missing-signature' | 'signature-mismatch'> {
+  if (!input.webhookSecret) {
+    return { ok: false, reason: 'missing-secret' };
+  }
+  if (!input.signature) {
+    return { ok: false, reason: 'missing-signature' };
+  }
+  const body = Buffer.isBuffer(input.rawBody)
+    ? input.rawBody.toString('utf8')
+    : input.rawBody;
+
+  const expected = crypto
+    .createHmac('sha256', input.webhookSecret)
+    .update(body)
+    .digest('hex');
+
+  const sigBuf = Buffer.from(input.signature, 'utf8');
+  const expBuf = Buffer.from(expected, 'utf8');
+
+  if (sigBuf.length !== expBuf.length) {
+    return { ok: false, reason: 'signature-mismatch' };
+  }
+  if (!crypto.timingSafeEqual(sigBuf, expBuf)) {
+    return { ok: false, reason: 'signature-mismatch' };
+  }
+  return { ok: true };
+}

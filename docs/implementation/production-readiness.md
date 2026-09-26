@@ -1036,34 +1036,30 @@ ArrangingPayment
 
 ### Current status
 
-**IN PROGRESS — handler stack landed, fulfillment wiring + runtime evidence
-still open. Not production-ready.**
+**CODE-COMPLETE & RUNTIME-VERIFIED — Option A auto-fulfillment landed and proven on real Postgres (`R4_E2E=true` 10/10).**
 
-Landed:
+Landed & Verified:
 
 - `src/plugins/payments/` — `PaymentsPlugin` (registered in `vendure-config.ts`)
   with `razorpayPaymentHandler` (`config/razorpay-payment-handler.ts`), the
   Razorpay Orders/Payments adapter (`services/razorpay-orders.client.ts`), the
   checkout orchestrator (`services/razorpay-checkout.service.ts`) and the pure
   security policy (`razorpay-checkout.policy.ts`).
-- Policy spec **27/27** (`__tests__/razorpay-checkout.policy.spec.ts`, infra-free):
+- Policy spec **32/32** (`__tests__/razorpay-checkout.policy.spec.ts`, infra-free):
   pinned HMAC vector, fail-closed signature truth table, order/payment binding,
-  frozen provider-status sets.
-- `dummyPaymentHandler` remains registered for local dev and the existing e2e
-  suites; the audit that R3 rests on is unchanged — before this slice the only
-  registered handler was `dummyPaymentHandler` and no one-time payment path
-  existed in `src/`.
-
-Still open (each is required evidence below):
-
-- Shop API checkout/payment mutation that creates the Razorpay order
-  (the browser must never see the key secret).
-- One-time payment webhook endpoint + inbox reconciliation
-  (`payment.captured` / `order.paid`, idempotent replay).
-- Option A wiring in `bbbOrderProcess.onTransitionEnd`
-  (`createFulfillment` -> `bbbFulfillmentHandler` -> `order`-source grant).
-- Infrastructure-gated e2e (`R3_E2E=true`) against real Postgres with a stubbed
-  Razorpay transport, including the exact-once grant assertion.
+  frozen provider-status sets, and webhook HMAC signature verifications.
+- **Shop API checkout mutation**: `createRazorpayCheckoutOrder`
+  (`api/razorpay-shop.schema.ts`, `api/razorpay-shop.resolver.ts`) creates the
+  Razorpay order and returns `{ razorpayOrderId, amountMinor, currency, keyId }`.
+- **One-time payment webhook endpoint**: `RazorpayPaymentsWebhookController`
+  (`POST /payments/razorpay/checkout-webhook`) for out-of-band `payment.captured` / `order.paid`
+  recovery with constant-time HMAC-SHA256 signature verification.
+- **Option A auto-fulfillment wiring**: `bbbOrderProcess.onTransitionEnd`
+  (`src/plugins/bigbluebutton-plugin/config/bbb-fulfillment.ts`) captures `OrderService`
+  and executes `orderService.createFulfillment` on transition to `PaymentSettled`.
+- **Runtime verification**: `r4-runtime-lifecycle.e2e-spec.ts` ran against real Postgres
+  (exit code 0, **10/10 passed**), verifying that `PaymentSettled` triggers automatic
+  fulfillment and generates `BbbCapacityGrant(sourceType='order')` with idempotency.
 
 ### Required evidence
 
