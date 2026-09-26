@@ -32,6 +32,11 @@ import { TenantProfile } from "../../tenant-plugin/entities/tenant-profile.entit
  * Renewal/dunning live in SubscriptionRenewalService; the provider
  * is Razorpay (sole active provider — ADR-038).
  */
+export interface TenantSelfServeSubscriptionPlanChangeResult {
+  subscription: OrganizationSubscription;
+  providerAuthorizationUrl: string | null;
+}
+
 @Injectable()
 export class SubscriptionService {
   constructor(
@@ -344,6 +349,39 @@ export class SubscriptionService {
     channelId: string,
     planId: ID,
   ): Promise<OrganizationSubscription> {
+    const result = await this.changeOrganizationSubscriptionPlanInternal(
+      ctx,
+      channelId,
+      planId,
+      false,
+    );
+    return result.subscription;
+  }
+
+  /**
+   * ADR-046: same plan-change domain operation for the Shop self-serve surface.
+   * The transient provider authorization URL is returned only when this
+   * invocation created the provider subscription requiring customer action.
+   */
+  async changeOrganizationSubscriptionPlanForSelfServe(
+    ctx: RequestContext,
+    channelId: string,
+    planId: ID,
+  ): Promise<TenantSelfServeSubscriptionPlanChangeResult> {
+    return this.changeOrganizationSubscriptionPlanInternal(
+      ctx,
+      channelId,
+      planId,
+      true,
+    );
+  }
+
+  private async changeOrganizationSubscriptionPlanInternal(
+    ctx: RequestContext,
+    channelId: string,
+    planId: ID,
+    requireAuthorizationUrl: boolean,
+  ): Promise<TenantSelfServeSubscriptionPlanChangeResult> {
     const repo = this.connection.getRepository(ctx, OrganizationSubscription);
     const bindingRepo = this.connection.getRepository(ctx, SubscriptionProviderBinding);
 
@@ -367,7 +405,10 @@ export class SubscriptionService {
     // Idempotent no-op: same plan. MUST short-circuit BEFORE any provider call
     // — otherwise every retry mints a duplicate provider subscription.
     if (String(current.plan.id) === String(target.id)) {
-      return current;
+      return {
+        subscription: current,
+        providerAuthorizationUrl: null,
+      };
     }
 
     // ADR-044 §5: the paid-upgrade direction is always allowed; a DOWNGRADE
@@ -415,6 +456,24 @@ export class SubscriptionService {
         tenantProfileId,
         planId: target.providerPlanId,
       });
+
+      if (requireAuthorizationUrl && !providerSub.shortUrl) {
+        try {
+          await this.billingProvider.cancelSubscription(
+            providerSub.providerSubscriptionId,
+            { cancelAtCycleEnd: false },
+          );
+        } catch (cancelErr) {
+          throw new Error(
+            `Provider created subscription ${providerSub.providerSubscriptionId} without an authorization URL, ` +
+              `and cleanup failed: ${cancelErr instanceof Error ? cancelErr.message : String(cancelErr)}`,
+          );
+        }
+        throw new Error(
+          `Provider created subscription ${providerSub.providerSubscriptionId} without an authorization URL; ` +
+            "self-serve authorization cannot continue",
+        );
+      }
     }
 
     // ── 2b. EXTERNAL: stop the OLD provider subscription from renewing. ──
@@ -546,7 +605,10 @@ export class SubscriptionService {
     // Announce after commit so the plan-derived capacity cache converges on the
     // NEW plan (ADR-031 amendment; free → paid and paid → free both re-derive).
     this.announcePlanChange(ctx, saved, String(current.plan.id), "changed");
-    return saved;
+    return {
+      subscription: saved,
+      providerAuthorizationUrl: providerSub?.shortUrl ?? null,
+    };
   }
 
   /**

@@ -140,6 +140,22 @@ R2 evidence must not be counted as evidence for R3 or R4.
 R3 and R4 may be developed in parallel if desired, but their evidence
 must remain independently attributable.
 
+## 4.2 ADR-046 --- tenant self-serve subscription lifecycle
+
+**Status:** **Accepted (2026-09-26)**
+
+The accepted contract adds two authenticated Shop API mutations:
+`requestMySubscriptionPlanChange(planId)` and
+`cancelMySubscription(atPeriodEnd)`. Tenant identity is derived only from
+`ctx.channelId`; `MySubscriptionChangeResult.authorizationUrl` is transient
+and invocation-scoped; Redis `SET NX EX 300` provides the per-channel plan-change
+cooldown and fails closed; provider activation remains webhook-authoritative.
+
+Current implementation is on the dedicated ADR-046 backend/frontend branches.
+The merge gate is the ADR's evidence set: ownership boundary, cooldown/idempotency,
+transient redirect origin, provider-internals read-boundary regression, and
+cancellation behavior.
+
 ------------------------------------------------------------------------
 
 # 4. Current overall status
@@ -208,8 +224,21 @@ must remain independently attributable.
                           REQUIRED**          evidence pending
 
 
-  R3 one-time commerce    **OPEN**                Current payment handler is
-                                                  not production-ready
+  R3 one-time commerce    **VERIFIED**            Slice 11 R3 is code-complete on
+                          (2026-09-26)            current main (commit
+                                                  3a8d3bd): Razorpay handler,
+                                                  Shop checkout mutation,
+                                                  webhook reconciliation, and
+                                                  Option A auto-fulfillment;
+                                                  runtime evidence recorded by
+                                                  the R4 lifecycle suite.
+
+  ADR-046 self-serve       **IMPLEMENTATION IN     Accepted contract; backend and
+  subscription             PROGRESS**              storefront implementation is
+                                                  on the ADR-046 branches.
+                                                  Runtime ownership/cooldown/
+                                                  redirect/cancellation evidence
+                                                  is still required before merge.
 
   R4 BBB paid access /    **VERIFIED**            End-to-end payment-to-
   usage                   (2026-09-25)            entitlement evidence

@@ -12,6 +12,7 @@ import { adminApiExtensions } from './api/schema/subscription-admin.schema';
 import { SubscriptionShopResolver } from './api/subscription-shop.resolver';
 import { shopApiExtensions } from './api/schema/subscription-shop.schema';
 import { SubscriptionShopService } from './services/subscription-shop.service';
+import { TenantSelfServeSubscriptionCooldownService } from './services/tenant-self-serve-subscription-cooldown.service';
 import { CommercialEntitlementModule } from '../../platform/commercial/commercial-entitlement.module';
 import { SubscriptionService } from './services/subscription.service';
 import { FreePlanProvisioningService } from './services/free-plan-provisioning.service';
@@ -80,9 +81,10 @@ import { PluginInitOptions } from './types';
         // TenantRegisteredEvent and is deliberately fail-soft.
         FreePlanProvisioningService,
         FreePlanProvisioningListener,
-        // Tenant-facing commercial READ surface (plan §3.5, slice 8).
-        // Read-only: self-serve upgrade/cancel stays deferred (UI-1).
+        // Tenant-facing commercial surface (plan §3.5 + ADR-046): reads plus
+        // self-serve plan change/cancellation. Provider internals stay Admin-only.
         SubscriptionShopService,
+        TenantSelfServeSubscriptionCooldownService,
         // Razorpay services (default provider)
         RazorpaySubscriptionProvider,
         RazorpayWebhookVerifier,

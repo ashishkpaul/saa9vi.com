@@ -906,3 +906,32 @@ changes **no schema**.
 
 **Migrations required:** none — deliberate (frozen Slice-5 schema).
 
+---
+
+## ADR-046: Tenant Self-Serve Plan Change and Cancellation (Shop API)
+
+**Status:** Accepted (2026-09-26)  
+**Full record:** `docs/architecture/adr-046-tenant-self-serve-plan-change.md`
+
+**Core decision:** Expose tenant-scoped plan change and cancellation as Shop API mutations
+(`requestMySubscriptionPlanChange`, `cancelMySubscription`) returning a dedicated
+`MySubscriptionChangeResult` containing the tenant's `MySubscription` projection and an
+ephemeral `authorizationUrl` (for provider-wired upgrades needing e-mandate/UPI Autopay).
+
+**Key decisions:**
+- **Dedicated result type (`MySubscriptionChangeResult`)** — preserves the slice 8 provider-internals
+  boundary on `MySubscription` (`providerShortUrl`, `billingCustomerId`, `providerPlanId` remain
+  strictly unexposed on read). The redirect URL is ephemeral on the mutation result only.
+- **Shop resolver as thin wrapper** — resolves channel strictly from `ctx.channelId` (no caller-supplied
+  channelId argument), guards with tenant business-account ownership, and delegates directly to
+  `SubscriptionService.changeOrganizationSubscriptionPlan` and `cancelOrganizationSubscription`
+  (ADR-044 state machine and transactions reused without duplication).
+- **Per-channel rate limiting via atomic cooldown** — 5-minute per-channel cooldown using an expiring key
+  in Redis (`SET NX EX 300`, fails closed) prevents duplicate provider subscription minting or abuse
+  without holding DB connections open across external provider HTTP calls.
+- **Audit logging and actor provenance** — distinguishes tenant actions (`actor: 'tenant-self-serve'`)
+  from platform SuperAdmin interventions (`actor: 'platform-superadmin'`).
+
+
+**Implementation note:** `SubscriptionService` exposes the invocation-scoped provider authorization URL through a typed operation result. The Shop resolver never reads persisted `subscription.providerShortUrl` to populate `authorizationUrl`.
+**Migrations required:** none.

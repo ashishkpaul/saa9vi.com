@@ -2,6 +2,12 @@
 
 > **STATUS: HISTORICAL — decision made.** The actor-model decision was recorded in the canonical worklist (`UI-1`, commit `7d80854`): **option (b) — Portal Admin subscribes tenants via the Admin API** for the current phase. Dashboard subscription visibility subsequently shipped in `91ca476`. Storefront subscription mutations remain deferred; Shop-API self-service requires a new ADR. This document is retained as the discovery evidence behind that decision.
 >
+> **Superseding update (2026-09-26):** ADR-046 is now **Accepted** and resolves the deferred mutation half described below. The storefront implementation uses authenticated Shop API mutations
+> `requestMySubscriptionPlanChange` and `cancelMySubscription`, with tenant identity from `ctx.channelId`,
+> Redis `SET NX EX 300` cooldown, a dedicated `MySubscriptionChangeResult`, and invocation-scoped
+> `authorizationUrl`. `MySubscription` remains free of provider internals. The findings below are retained
+> as historical discovery evidence; they no longer describe the current implementation state.
+>
 > **Update (2026-09-24):** the *read* half of this surface has **shipped** as the Shop read-only commercial API (plan §3.5; slice 8, commit `ec866fe`): `mySubscription` (`plan`, `status`, `currentPeriodStart`, `currentPeriodEnd`, `cancelAtPeriodEnd`, `cancelledAt`, `marketplaceEligible`), `myLiveUsage`, and `availableSubscriptionPlans`, whose rules restate this document's findings: tenant resolved from `RequestContext` only, no `channelId` argument, and no mutation. Provider internals (`providerStatus`, `providerShortUrl`) are deliberately **not** exposed — they remain Admin-surface only — and business sessions authenticate on the **Admin API**, with the session token presented to the Shop surface (platform finding recorded in the slice-8 spec). Finding 1 (zero subscription *mutation* surface in the storefront) and finding 4 (never assume return-from-Razorpay means active) remain the governing constraints for the still-deferred mutation half; finding 5 (R3 `PaymentMethodHandler` is a separate integration) is unchanged. (Earlier note, 2026-09-22: the read half was specified for implementation in plan §3.5.)
 
 Audited `nextjs-starter-vendure` against the post-ADR-039 schema. Findings:

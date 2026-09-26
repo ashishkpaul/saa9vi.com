@@ -3,9 +3,9 @@ import gql from "graphql-tag";
 /**
  * Shop API (tenant-facing) commercial read surface — plan §3.5, slice 8.
  *
- * READ-ONLY BY CONSTRUCTION: no mutation is declared here. Self-serve upgrade /
- * cancellation stays deferred pending its own ADR (UI-1); plan changes remain an
- * Admin API (`changeOrganizationSubscriptionPlan`) and dashboard affordance.
+ * Tenant-facing commercial read and self-serve mutation surface.
+ * The plan catalogue and read model remain provider-internal-safe; ADR-046 adds
+ * only tenant-scoped lifecycle mutations with an ephemeral authorizationUrl result.
  *
  * TENANT RESOLUTION: every tenant-scoped field resolves the tenant from
  * `ctx.channelId` — the hostname→channel resolution the storefront already
@@ -44,6 +44,16 @@ export const shopApiExtensions = gql`
     whitelabelEnabled: Boolean!
     "ADR-042 §2: whether this tier may be listed on the marketplace."
     marketplaceListingEnabled: Boolean!
+  }
+
+  """
+  Result of a tenant self-serve subscription lifecycle mutation.
+  `authorizationUrl` is invocation-scoped provider authorization data and is
+  never persisted on the MySubscription read model.
+  """
+  type MySubscriptionChangeResult {
+    subscription: MySubscription!
+    authorizationUrl: String
   }
 
   """
@@ -103,5 +113,12 @@ export const shopApiExtensions = gql`
     "Null when the channel has no subscription at all."
     mySubscription: MySubscription
     myLiveUsage: MyLiveUsage!
+  }
+
+  extend type Mutation {
+    "Change the subscription for the authenticated business account's active tenant channel."
+    requestMySubscriptionPlanChange(planId: ID!): MySubscriptionChangeResult!
+    "Cancel the subscription for the authenticated business account's active tenant channel."
+    cancelMySubscription(atPeriodEnd: Boolean = true): MySubscriptionChangeResult!
   }
 `;
