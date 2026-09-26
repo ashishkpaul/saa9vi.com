@@ -3,9 +3,9 @@ import gql from "graphql-tag";
 /**
  * Shop API (tenant-facing) commercial read surface — plan §3.5, slice 8.
  *
- * READ-ONLY BY CONSTRUCTION: no mutation is declared here. Self-serve upgrade /
- * cancellation stays deferred pending its own ADR (UI-1); plan changes remain an
- * Admin API (`changeOrganizationSubscriptionPlan`) and dashboard affordance.
+ * Tenant-facing commercial read and self-serve mutation surface.
+ * The plan catalogue and read model remain provider-internal-safe; ADR-046 adds
+ * only tenant-scoped lifecycle mutations with an ephemeral authorizationUrl result.
  *
  * TENANT RESOLUTION: every tenant-scoped field resolves the tenant from
  * `ctx.channelId` — the hostname→channel resolution the storefront already
