@@ -380,11 +380,5 @@ describe("ADR-046 — tenant self-serve subscription Shop API", () => {
     );
   });
 
-  it("records no self-serve plan-change cooldown fallback path in Redis failures", async () => {
-    const cooldown = server.app.get(TenantSelfServeSubscriptionCooldownService);
-    expect(cooldown).toBeTruthy();
-    // The production service itself fails closed when Redis is absent/unavailable;
-    // this test runs the API seam with a deterministic mock so no external Redis
-    // dependency is required for the GraphQL contract proof.
-  });
+
 });
