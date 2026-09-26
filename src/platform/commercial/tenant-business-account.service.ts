@@ -48,9 +48,9 @@ import {
  * SubscriptionPlugin) because "who owns this tenant" is a tenancy fact, not a
  * billing fact — the same reason `CommercialEntitlementService` is shared.
  */
-@Injectable()
 export type TenantSelfServeActor = "tenant-self-serve" | "platform-superadmin";
 
+@Injectable()
 export class TenantBusinessAccountService {
   private static readonly loggerCtx = "TenantBusinessAccountService";
 
