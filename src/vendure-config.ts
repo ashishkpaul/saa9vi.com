@@ -33,6 +33,7 @@ import { AdSpendLedgerImmutableSubscriber } from './plugins/marketplace/ad-spend
 import { CommissionLedgerImmutableSubscriber } from './plugins/marketplace/commission-ledger-immutable.subscriber';
 import { AdWalletLedgerImmutableSubscriber } from './plugins/marketplace/ad-wallet-ledger-immutable.subscriber';
 import { SubscriptionPlugin } from './plugins/subscription/subscription.plugin';
+import { PaymentsPlugin } from './plugins/payments/payments.plugin';
 // ADR-038: Razorpay is the sole recurring-billing provider. The former Juspay
 // implementation was removed in 9a31beb and its legacy tables dropped in
 // 466a4ef (ADR-040). Billing credentials are resolved eagerly at config time
@@ -282,6 +283,9 @@ apiOptions: {
     MarketplaceIndexerPlugin,
     CustomerSuspensionPlugin.init({}),
     PlatformDashboardPlugin.init({}),
+    // R3 — one-time commerce: registers `razorpayPaymentHandler` alongside the
+    // dummy handler (which stays for dev + the existing e2e suites).
+    PaymentsPlugin,
     SubscriptionPlugin.init({
         // ADR-038: Razorpay is the accepted recurring-billing provider. Explicit
         // selection is REQUIRED (fail-closed in production) — the plugin's

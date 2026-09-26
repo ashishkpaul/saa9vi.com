@@ -995,14 +995,75 @@ Vendure Payment
 Order fulfillment
 ```
 
+### R3 decisions (approved 2026-09-26)
+
+Both were open through the slice-6 close and are now settled:
+
+1. **Capacity-grant producer: Option A — automatic fulfillment.** When an order
+   reaches `PaymentSettled`, the order process creates the fulfillment for the
+   BBB-eligible lines, which invokes `bbbFulfillmentHandler` and writes
+   `BbbCapacityGrant(sourceType='order')`. No manual/Admin fulfillment step is
+   required for digital delivery. This closes the gap established by R4 (path A
+   wrote entitlements only; the grant had no automatic producer).
+2. **Settlement topology: single-step (authorize & capture).**
+   `createPayment()` verifies the provider state and returns `Settled`; payment
+   webhooks (`payment.captured`, `order.paid`) are the asynchronous
+   reconciliation safety net, not the settlement path.
+
+Signature guard (mandatory): the shop path must present a valid
+`HMAC-SHA256(`razorpay_order_id|razorpay_payment_id`, RAZORPAY_KEY_SECRET)`;
+any mismatch or missing identifier is an explicit payment failure. Every path
+(including the webhook) re-reads the Razorpay order and payment server-to-server
+and checks order binding (receipt/notes = Vendure order code), exact minor-unit
+amount, currency and a settling provider status.
+
+Secrets are environment-only (`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`,
+`RAZORPAY_PAYMENTS_WEBHOOK_SECRET`) — the handler deliberately declares no
+config args, so no key material can be persisted or read back via the Admin API.
+See `.env.example`.
+
+Expected lifecycle (frozen by the decisions above):
+
+``` text
+ArrangingPayment
+    -> addPaymentToOrder (razorpayPaymentHandler.createPayment)
+    -> signature verified + provider re-read (amount/currency/order binding)
+    -> PaymentSettled
+    -> automatic fulfillment (bbbOrderProcess.onTransitionEnd)
+    -> bbbFulfillmentHandler -> BbbCapacityGrant(sourceType='order')
+    -> provisioning -> Join URL
+```
+
 ### Current status
 
-**NOT COMPLETE**
+**IN PROGRESS — handler stack landed, fulfillment wiring + runtime evidence
+still open. Not production-ready.**
 
-The current source audit identified that the registered payment handler
-is still `dummyPaymentHandler`.
+Landed:
 
-Therefore R3 cannot be considered production-ready.
+- `src/plugins/payments/` — `PaymentsPlugin` (registered in `vendure-config.ts`)
+  with `razorpayPaymentHandler` (`config/razorpay-payment-handler.ts`), the
+  Razorpay Orders/Payments adapter (`services/razorpay-orders.client.ts`), the
+  checkout orchestrator (`services/razorpay-checkout.service.ts`) and the pure
+  security policy (`razorpay-checkout.policy.ts`).
+- Policy spec **27/27** (`__tests__/razorpay-checkout.policy.spec.ts`, infra-free):
+  pinned HMAC vector, fail-closed signature truth table, order/payment binding,
+  frozen provider-status sets.
+- `dummyPaymentHandler` remains registered for local dev and the existing e2e
+  suites; the audit that R3 rests on is unchanged — before this slice the only
+  registered handler was `dummyPaymentHandler` and no one-time payment path
+  existed in `src/`.
+
+Still open (each is required evidence below):
+
+- Shop API checkout/payment mutation that creates the Razorpay order
+  (the browser must never see the key secret).
+- One-time payment webhook endpoint + inbox reconciliation
+  (`payment.captured` / `order.paid`, idempotent replay).
+- Option A wiring in `bbbOrderProcess.onTransitionEnd`
+  (`createFulfillment` -> `bbbFulfillmentHandler` -> `order`-source grant).
+- Infrastructure-gated e2e (`R3_E2E=true`) against real Postgres with a stubbed
+  Razorpay transport, including the exact-once grant assertion.
 
 ### Required evidence
 
