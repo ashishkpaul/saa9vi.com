@@ -1124,6 +1124,20 @@ Required verification:
 -   response parsing
 -   provider error handling
 
+**Not implemented — join-URL `createTime` binding (session anti-hijacking).**
+The signed-join builder accepts an optional `createTime`
+(`bbb-api.service.ts:199`; `bbb-join-url.service.ts:16/88`), but the mechanism is
+unwired end to end: `createMeeting()` returns only
+`{ internalMeetingID, meetingID }`, discarding the `createTime` from the create
+response (`bbb-api.service.ts:150-177`); `BbbMeeting` has no column for it; and no
+caller supplies it (`grep -rn createTime src` → those two services only). Until it
+is wired (capture the create-response `createTime` → persist on `BbbMeeting` →
+pass it when signing joins), a historical join URL stays valid for a meeting that
+is later re-created under the same `meetingID`, because BBB has nothing to
+compare it against and cannot answer `mismatchCreateTimeParam`. Verify this
+against the deployed BBB version and implement it before declaring session
+anti-hijacking complete.
+
 The current adapter uses SHA-256 according to the existing repository
 verification; retain this as a code finding but verify it against the
 deployed BBB/API contract before declaring provider compatibility
