@@ -184,7 +184,7 @@ describe("ADR-046 — tenant self-serve subscription Shop API", () => {
     const free = await adminClient.query(CREATE_PLAN, {
       input: {
         name: "Free Basic",
-        slug: `free-basic-adr046-${Date.now()}`,
+        slug: "free-basic",
         description: "Provider-free test tier",
         monthlyPriceInPaise: 0,
         includedBbbMinutes: 60,
