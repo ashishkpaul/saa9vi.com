@@ -1,7 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, Badge, Card, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@vendure/dashboard";
+import { api, Badge, Card, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@vendure/dashboard";
 import { graphql } from "@/gql";
+
+import { BILLING_ATTEMPT_STATUSES, humanizeStatus } from "../../../../../platform/dashboard/billing-vocabularies";
+import { resolveListState } from "../../../../../platform/dashboard/query-state";
+import { LedgerQueryError, LedgerStateView } from "../../shared/query-state-panel";
 
 const GET_CHANNELS = graphql(`
   query GetChannelsForAttempts {
@@ -62,26 +66,30 @@ export function PaymentAttemptsList() {
     queryKey: ["channelsForAttempts"],
     queryFn: () => api.query(GET_CHANNELS),
   });
-  const channels = channelsQuery.data?.channels?.items ?? [];
+  const channelsState = resolveListState(channelsQuery, (data) => data.channels, {
+    expected: "channels",
+  });
+  const channelOptions = channelsState.status === "ready" ? channelsState.items : [];
 
-  useEffect(() => {
-    if (!channelId && channels.length > 0) {
-      setChannelId(channels[0].id);
-    }
-  }, [channelsQuery.data, channelId]);
+  // Derive the effective channel rather than mirroring it into state from an
+  // effect: a disabled query reports isLoading === false, so the ledger would
+  // otherwise render its empty state before anything was requested.
+  const activeChannelId = channelId || channelOptions[0]?.id || "";
 
   const attemptsQuery = useQuery({
-    queryKey: ["providerAttempts", channelId, statusFilter],
+    queryKey: ["providerAttempts", activeChannelId, statusFilter],
     queryFn: () =>
       api.query(GET_ATTEMPTS, {
-        channelId,
+        channelId: activeChannelId,
         filter: statusFilter ? { status: statusFilter } : undefined,
       }),
-    enabled: !!channelId,
+    enabled: !!activeChannelId,
   });
 
-  const attempts = attemptsQuery.data?.providerPaymentAttempts?.items ?? [];
-  const total = attemptsQuery.data?.providerPaymentAttempts?.total ?? 0;
+  const attemptsState = resolveListState(attemptsQuery, (data) => data.providerPaymentAttempts, {
+    blocked: !activeChannelId,
+    expected: "providerPaymentAttempts",
+  });
 
   return (
     <div className="space-y-6">
@@ -101,18 +109,29 @@ export function PaymentAttemptsList() {
             <select
               id="attempts-channel-select"
               className="border rounded px-3 py-1.5 text-sm bg-background"
-              value={channelId}
+              value={activeChannelId}
+              disabled={channelOptions.length === 0}
               onChange={(e) => setChannelId(e.target.value)}
             >
-              {channels.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.code} ({c.id})
-                </option>
-              ))}
+              {channelOptions.length === 0 ? (
+                <option value="">—</option>
+              ) : (
+                channelOptions.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.code} ({c.id})
+                  </option>
+                ))
+              )}
             </select>
           </div>
 
           <div className="flex items-center gap-2">
+            {/*
+              Options come from BILLING_ATTEMPT_STATUSES — the exact
+              `SubscriptionBillingAttempt.status` vocabulary (INV-002). A filter
+              value the ledger cannot hold would answer with an empty table and
+              read as "no attempts" (INV-015).
+            */}
             <label htmlFor="attempts-status-select" className="text-sm font-medium text-muted-foreground">
               Status:
             </label>
@@ -123,64 +142,82 @@ export function PaymentAttemptsList() {
               onChange={(e) => setStatusFilter(e.target.value)}
             >
               <option value="">All statuses</option>
-              <option value="initiated">Initiated</option>
-              <option value="succeeded">Succeeded</option>
-              <option value="failed">Failed</option>
+              {BILLING_ATTEMPT_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {humanizeStatus(status)}
+                </option>
+              ))}
             </select>
           </div>
         </div>
 
-        {attemptsQuery.isLoading ? (
+        {/*
+          The channel list gates the ledger query. While it is unresolved (or if
+          it failed) the ledger was never requested, so it must not render its
+          empty state.
+        */}
+        {channelsState.status === "loading" ? (
           <div className="p-4 space-y-3">
             {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className="h-10 w-full" />
+              <div key={i} className="h-10 w-full animate-pulse rounded bg-muted" />
             ))}
           </div>
-        ) : attemptsQuery.isError ? (
-          <div className="p-6 text-center text-destructive">
-            <p className="font-semibold">Unable to load payment attempts</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              {attemptsQuery.error instanceof Error ? attemptsQuery.error.message : "GraphQL query error"}
-            </p>
-          </div>
-        ) : attempts.length === 0 ? (
+        ) : channelsState.status === "error" ? (
+          <LedgerQueryError
+            title="Unable to load channels"
+            message={channelsState.message}
+            onRetry={channelsState.retry}
+          />
+        ) : channelsState.status === "empty" ? (
           <div className="p-6 text-center text-muted-foreground">
-            No payment attempts for this channel.
+            No channels are available for your account.
           </div>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Status</TableHead>
-                <TableHead>Payment ID</TableHead>
-                <TableHead>Invoice ID</TableHead>
-                <TableHead>Period</TableHead>
-                <TableHead>Amount</TableHead>
-                <TableHead>Reason</TableHead>
-                <TableHead>Attempted</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {attempts.map((a) => (
-                <TableRow key={a.id}>
-                  <TableCell>
-                    <Badge variant={STATUS_VARIANT[a.status] ?? "secondary"}>
-                      {a.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">{a.providerPaymentId ?? "—"}</TableCell>
-                  <TableCell className="font-mono text-sm">{a.invoiceId ?? a.providerInvoiceId ?? "—"}</TableCell>
-                  <TableCell className="text-sm">{a.billingPeriodStart ?? "—"}</TableCell>
-                  <TableCell>₹{toRupees(a.amountPaise)}</TableCell>
-                  <TableCell className="text-sm text-destructive">{a.failureReason ?? "—"}</TableCell>
-                  <TableCell className="text-sm">{fmtDate(a.attemptedAt)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <LedgerStateView
+            state={attemptsState}
+            errorTitle="Unable to load payment attempts"
+            emptyMessage="No payment attempts for this channel."
+            blockedMessage="Select a channel to view its payment attempts."
+          >
+            {(attempts, total) => (
+              <>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Payment ID</TableHead>
+                      <TableHead>Invoice ID</TableHead>
+                      <TableHead>Period</TableHead>
+                      <TableHead>Amount</TableHead>
+                      <TableHead>Reason</TableHead>
+                      <TableHead>Attempted</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {attempts.map((a) => (
+                      <TableRow key={a.id}>
+                        <TableCell>
+                          <Badge variant={STATUS_VARIANT[a.status] ?? "secondary"}>{a.status}</Badge>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{a.providerPaymentId ?? "—"}</TableCell>
+                        <TableCell className="font-mono text-sm">
+                          {a.invoiceId ?? a.providerInvoiceId ?? "—"}
+                        </TableCell>
+                        <TableCell className="text-sm">{a.billingPeriodStart ?? "—"}</TableCell>
+                        <TableCell>₹{toRupees(a.amountPaise)}</TableCell>
+                        <TableCell className="text-sm text-destructive">{a.failureReason ?? "—"}</TableCell>
+                        <TableCell className="text-sm">{fmtDate(a.attemptedAt)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <div className="p-3 border-t text-sm text-muted-foreground">{total} total</div>
+              </>
+            )}
+          </LedgerStateView>
         )}
-        <div className="p-3 border-t text-sm text-muted-foreground">{total} total</div>
       </Card>
     </div>
   );
 }
+

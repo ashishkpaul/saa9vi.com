@@ -1,7 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, Badge, Card, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@vendure/dashboard";
+import { api, Badge, Card, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@vendure/dashboard";
 import { graphql } from "@/gql";
+
+import { PROVIDER_SUBSCRIPTION_STATUSES, humanizeStatus } from "../../../../../platform/dashboard/billing-vocabularies";
+import { resolveListState } from "../../../../../platform/dashboard/query-state";
+import { LedgerQueryError, LedgerStateView } from "../../shared/query-state-panel";
 
 const GET_CHANNELS = graphql(`
   query GetChannelsForMandates {
@@ -42,8 +46,6 @@ const STATUS_VARIANT: Record<string, "warning" | "success" | "secondary" | "dest
   pending: "warning",
   halted: "destructive",
   cancelled: "secondary",
-  completed: "secondary",
-  expired: "destructive",
 };
 
 function fmtDate(d: string | null | undefined) {
@@ -58,26 +60,31 @@ export function MandatesList() {
     queryKey: ["channelsForMandates"],
     queryFn: () => api.query(GET_CHANNELS),
   });
-  const channels = channelsQuery.data?.channels?.items ?? [];
+  const channelsState = resolveListState(channelsQuery, (data) => data.channels, {
+    expected: "channels",
+  });
+  const channelOptions = channelsState.status === "ready" ? channelsState.items : [];
 
-  useEffect(() => {
-    if (!channelId && channels.length > 0) {
-      setChannelId(channels[0].id);
-    }
-  }, [channelsQuery.data, channelId]);
+  // Derive the effective channel instead of mirroring it into state from an
+  // effect: an effect leaves the ledger query disabled for one render after the
+  // channels arrive, and a disabled query reports isLoading === false — which is
+  // exactly how a pending screen used to print "no mandates found".
+  const activeChannelId = channelId || channelOptions[0]?.id || "";
 
   const mandatesQuery = useQuery({
-    queryKey: ["providerMandates", channelId, statusFilter],
+    queryKey: ["providerMandates", activeChannelId, statusFilter],
     queryFn: () =>
       api.query(GET_MANDATES, {
-        channelId,
+        channelId: activeChannelId,
         filter: statusFilter ? { status: statusFilter } : undefined,
       }),
-    enabled: !!channelId,
+    enabled: !!activeChannelId,
   });
 
-  const mandates = mandatesQuery.data?.providerMandates?.items ?? [];
-  const total = mandatesQuery.data?.providerMandates?.total ?? 0;
+  const mandatesState = resolveListState(mandatesQuery, (data) => data.providerMandates, {
+    blocked: !activeChannelId,
+    expected: "providerMandates",
+  });
 
   return (
     <div className="space-y-6">
@@ -97,20 +104,33 @@ export function MandatesList() {
             <select
               id="mandates-channel-select"
               className="border rounded px-3 py-1.5 text-sm bg-background"
-              value={channelId}
+              value={activeChannelId}
+              disabled={channelOptions.length === 0}
               onChange={(e) => setChannelId(e.target.value)}
             >
-              {channels.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.code} ({c.id})
-                </option>
-              ))}
+              {channelOptions.length === 0 ? (
+                <option value="">—</option>
+              ) : (
+                channelOptions.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.code} ({c.id})
+                  </option>
+                ))
+              )}
             </select>
           </div>
 
           <div className="flex items-center gap-2">
+            {/*
+              Filters on the binding's provider status; the `active` flag is a
+              separate column and is never conflated with this filter. Options
+              come from PROVIDER_SUBSCRIPTION_STATUSES — only statuses the
+              provider lifecycle actually persists (INV-015), because a
+              selectable status no code path writes always answers with an empty
+              table.
+            */}
             <label htmlFor="mandates-status-select" className="text-sm font-medium text-muted-foreground">
-              Status:
+              Provider status:
             </label>
             <select
               id="mandates-status-select"
@@ -119,73 +139,86 @@ export function MandatesList() {
               onChange={(e) => setStatusFilter(e.target.value)}
             >
               <option value="">All statuses</option>
-              <option value="created">Created</option>
-              <option value="authenticated">Authenticated</option>
-              <option value="active">Active</option>
-              <option value="pending">Pending</option>
-              <option value="halted">Halted</option>
-              <option value="cancelled">Cancelled</option>
-              <option value="completed">Completed</option>
-              <option value="expired">Expired</option>
+              {PROVIDER_SUBSCRIPTION_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {humanizeStatus(status)}
+                </option>
+              ))}
             </select>
           </div>
         </div>
 
-        {mandatesQuery.isLoading ? (
+        {/*
+          The channel list is the ledger's precondition: if it is still loading or
+          failed, the ledger query never runs and must not be rendered as "no
+          mandates". Each channel-query outcome therefore has its own branch.
+        */}
+        {channelsState.status === "loading" ? (
           <div className="p-4 space-y-3">
             {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className="h-10 w-full" />
+              <div key={i} className="h-10 w-full animate-pulse rounded bg-muted" />
             ))}
           </div>
-        ) : mandatesQuery.isError ? (
-          <div className="p-6 text-center text-destructive">
-            <p className="font-semibold">Unable to load payment mandates</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              {mandatesQuery.error instanceof Error ? mandatesQuery.error.message : "GraphQL query error"}
-            </p>
-          </div>
-        ) : mandates.length === 0 ? (
+        ) : channelsState.status === "error" ? (
+          <LedgerQueryError
+            title="Unable to load channels"
+            message={channelsState.message}
+            onRetry={channelsState.retry}
+          />
+        ) : channelsState.status === "empty" ? (
           <div className="p-6 text-center text-muted-foreground">
-            No mandates found for this channel.
+            No channels are available for your account.
           </div>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Provider Sub ID</TableHead>
-                <TableHead>Provider</TableHead>
-                <TableHead>Plan ID</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Active</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead>Updated</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {mandates.map((m) => (
-                <TableRow key={m.id}>
-                  <TableCell className="font-mono text-sm">{m.providerSubscriptionId}</TableCell>
-                  <TableCell className="text-sm">{m.provider}</TableCell>
-                  <TableCell className="font-mono text-xs">{m.providerPlanId ?? "—"}</TableCell>
-                  <TableCell>
-                    <Badge variant={STATUS_VARIANT[m.providerStatus] ?? "secondary"}>
-                      {m.providerStatus}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={m.active ? "success" : "secondary"}>
-                      {m.active ? "Active" : "Inactive"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-sm">{fmtDate(m.createdAt)}</TableCell>
-                  <TableCell className="text-sm">{fmtDate(m.updatedAt)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <LedgerStateView
+            state={mandatesState}
+            errorTitle="Unable to load payment mandates"
+            emptyMessage="No mandates found for this channel."
+            blockedMessage="Select a channel to view its payment mandates."
+          >
+            {(mandates, total) => (
+              <>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Provider Sub ID</TableHead>
+                      <TableHead>Provider</TableHead>
+                      <TableHead>Plan ID</TableHead>
+                      <TableHead>Provider Status</TableHead>
+                      <TableHead>Active</TableHead>
+                      <TableHead>Created</TableHead>
+                      <TableHead>Updated</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {mandates.map((m) => (
+                      <TableRow key={m.id}>
+                        <TableCell className="font-mono text-sm">{m.providerSubscriptionId}</TableCell>
+                        <TableCell className="text-sm">{m.provider}</TableCell>
+                        <TableCell className="font-mono text-xs">{m.providerPlanId ?? "—"}</TableCell>
+                        <TableCell>
+                          <Badge variant={STATUS_VARIANT[m.providerStatus] ?? "secondary"}>
+                            {m.providerStatus}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={m.active ? "success" : "secondary"}>
+                            {m.active ? "Active" : "Inactive"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-sm">{fmtDate(m.createdAt)}</TableCell>
+                        <TableCell className="text-sm">{fmtDate(m.updatedAt)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <div className="p-3 border-t text-sm text-muted-foreground">{total} total</div>
+              </>
+            )}
+          </LedgerStateView>
         )}
-        <div className="p-3 border-t text-sm text-muted-foreground">{total} total</div>
       </Card>
     </div>
   );
 }
+

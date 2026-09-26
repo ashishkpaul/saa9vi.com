@@ -1,7 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, Badge, Card, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@vendure/dashboard";
+import { api, Badge, Card, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@vendure/dashboard";
 import { graphql } from "@/gql";
+
+import {
+  RECONCILIATION_INCIDENT_STATUSES,
+  humanizeStatus,
+  type ReconciliationIncidentStatusOption,
+} from "../../../../../platform/dashboard/billing-vocabularies";
+import { resolveListState } from "../../../../../platform/dashboard/query-state";
+import { LedgerQueryError, LedgerStateView } from "../../shared/query-state-panel";
 
 const GET_CHANNELS = graphql(`
   query GetChannelsForReconciliation {
@@ -45,32 +53,36 @@ function fmtDate(d: string | null | undefined) {
 
 export function ReconciliationList() {
   const [channelId, setChannelId] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<ReconciliationIncidentStatusOption | "">("");
 
   const channelsQuery = useQuery({
     queryKey: ["channelsForReconciliation"],
     queryFn: () => api.query(GET_CHANNELS),
   });
-  const channels = channelsQuery.data?.channels?.items ?? [];
+  const channelsState = resolveListState(channelsQuery, (data) => data.channels, {
+    expected: "channels",
+  });
+  const channelOptions = channelsState.status === "ready" ? channelsState.items : [];
 
-  useEffect(() => {
-    if (!channelId && channels.length > 0) {
-      setChannelId(channels[0].id);
-    }
-  }, [channelsQuery.data, channelId]);
+  // Derive the effective channel rather than mirroring it into state from an
+  // effect: a disabled query reports isLoading === false, so the ledger would
+  // otherwise render "no incidents — system healthy" before anything was asked.
+  const activeChannelId = channelId || channelOptions[0]?.id || "";
 
   const query = useQuery({
-    queryKey: ["reconciliationIncidents", channelId, statusFilter],
+    queryKey: ["reconciliationIncidents", activeChannelId, statusFilter],
     queryFn: () =>
       api.query(GET_INCIDENTS, {
-        channelId,
-        status: statusFilter ? (statusFilter as "PENDING" | "RESOLVED") : undefined,
+        channelId: activeChannelId,
+        status: statusFilter || undefined,
       }),
-    enabled: !!channelId,
+    enabled: !!activeChannelId,
   });
 
-  const incidents = query.data?.reconciliationIncidents?.items ?? [];
-  const total = query.data?.reconciliationIncidents?.total ?? 0;
+  const incidentsState = resolveListState(query, (data) => data.reconciliationIncidents, {
+    blocked: !activeChannelId,
+    expected: "reconciliationIncidents",
+  });
 
   return (
     <div className="space-y-6">
@@ -90,18 +102,28 @@ export function ReconciliationList() {
             <select
               id="reconciliation-channel-select"
               className="border rounded px-3 py-1.5 text-sm bg-background"
-              value={channelId}
+              value={activeChannelId}
+              disabled={channelOptions.length === 0}
               onChange={(e) => setChannelId(e.target.value)}
             >
-              {channels.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.code} ({c.id})
-                </option>
-              ))}
+              {channelOptions.length === 0 ? (
+                <option value="">—</option>
+              ) : (
+                channelOptions.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.code} ({c.id})
+                  </option>
+                ))
+              )}
             </select>
           </div>
 
           <div className="flex items-center gap-2">
+            {/*
+              Options come from RECONCILIATION_INCIDENT_STATUSES, mirroring the
+              schema's ReconciliationIncidentStatus enum: an operator can only
+              filter by values the incident can actually hold (INV-015).
+            */}
             <label htmlFor="reconciliation-status-select" className="text-sm font-medium text-muted-foreground">
               Status:
             </label>
@@ -109,68 +131,87 @@ export function ReconciliationList() {
               id="reconciliation-status-select"
               className="border rounded px-3 py-1.5 text-sm bg-background"
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => setStatusFilter(e.target.value as ReconciliationIncidentStatusOption | "")}
             >
               <option value="">All statuses</option>
-              <option value="PENDING">Pending</option>
-              <option value="RESOLVED">Resolved</option>
+              {RECONCILIATION_INCIDENT_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {humanizeStatus(status.toLowerCase())}
+                </option>
+              ))}
             </select>
           </div>
         </div>
 
-        {query.isLoading ? (
+        {/*
+          The channel list gates the incident query. "System healthy" may only be
+          claimed by a successful query that returned zero rows — never by a
+          query whose precondition was unmet or whose request failed (INV-015).
+        */}
+        {channelsState.status === "loading" ? (
           <div className="p-4 space-y-3">
             {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className="h-10 w-full" />
+              <div key={i} className="h-10 w-full animate-pulse rounded bg-muted" />
             ))}
           </div>
-        ) : query.isError ? (
-          <div className="p-6 text-center text-destructive">
-            <p className="font-semibold">Unable to load reconciliation incidents</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              {query.error instanceof Error ? query.error.message : "GraphQL query error"}
-            </p>
-          </div>
-        ) : incidents.length === 0 ? (
+        ) : channelsState.status === "error" ? (
+          <LedgerQueryError
+            title="Unable to load channels"
+            message={channelsState.message}
+            onRetry={channelsState.retry}
+          />
+        ) : channelsState.status === "empty" ? (
           <div className="p-6 text-center text-muted-foreground">
-            No reconciliation incidents for this channel. System healthy.
+            No channels are available for your account.
           </div>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Status</TableHead>
-                <TableHead>Channel</TableHead>
-                <TableHead>Subscription</TableHead>
-                <TableHead>Order ID</TableHead>
-                <TableHead>Invoice</TableHead>
-                <TableHead>Detected</TableHead>
-                <TableHead>Note</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {incidents.map((inc) => (
-                <TableRow key={inc.id}>
-                  <TableCell>
-                    <Badge variant={inc.status === "PENDING" ? "destructive" : "success"}>
-                      {inc.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-sm">{inc.channelId}</TableCell>
-                  <TableCell className="font-mono text-sm">{inc.subscriptionId}</TableCell>
-                  <TableCell className="font-mono text-xs">{inc.providerOrderId}</TableCell>
-                  <TableCell className="font-mono text-sm">{inc.invoiceId}</TableCell>
-                  <TableCell className="text-sm">{fmtDate(inc.detectedAt)}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {inc.resolutionNote ?? "—"}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <LedgerStateView
+            state={incidentsState}
+            errorTitle="Unable to load reconciliation incidents"
+            emptyMessage="No reconciliation incidents for this channel. System healthy."
+            blockedMessage="Select a channel to view its reconciliation incidents."
+          >
+            {(incidents, total) => (
+              <>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Channel</TableHead>
+                      <TableHead>Subscription</TableHead>
+                      <TableHead>Order ID</TableHead>
+                      <TableHead>Invoice</TableHead>
+                      <TableHead>Detected</TableHead>
+                      <TableHead>Note</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {incidents.map((inc) => (
+                      <TableRow key={inc.id}>
+                        <TableCell>
+                          <Badge variant={inc.status === "PENDING" ? "destructive" : "success"}>
+                            {inc.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-sm">{inc.channelId}</TableCell>
+                        <TableCell className="font-mono text-sm">{inc.subscriptionId}</TableCell>
+                        <TableCell className="font-mono text-xs">{inc.providerOrderId}</TableCell>
+                        <TableCell className="font-mono text-sm">{inc.invoiceId}</TableCell>
+                        <TableCell className="text-sm">{fmtDate(inc.detectedAt)}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {inc.resolutionNote ?? "—"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <div className="p-3 border-t text-sm text-muted-foreground">{total} total</div>
+              </>
+            )}
+          </LedgerStateView>
         )}
-        <div className="p-3 border-t text-sm text-muted-foreground">{total} total</div>
       </Card>
     </div>
   );
 }
+
