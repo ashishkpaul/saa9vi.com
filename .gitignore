@@ -49,3 +49,9 @@ changes.patch
 
 # Generated development email mailbox output
 /static/email/test-emails/
+
+# Third-party reference material (external code samples — not part of the platform)
+reference/
+
+# E2E fixture run artifacts (manifests are outputs of a seeding run, not fixtures)
+scripts/e2e/.fixtures/
