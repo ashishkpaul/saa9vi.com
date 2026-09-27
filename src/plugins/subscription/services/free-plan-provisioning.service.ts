@@ -11,6 +11,7 @@ import { SUBSCRIPTION_PLUGIN_OPTIONS, loggerCtx } from "../constants";
 import { OrganizationSubscription } from "../entities/organization-subscription.entity";
 import { SubscriptionPlan } from "../entities/subscription-plan.entity";
 import { SubscriptionPlanChangedEvent } from "../events/subscription.events";
+import { findLiveSubscriptionForChannel } from "./subscription-lookup.policy";
 import { PluginInitOptions } from "../types";
 
 /** Default catalogue slug of the provider-free entry-tier plan. */
@@ -142,8 +143,12 @@ export class FreePlanProvisioningService {
     // Cheap pre-check (the authoritative check is inside the transaction). A
     // CANCELLED row does not occupy the partial unique index, so it is history
     // rather than a conflict — a fresh row is created below.
-    const existing = await repo.findOne({ where: { channelId } });
-    if (existing && existing.status !== "cancelled") {
+    //
+    // BUG-040: ask for the LIVE row explicitly. An unordered
+    // `findOne({ channelId })` could return a cancelled row while a live row
+    // exists, and the insert below would then be rejected by the unique index.
+    const existing = await findLiveSubscriptionForChannel(repo, channelId, []);
+    if (existing) {
       Logger.debug(
         `Channel ${channelId} already has a non-cancelled subscription ` +
           `('${existing.status}') — free-plan provisioning is a no-op`,
@@ -167,10 +172,12 @@ export class FreePlanProvisioningService {
       const saved = await this.connection.rawConnection.transaction(async (em) => {
         // Authoritative idempotency check INSIDE the transaction: registration
         // retries and a double-published TenantRegisteredEvent are both plausible.
-        const current = await em
-          .getRepository(OrganizationSubscription)
-          .findOne({ where: { channelId } });
-        if (current && current.status !== "cancelled") {
+        const current = await findLiveSubscriptionForChannel(
+          em.getRepository(OrganizationSubscription),
+          channelId,
+          [],
+        );
+        if (current) {
           return current;
         }
 
@@ -207,8 +214,8 @@ export class FreePlanProvisioningService {
       // Backstop for a lost race: the partial unique index is the DB guard, so a
       // unique violation means a concurrent writer won — adopt their row rather
       // than failing the registration.
-      const again = await repo.findOne({ where: { channelId } });
-      if (again && again.status !== "cancelled") {
+      const again = await findLiveSubscriptionForChannel(repo, channelId, []);
+      if (again) {
         Logger.warn(
           `Free-plan provisioning: concurrent creation detected for channel ${channelId}; ` +
             `adopted existing subscription ${again.id}`,

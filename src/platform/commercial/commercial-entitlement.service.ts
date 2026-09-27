@@ -5,6 +5,7 @@ import {
   OrganizationSubscriptionStatus,
 } from '../../plugins/subscription/entities/organization-subscription.entity';
 import { SubscriptionPlan } from '../../plugins/subscription/entities/subscription-plan.entity';
+import { findCurrentSubscriptionForChannel } from '../../plugins/subscription/services/subscription-lookup.policy';
 
 /**
  * PLATFORM-LEVEL COMMERCIAL ENTITLEMENT POLICY (ADR-042 §1, ADR-043 §2).
@@ -92,21 +93,28 @@ export class CommercialEntitlementService {
   constructor(private readonly connection: TransactionalConnection) {}
 
   /**
-   * The tenant's subscription (with plan), or null.
+   * The tenant's CURRENT subscription (with plan), or null.
    *
-   * Mirrors `SubscriptionService.findSubscriptionByChannel()` — same predicate,
-   * same `plan` relation — rather than inventing a new query shape. Read through
-   * `rawConnection` because this is a channel-free policy evaluation: the caller
-   * may be evaluating a *different* channel than the active RequestContext (the
-   * marketplace indexer runs in a job context whose ctx.channelId is not the
-   * session's channel). The channel is always supplied explicitly, so tenant
-   * isolation is preserved by the WHERE clause.
+   * Calls the shared predicate in `subscription-lookup.policy.ts` rather than
+   * inventing a query shape. This method previously ran an unfiltered
+   * `findOne({ channelId })` while its docstring claimed to mirror
+   * `SubscriptionService.findSubscriptionByChannel()` — the BUG-036 drift
+   * pattern, and the instance of BUG-040 that survived the first fix: with a
+   * cancelled row beside a live one, `mySubscription`, `myLiveUsage` and the
+   * ADR-042 marketplace gate could all read history.
+   *
+   * Read through `rawConnection` because this is a channel-free policy
+   * evaluation: the caller may be evaluating a *different* channel than the
+   * active RequestContext (the marketplace indexer runs in a job context whose
+   * ctx.channelId is not the session's channel). The channel is always supplied
+   * explicitly, so tenant isolation is preserved by the WHERE clause.
    */
   async findChannelSubscription(channelId: string): Promise<OrganizationSubscription | null> {
     if (!channelId) return null;
-    return this.connection.rawConnection
-      .getRepository(OrganizationSubscription)
-      .findOne({ where: { channelId }, relations: ['plan'] });
+    return findCurrentSubscriptionForChannel(
+      this.connection.rawConnection.getRepository(OrganizationSubscription),
+      channelId,
+    );
   }
 
   /**

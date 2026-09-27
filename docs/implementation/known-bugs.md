@@ -6,13 +6,22 @@
 
 ## Active Bugs
 
-**BUG-040 — a channel's subscription is resolved by an unordered, unfiltered `findOne({ channelId })`, so once a *cancelled* row coexists with a live one, cancel/change can act on the wrong row (found live 2026-09-27; **OPEN**, see below).** This is the single root cause of all 13 remaining failures in the live ADR-044 acceptance run, including one **orphaned provider subscription** (`sub_TguvSWt6mE5YYe`) that was created at Razorpay and never persisted locally.
+**BUG-041 — a provider-wired cancel/change of a never-authorized Razorpay mandate is refused by the provider, blocking every provider-wired ADR-044 scenario (found live 2026-09-27; **OPEN** — needs a billing-path behaviour decision, see below).** The local lookup fix is provably working (the provider call is only reached *because* the live row was selected), but Razorpay answers `400 BAD_REQUEST_ERROR: Subscription cannot be cancelled since no billing cycle is going on` for a mandate that has never started a cycle, and the Admin mutation surfaces that as `Unexpected error value: { … }` with `data: null`. This is now the single root cause of **all 16 failures** in the live acceptance run (`22 passed / 16 failed / 2 skipped`).
 
-**PR #3 implementation status:** the subscription lookup/binding fix is implemented on `fix/bug-040-subscription-lookup` and regression coverage now exercises the cancelled-row + live-row coexistence state. **Runtime closure is still pending**: until the live ADR-044/Phase-8-style revalidation passes on this fix branch, BUG-040 remains OPEN in this evidence ledger.
+**BUG-043 — `subscription-shop.e2e-spec.ts` still asserts the pre-ADR-045 `myLiveUsage` allowance, so two of its assertions cannot pass (found 2026-09-27 by A/B against unchanged code; **OPEN** — decision required, see below).** Not a BUG-040 regression: both failures reproduce identically with the BUG-040 work stashed.
 
-BUG-036 (provisioning capacity/`isUnbounded`) was fixed and runtime-reproduced on 2026-09-23 in `d711940`; BUG-037 (the `bbb-channel-isolation` e2e harness could not pass) was found and fixed on 2026-09-24; BUG-038 (`bbbFulfillmentHandler` read the never-loaded `order.lines`, so no `order`-source capacity grant could ever be written) was found and fixed on 2026-09-25 while producing the Slice 10 / R4 runtime-lifecycle evidence; BUG-039 (Tier 2 of the capacity-policy cascade ran schema-blind raw SQL, so plan-derived concurrency silently resolved to `fallback` whenever `dbConnectionOptions.schema` was set) was found and fixed on 2026-09-25 while producing the Slice 5 plan-derived-concurrency evidence. All four archived entries are below; the fixes are recorded in `release-notes.md`.
+**BUG-040 and BUG-042 are fixed and runtime-verified (2026-09-27).** BUG-036 (provisioning capacity/`isUnbounded`) was fixed and runtime-reproduced on 2026-09-23 in `d711940`; BUG-037 (the `bbb-channel-isolation` e2e harness could not pass) was found and fixed on 2026-09-24; BUG-038 (`bbbFulfillmentHandler` read the never-loaded `order.lines`, so no `order`-source capacity grant could ever be written) was found and fixed on 2026-09-25 while producing the Slice 10 / R4 runtime-lifecycle evidence; BUG-039 (Tier 2 of the capacity-policy cascade ran schema-blind raw SQL, so plan-derived concurrency silently resolved to `fallback` whenever `dbConnectionOptions.schema` was set) was found and fixed on 2026-09-25. All six archived entries are below; the fixes are recorded in `release-notes.md`.
 
-## BUG-040 — Subscription lookups by channel are unordered and unfiltered, so cancel/change can target a stale cancelled row — **OPEN** (found live 2026-09-27)
+## BUG-040 — Subscription lookups by channel are unordered and unfiltered, so cancel/change can target a stale cancelled row — ✅ FIXED and runtime-verified 2026-09-27 (found live 2026-09-27)
+
+> **Status:** fixed and runtime-verified 2026-09-27 against a live dev server, after PR #3
+> (`b3a3704`) turned out to be an **incomplete** fix whose regression test could not pass.
+> The pre-fix record below is retained in full — every symptom in it was reproduced live
+> before the fix.
+> **Completion commit:** `pending-push` (this change set — see the fix block at the end of
+> this section). **Still open:** its sibling defect **BUG-041** (the provider refuses to
+> cancel a never-billed mandate), which now accounts for every remaining acceptance
+> failure and is *not* part of this defect.
 
 **Severity:** High (billing correctness + orphaned provider subscriptions) · **Discovered:** 2026-09-27, live, while executing `scripts/verify/adr-044-acceptance.sh` against a running dev server · **Components:** `src/plugins/subscription/services/subscription.service.ts` (channel lookups at lines 140, 389, 646; binding lookups at 431, 662, 769), `src/plugins/subscription/entities/organization-subscription.entity.ts:40`
 
@@ -43,7 +52,66 @@ select id, "channelId", provider, "providerSubscriptionId", active from public.s
 
 Acceptance run summary: `passed: 25  failed: 13  skipped: 2`. All 13 failures are downstream of this defect — scenario 4: 4, scenario 5: 1, scenario 6: 3, scenario 9: 3, scenario 10: 2. Scenario 9's expectation ("partial unique index slot freed") is correct as a design intent; it fails because the live row was never actually cancelled.
 
-**Suggested fix (NOT applied — this is a product behaviour change in the billing path).** Make every channel→subscription lookup deterministic and status-aware: `where: { channelId, status: Not('cancelled') }`, or `order: { id: 'DESC' }` plus an explicit live-row predicate, at `subscription.service.ts:140/389/646`, with the same predicate on the binding lookups that must mirror the live row. Regression coverage should assert (a) cancel→re-subscribe leaves exactly one live row and no orphan, and (b) `changeOrganizationSubscriptionPlan` resolves the live row while a cancelled row is present.
+**Fix (applied 2026-09-27) — and why PR #3 alone did not close it.** PR #3 made the lookups status-aware in `subscription.service.ts` (the channel lookups and both binding lookups), but left a **live consumer untouched**: `CommercialEntitlementService.findChannelSubscription()` still ran `findOne({ where: { channelId }, relations: ['plan'] })` while its docstring claimed to *mirror* the fixed predicate. That path serves `mySubscription`, `myLiveUsage` and the ADR-042 marketplace gate, so a channel with a cancelled row beside a live one could still read history. The rule now lives in ONE place — `services/subscription-lookup.policy.ts` (`liveSubscriptionWhere()`, `findLiveSubscriptionForChannel()`, `findCurrentSubscriptionForChannel()`) — and every channel→subscription read calls it: `findSubscriptionByChannel`, the `subscribeToPlan` slot guard, `changeOrganizationSubscriptionPlan` (Admin and ADR-046 self-serve), `cancelOrganizationSubscription`, legacy `createProviderBinding`, `CommercialEntitlementService.findChannelSubscription`, and the three lookups in `FreePlanProvisioningService` (whose unordered pre-check could return the cancelled row and then attempt an insert the unique index rejects). No schema change. The BUG-036 lesson is why the predicate is a shared policy instead of five inline copies — the drift that left this instance behind is exactly what duplicated rules do.
+
+**The regression test also had to be made runnable.** PR #3's `BUG-040` case had never been executed (the PR reports no workflow runs) and could not pass: it called the SuperAdmin-only `subscribeToPlan` / `cancelOrganizationSubscription` with a tenant-Administrator session (`You are not currently authorized to perform this action`), and it passed the **transient** registration id (`T_2`) into raw-SQL integer parameters (`invalid input syntax for type integer: "T_2"`). It now uses the SuperAdmin actor for the Admin mutations, the tenant business-account session for the Shop reads, and the repo's existing `decode()` helper (`r4-runtime-lifecycle.e2e-spec.ts`) for the persisted id — and additionally asserts the **read path** this completion closes (live row wins; a cancelled-only channel still reports `cancelled`, deterministically from the newest row).
+
+**Runtime evidence (2026-09-27, live dev server rebuilt with this change set).**
+
+| Evidence | Result |
+|---|---|
+| `adr-046-self-serve.e2e-spec.ts` (real Postgres) | **9/9 pass** — the BUG-040 case now runs: coexistence fixture, Shop plan change, `mySubscription` live-row read, cancel returns the live row id, terminal fallback |
+| Live ADR-044 acceptance, channel **35** | `subscribeToPlan` → row 24 `pending_provider_auth`; harness pre-clear leaves row 23 `cancelled` (plan `free-basic`) — the exact coexistence state |
+| Live row was selected, not the stale row | every cancel/change reached the **provider** and returned Razorpay's `400 … no billing cycle is going on`. A stale `free-basic` row would have taken the provider-free branch and returned local success with no provider call |
+| **No orphan** | `grep -c ORPHAN` over the server log = **0**; binding 11 → `subscriptionId 24` (the live row), provider subscription `sub_Tgzkb7Xu5q5CZz` — one provider subscription, one binding, no unreferenced provider row (pre-fix this same path orphaned `sub_TguvSWt6mE5YYe`) |
+| `subscribeToPlan` slot guard | re-subscribe refused **before** any provider call: `Channel 35 already has a non-cancelled subscription (status 'pending_provider_auth')` — validation-first, ADR-039 |
+| Phase 8 fixture layer (§4 harness) | `typecheck:e2e` 0; `verify.ts` **16/16 PASS** after the fix (tenant-b's `cancelled` read now traverses the fixed entitlement lookup); reseed idempotent (ids 32/33, 13/14, 20/21, 23/24 unchanged) with **no resurrection** of the cancelled tenant |
+
+The acceptance suite's remaining 16 failures are **BUG-041**, not this defect.
+
+---
+
+## BUG-041 — A provider-wired cancel/change of a never-authorized mandate is refused by the provider — **OPEN** (found live 2026-09-27)
+
+**Severity:** High (blocks every provider-wired ADR-044 acceptance scenario; a tenant cannot abandon an unauthorized subscription) · **Discovered:** 2026-09-27, live, while re-running `scripts/verify/adr-044-acceptance.sh` after the BUG-040 completion · **Components:** `src/plugins/subscription/providers/razorpay/*` (the provider leg of cancel/change), `src/plugins/subscription/services/subscription.service.ts` (`cancelOrganizationSubscription`, `changeOrganizationSubscriptionPlanInternal`)
+
+**What the code does.** `subscribeToPlan` creates the Razorpay subscription and persists the mandate with `providerStatus = 'created'` and local status `pending_provider_auth`. A later cancel — or a plan change, which cancels the outgoing mandate provider-side before binding the new one — calls the provider's cancel API. Razorpay refuses while the subscription has never had a billing cycle.
+
+**Evidence (raw GraphQL response, channel 35, 2026-09-27).**
+
+```json
+{"errors":[{"message":"Unexpected error value: { statusCode: 400, error: { code: \"BAD_REQUEST_ERROR\", description: \"Subscription cannot be cancelled since no billing cycle is going on\" } }","path":["cancelOrganizationSubscription"]}],"data":null}
+```
+
+All four `cancelOrganizationSubscription` calls and all three `changeOrganizationSubscriptionPlan` calls of the run failed this way. The local row correctly stayed `pending_provider_auth` (ADR-039 ordering: provider side-effect before local persist), so the run reports `22 passed / 16 failed / 2 skipped` with **all 16** assertions downstream of this one provider response. Note these are *different* failures from the `25 passed / 13 failed` run that exposed BUG-040: the code path is now correct, the provider refuses.
+
+**Why this is not BUG-040.** The provider call is only reached *because* the live row was selected and its binding resolved — the property the BUG-040 fix was for. Under the pre-fix code the stale provider-free row was chosen, no provider call was made, and the mutation returned a false success.
+
+**Decision required (not applied — product behaviour in the billing path).** Two fail-closed remedies: (a) skip the provider cancel when the mandate has never had a cycle (`providerStatus === 'created'` — nothing was billed, nothing to stop), or (b) recognise the provider's specific `BAD_REQUEST_ERROR … no billing cycle is going on` response as already-terminal and continue locally, leaving every other provider error fatal. (b) is narrower; (a) avoids a pointless round trip. Independently required: surface provider failures as a typed domain error instead of `Unexpected error value: { … }`. Until this is decided, ADR-044 scenarios 4–11 cannot pass against Razorpay.
+
+---
+
+## BUG-042 — `cancelOrganizationSubscription` returned a subscription with no `plan` relation — ✅ FIXED 2026-09-27 (found 2026-09-27)
+
+> **Status:** fixed and verified 2026-09-27 — `adr-046-self-serve.e2e-spec.ts` **9/9** (the case selects `plan { id slug }` on the cancel mutation), against real Postgres.
+
+**Severity:** Medium (Admin API contract violation: any client selecting `plan` on this mutation received a GraphQL error) · **Components:** `src/plugins/subscription/services/subscription.service.ts` (`cancelOrganizationSubscription`)
+
+**What the code did.** The cancellation transaction re-reads the row under `pessimistic_write` **without** the `plan` relation (Postgres cannot apply `FOR UPDATE` across the outer join TypeORM emits for a relation) and returned that entity. The Admin schema declares `plan: SubscriptionPlan!`, so a client selecting it got `Cannot return null for non-nullable field OrganizationSubscription.plan` — reproduced live by the BUG-040 regression test once it could actually run. The acceptance harness never selected `plan` on cancel, which is why this stayed invisible; the plan-change path was unaffected (it assigns `managed.plan = target` explicitly).
+
+**Fix.** After the transaction commits, re-read the persisted row with `relations: ["plan"]` and return it (`persisted ?? saved`). No schema change.
+
+---
+
+## BUG-043 — `subscription-shop.e2e-spec.ts` still asserts the pre-ADR-045 `myLiveUsage` allowance — **OPEN** (found 2026-09-27)
+
+**Severity:** Low (test drift: no product symptom observed) · **Components:** `src/plugins/subscription/__tests__/subscription-shop.e2e-spec.ts` (the two `myLiveUsage` cases)
+
+**What happens.** Two assertions expect `includedMinutes: 0` (a channel whose only grant is `internal_overhead`) and `100` (a 100-minute `order` grant, 30 consumed) but receive `60` and `160` — a constant **+60** in both. The extra 60 minutes is a `sourceType = 'subscription'` grant, which `myLiveUsage` counts by design: `TENANT_SELECTABLE_SOURCE_TYPES = ['order', 'subscription']`, and ADR-045's daily allowance is itself recorded as `sourceType = 'subscription'` (the dedup key is `(organization, validFrom = startOfDay, sourceType)`). So either the daily allowance is meant to be part of "included minutes" (the test is stale) or it must be excluded from the read (the read is wrong).
+
+**A/B (decisive — this is not a BUG-040 regression).** Both failures reproduce **identically with the BUG-040 completion work stashed**: `2 failed | 10 passed (12)`, same `60` / `160` received values, same `- 100 / + 160` diff.
+
+**Decision required (not applied).** Confirm ADR-045's intent, then either update the two expectations (documenting the 60-minute daily allowance as included minutes) or narrow the read's source-type filter. Deliberately **not** aligned to observed behaviour: editing the test to match would mask a possible product defect, and rewriting the read without the ADR-045 decision would remove a real allowance from the tenant-facing surface.
 
 ---
 

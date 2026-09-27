@@ -138,6 +138,15 @@ const PROVIDER_FIELD_PROBE = gql`
   }
 `;
 
+/**
+ * Entities created inside the registration transaction come back with a
+ * TRANSIENT Vendure id (`T_2`). That is not a valid integer for the raw-SQL
+ * parameters in the Admin subscription service (`invalid input syntax for type
+ * integer: "T_2"`), so the persisted id is recovered the same way
+ * `r4-runtime-lifecycle.e2e-spec.ts` does.
+ */
+const decode = (id: unknown): string => String(id).replace(/^T_/, '');
+
 describe("ADR-046 — tenant self-serve subscription Shop API", () => {
   const { server, adminClient, shopClient } = createTestEnvironment(
     mergeConfig(testConfig, {
@@ -253,7 +262,7 @@ describe("ADR-046 — tenant self-serve subscription Shop API", () => {
       return {
         email,
         token: result.registerNewTenant.channelToken,
-        channelId: String(result.registerNewTenant.channelId),
+        channelId: decode(result.registerNewTenant.channelId),
       };
     };
 
@@ -409,8 +418,14 @@ describe("ADR-046 — tenant self-serve subscription Shop API", () => {
     // The previous test leaves sub_mock_1 cancelled. Re-subscribing creates a
     // second, live row for the same channel — the exact state allowed by the
     // partial unique index and previously exposed the unordered findOne bug.
-    await adminClient.asUserWithCredentials(tenantAEmail, adminPassword);
-    adminClient.setChannelToken(tenantAToken);
+    // `subscribeToPlan` / `cancelOrganizationSubscription` are SuperAdmin-only
+    // Admin mutations — a tenant Administrator session is refused (found by
+    // actually running this test, which had never been executed), so the
+    // coexistence fixture is built with the same actor the acceptance harness
+    // uses. The Shop reads below switch to the tenant's business-account
+    // session, which is what the self-serve path is about.
+    adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
+    await adminClient.asSuperAdmin();
 
     const resubscribe = await adminClient.query(ADMIN_SUBSCRIBE, {
       channelId: tenantAChannelId,
@@ -425,8 +440,21 @@ describe("ADR-046 — tenant self-serve subscription Shop API", () => {
     // The Shop self-serve path must select the non-cancelled row, not the
     // older cancelled row. Changing the live paid row to provider-free also
     // exercises the corresponding binding lookup.
+    // The Shop surface needs the tenant's own business-account session.
+    await adminClient.asUserWithCredentials(tenantAEmail, adminPassword);
+    adminClient.setChannelToken(tenantAToken);
     shopClient.setAuthToken(adminClient.getAuthToken());
     shopClient.setChannelToken(tenantAToken);
+
+    // BUG-040 (read path): `mySubscription` is served by
+    // CommercialEntitlementService.findChannelSubscription, which now uses the
+    // same shared predicate as the mutations. With a cancelled row and a live
+    // row coexisting it must report the LIVE row — that read path (and the
+    // ADR-042 marketplace gate beside it) is the instance of BUG-040 the first
+    // fix left behind.
+    const readWithLiveRow = await shopClient.query(MY_SUBSCRIPTION);
+    expect(readWithLiveRow.mySubscription.status).toBe("pending_provider_auth");
+    expect(readWithLiveRow.mySubscription.plan.id).toBe(paidPlanId);
 
     const changed = await shopClient.query(CHANGE_PLAN, { planId: freePlanId });
     expect(changed.requestMySubscriptionPlanChange.subscription.status).toBe("active");
@@ -435,7 +463,10 @@ describe("ADR-046 — tenant self-serve subscription Shop API", () => {
 
     // Cancellation must target the same live row. The stale cancelled row has a
     // lower id; returning it would falsely report success while leaving the
-    // actual live row active.
+    // actual live row active. Switched back to the SuperAdmin actor because the
+    // Admin cancel mutation is SuperAdmin-only.
+    adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
+    await adminClient.asSuperAdmin();
     const cancelled = await adminClient.query(ADMIN_CANCEL, {
       channelId: tenantAChannelId,
       atPeriodEnd: false,
@@ -443,6 +474,19 @@ describe("ADR-046 — tenant self-serve subscription Shop API", () => {
     expect(cancelled.cancelOrganizationSubscription.id).toBe(liveSubId);
     expect(cancelled.cancelOrganizationSubscription.status).toBe("cancelled");
     expect(cancelProvider).toHaveBeenCalledTimes(2);
+
+    // BUG-040 (read path, terminal fallback): a cancelled-only channel must
+    // still report the terminal state — the fix must not turn "cancelled" into
+    // "no subscription". Two cancelled rows now exist, so the fallback must
+    // also be deterministic: the older row (sub_mock_1) is on the paid plan and
+    // the row just cancelled is on the free plan.
+    await adminClient.asUserWithCredentials(tenantAEmail, adminPassword);
+    adminClient.setChannelToken(tenantAToken);
+    shopClient.setAuthToken(adminClient.getAuthToken());
+    shopClient.setChannelToken(tenantAToken);
+    const readAfterCancel = await shopClient.query(MY_SUBSCRIPTION);
+    expect(readAfterCancel.mySubscription.status).toBe("cancelled");
+    expect(readAfterCancel.mySubscription.plan.id).toBe(freePlanId);
   });
 
 

@@ -9,7 +9,6 @@ import {
   RequestContext,
   TransactionalConnection,
 } from "@vendure/core";
-import { Not } from "typeorm";
 
 import { loggerCtx, RECURRING_BILLING_PROVIDER } from "../constants";
 import { OrganizationSubscription } from "../entities/organization-subscription.entity";
@@ -22,6 +21,10 @@ import {
   RecurringBillingProvider,
 } from "../providers/recurring-billing.provider";
 import { TenantProfile } from "../../tenant-plugin/entities/tenant-profile.entity";
+import {
+  findCurrentSubscriptionForChannel,
+  findLiveSubscriptionForChannel,
+} from "./subscription-lookup.policy";
 
 /**
  * Lifecycle service for tenant SaaS subscriptions.
@@ -118,21 +121,9 @@ export class SubscriptionService {
   ): Promise<OrganizationSubscription | null> {
     const repo = this.connection.getRepository(ctx, OrganizationSubscription);
 
-    // The partial unique index guarantees at most one non-cancelled row per
-    // channel. Prefer that current row deterministically; only fall back to
-    // the newest cancelled row when the channel has no live subscription so
-    // the Shop read can still report a terminal cancellation state.
-    const current = await repo.findOne({
-      where: { channelId, status: Not("cancelled") },
-      relations: ["plan"],
-    });
-    if (current) return current;
-
-    return repo.findOne({
-      where: { channelId, status: "cancelled" },
-      relations: ["plan"],
-      order: { id: "DESC" },
-    });
+    // BUG-040: the predicate lives in subscription-lookup.policy.ts, so an
+    // unordered `findOne({ channelId })` cannot be re-introduced here.
+    return findCurrentSubscriptionForChannel(repo, channelId);
   }
 
   /**
@@ -152,10 +143,8 @@ export class SubscriptionService {
     const repo = this.connection.getRepository(ctx, OrganizationSubscription);
 
     // ── 1. Validate local prerequisites (no side effects yet — ADR-039) ──
-    const existing = await repo.findOne({
-      where: { channelId, status: Not("cancelled") },
-    });
-    if (existing && existing.status !== "cancelled") {
+    const existing = await findLiveSubscriptionForChannel(repo, channelId, []);
+    if (existing) {
       // Message matches the ACTUAL condition: ANY non-cancelled status occupies
       // the partial unique index slot (`status != 'cancelled'`), not just
       // active/trialing. Use changeOrganizationSubscriptionPlan to move plan,
@@ -403,17 +392,12 @@ export class SubscriptionService {
     const bindingRepo = this.connection.getRepository(ctx, SubscriptionProviderBinding);
 
     // ── 1. Validate local prerequisites (no side effects yet — ADR-039) ──
-    const current = await repo.findOne({
-      where: { channelId, status: Not("cancelled") },
-      relations: ["plan"],
-    });
+    // BUG-040: resolve the LIVE row. A cancelled row must never satisfy this
+    // precondition — doing so previously produced a misleading "subscription is
+    // cancelled" error while a live row existed.
+    const current = await findLiveSubscriptionForChannel(repo, channelId);
     if (!current) {
       throw new Error(`Channel ${channelId} has no subscription; use subscribeToPlan`);
-    }
-    if (current.status === "cancelled") {
-      throw new Error(
-        `Channel ${channelId} subscription is cancelled; use subscribeToPlan to start a new subscription`,
-      );
     }
     const target = await this.connection
       .getRepository(ctx, SubscriptionPlan)
@@ -666,20 +650,10 @@ export class SubscriptionService {
     const repo = this.connection.getRepository(ctx, OrganizationSubscription);
     const bindingRepo = this.connection.getRepository(ctx, SubscriptionProviderBinding);
 
-    // Prefer the unique current (non-cancelled) row. If none exists,
-    // deterministically return the newest cancelled row so repeated cancel
-    // requests remain idempotent without ever masking a live subscription.
-    let sub = await repo.findOne({
-      where: { channelId, status: Not("cancelled") },
-      relations: ["plan"],
-    });
-    if (!sub) {
-      sub = await repo.findOne({
-        where: { channelId, status: "cancelled" },
-        relations: ["plan"],
-        order: { id: "DESC" },
-      });
-    }
+    // BUG-040: live row first; the newest cancelled row is only the terminal
+    // fallback, so repeated cancel requests stay idempotent without ever
+    // masking a live subscription.
+    const sub = await findCurrentSubscriptionForChannel(repo, channelId);
     if (!sub) {
       throw new Error(`Channel ${channelId} has no subscription`);
     }
@@ -775,7 +749,17 @@ export class SubscriptionService {
         ` (ADR-044)`,
       loggerCtx,
     );
-    return saved;
+
+    // BUG-042: the locked reload above deliberately omits the `plan` relation
+    // (Postgres cannot apply FOR UPDATE across the outer join TypeORM emits for
+    // it), but the Admin schema declares `plan: SubscriptionPlan!`. Without this
+    // re-read, any client selecting `plan` on this mutation received
+    // "Cannot return null for non-nullable field OrganizationSubscription.plan".
+    const persisted = await repo.findOne({
+      where: { id: saved.id },
+      relations: ["plan"],
+    });
+    return persisted ?? saved;
   }
 
   /**
@@ -816,13 +800,9 @@ export class SubscriptionService {
 
     // Resolve the OrganizationSubscription for this channel
     const subRepo = this.connection.getRepository(ctx, OrganizationSubscription);
-    const subscription = await subRepo.findOne({
-      // Legacy lazy binding is only valid for the current subscription. Never
-      // attach a provider webhook to a historical cancelled row merely because
-      // it happens to be returned first by an unordered query.
-      where: { channelId, status: Not("cancelled") },
-      relations: ["plan"],
-    });
+    // BUG-040: legacy lazy binding is only valid for the LIVE subscription.
+    // Never attach a provider webhook to a historical cancelled row.
+    const subscription = await findLiveSubscriptionForChannel(subRepo, channelId);
     if (!subscription) {
       throw new Error(
         `Cannot create SubscriptionProviderBinding: no OrganizationSubscription found for channel ${channelId}`,
