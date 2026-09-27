@@ -166,6 +166,7 @@ describe("ADR-046 — tenant self-serve subscription Shop API", () => {
   const adminPassword = "StrongP@ss1";
   const learnerPassword = "LearnerP@ss1";
   let tenantAEmail: string;
+  let tenantAChannelId: string;
   let tenantBEmail: string;
   let learnerEmail: string;
   let tenantAToken: string;
