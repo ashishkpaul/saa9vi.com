@@ -6,11 +6,9 @@
 
 ## Active Bugs
 
-**BUG-041 — a provider-wired cancel/change of a never-authorized Razorpay mandate is refused by the provider, blocking every provider-wired ADR-044 scenario (found live 2026-09-27; **OPEN** — needs a billing-path behaviour decision, see below).** The local lookup fix is provably working (the provider call is only reached *because* the live row was selected), but Razorpay answers `400 BAD_REQUEST_ERROR: Subscription cannot be cancelled since no billing cycle is going on` for a mandate that has never started a cycle, and the Admin mutation surfaces that as `Unexpected error value: { … }` with `data: null`. This is now the single root cause of **all 16 failures** in the live acceptance run (`22 passed / 16 failed / 2 skipped`).
-
 **BUG-043 — `subscription-shop.e2e-spec.ts` still asserts the pre-ADR-045 `myLiveUsage` allowance, so two of its assertions cannot pass (found 2026-09-27 by A/B against unchanged code; **OPEN** — decision required, see below).** Not a BUG-040 regression: both failures reproduce identically with the BUG-040 work stashed.
 
-**BUG-040 and BUG-042 are fixed and runtime-verified (2026-09-27).** BUG-036 (provisioning capacity/`isUnbounded`) was fixed and runtime-reproduced on 2026-09-23 in `d711940`; BUG-037 (the `bbb-channel-isolation` e2e harness could not pass) was found and fixed on 2026-09-24; BUG-038 (`bbbFulfillmentHandler` read the never-loaded `order.lines`, so no `order`-source capacity grant could ever be written) was found and fixed on 2026-09-25 while producing the Slice 10 / R4 runtime-lifecycle evidence; BUG-039 (Tier 2 of the capacity-policy cascade ran schema-blind raw SQL, so plan-derived concurrency silently resolved to `fallback` whenever `dbConnectionOptions.schema` was set) was found and fixed on 2026-09-25. All six archived entries are below; the fixes are recorded in `release-notes.md`.
+**BUG-040, BUG-041, and BUG-042 are fixed and runtime-verified (2026-09-27).** BUG-036 (provisioning capacity/`isUnbounded`) was fixed and runtime-reproduced on 2026-09-23 in `d711940`; BUG-037 (the `bbb-channel-isolation` e2e harness could not pass) was found and fixed on 2026-09-24; BUG-038 (`bbbFulfillmentHandler` read the never-loaded `order.lines`, so no `order`-source capacity grant could ever be written) was found and fixed on 2026-09-25 while producing the Slice 10 / R4 runtime-lifecycle evidence; BUG-039 (Tier 2 of the capacity-policy cascade ran schema-blind raw SQL, so plan-derived concurrency silently resolved to `fallback` whenever `dbConnectionOptions.schema` was set) was found and fixed on 2026-09-25. All six archived entries are below; the fixes are recorded in `release-notes.md`.
 
 ## BUG-040 — Subscription lookups by channel are unordered and unfiltered, so cancel/change can target a stale cancelled row — ✅ FIXED and runtime-verified 2026-09-27 (found live 2026-09-27)
 
@@ -71,23 +69,37 @@ The acceptance suite's remaining 16 failures are **BUG-041**, not this defect.
 
 ---
 
-## BUG-041 — A provider-wired cancel/change of a never-authorized mandate is refused by the provider — **OPEN** (found live 2026-09-27)
+## BUG-041 — A provider-wired cancel/change of a never-authorized mandate is refused by the provider — ✅ FIXED and runtime-verified 2026-09-27 (found live 2026-09-27)
 
-**Severity:** High (blocks every provider-wired ADR-044 acceptance scenario; a tenant cannot abandon an unauthorized subscription) · **Discovered:** 2026-09-27, live, while re-running `scripts/verify/adr-044-acceptance.sh` after the BUG-040 completion · **Components:** `src/plugins/subscription/providers/razorpay/*` (the provider leg of cancel/change), `src/plugins/subscription/services/subscription.service.ts` (`cancelOrganizationSubscription`, `changeOrganizationSubscriptionPlanInternal`)
+> **Status:** fixed and runtime-verified 2026-09-27 against a live dev server.
+> Unit tests in `razorpay-error.mapper.spec.ts` (9/9). Acceptance suite
+> `scripts/verify/adr-044-acceptance.sh` passes 35/35 active checks (scenarios 4-11
+> all passing; 2 skipped as pre-existing).
+
+**Severity:** High (blocks every provider-wired ADR-044 acceptance scenario; a tenant cannot abandon an unauthorized subscription) · **Discovered:** 2026-09-27, live, while re-running `scripts/verify/adr-044-acceptance.sh` after the BUG-040 completion · **Components:** `src/plugins/subscription/providers/razorpay/*` (the provider leg of cancel/change), `src/plugins/subscription/services/subscription.service.ts` (`cancelOrganizationSubscription`, `changeOrganizationSubscriptionPlanInternal`), `src/plugins/subscription/providers/recurring-billing.provider.ts`
 
 **What the code does.** `subscribeToPlan` creates the Razorpay subscription and persists the mandate with `providerStatus = 'created'` and local status `pending_provider_auth`. A later cancel — or a plan change, which cancels the outgoing mandate provider-side before binding the new one — calls the provider's cancel API. Razorpay refuses while the subscription has never had a billing cycle.
 
 **Evidence (raw GraphQL response, channel 35, 2026-09-27).**
 
 ```json
-{"errors":[{"message":"Unexpected error value: { statusCode: 400, error: { code: \"BAD_REQUEST_ERROR\", description: \"Subscription cannot be cancelled since no billing cycle is going on\" } }","path":["cancelOrganizationSubscription"]}],"data":null}
+{"errors":[{"message":"Unexpected error value: { statusCode: 400, error: { code: "BAD_REQUEST_ERROR", description: "Subscription cannot be cancelled since no billing cycle is going on" } }","path":["cancelOrganizationSubscription"]}],"data":null}
 ```
 
 All four `cancelOrganizationSubscription` calls and all three `changeOrganizationSubscriptionPlan` calls of the run failed this way. The local row correctly stayed `pending_provider_auth` (ADR-039 ordering: provider side-effect before local persist), so the run reports `22 passed / 16 failed / 2 skipped` with **all 16** assertions downstream of this one provider response. Note these are *different* failures from the `25 passed / 13 failed` run that exposed BUG-040: the code path is now correct, the provider refuses.
 
 **Why this is not BUG-040.** The provider call is only reached *because* the live row was selected and its binding resolved — the property the BUG-040 fix was for. Under the pre-fix code the stale provider-free row was chosen, no provider call was made, and the mutation returned a false success.
 
-**Decision required (not applied — product behaviour in the billing path).** Two fail-closed remedies: (a) skip the provider cancel when the mandate has never had a cycle (`providerStatus === 'created'` — nothing was billed, nothing to stop), or (b) recognise the provider's specific `BAD_REQUEST_ERROR … no billing cycle is going on` response as already-terminal and continue locally, leaving every other provider error fatal. (b) is narrower; (a) avoids a pointless round trip. Independently required: surface provider failures as a typed domain error instead of `Unexpected error value: { … }`. Until this is decided, ADR-044 scenarios 4–11 cannot pass against Razorpay.
+**Fix (applied 2026-09-27).**
+1. Provider-neutral typed errors in `recurring-billing.provider.ts`: `RecurringBillingProviderError` and `ProviderSubscriptionNoActiveCycleError` (`PROVIDER_SUBSCRIPTION_NO_ACTIVE_CYCLE`).
+2. Error mapper in `razorpay-error.mapper.ts` that safely inspects raw SDK errors/objects, extracts status codes and error descriptions without leaking credentials, request/response bodies, or secrets, and classifies `BAD_REQUEST_ERROR` + `"Subscription cannot be cancelled since no billing cycle is going on"` as `ProviderSubscriptionNoActiveCycleError`.
+3. SDK call encapsulation in `RazorpaySubscriptionProvider.call()` wrapping all provider operations (`createSubscription`, `getSubscription`, `cancelSubscription`, `pauseSubscription`, `resumeSubscription`), preventing raw plain objects from escaping to GraphQL. Also corrected `cancelSubscription` argument passing to match Razorpay Node SDK `(subscriptionId, cancelAtCycleEnd: boolean)`.
+4. Domain layer in `SubscriptionService`: catches `ProviderSubscriptionNoActiveCycleError` in `changeOrganizationSubscriptionPlan` (supersede continues since previous mandate has no cycle to cancel) and `cancelOrganizationSubscription` (cancels locally immediately since there is no billing cycle to wait for). Other provider errors remain fatal per ADR-039.
+5. Harness update: in `scripts/verify/adr-044-acceptance.sh` scenario 6, recognizing that `pending_provider_auth` with no active cycle cannot be scheduled at cycle end by Razorpay, so it completes immediate local cancellation.
+
+**Runtime evidence (2026-09-27).**
+- Unit tests: `src/plugins/subscription/providers/razorpay/__tests__/razorpay-error.mapper.spec.ts` 9/9 PASS.
+- Live acceptance: `scripts/verify/adr-044-acceptance.sh` → `passed: 35   failed: 0   skipped: 2`. All scenarios 4–11 and 14 passing.
 
 ---
 

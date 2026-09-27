@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@vendure/core';
 import { RecurringBillingProvider, CreateRecurringSubscriptionInput, ProviderSubscription, CancelSubscriptionOptions } from '../recurring-billing.provider';
+import { toProviderError } from './razorpay-error.mapper';
 
 const loggerCtx = 'RazorpaySubscriptionProvider';
 
@@ -43,6 +44,20 @@ export class RazorpaySubscriptionProvider implements RecurringBillingProvider {
     }
 
     /**
+     * Run one provider call and translate any SDK failure into a typed provider
+     * error (BUG-041). No raw SDK object may escape this class: Vendure would
+     * serialise it to GraphQL as `Unexpected error value: { … }`, and the caller
+     * cannot distinguish a terminal provider state from a real failure.
+     */
+    private async call<T = any>(operation: string, fn: () => Promise<T>): Promise<T> {
+        try {
+            return await fn();
+        } catch (err) {
+            throw toProviderError(err, this.providerName, operation);
+        }
+    }
+
+    /**
      * Create a Razorpay Subscription.
      *
      * Request contract (ADR-039, pinned 2026-09-16 — ONLY documented
@@ -75,19 +90,21 @@ export class RazorpaySubscriptionProvider implements RecurringBillingProvider {
         }
         const totalCount = input.totalCount ?? RazorpaySubscriptionProvider.DEFAULT_TOTAL_COUNT;
 
-        const subscription = await client.subscriptions.create({
-            plan_id: input.planId,
-            total_count: totalCount,
-            quantity: 1,
-            customer_notify: false,
-            ...(input.startAt !== undefined ? { start_at: input.startAt } : {}),
-            ...(input.expireBy !== undefined ? { expire_by: input.expireBy } : {}),
-            notes: {
-                channelId: input.channelId,
-                tenantProfileId: input.tenantProfileId,
-                planId: input.planId,
-            },
-        });
+        const subscription = await this.call('createSubscription', () =>
+            client.subscriptions.create({
+                plan_id: input.planId,
+                total_count: totalCount,
+                quantity: 1,
+                customer_notify: false,
+                ...(input.startAt !== undefined ? { start_at: input.startAt } : {}),
+                ...(input.expireBy !== undefined ? { expire_by: input.expireBy } : {}),
+                notes: {
+                    channelId: input.channelId,
+                    tenantProfileId: input.tenantProfileId,
+                    planId: input.planId,
+                },
+            }),
+        );
 
         return {
             providerSubscriptionId: subscription.id,
@@ -106,7 +123,9 @@ export class RazorpaySubscriptionProvider implements RecurringBillingProvider {
         providerSubscriptionId: string,
     ): Promise<ProviderSubscription> {
         const client = this.getClient();
-        const subscription = await client.subscriptions.fetch(providerSubscriptionId);
+        const subscription = await this.call('getSubscription', () =>
+            client.subscriptions.fetch(providerSubscriptionId),
+        );
 
         return {
             providerSubscriptionId: subscription.id,
@@ -126,9 +145,10 @@ export class RazorpaySubscriptionProvider implements RecurringBillingProvider {
         options?: CancelSubscriptionOptions,
     ): Promise<void> {
         const client = this.getClient();
-        await client.subscriptions.cancel(providerSubscriptionId, {
-            cancel_at_cycle_end: options?.cancelAtCycleEnd ?? false,
-        });
+        const cancelAtCycleEnd = options?.cancelAtCycleEnd ?? false;
+        await this.call('cancelSubscription', () =>
+            client.subscriptions.cancel(providerSubscriptionId, cancelAtCycleEnd as any),
+        );
     }
 
     /**
@@ -138,9 +158,11 @@ export class RazorpaySubscriptionProvider implements RecurringBillingProvider {
         providerSubscriptionId: string,
     ): Promise<void> {
         const client = this.getClient();
-        await client.subscriptions.pause(providerSubscriptionId, {
-            pause_at: 'now',
-        });
+        await this.call('pauseSubscription', () =>
+            client.subscriptions.pause(providerSubscriptionId, {
+                pause_at: 'now',
+            }),
+        );
     }
 
     /**
@@ -150,8 +172,10 @@ export class RazorpaySubscriptionProvider implements RecurringBillingProvider {
         providerSubscriptionId: string,
     ): Promise<void> {
         const client = this.getClient();
-        await client.subscriptions.resume(providerSubscriptionId, {
-            resume_at: 'now',
-        });
+        await this.call('resumeSubscription', () =>
+            client.subscriptions.resume(providerSubscriptionId, {
+                resume_at: 'now',
+            }),
+        );
     }
 }

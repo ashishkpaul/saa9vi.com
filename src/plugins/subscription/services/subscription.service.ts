@@ -18,6 +18,7 @@ import { SubscriptionPlanChangedEvent } from "../events/subscription.events";
 import {
   CreateRecurringSubscriptionInput,
   ProviderSubscription,
+  ProviderSubscriptionNoActiveCycleError,
   RecurringBillingProvider,
 } from "../providers/recurring-billing.provider";
 import { TenantProfile } from "../../tenant-plugin/entities/tenant-profile.entity";
@@ -495,9 +496,21 @@ export class SubscriptionService {
     // stale local row — surfaced, not silent — rather than a double-billing
     // window.
     if (currentBinding && this.billingProvider) {
-      await this.billingProvider.cancelSubscription(currentBinding.providerSubscriptionId, {
-        cancelAtCycleEnd: true,
-      });
+      try {
+        await this.billingProvider.cancelSubscription(currentBinding.providerSubscriptionId, {
+          cancelAtCycleEnd: true,
+        });
+      } catch (err) {
+        if (err instanceof ProviderSubscriptionNoActiveCycleError) {
+          Logger.info(
+            `Previous provider subscription ${currentBinding.providerSubscriptionId} has no active billing cycle; ` +
+              `treating as terminal and proceeding with supersede (BUG-041)`,
+            loggerCtx,
+          );
+        } else {
+          throw err;
+        }
+      }
     }
 
     // ── 3. ONE narrow transaction: supersede in place (ADR-044 §1) ──
@@ -677,11 +690,25 @@ export class SubscriptionService {
         });
     const providerWired = !providerFree && !!binding;
 
+    let noActiveCycle = false;
     if (providerWired && this.billingProvider) {
       // EXTERNAL first (non-rollbackable): Razorpay owns recurring execution.
-      await this.billingProvider.cancelSubscription(binding!.providerSubscriptionId, {
-        cancelAtCycleEnd: atPeriodEnd,
-      });
+      try {
+        await this.billingProvider.cancelSubscription(binding!.providerSubscriptionId, {
+          cancelAtCycleEnd: atPeriodEnd,
+        });
+      } catch (err) {
+        if (err instanceof ProviderSubscriptionNoActiveCycleError) {
+          Logger.info(
+            `Provider subscription ${binding!.providerSubscriptionId} has no active billing cycle; ` +
+              `treating as terminal and cancelling locally immediately (BUG-041)`,
+            loggerCtx,
+          );
+          noActiveCycle = true;
+        } else {
+          throw err;
+        }
+      }
     } else if (providerWired) {
       throw new Error(
         `No recurring billing provider configured; cannot cancel provider-wired subscription for channel ${channelId}`,
@@ -690,8 +717,10 @@ export class SubscriptionService {
 
     // Provider-free rows have no billing period, so "at period end" is not
     // representable for them; a provider-wired row with no binding has no
-    // provider subscription to schedule either. Both cancel immediately.
-    const immediate = providerFree || !providerWired || !atPeriodEnd;
+    // provider subscription to schedule either. If the provider reports no
+    // active billing cycle (BUG-041), there is no period to wait for either.
+    // In all those cases, cancel immediately.
+    const immediate = providerFree || !providerWired || !atPeriodEnd || noActiveCycle;
 
     // ── ONE narrow local transaction (locking + version CAS). ──
     const saved = await this.connection.rawConnection.transaction(async (em) => {
