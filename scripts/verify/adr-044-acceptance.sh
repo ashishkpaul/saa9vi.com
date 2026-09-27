@@ -74,6 +74,21 @@ def dig(o,path):
     return o
 print(json.dumps(dig(d, sys.argv[2])))" "$1" "$2"; }
 
+# jstr <file> <path> — like jget, but a JSON *string* comes back WITHOUT its
+# surrounding quotes, while booleans/null/numbers keep their JSON spelling
+# (`true` / `null` / `42`).
+#
+# Why this exists: `check` evaluates its condition through `eval`, and eval
+# strips the inner double quotes from an expanded word. A condition written
+# `[ "$V" = '"cancelled"' ]` therefore can NEVER match, and its `!=` form
+# always matches — so both directions reported a *correct* server as a
+# failure (`status = cancelled` → FAIL while printing `got "cancelled"`, and
+# `status NOT cancelled` passing unconditionally). Compare plain strings
+# instead of quoting around the quotes.
+jstr() { jget "$1" "$2" | python3 -c 'import json,sys
+v = json.load(sys.stdin)
+print(v if isinstance(v, str) else json.dumps(v))'; }
+
 echo "=== 0. Admin login (Vendure session cookie) ==="
 gql login "$ADMIN_API" "" \
   'mutation($u:String!,$p:String!){ login(username:$u,password:$p){ ... on CurrentUser { id identifier } } }' \
@@ -88,15 +103,23 @@ check "session is authorized for SuperAdmin-only queries" \
 AUTH=""
 
 echo "=== 1. Plan catalogue fixtures (unique slugs per run) ==="
+# Razorpay rejects fabricated plan ids (verified live: an unknown plan id
+# returns HTTP 404 from api.razorpay.com) and the server fails closed rather
+# than falling back to a local-only subscription (ADR-039). The provider-wired
+# scenarios therefore need a REAL test-mode plan id. One provider plan may
+# back two local plans (verified: two plans created with the same
+# providerPlanId), which is all the supersede scenario needs.
+PROVIDER_PLAN_A="${RAZORPAY_TEST_PLAN_ID:-plan_TESTADRA$RUN_ID}"
+PROVIDER_PLAN_B="${RAZORPAY_TEST_PLAN_ID:-plan_TESTADRB$RUN_ID}"
 mkplan() { # mkplan <key> <slug> <name> <price> <providerPlanId-or-empty>
   local key="$1" slug="$2" name="$3" price="$4" ppid="$5"
   gql "$key" "$ADMIN_API" "$AUTH" \
     'mutation($i:SubscriptionPlanInput!){ createSubscriptionPlan(input:$i){ id slug name monthlyPriceInPaise providerPlanId } }' \
-    "{\"i\":{\"name\":\"$name\",\"slug\":\"$slug\",\"monthlyPriceInPaise\":$price,\"includedBbbMinutes\":60,\"providerPlanId\":$([ -n "$ppid" ] && echo "'$ppid'" || echo null)}}"
+    "{\"i\":{\"name\":\"$name\",\"slug\":\"$slug\",\"monthlyPriceInPaise\":$price,\"includedBbbMinutes\":60,\"providerPlanId\":$([ -n "$ppid" ] && echo "\"$ppid\"" || echo null)}}"
   jget "$OUTDIR/$key.json" "data.createSubscriptionPlan.id"
 }
-PAID_A_ID=$(mkplan paidA "adr044-paid-a-$RUN_ID" "ADR044 Paid A" 49000 "plan_TESTADRA$RUN_ID" | tr -d '"')
-PAID_B_ID=$(mkplan paidB "adr044-paid-b-$RUN_ID" "ADR044 Paid B" 99000 "plan_TESTADRB$RUN_ID" | tr -d '"')
+PAID_A_ID=$(mkplan paidA "adr044-paid-a-$RUN_ID" "ADR044 Paid A" 49000 "$PROVIDER_PLAN_A" | tr -d '"')
+PAID_B_ID=$(mkplan paidB "adr044-paid-b-$RUN_ID" "ADR044 Paid B" 99000 "$PROVIDER_PLAN_B" | tr -d '"')
 FREE_ID=$(mkplan free "adr044-free-$RUN_ID" "ADR044 Free" 0 "" | tr -d '"')
 check "three plans created (paidA/paidB/free)" "[ -n \"$PAID_A_ID\" ] && [ \"$PAID_A_ID\" != \"null\" ] && [ -n \"$FREE_ID\" ] && [ \"$FREE_ID\" != \"null\" ]" "paidA=$PAID_A_ID paidB=$PAID_B_ID free=$FREE_ID"
 
@@ -106,6 +129,22 @@ gql register "$SHOP_API" "" \
   "{\"i\":{\"businessName\":\"ADR044 Tenant $RUN_ID\",\"firstName\":\"Adr\",\"lastName\":\"Tester\",\"emailAddress\":\"adr044-$RUN_ID@example.com\",\"password\":\"Test-Passw0rd!\"}}"
 CH=$(jget "$OUTDIR/register.json" "data.registerNewTenant.channelId"); CH="${CH//\"/}"
 check "tenant provisioned (channelId present)" "[ -n \"$CH\" ] && [ \"$CH\" != \"null\" ]" "see $OUTDIR/register.json"
+
+# A freshly registered tenant is NOT subscription-free. Registration auto-
+# activates the provider-free Free Basic plan (slice 4 / `d45b0a5`), so leaving
+# it in place made every provider-wired scenario below fail with the *correct*
+# error "Channel N already has a non-cancelled subscription (status 'active')"
+# — a stale premise in this harness, not a defect in the server. Verified live
+# before writing this: a tenant registered seconds earlier reports plan slug
+# `free-basic`, price 0, providerPlanId null, status `active`.
+gql preclear "$ADMIN_API" "$AUTH" \
+  'mutation($c:String!){ cancelOrganizationSubscription(channelId:$c,atPeriodEnd:false){ id status } }' \
+  "{\"c\":\"$CH\"}"
+PRECLEAR_STATUS=$(jstr "$OUTDIR/preclear.json" "data.cancelOrganizationSubscription.status")
+# Assert the precondition instead of assuming a clean slate.
+check "registration's auto-provisioned subscription cleared for a real baseline" \
+  "[ \"$PRECLEAR_STATUS\" = 'cancelled' ]" \
+  "status=$PRECLEAR_STATUS (the auto-provisioned row is provider-free: plan 'free-basic', providerPlanId null)"
 
 sub() { # sub <key> <planId>
   gql "$1" "$ADMIN_API" "$AUTH" \
@@ -131,8 +170,8 @@ mandateCount() { # mandateCount <key>
 echo "=== 3. subscribeToPlan(paidA) → pending_provider_auth (baseline) ==="
 sub s1 "$PAID_A_ID"
 S1_ID=$(jget "$OUTDIR/s1.json" "data.subscribeToPlan.id"); S1_ID="${S1_ID//\"/}"
-S1_STATUS=$(jget "$OUTDIR/s1.json" "data.subscribeToPlan.status")
-check "subscribeToPlan → pending_provider_auth" "[ \"$S1_STATUS\" = '\"pending_provider_auth\"' ]" "got $S1_STATUS"
+S1_STATUS=$(jstr "$OUTDIR/s1.json" "data.subscribeToPlan.status")
+check "subscribeToPlan → pending_provider_auth" "[ \"$S1_STATUS\" = 'pending_provider_auth' ]" "got $S1_STATUS"
 check "subscribeToPlan created a mandate row" "[ \"$(mandateCount m1)\" = '1' ]" "mandates=$(mandateCount m1)"
 
 echo "=== 4. changeOrganizationSubscriptionPlan(paidA → paidB): SAME row id (supersede in place) ==="
@@ -141,7 +180,7 @@ C1_ID=$(jget "$OUTDIR/c1.json" "data.changeOrganizationSubscriptionPlan.id"); C1
 C1_PLAN=$(jget "$OUTDIR/c1.json" "data.changeOrganizationSubscriptionPlan.plan.slug")
 check "plan changed to paidB" "echo \"$C1_PLAN\" | grep -q 'adr044-paid-b-$RUN_ID'" "got $C1_PLAN"
 check "row was SUPERSEDED, not recreated (same id)" "[ \"$C1_ID\" = \"$S1_ID\" ]" "before=$S1_ID after=$C1_ID"
-check "status back to pending_provider_auth (re-authorization)" "[ \"$(jget "$OUTDIR/c1.json" "data.changeOrganizationSubscriptionPlan.status")\" = '\"pending_provider_auth\"' ]"
+check "status back to pending_provider_auth (re-authorization)" "[ \"$(jstr "$OUTDIR/c1.json" "data.changeOrganizationSubscriptionPlan.status")\" = 'pending_provider_auth' ]"
 check "period fields are NULL (ADR-041 / F-7)" "[ \"$(jget "$OUTDIR/c1.json" "data.changeOrganizationSubscriptionPlan.currentPeriodEnd")\" = 'null' ]"
 check "exactly 2 mandates: 1 superseded (inactive) + 1 new" "[ \"$(mandateCount m2)\" = '2' ]" "mandates=$(mandateCount m2)"
 check "at most one mandate is active" "[ \"$(python3 -c "import json;d=json.load(open('$OUTDIR/m2.json'));print(sum(1 for i in d['data']['providerMandates']['items'] if i['active']))")\" -le 1 ]"
@@ -154,46 +193,46 @@ check "mandate count unchanged (no third provider subscription)" "[ \"$(mandateC
 
 echo "=== 6. cancelOrganizationSubscription(atPeriodEnd: true) → scheduled, not yet cancelled ==="
 cancel x1 true
-X1_STATUS=$(jget "$OUTDIR/x1.json" "data.cancelOrganizationSubscription.status")
-X1_CAE=$(jget "$OUTDIR/x1.json" "data.cancelOrganizationSubscription.cancelAtPeriodEnd")
-check "status NOT cancelled (transition defers to period end)" "[ \"$X1_STATUS\" != '\"cancelled\"' ]" "got $X1_STATUS"
+X1_STATUS=$(jstr "$OUTDIR/x1.json" "data.cancelOrganizationSubscription.status")
+X1_CAE=$(jstr "$OUTDIR/x1.json" "data.cancelOrganizationSubscription.cancelAtPeriodEnd")
+check "status NOT cancelled (transition defers to period end)" "[ \"$X1_STATUS\" != 'cancelled' ]" "got $X1_STATUS"
 check "cancelAtPeriodEnd = true" "[ \"$X1_CAE\" = 'true' ]" "got $X1_CAE"
 check "cancelledAt still null" "[ \"$(jget "$OUTDIR/x1.json" "data.cancelOrganizationSubscription.cancelledAt")\" = 'null' ]"
 
 echo "=== 7. cancelOrganizationSubscription(atPeriodEnd: false) → immediate ==="
 cancel x2 false
-X2_STATUS=$(jget "$OUTDIR/x2.json" "data.cancelOrganizationSubscription.status")
-check "status = cancelled" "[ \"$X2_STATUS\" = '\"cancelled\"' ]" "got $X2_STATUS"
+X2_STATUS=$(jstr "$OUTDIR/x2.json" "data.cancelOrganizationSubscription.status")
+check "status = cancelled" "[ \"$X2_STATUS\" = 'cancelled' ]" "got $X2_STATUS"
 check "cancelledAt set" "[ \"$(jget "$OUTDIR/x2.json" "data.cancelOrganizationSubscription.cancelledAt")\" != 'null' ]"
 check "cancelAtPeriodEnd cleared" "[ \"$(jget "$OUTDIR/x2.json" "data.cancelOrganizationSubscription.cancelAtPeriodEnd")\" = 'false' ]"
 
 echo "=== 8. Repeated cancel is an idempotent no-op ==="
 cancel x3 false
-check "still cancelled, no error" "[ \"$(jget "$OUTDIR/x3.json" "data.cancelOrganizationSubscription.status")\" = '\"cancelled\"' ]" "see $OUTDIR/x3.json"
+check "still cancelled, no error" "[ \"$(jstr "$OUTDIR/x3.json" "data.cancelOrganizationSubscription.status")\" = 'cancelled' ]" "see $OUTDIR/x3.json"
 
 echo "=== 9. subscribeToPlan AFTER cancel succeeds (partial unique index slot freed) ==="
 sub s2 "$PAID_A_ID"
 S2_ID=$(jget "$OUTDIR/s2.json" "data.subscribeToPlan.id"); S2_ID="${S2_ID//\"/}"
-S2_STATUS=$(jget "$OUTDIR/s2.json" "data.subscribeToPlan.status")
+S2_STATUS=$(jstr "$OUTDIR/s2.json" "data.subscribeToPlan.status")
 check "re-subscribe succeeded" "[ -n \"$S2_ID\" ] && [ \"$S2_ID\" != \"null\" ]" "see $OUTDIR/s2.json"
 check "new row id (not reused)" "[ \"$S2_ID\" != \"$C1_ID\" ]" "old=$C1_ID new=$S2_ID"
-check "status pending_provider_auth" "[ \"$S2_STATUS\" = '\"pending_provider_auth\"' ]" "got $S2_STATUS"
+check "status pending_provider_auth" "[ \"$S2_STATUS\" = 'pending_provider_auth' ]" "got $S2_STATUS"
 
 echo "=== 10. Provider-free target: change to the free plan is local-only ==="
 MANDATES_BEFORE=$(mandateCount m4)
 change c3 "$FREE_ID"
 C3_PLAN=$(jget "$OUTDIR/c3.json" "data.changeOrganizationSubscriptionPlan.plan.slug")
-C3_STATUS=$(jget "$OUTDIR/c3.json" "data.changeOrganizationSubscriptionPlan.status")
+C3_STATUS=$(jstr "$OUTDIR/c3.json" "data.changeOrganizationSubscriptionPlan.status")
 C3_PROV=$(jget "$OUTDIR/c3.json" "data.changeOrganizationSubscriptionPlan.providerStatus")
 check "plan changed to free" "echo \"$C3_PLAN\" | grep -q 'adr044-free-$RUN_ID'" "got $C3_PLAN"
-check "provider-free target activates LOCALLY (status active)" "[ \"$C3_STATUS\" = '\"active\"' ]" "got $C3_STATUS"
+check "provider-free target activates LOCALLY (status active)" "[ \"$C3_STATUS\" = 'active' ]" "got $C3_STATUS"
 check "providerStatus cleared" "[ \"$C3_PROV\" = 'null' ]" "got $C3_PROV"
 check "NO new provider subscription created" "[ \"$(mandateCount m5)\" = \"$MANDATES_BEFORE\" ]" "before=$MANDATES_BEFORE after=$(mandateCount m5)"
 
 echo "=== 11. Provider-free cancellation is local-only and immediate (even with atPeriodEnd=true) ==="
 cancel x4 true
-X4_STATUS=$(jget "$OUTDIR/x4.json" "data.cancelOrganizationSubscription.status")
-check "provider-free + atPeriodEnd=true still cancels immediately" "[ \"$X4_STATUS\" = '\"cancelled\"' ]" "got $X4_STATUS"
+X4_STATUS=$(jstr "$OUTDIR/x4.json" "data.cancelOrganizationSubscription.status")
+check "provider-free + atPeriodEnd=true still cancels immediately" "[ \"$X4_STATUS\" = 'cancelled' ]" "got $X4_STATUS"
 
 echo "=== 12. Trialing downgrade guard (ADR-044 §5) ==="
 skip "trialing -> cheaper plan rejection" "A 'trialing' row cannot be produced through the Admin API (subscribeToPlan yields pending_provider_auth; trialing arrives via the provider webhook path). Exercise manually, then changeOrganizationSubscriptionPlan(channelId, <cheaper plan>) must fail with 'Cannot change a trialing subscription to a lower-priced plan'."
@@ -263,7 +302,7 @@ PY
   WH_NOEID="$(wh noeid "$WH_SIG" -)"
   check "valid signature without x-razorpay-event-id rejected 401" "[ \"$WH_NOEID\" = '401' ]" "HTTP $WH_NOEID — see $OUTDIR/noeid.json"
 
-  WH_GET="$(curl -sS -o /dev/null -w '%{http_code}' \"$WH_URL\")"
+  WH_GET="$(curl -sS -o /dev/null -w '%{http_code}' "$WH_URL")"
   check "webhook route is POST-only" "[ \"$WH_GET\" = '404' ] || [ \"$WH_GET\" = '405' ]" "GET -> HTTP $WH_GET"
 fi
 

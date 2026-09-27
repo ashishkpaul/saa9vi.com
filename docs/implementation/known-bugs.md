@@ -6,7 +6,42 @@
 
 ## Active Bugs
 
-_None._ BUG-036 (provisioning capacity/`isUnbounded`) was fixed and runtime-reproduced on 2026-09-23 in `d711940`; BUG-037 (the `bbb-channel-isolation` e2e harness could not pass) was found and fixed on 2026-09-24; BUG-038 (`bbbFulfillmentHandler` read the never-loaded `order.lines`, so no `order`-source capacity grant could ever be written) was found and fixed on 2026-09-25 while producing the Slice 10 / R4 runtime-lifecycle evidence; BUG-039 (Tier 2 of the capacity-policy cascade ran schema-blind raw SQL, so plan-derived concurrency silently resolved to `fallback` whenever `dbConnectionOptions.schema` was set) was found and fixed on 2026-09-25 while producing the Slice 5 plan-derived-concurrency evidence. All four archived entries are below; the fixes are recorded in `release-notes.md`.
+**BUG-040 — a channel's subscription is resolved by an unordered, unfiltered `findOne({ channelId })`, so once a *cancelled* row coexists with a live one, cancel/change can act on the wrong row (found live 2026-09-27; **OPEN**, see below).** This is the single root cause of all 13 remaining failures in the live ADR-044 acceptance run, including one **orphaned provider subscription** (`sub_TguvSWt6mE5YYe`) that was created at Razorpay and never persisted locally.
+
+BUG-036 (provisioning capacity/`isUnbounded`) was fixed and runtime-reproduced on 2026-09-23 in `d711940`; BUG-037 (the `bbb-channel-isolation` e2e harness could not pass) was found and fixed on 2026-09-24; BUG-038 (`bbbFulfillmentHandler` read the never-loaded `order.lines`, so no `order`-source capacity grant could ever be written) was found and fixed on 2026-09-25 while producing the Slice 10 / R4 runtime-lifecycle evidence; BUG-039 (Tier 2 of the capacity-policy cascade ran schema-blind raw SQL, so plan-derived concurrency silently resolved to `fallback` whenever `dbConnectionOptions.schema` was set) was found and fixed on 2026-09-25 while producing the Slice 5 plan-derived-concurrency evidence. All four archived entries are below; the fixes are recorded in `release-notes.md`.
+
+## BUG-040 — Subscription lookups by channel are unordered and unfiltered, so cancel/change can target a stale cancelled row — **OPEN** (found live 2026-09-27)
+
+**Severity:** High (billing correctness + orphaned provider subscriptions) · **Discovered:** 2026-09-27, live, while executing `scripts/verify/adr-044-acceptance.sh` against a running dev server · **Components:** `src/plugins/subscription/services/subscription.service.ts` (channel lookups at lines 140, 389, 646; binding lookups at 431, 662, 769), `src/plugins/subscription/entities/organization-subscription.entity.ts:40`
+
+**What the code does.** The row that means "this channel's subscription" is fetched as `repo.findOne({ where: { channelId }, relations: ['plan'] })` — no `status` predicate, no `ORDER BY`. The partial unique index `@Index(['channelId'], { unique: true, where: '"status" != \'cancelled\'' })` (DB name `IDX_b6741adfd949003e33d62dba5f`) deliberately allows any number of **cancelled** rows per channel while permitting one live row — i.e. the table is designed to hold a cancelled row *and* a live row for the same channel at the same time. `findOne` is then free to return either one.
+
+**Failure modes — all three reproduced in a single live run (channel 31).**
+
+1. **Cancel targets the stale row.** `cancelOrganizationSubscription` resolved row 16 (`cancelled`, plan `free-basic`) instead of row 17 (`pending_provider_auth`, plan `adr044-paid-a-…`). Three consecutive cancels (acceptance scenarios 6, 7, 8) therefore never touched the live subscription: post-run, row 17 was **still `pending_provider_auth`**.
+2. **Change-plan reads the stale row.** `changeOrganizationSubscriptionPlan(→ paidB)` and `(→ free)` each failed with `Channel 31 subscription is cancelled; use subscribeToPlan to start a new subscription` — a misleading error, because a live subscription existed at that moment.
+3. **Re-subscribe orphans a provider subscription.** With row 17 still live, `subscribeToPlan` created the provider subscription **first** (ADR-039 external-side-effect ordering) and only then failed to persist: `Subscription persisted-state failure after provider creation. ORPHAN provider subscription sub_TguvSWt6mE5YYe (channel 31) must be reconciled/cancelled in the provider dashboard. Cause: duplicate key value violates unique constraint "IDX_b6741adfd949003e33d62dba5f"`. No local row and no binding row reference it.
+
+**Why this is reachable outside the harness.** Cancel-then-re-subscribe is a supported flow — the acceptance script asserts it as scenario 9 ("partial unique index slot freed"). Any channel that has ever cancelled a subscription keeps a leftover row and is exposed to (1)–(3) from then on.
+
+**Evidence.**
+
+```sql
+-- post-run state of the acceptance run's tenant channel
+select id, "channelId", status, "planId" from public.organization_subscription
+ where "channelId" = '31' order by id;
+ id | channelId |        status         | planId
+ 16 |        31 | cancelled             |      3   -- cancelled by the harness precondition step
+ 17 |        31 | pending_provider_auth |     10   -- created by scenario 3; never cancelled
+
+select id, "channelId", provider, "providerSubscriptionId", active from public.subscription_provider_binding
+ where "channelId" = '31';
+  9 |        31 | razorpay | sub_TguvPCno19wMSu | f   -- only scenario 3's binding; scenario 9's never persisted
+```
+
+Acceptance run summary: `passed: 25  failed: 13  skipped: 2`. All 13 failures are downstream of this defect — scenario 4: 4, scenario 5: 1, scenario 6: 3, scenario 9: 3, scenario 10: 2. Scenario 9's expectation ("partial unique index slot freed") is correct as a design intent; it fails because the live row was never actually cancelled.
+
+**Suggested fix (NOT applied — this is a product behaviour change in the billing path).** Make every channel→subscription lookup deterministic and status-aware: `where: { channelId, status: Not('cancelled') }`, or `order: { id: 'DESC' }` plus an explicit live-row predicate, at `subscription.service.ts:140/389/646`, with the same predicate on the binding lookups that must mirror the live row. Regression coverage should assert (a) cancel→re-subscribe leaves exactly one live row and no orphan, and (b) `changeOrganizationSubscriptionPlan` resolves the live row while a cancelled row is present.
 
 ---
 
