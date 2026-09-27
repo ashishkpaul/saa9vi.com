@@ -1,5 +1,5 @@
 import { Controller, Post, Req, Res, HttpStatus } from "@nestjs/common";
-import type { Request, Response } from "express";
+import type { Request as ExpressRequest, Response } from "express";
 import { Readable } from "stream";
 import {
   Allow,
@@ -40,7 +40,7 @@ export class ReviewUploadController {
 
   @Post("upload-asset")
   @Allow(Permission.Authenticated)
-  async uploadAsset(@Req() req: Request, @Res() res: Response) {
+  async uploadAsset(@Req() req: ExpressRequest, @Res() res: Response) {
     try {
       const body = req.body;
       const { file } = body;
@@ -81,7 +81,7 @@ export class ReviewUploadController {
         : undefined;
 
       const ctx = await this.requestContextService.fromRequest(
-        req,
+        req as any,
         undefined,
         undefined,
         session,

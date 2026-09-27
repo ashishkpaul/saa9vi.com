@@ -20,7 +20,7 @@ export type AddItemInput = {
   quantity: Scalars['Int']['input'];
 };
 
-export type AddPaymentToOrderResult = IneligiblePaymentMethodError | NoActiveOrderError | Order | OrderPaymentStateError | OrderStateTransitionError | PaymentDeclinedError | PaymentFailedError;
+export type AddPaymentToOrderResult = CouponRemovedDuringCheckoutError | IneligiblePaymentMethodError | NoActiveOrderError | Order | OrderPaymentStateError | OrderStateTransitionError | PaymentDeclinedError | PaymentFailedError;
 
 export type Address = Node & {
   __typename?: 'Address';
@@ -600,6 +600,26 @@ export type CouponCodeLimitError = ErrorResult & {
 };
 
 /**
+ * Returned by `addPaymentToOrder` when one or more coupon codes were removed
+ * from the Order during payment-time revalidation and the removal would have
+ * increased the amount the customer is charged. Refusing the payment in this
+ * case prevents silently charging the customer more than they agreed to. The
+ * most common trigger is a usage-limited coupon's slot being claimed by a
+ * concurrent checkout, but the same protection applies when a coupon is
+ * stripped because the order no longer meets the promotion's eligibility
+ * conditions or because the promotion was disabled mid-checkout.
+ */
+export type CouponRemovedDuringCheckoutError = ErrorResult & {
+  __typename?: 'CouponRemovedDuringCheckoutError';
+  currencyCode: CurrencyCode;
+  errorCode: ErrorCode;
+  message: Scalars['String']['output'];
+  newTotalWithTax: Scalars['Money']['output'];
+  previousTotalWithTax: Scalars['Money']['output'];
+  removedCouponCodes: Array<Scalars['String']['output']>;
+};
+
+/**
  * Input used to create an Address.
  *
  * The countryCode must correspond to a `code` property of a Country that has been defined in the
@@ -1170,6 +1190,7 @@ export enum ErrorCode {
   COUPON_CODE_EXPIRED_ERROR = 'COUPON_CODE_EXPIRED_ERROR',
   COUPON_CODE_INVALID_ERROR = 'COUPON_CODE_INVALID_ERROR',
   COUPON_CODE_LIMIT_ERROR = 'COUPON_CODE_LIMIT_ERROR',
+  COUPON_REMOVED_DURING_CHECKOUT_ERROR = 'COUPON_REMOVED_DURING_CHECKOUT_ERROR',
   EMAIL_ADDRESS_CONFLICT_ERROR = 'EMAIL_ADDRESS_CONFLICT_ERROR',
   GUEST_CHECKOUT_ERROR = 'GUEST_CHECKOUT_ERROR',
   IDENTIFIER_CHANGE_TOKEN_EXPIRED_ERROR = 'IDENTIFIER_CHANGE_TOKEN_EXPIRED_ERROR',
@@ -2213,8 +2234,15 @@ export type Mutation = {
   authenticate: AuthenticationResult;
   bbbJoinMeeting: Scalars['String']['output'];
   bbbJoinRoom: BbbJoinRoomResult;
+  /** Cancel the subscription for the authenticated business account's active tenant channel. */
+  cancelMySubscription: MySubscriptionChangeResult;
   /** Create a new Customer Address */
   createCustomerAddress: Address;
+  /**
+   * Creates a Razorpay order for the customer's active order, or an order
+   * specified by ID if the caller is the order's owner.
+   */
+  createRazorpayCheckoutOrder: RazorpayCheckoutOrder;
   /** Delete an existing Address */
   deleteCustomerAddress: Success;
   /**
@@ -2241,7 +2269,7 @@ export type Mutation = {
   /** Regenerate and send a verification token for a new Customer registration. Only applicable if `authOptions.requireVerification` is set to true. */
   refreshCustomerVerification: RefreshCustomerVerificationResult;
   /**
-   * Register a Customer account with the given credentials. There are three possible registration flows:
+   * Register a Customer account with the given credentials. There are four possible registration flows:
    *
    * _If `authOptions.requireVerification` is set to `true`:_
    *
@@ -2255,6 +2283,19 @@ export type Mutation = {
    * _If `authOptions.requireVerification` is set to `false`:_
    *
    * 3. The Customer _must_ be registered _with_ a password. No further action is needed - the Customer is able to authenticate immediately.
+   *
+   * _Whatever the setting, if an account already exists for the email address through another authentication strategy
+   * (for example an SSO provider) and has no password yet:_
+   *
+   * 4. **The supplied password is never stored.** A verificationToken is created and emailed to the address, and this mutation
+   *    answers with a generic success so that it does not reveal whether the account exists. The password is set only when that
+   *    token is passed to the `verifyCustomerAccount` mutation _with_ the chosen password, which proves the caller controls the
+   *    mailbox. This holds even when `requireVerification` is `false`, so the Customer cannot be authenticated straight after
+   *    registering. Registering again issues a fresh token and sends the email again.
+   *
+   * In every flow the caller-supplied `firstName`, `lastName`, `phoneNumber` and custom fields are ignored whenever a User already
+   * exists for the email address, since the caller has not proven they own it. This includes an account an administrator created
+   * earlier. A Customer with no User, such as one left by a guest checkout, is not an account and its details are still filled in.
    */
   registerCustomerAccount: RegisterCustomerAccountResult;
   registerForTrial: BbbTrialRegistrationPublic;
@@ -2266,6 +2307,8 @@ export type Mutation = {
   /** Remove an OrderLine from the Order */
   removeOrderLine: RemoveOrderItemsResult;
   reportReview: Scalars['Boolean']['output'];
+  /** Change the subscription for the authenticated business account's active tenant channel. */
+  requestMySubscriptionPlanChange: MySubscriptionChangeResult;
   /** Requests a password reset email to be sent */
   requestPasswordReset?: Maybe<RequestPasswordResetResult>;
   /**
@@ -2315,7 +2358,9 @@ export type Mutation = {
   /** Update the password of the active Customer */
   updateCustomerPassword: UpdateCustomerPasswordResult;
   /**
-   * Verify a Customer email address with the token sent to that address. Only applicable if `authOptions.requireVerification` is set to true.
+   * Verify a Customer email address with the token sent to that address. Applicable whenever a verificationToken was issued:
+   * that is when `authOptions.requireVerification` is set to true, and also when a password was registered against an account
+   * that already existed through another authentication strategy, whatever that setting is.
    *
    * If the Customer was not registered with a password in the `registerCustomerAccount` mutation, the password _must_ be
    * provided here.
@@ -2376,8 +2421,18 @@ export type MutationBbbJoinRoomArgs = {
 };
 
 
+export type MutationCancelMySubscriptionArgs = {
+  atPeriodEnd?: InputMaybe<Scalars['Boolean']['input']>;
+};
+
+
 export type MutationCreateCustomerAddressArgs = {
   input: CreateAddressInput;
+};
+
+
+export type MutationCreateRazorpayCheckoutOrderArgs = {
+  orderId?: InputMaybe<Scalars['ID']['input']>;
 };
 
 
@@ -2430,6 +2485,11 @@ export type MutationRemoveOrderLineArgs = {
 
 export type MutationReportReviewArgs = {
   input: ReportReviewInput;
+};
+
+
+export type MutationRequestMySubscriptionPlanChangeArgs = {
+  planId: Scalars['ID']['input'];
 };
 
 
@@ -2585,6 +2645,17 @@ export type MySubscription = {
   status: Scalars['String']['output'];
 };
 
+/**
+ * Result of a tenant self-serve subscription lifecycle mutation.
+ * authorizationUrl is invocation-scoped provider authorization data and is
+ * never persisted on the MySubscription read model.
+ */
+export type MySubscriptionChangeResult = {
+  __typename?: 'MySubscriptionChangeResult';
+  authorizationUrl?: Maybe<Scalars['String']['output']>;
+  subscription: MySubscription;
+};
+
 export type NativeAuthInput = {
   password: Scalars['String']['input'];
   username: Scalars['String']['input'];
@@ -2738,21 +2809,36 @@ export type OrderCustomFields = {
 export type OrderFilterParameter = {
   _and?: InputMaybe<Array<OrderFilterParameter>>;
   _or?: InputMaybe<Array<OrderFilterParameter>>;
+  /** An order is active as long as the payment process has not been completed */
   active?: InputMaybe<BooleanOperators>;
+  /** A unique code for the Order */
   code?: InputMaybe<StringOperators>;
   createdAt?: InputMaybe<DateOperators>;
   currencyCode?: InputMaybe<StringOperators>;
   id?: InputMaybe<IdOperators>;
   marketplaceRef?: InputMaybe<StringOperators>;
+  /**
+   * The date & time that the Order was placed, i.e. the Customer
+   * completed the checkout and the Order is no longer "active"
+   */
   orderPlacedAt?: InputMaybe<DateOperators>;
   orderSource?: InputMaybe<StringOperators>;
   shipping?: InputMaybe<NumberOperators>;
   shippingWithTax?: InputMaybe<NumberOperators>;
   state?: InputMaybe<StringOperators>;
+  /**
+   * The subTotal is the total of all OrderLines in the Order. This figure also includes any Order-level
+   * discounts which have been prorated (proportionally distributed) amongst the items of each OrderLine.
+   * To get a total of all OrderLines which does not account for prorated discounts, use the
+   * sum of `OrderLine.discountedLinePrice` values.
+   */
   subTotal?: InputMaybe<NumberOperators>;
+  /** Same as subTotal, but inclusive of tax */
   subTotalWithTax?: InputMaybe<NumberOperators>;
+  /** Equal to subTotal plus shipping */
   total?: InputMaybe<NumberOperators>;
   totalQuantity?: InputMaybe<NumberOperators>;
+  /** The final payable amount. Equal to subTotalWithTax plus shippingWithTax */
   totalWithTax?: InputMaybe<NumberOperators>;
   type?: InputMaybe<StringOperators>;
   updatedAt?: InputMaybe<DateOperators>;
@@ -2872,19 +2958,33 @@ export type OrderPaymentStateError = ErrorResult & {
 };
 
 export type OrderSortParameter = {
+  /** A unique code for the Order */
   code?: InputMaybe<SortOrder>;
   createdAt?: InputMaybe<SortOrder>;
   id?: InputMaybe<SortOrder>;
   marketplaceRef?: InputMaybe<SortOrder>;
+  /**
+   * The date & time that the Order was placed, i.e. the Customer
+   * completed the checkout and the Order is no longer "active"
+   */
   orderPlacedAt?: InputMaybe<SortOrder>;
   orderSource?: InputMaybe<SortOrder>;
   shipping?: InputMaybe<SortOrder>;
   shippingWithTax?: InputMaybe<SortOrder>;
   state?: InputMaybe<SortOrder>;
+  /**
+   * The subTotal is the total of all OrderLines in the Order. This figure also includes any Order-level
+   * discounts which have been prorated (proportionally distributed) amongst the items of each OrderLine.
+   * To get a total of all OrderLines which does not account for prorated discounts, use the
+   * sum of `OrderLine.discountedLinePrice` values.
+   */
   subTotal?: InputMaybe<SortOrder>;
+  /** Same as subTotal, but inclusive of tax */
   subTotalWithTax?: InputMaybe<SortOrder>;
+  /** Equal to subTotal plus shipping */
   total?: InputMaybe<SortOrder>;
   totalQuantity?: InputMaybe<SortOrder>;
+  /** The final payable amount. Equal to subTotalWithTax plus shippingWithTax */
   totalWithTax?: InputMaybe<SortOrder>;
   updatedAt?: InputMaybe<SortOrder>;
 };
@@ -3978,6 +4078,14 @@ export type QuerySearchArgs = {
 
 export type QueryValidateReviewTokenArgs = {
   token: Scalars['String']['input'];
+};
+
+export type RazorpayCheckoutOrder = {
+  __typename?: 'RazorpayCheckoutOrder';
+  amountMinor: Scalars['Int']['output'];
+  currency: Scalars['String']['output'];
+  keyId: Scalars['String']['output'];
+  razorpayOrderId: Scalars['String']['output'];
 };
 
 export type RefreshCustomerVerificationResult = NativeAuthStrategyError | Success;

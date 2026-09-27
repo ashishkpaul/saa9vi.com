@@ -215,7 +215,7 @@ type Mutation {
   logout: Success!
 
   """
-  Register a Customer account with the given credentials. There are three possible registration flows:
+  Register a Customer account with the given credentials. There are four possible registration flows:
   
   _If `authOptions.requireVerification` is set to `true`:_
   
@@ -229,6 +229,19 @@ type Mutation {
   _If `authOptions.requireVerification` is set to `false`:_
   
   3. The Customer _must_ be registered _with_ a password. No further action is needed - the Customer is able to authenticate immediately.
+  
+  _Whatever the setting, if an account already exists for the email address through another authentication strategy
+  (for example an SSO provider) and has no password yet:_
+  
+  4. **The supplied password is never stored.** A verificationToken is created and emailed to the address, and this mutation
+     answers with a generic success so that it does not reveal whether the account exists. The password is set only when that
+     token is passed to the `verifyCustomerAccount` mutation _with_ the chosen password, which proves the caller controls the
+     mailbox. This holds even when `requireVerification` is `false`, so the Customer cannot be authenticated straight after
+     registering. Registering again issues a fresh token and sends the email again.
+  
+  In every flow the caller-supplied `firstName`, `lastName`, `phoneNumber` and custom fields are ignored whenever a User already
+  exists for the email address, since the caller has not proven they own it. This includes an account an administrator created
+  earlier. A Customer with no User, such as one left by a guest checkout, is not an account and its details are still filled in.
   """
   registerCustomerAccount(input: RegisterCustomerInput!): RegisterCustomerAccountResult!
 
@@ -250,7 +263,9 @@ type Mutation {
   deleteCustomerAddress(id: ID!): Success!
 
   """
-  Verify a Customer email address with the token sent to that address. Only applicable if `authOptions.requireVerification` is set to true.
+  Verify a Customer email address with the token sent to that address. Applicable whenever a verificationToken was issued:
+  that is when `authOptions.requireVerification` is set to true, and also when a password was registered against an account
+  that already existed through another authentication strategy, whatever that setting is.
   
   If the Customer was not registered with a password in the `registerCustomerAccount` mutation, the password _must_ be
   provided here.
@@ -317,6 +332,22 @@ type Mutation {
   classified later at the order lifecycle boundary (3B.3 listener).
   """
   applyMarketplaceReference(ref: String!): MarketplaceReferenceApplyResult!
+
+  """
+  Creates a Razorpay order for the customer's active order, or an order
+  specified by ID if the caller is the order's owner.
+  """
+  createRazorpayCheckoutOrder(orderId: ID): RazorpayCheckoutOrder!
+
+  """
+  Change the subscription for the authenticated business account's active tenant channel.
+  """
+  requestMySubscriptionPlanChange(planId: ID!): MySubscriptionChangeResult!
+
+  """
+  Cancel the subscription for the authenticated business account's active tenant channel.
+  """
+  cancelMySubscription(atPeriodEnd: Boolean = true): MySubscriptionChangeResult!
 }
 
 type Address implements Node {
@@ -973,6 +1004,7 @@ enum ErrorCode {
   INELIGIBLE_PAYMENT_METHOD_ERROR
   PAYMENT_FAILED_ERROR
   PAYMENT_DECLINED_ERROR
+  COUPON_REMOVED_DURING_CHECKOUT_ERROR
   ALREADY_LOGGED_IN_ERROR
   MISSING_PASSWORD_ERROR
   PASSWORD_VALIDATION_ERROR
@@ -3594,6 +3626,25 @@ type PaymentDeclinedError implements ErrorResult {
 }
 
 """
+Returned by `addPaymentToOrder` when one or more coupon codes were removed
+from the Order during payment-time revalidation and the removal would have
+increased the amount the customer is charged. Refusing the payment in this
+case prevents silently charging the customer more than they agreed to. The
+most common trigger is a usage-limited coupon's slot being claimed by a
+concurrent checkout, but the same protection applies when a coupon is
+stripped because the order no longer meets the promotion's eligibility
+conditions or because the promotion was disabled mid-checkout.
+"""
+type CouponRemovedDuringCheckoutError implements ErrorResult {
+  errorCode: ErrorCode!
+  message: String!
+  removedCouponCodes: [String!]!
+  previousTotalWithTax: Money!
+  newTotalWithTax: Money!
+  currencyCode: CurrencyCode!
+}
+
+"""
 Returned when attempting to set the Customer for an Order when already logged in.
 """
 type AlreadyLoggedInError implements ErrorResult {
@@ -3844,7 +3895,7 @@ input ProductVariantListOptions {
   filterOperator: LogicalOperator
 }
 
-union AddPaymentToOrderResult = Order | OrderPaymentStateError | IneligiblePaymentMethodError | PaymentFailedError | PaymentDeclinedError | OrderStateTransitionError | NoActiveOrderError
+union AddPaymentToOrderResult = Order | OrderPaymentStateError | IneligiblePaymentMethodError | PaymentFailedError | PaymentDeclinedError | OrderStateTransitionError | NoActiveOrderError | CouponRemovedDuringCheckoutError
 
 union TransitionOrderToStateResult = Order | OrderStateTransitionError
 
@@ -4449,6 +4500,13 @@ type MarketplaceReferenceApplyResult {
   code: String
 }
 
+type RazorpayCheckoutOrder {
+  razorpayOrderId: String!
+  amountMinor: Int!
+  currency: String!
+  keyId: String!
+}
+
 """
 A tenant-subscribable tier as the storefront may see it.
 Deliberately omits provider wiring (see module note above).
@@ -4466,6 +4524,16 @@ type SubscriptionPlanPublic {
 
   """ADR-042 §2: whether this tier may be listed on the marketplace."""
   marketplaceListingEnabled: Boolean!
+}
+
+"""
+Result of a tenant self-serve subscription lifecycle mutation.
+authorizationUrl is invocation-scoped provider authorization data and is
+never persisted on the MySubscription read model.
+"""
+type MySubscriptionChangeResult {
+  subscription: MySubscription!
+  authorizationUrl: String
 }
 
 """
@@ -4586,17 +4654,43 @@ input OrderFilterParameter {
   createdAt: DateOperators
   updatedAt: DateOperators
   type: StringOperators
+
+  """
+  The date & time that the Order was placed, i.e. the Customer
+  completed the checkout and the Order is no longer "active"
+  """
   orderPlacedAt: DateOperators
+
+  """A unique code for the Order"""
   code: StringOperators
   state: StringOperators
+
+  """
+  An order is active as long as the payment process has not been completed
+  """
   active: BooleanOperators
   totalQuantity: NumberOperators
+
+  """
+  The subTotal is the total of all OrderLines in the Order. This figure also includes any Order-level
+  discounts which have been prorated (proportionally distributed) amongst the items of each OrderLine.
+  To get a total of all OrderLines which does not account for prorated discounts, use the
+  sum of `OrderLine.discountedLinePrice` values.
+  """
   subTotal: NumberOperators
+
+  """Same as subTotal, but inclusive of tax"""
   subTotalWithTax: NumberOperators
   currencyCode: StringOperators
   shipping: NumberOperators
   shippingWithTax: NumberOperators
+
+  """Equal to subTotal plus shipping"""
   total: NumberOperators
+
+  """
+  The final payable amount. Equal to subTotalWithTax plus shippingWithTax
+  """
   totalWithTax: NumberOperators
   _and: [OrderFilterParameter!]
   _or: [OrderFilterParameter!]
@@ -4608,15 +4702,37 @@ input OrderSortParameter {
   id: SortOrder
   createdAt: SortOrder
   updatedAt: SortOrder
+
+  """
+  The date & time that the Order was placed, i.e. the Customer
+  completed the checkout and the Order is no longer "active"
+  """
   orderPlacedAt: SortOrder
+
+  """A unique code for the Order"""
   code: SortOrder
   state: SortOrder
   totalQuantity: SortOrder
+
+  """
+  The subTotal is the total of all OrderLines in the Order. This figure also includes any Order-level
+  discounts which have been prorated (proportionally distributed) amongst the items of each OrderLine.
+  To get a total of all OrderLines which does not account for prorated discounts, use the
+  sum of `OrderLine.discountedLinePrice` values.
+  """
   subTotal: SortOrder
+
+  """Same as subTotal, but inclusive of tax"""
   subTotalWithTax: SortOrder
   shipping: SortOrder
   shippingWithTax: SortOrder
+
+  """Equal to subTotal plus shipping"""
   total: SortOrder
+
+  """
+  The final payable amount. Equal to subTotalWithTax plus shippingWithTax
+  """
   totalWithTax: SortOrder
   orderSource: SortOrder
   marketplaceRef: SortOrder
