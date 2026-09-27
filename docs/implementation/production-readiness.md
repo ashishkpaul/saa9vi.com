@@ -1402,30 +1402,20 @@ Then verify the actual changed files.
 
 # 15. Immediate next action
 
-**R2-A, R2-E, and R2-F are now VERIFIED (2026-09-20).**
+R2-A, R2-E, R2-F, and the post-refactor R2-G failure-state bridge are covered by
+the current code/test evidence set. The next work is **V1 production hardening**, not
+another subscription-state implementation pass.
 
-R2-A closed: post-restart `provider-webhook-processing` queue execution observed
-during the R2-E run (3 jobs, all processed).
+Priority order:
 
-R2-E closed: fresh Test Mode authorization with UPI (`pay_TeJk63hHNo32gI`),
-subscription `sub_TeJjWjzzC0dU4W`, provider-cycle identity confirmed, no period
-drift. BUG C also found and fixed during this run (see `known-bugs.md`).
-
-R2-F closed: signed webhook lifecycle end-to-end — inbox persist, BullMQ queue,
-processor, billing attempt, cycle-monotonic CAS, period finalization, idempotency.
-
-**Next action: R2-G** — Razorpay failure lifecycle (Test Mode):
-
-Trigger `subscription.pending` → retry → `subscription.halted` against the
-runtime and verify:
-
-1. `OrganizationSubscription.status` → `past_due` on `subscription.pending`
-2. Cycle-identity freshness guard fires correctly for stale failure events
-3. `subscription.halted` → `past_due` (not double-transition)
-4. Out-of-order `subscription.pending` for an already-finalized cycle → no-op
-
-Use the existing Razorpay Test Mode subscription (`sub_TeJjWjzzC0dU4W`) or
-create a new one and simulate payment failure via the Razorpay Test Dashboard.
+1. Rotate and validate the production Razorpay secrets.
+2. Close the webhook perimeter/configuration controls (HTTPS, request-size/rate limits,
+   proxy exposure, raw-body preservation, and secret hygiene).
+3. Close P0-K so production fails startup when PostgreSQL or Redis is unavailable instead
+   of silently degrading to pg-mem or an in-process queue.
+4. Complete provider webhook/queue observability and production failure-boundary tests.
+5. Re-verify the ADR-046 tenant self-service journey in the target runtime and capture the
+   remaining live-provider evidence before declaring the launch gate closed.
 
 ------------------------------------------------------------------------
 
