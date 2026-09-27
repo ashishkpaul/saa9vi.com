@@ -35,6 +35,7 @@
     "test:e2e:advertising": "ADVERTISING_E2E=true vitest run --config vitest.config.mts src/plugins/marketplace/e2e/advertising.e2e-spec.ts",
     "test:e2e:daily-allowance": "DAILY_ALLOWANCE_E2E=true vitest run --config vitest.config.mts src/plugins/bigbluebutton-plugin/e2e/daily-allowance.e2e-spec.ts",
     "test:e2e:subscription-self-serve": "vitest run --config vitest.config.mts src/plugins/subscription/__tests__/adr-046-self-serve.e2e-spec.ts",
+    "test:e2e:webhook-signature": "vitest run --config vitest.config.mts src/plugins/subscription/__tests__/webhook-signature-http.e2e-spec.ts",
     "test:dashboard-contract": "vitest run --config vitest.config.mts src/plugins/subscription/__tests__/dashboard-graphql-contract.spec.ts"
   },
   "dependencies": {

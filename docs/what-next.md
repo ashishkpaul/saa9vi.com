@@ -202,7 +202,7 @@ Order matters: secrets first, then perimeter + observability, then failure-bound
 
 - [x] ~~Controller depends only on ingress concerns~~ — done (`7630c5b` batch): unused `RazorpayWebhookProcessor`/`ChannelService`/`EventBus` deps removed; controller = verify → persist → enqueue → 2xx only
 - [ ] HTTPS-only at `webhook.saa9vi.com` (Cloudflare → origin)
-- [ ] Exact route exposure: only `POST /payments/razorpay/webhook`
+- [x] Exact route exposure: only `POST /payments/razorpay/webhook` — the app maps the path for POST only (`GET` → 404), asserted over real HTTP in `src/plugins/subscription/__tests__/webhook-signature-http.e2e-spec.ts`; proxy/Cloudflare exposure remains governed by the unchecked items below
 - [ ] No accidental GraphQL/auth middleware on the webhook route
 - [ ] Raw body preserved byte-for-byte through Cloudflare/any proxy (HMAC depends on it)
 - [ ] Request-size limit on the webhook route

@@ -17,6 +17,11 @@ set -uo pipefail
 # REQUIRES a dev server with a RAZORPAY test key for the provider-wired
 # scenarios (subscribe / supersede / provider-wired cancel). Scenarios 8-10
 # (provider-free) and the idempotency checks work without one.
+#
+# Scenario 14 (signed webhook ingress) additionally needs the webhook secret the
+# SERVER verifies with — export the environment first:
+#   set -a; . ./.env; set +a
+# Without it, scenario 14 SKIPs (the server would reject every delivery by design).
 ###############################################################################
 
 HOST="${HOST:-http://localhost:3000}"
@@ -195,6 +200,73 @@ skip "trialing -> cheaper plan rejection" "A 'trialing' row cannot be produced t
 
 echo "=== 13. Renewal sweep completes a scheduled cancellation (no billing attempt) ==="
 skip "sweep completion of cancelAtPeriodEnd" "Needs a past currentPeriodEnd, which only the provider webhook can authoritatively set. Set currentPeriodEnd into the past via the normal webhook/reconciliation path, run the 'subscription-renewal' scheduled task, then confirm (a) NO new SubscriptionBillingAttempt row, (b) status='cancelled' + cancelledAt set, (c) log 'completed scheduled cancellation at period end (ADR-044)'."
+
+echo "=== 14. Signed webhook delivery over HTTP (x-razorpay-signature) ==="
+# ADR-044 decision 3 keeps markCancelledFromWebhook() as the provider-confirmation
+# bridge for provider-initiated cancellations, so the ingress that feeds it is part
+# of this ADR's acceptance surface. Contract (RazorpayWebhookController):
+#   POST /payments/razorpay/webhook   x-razorpay-signature + x-razorpay-event-id
+#   verified  => 2xx, persisted to the immutable inbox BEFORE processing (INV-004)
+#   rejected  => 401, and NOTHING is written (no inbox row)
+# The route is mounted at the SERVER ROOT — not under /admin-api.
+# Note: the probe event deliberately has no provider binding, so the WORKER will
+# resolve no channel and terminal-fail it (INV-018 fail-closed). That is correct
+# and unrelated to ingress acceptance, which is what this scenario asserts; the
+# worker-side behaviour is covered by webhook-halted-state.e2e-spec.ts.
+WH_URL="${WEBHOOK_URL:-$HOST/payments/razorpay/webhook}"
+WEBHOOK_SECRET="${RAZORPAY_WEBHOOK_SECRET:-}"
+
+# sign <file> -> HMAC-SHA256 hex over the file's exact bytes (Razorpay's scheme).
+sign() { python3 -c 'import hmac,hashlib,sys;print(hmac.new(sys.argv[1].encode(),open(sys.argv[2],"rb").read(),hashlib.sha256).hexdigest())' "$WEBHOOK_SECRET" "$1"; }
+# wh <key> <signature|-> <event-id|-> -> writes the body to $OUTDIR/<key>.json
+# and echoes the HTTP status code. '-' omits that header.
+wh() {
+  local key="$1" sig="$2" eid="$3"
+  local args=(-sS -o "$OUTDIR/$key.json" -w '%{http_code}' -X POST "$WH_URL"
+              -H 'Content-Type: application/json')
+  [ "$sig" != '-' ] && args+=(-H "x-razorpay-signature: $sig")
+  [ "$eid" != '-' ] && args+=(-H "x-razorpay-event-id: $eid")
+  args+=(--data-binary "@$BODY_FILE")
+  curl "${args[@]}"
+}
+
+if [ -z "$WEBHOOK_SECRET" ]; then
+  skip "signed webhook accepted / unsigned + invalid signatures rejected" "RAZORPAY_WEBHOOK_SECRET is not exported, so the server verification secret is unknown here. Run: set -a; . ./.env; set +a"
+else
+  BODY_FILE="$OUTDIR/webhook-body.json"
+  WEBHOOK_EVENT_ID="adr044-wh-$RUN_ID"
+  python3 - "$WEBHOOK_EVENT_ID" > "$BODY_FILE" <<'PY'
+import json, sys
+json.dump({
+    "entity": "event",
+    "event": "subscription.cancelled",
+    "contains": ["subscription"],
+    "payload": {"subscription": {"entity": {"id": "sub_adr044_probe"}}},
+    "_probe": sys.argv[1],
+}, sys.stdout, separators=(",", ":"))
+PY
+  WH_SIG="$(sign "$BODY_FILE")"
+
+  WH_OK="$(wh valid "$WH_SIG" "$WEBHOOK_EVENT_ID")"
+  check "signed delivery accepted (2xx)" "[ \"${WH_OK:0:1}\" = '2' ]" "HTTP $WH_OK — see $OUTDIR/valid.json"
+  check "response body carries status:ok" "grep -q '\"status\"' '$OUTDIR/valid.json'" "see $OUTDIR/valid.json"
+
+  WH_DUP="$(wh duplicate "$WH_SIG" "$WEBHOOK_EVENT_ID")"
+  check "duplicate delivery still 2xx (idempotent inbox)" "[ \"${WH_DUP:0:1}\" = '2' ]" "HTTP $WH_DUP — see $OUTDIR/duplicate.json"
+
+  WH_BAD="$(wh badsig "deadbeef$WH_SIG" "adr044-wh-bad-$RUN_ID")"
+  check "invalid signature rejected 401" "[ \"$WH_BAD\" = '401' ]" "HTTP $WH_BAD — see $OUTDIR/badsig.json"
+
+  WH_NOSIG="$(wh nosig - "adr044-wh-nosig-$RUN_ID")"
+  check "missing x-razorpay-signature rejected 401 (fail-closed)" "[ \"$WH_NOSIG\" = '401' ]" "HTTP $WH_NOSIG — see $OUTDIR/nosig.json"
+
+  WH_NOEID="$(wh noeid "$WH_SIG" -)"
+  check "valid signature without x-razorpay-event-id rejected 401" "[ \"$WH_NOEID\" = '401' ]" "HTTP $WH_NOEID — see $OUTDIR/noeid.json"
+
+  WH_GET="$(curl -sS -o /dev/null -w '%{http_code}' \"$WH_URL\")"
+  check "webhook route is POST-only" "[ \"$WH_GET\" = '404' ] || [ \"$WH_GET\" = '405' ]" "GET -> HTTP $WH_GET"
+fi
+
 
 echo
 echo "=== Summary ==="
