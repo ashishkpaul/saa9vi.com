@@ -6,10 +6,10 @@ import {
   ID,
   ListQueryBuilder,
   Logger,
-  Not,
   RequestContext,
   TransactionalConnection,
 } from "@vendure/core";
+import { Not } from "typeorm";
 
 import { loggerCtx, RECURRING_BILLING_PROVIDER } from "../constants";
 import { OrganizationSubscription } from "../entities/organization-subscription.entity";
