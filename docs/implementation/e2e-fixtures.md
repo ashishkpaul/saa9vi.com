@@ -1,6 +1,6 @@
 # E2E Fixture Contract (Phase 8)
 
-**Status:** ACTIVE — contract defined, fixture layer per-contract not yet built\
+**Status:** COMPLETE — fixture layer implemented and live-verified 2026-09-27\
 **Scope:** `scripts/e2e/` — the deterministic multi-tenant fixture layer used by the Phase 8 scenario suite\
 **Canonical for:** what `E2EFixtureManifest` is, and what `verify.ts` is required to diff.
 
@@ -22,7 +22,7 @@ asks: *is tenant A's reported state correct while tenant B's state is different?
 A single-tenant spec can pass while the channel scoping separating two tenants is
 broken, because nothing in it ever resolves another tenant's row.
 
-## 2. What exists today, and what does not
+## 2. What exists today
 
 Present — type-checks under `--strict`, but **not** covered by `npm run build`,
 because `tsconfig.json` includes only `src/**/*.ts`. Run `tsc --noEmit` over the
@@ -146,19 +146,23 @@ produces an identical verdict.
 - **Not** a load/soak harness, and not a demo seeding tool — that is
   `scripts/seed/`.
 
-## 7. Open items (what Phase 8 still needs)
+## 7. Phase 8 delivery and evidence
 
-| Item | Path (proposed) | Notes |
-|---|---|---|
-| Fixture seeder | `scripts/e2e/seed-fixtures.ts` | Idempotent per label; records every created id; writes the manifest to `scripts/e2e/.fixtures/manifest.json` |
-| Scenario files | `scripts/e2e/scenarios/*.ts` | One per Phase 8 scenario; plain data only; imports limited to `../auth`, `../graphql-client`, `../fixture-types` |
-| Verifier | `scripts/e2e/verify.ts` | Implements §4 — the per-tenant diff, the isolation probe, and PASS/FAIL/SKIP reporting |
-| npm script | `package.json` | e.g. `test:e2e:fixtures`, alongside `test:e2e:webhook-signature` |
-| Fixture set | manifest | At least two tenants with **deliberately different** `expected` values, or the isolation probe proves nothing |
+Phase 8 is delivered at commit `787c4c2` and was live-verified against `localhost:3000`.
 
-Once implemented, this layer's output is *runtime evidence* and must be reported
-as such — separately from code and specification evidence, per the verification
-model in `docs/implementation/production-readiness.md`.
+| Evidence | Result |
+|---|---|
+| Seed | exit 0; tenant-a channel 32 with session 23 → SCHEDULED; tenant-b channel 33 with session 24 → DRAFT |
+| Idempotent reseed | identical fixture ids/state; cancelled subscriptions are not resurrected |
+| Verify | **16/16 PASS**, exit 0 |
+| Isolation | bidirectional probes on recorded BBB/customer/profile ids and channel-token surface all rejected or returned nothing |
+| Environment semantics | dead server → SKIP / exit 0; missing manifest → FAIL / exit 1 |
+| Static gates | `typecheck:e2e` 0; `npm run build` 0; `verify:invariants` 100/100; working tree clean |
+
+The fixture layer remains complementary to the Vitest and acceptance-script layers;
+it does not replace them. Its manifest is a gitignored run artifact, and its
+three-axis output should be cited as runtime evidence separately from code and
+specification evidence.
 
 
 

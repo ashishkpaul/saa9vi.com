@@ -96,6 +96,26 @@ const CANCEL = gql`
   }
 `;
 
+const ADMIN_SUBSCRIBE = gql`
+  mutation SubscribeToPlan($channelId: String!, $planId: ID!) {
+    subscribeToPlan(channelId: $channelId, planId: $planId) {
+      id
+      status
+      plan { id slug }
+    }
+  }
+`;
+
+const ADMIN_CANCEL = gql`
+  mutation CancelOrganizationSubscription($channelId: String!, $atPeriodEnd: Boolean!) {
+    cancelOrganizationSubscription(channelId: $channelId, atPeriodEnd: $atPeriodEnd) {
+      id
+      status
+      plan { id slug }
+    }
+  }
+`;
+
 const MY_SUBSCRIPTION = gql`
   query MySubscription {
     mySubscription {
@@ -146,6 +166,7 @@ describe("ADR-046 — tenant self-serve subscription Shop API", () => {
   const adminPassword = "StrongP@ss1";
   const learnerPassword = "LearnerP@ss1";
   let tenantAEmail: string;
+  let tenantAChannelId: string;
   let tenantBEmail: string;
   let learnerEmail: string;
   let tenantAToken: string;
@@ -229,12 +250,17 @@ describe("ADR-046 — tenant self-serve subscription Shop API", () => {
           timezone: "Asia/Kolkata",
         },
       });
-      return { email, token: result.registerNewTenant.channelToken };
+      return {
+        email,
+        token: result.registerNewTenant.channelToken,
+        channelId: String(result.registerNewTenant.channelId),
+      };
     };
 
     const tenantA = await createTenant("ADR046 Academy A");
     tenantAEmail = tenantA.email;
     tenantAToken = tenantA.token;
+    tenantAChannelId = tenantA.channelId;
 
     const tenantB = await createTenant("ADR046 Academy B");
     tenantBEmail = tenantB.email;
@@ -378,6 +404,45 @@ describe("ADR-046 — tenant self-serve subscription Shop API", () => {
       "sub_mock_1",
       { cancelAtCycleEnd: false },
     );
+  });
+  it("BUG-040: resolves the live row when a cancelled row coexists with it", async () => {
+    // The previous test leaves sub_mock_1 cancelled. Re-subscribing creates a
+    // second, live row for the same channel — the exact state allowed by the
+    // partial unique index and previously exposed the unordered findOne bug.
+    await adminClient.asUserWithCredentials(tenantAEmail, adminPassword);
+    adminClient.setChannelToken(tenantAToken);
+
+    const resubscribe = await adminClient.query(ADMIN_SUBSCRIBE, {
+      channelId: tenantAChannelId,
+      planId: paidPlanId,
+    });
+
+    const liveSubId = resubscribe.subscribeToPlan.id;
+    expect(liveSubId).toBeTruthy();
+    expect(resubscribe.subscribeToPlan.status).toBe("pending_provider_auth");
+    expect(createProvider).toHaveBeenCalledTimes(2);
+
+    // The Shop self-serve path must select the non-cancelled row, not the
+    // older cancelled row. Changing the live paid row to provider-free also
+    // exercises the corresponding binding lookup.
+    shopClient.setAuthToken(adminClient.getAuthToken());
+    shopClient.setChannelToken(tenantAToken);
+
+    const changed = await shopClient.query(CHANGE_PLAN, { planId: freePlanId });
+    expect(changed.requestMySubscriptionPlanChange.subscription.status).toBe("active");
+    expect(changed.requestMySubscriptionPlanChange.subscription.plan.id).toBe(freePlanId);
+    expect(changed.requestMySubscriptionPlanChange.authorizationUrl).toBeNull();
+
+    // Cancellation must target the same live row. The stale cancelled row has a
+    // lower id; returning it would falsely report success while leaving the
+    // actual live row active.
+    const cancelled = await adminClient.query(ADMIN_CANCEL, {
+      channelId: tenantAChannelId,
+      atPeriodEnd: false,
+    });
+    expect(cancelled.cancelOrganizationSubscription.id).toBe(liveSubId);
+    expect(cancelled.cancelOrganizationSubscription.status).toBe("cancelled");
+    expect(cancelProvider).toHaveBeenCalledTimes(2);
   });
 
 

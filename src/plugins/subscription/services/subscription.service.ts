@@ -9,6 +9,7 @@ import {
   RequestContext,
   TransactionalConnection,
 } from "@vendure/core";
+import { Not } from "typeorm";
 
 import { loggerCtx, RECURRING_BILLING_PROVIDER } from "../constants";
 import { OrganizationSubscription } from "../entities/organization-subscription.entity";
@@ -115,9 +116,23 @@ export class SubscriptionService {
     ctx: RequestContext,
     channelId: string,
   ): Promise<OrganizationSubscription | null> {
-    return this.connection
-      .getRepository(ctx, OrganizationSubscription)
-      .findOne({ where: { channelId }, relations: ["plan"] });
+    const repo = this.connection.getRepository(ctx, OrganizationSubscription);
+
+    // The partial unique index guarantees at most one non-cancelled row per
+    // channel. Prefer that current row deterministically; only fall back to
+    // the newest cancelled row when the channel has no live subscription so
+    // the Shop read can still report a terminal cancellation state.
+    const current = await repo.findOne({
+      where: { channelId, status: Not("cancelled") },
+      relations: ["plan"],
+    });
+    if (current) return current;
+
+    return repo.findOne({
+      where: { channelId, status: "cancelled" },
+      relations: ["plan"],
+      order: { id: "DESC" },
+    });
   }
 
   /**
@@ -137,7 +152,9 @@ export class SubscriptionService {
     const repo = this.connection.getRepository(ctx, OrganizationSubscription);
 
     // ── 1. Validate local prerequisites (no side effects yet — ADR-039) ──
-    const existing = await repo.findOne({ where: { channelId } });
+    const existing = await repo.findOne({
+      where: { channelId, status: Not("cancelled") },
+    });
     if (existing && existing.status !== "cancelled") {
       // Message matches the ACTUAL condition: ANY non-cancelled status occupies
       // the partial unique index slot (`status != 'cancelled'`), not just
@@ -386,7 +403,10 @@ export class SubscriptionService {
     const bindingRepo = this.connection.getRepository(ctx, SubscriptionProviderBinding);
 
     // ── 1. Validate local prerequisites (no side effects yet — ADR-039) ──
-    const current = await repo.findOne({ where: { channelId }, relations: ["plan"] });
+    const current = await repo.findOne({
+      where: { channelId, status: Not("cancelled") },
+      relations: ["plan"],
+    });
     if (!current) {
       throw new Error(`Channel ${channelId} has no subscription; use subscribeToPlan`);
     }
@@ -429,7 +449,10 @@ export class SubscriptionService {
     // from renewing. Legacy pre-ADR-039 rows may carry providerPlanId with no
     // binding at all, so plan.providerPlanId alone is not sufficient here.
     const currentBinding = await bindingRepo.findOne({
-      where: { channelId },
+      // Bindings are historical rows: select the binding belonging to the
+      // exact live subscription chosen above, never merely the newest row for
+      // the channel. Older cancelled subscriptions may retain their bindings.
+      where: { channelId, subscription: { id: current.id } },
       order: { createdAt: "DESC" },
     });
 
@@ -643,7 +666,20 @@ export class SubscriptionService {
     const repo = this.connection.getRepository(ctx, OrganizationSubscription);
     const bindingRepo = this.connection.getRepository(ctx, SubscriptionProviderBinding);
 
-    const sub = await repo.findOne({ where: { channelId }, relations: ["plan"] });
+    // Prefer the unique current (non-cancelled) row. If none exists,
+    // deterministically return the newest cancelled row so repeated cancel
+    // requests remain idempotent without ever masking a live subscription.
+    let sub = await repo.findOne({
+      where: { channelId, status: Not("cancelled") },
+      relations: ["plan"],
+    });
+    if (!sub) {
+      sub = await repo.findOne({
+        where: { channelId, status: "cancelled" },
+        relations: ["plan"],
+        order: { id: "DESC" },
+      });
+    }
     if (!sub) {
       throw new Error(`Channel ${channelId} has no subscription`);
     }
@@ -659,7 +695,12 @@ export class SubscriptionService {
     const providerFree = !sub.plan?.providerPlanId;
     const binding = providerFree
       ? null
-      : await bindingRepo.findOne({ where: { channelId }, order: { createdAt: "DESC" } });
+      : await bindingRepo.findOne({
+          // Use the exact subscription selected above. A channel may retain
+          // historical bindings for previously cancelled subscriptions.
+          where: { channelId, subscription: { id: sub.id } },
+          order: { createdAt: "DESC" },
+        });
     const providerWired = !providerFree && !!binding;
 
     if (providerWired && this.billingProvider) {
@@ -776,7 +817,10 @@ export class SubscriptionService {
     // Resolve the OrganizationSubscription for this channel
     const subRepo = this.connection.getRepository(ctx, OrganizationSubscription);
     const subscription = await subRepo.findOne({
-      where: { channelId },
+      // Legacy lazy binding is only valid for the current subscription. Never
+      // attach a provider webhook to a historical cancelled row merely because
+      // it happens to be returned first by an unordered query.
+      where: { channelId, status: Not("cancelled") },
       relations: ["plan"],
     });
     if (!subscription) {
