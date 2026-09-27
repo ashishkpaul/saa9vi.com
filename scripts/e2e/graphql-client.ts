@@ -24,6 +24,24 @@ export class GraphQLFixtureError extends Error {
   }
 }
 
+/**
+ * The server was unreachable (connection refused, DNS failure, aborted socket).
+ * Distinguished from GraphQLFixtureError so `verify.ts` can honour the SKIP
+ * convention of e2e-fixtures.md §4: environment absence (no server reachable)
+ * is a SKIP and never a FAIL — and never silently a pass.
+ */
+export class GraphQLFixtureNetworkError extends GraphQLFixtureError {
+  constructor(operation: string, public readonly cause: unknown) {
+    super(
+      `Network error while reaching the server: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+      operation,
+    );
+    this.name = 'GraphQLFixtureNetworkError';
+  }
+}
+
 export interface GraphQLClientOptions {
   /** e.g. http://localhost:3000 */
   host: string;
@@ -55,14 +73,48 @@ async function post<T>(
   if (opts.cookie) headers['cookie'] = opts.cookie;
   if (opts.channelToken) headers['vendure-token'] = opts.channelToken;
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ query, variables }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ query, variables }),
+    });
+  } catch (err) {
+    throw new GraphQLFixtureNetworkError(operation, err);
+  }
 
-  const setCookie = res.headers.get('set-cookie') ?? undefined;
-  const json = (await res.json()) as GraphQLResponse<T>;
+  // Merge EVERY Set-Cookie pair into the jar. Vendure signs its session cookie:
+  // the server sets `session` AND `session.sig`, and a client that forwards only
+  // the first one is treated as anonymous — FORBIDDEN on every guarded operation.
+  // Attributes after the first `;` (Path, HttpOnly, Max-Age, …) are not cookie
+  // pairs and are stripped before forwarding.
+  let cookie = opts.cookie;
+  const setCookieHeaders = res.headers.getSetCookie();
+  if (setCookieHeaders.length > 0) {
+    const jar = new Map<string, string>();
+    for (const pair of (opts.cookie ?? '').split('; ')) {
+      const eq = pair.indexOf('=');
+      if (eq > 0) jar.set(pair.slice(0, eq), pair.slice(eq + 1));
+    }
+    for (const header of setCookieHeaders) {
+      const pair = header.split(';')[0];
+      const eq = pair.indexOf('=');
+      if (eq > 0) jar.set(pair.slice(0, eq), pair.slice(eq + 1));
+    }
+    cookie = Array.from(jar.entries(), ([k, v]) => `${k}=${v}`).join('; ');
+  }
+
+  let json: GraphQLResponse<T>;
+  try {
+    json = (await res.json()) as GraphQLResponse<T>;
+  } catch (err) {
+    throw new GraphQLFixtureError(
+      `Response was not JSON (HTTP ${res.status}) — malformed response.`,
+      operation,
+      err,
+    );
+  }
 
   if (json.errors?.length) {
     throw new GraphQLFixtureError(json.errors.map(e => e.message).join('; '), operation, json.errors);
@@ -71,7 +123,7 @@ async function post<T>(
     throw new GraphQLFixtureError('Response had no `data` and no `errors` — malformed response.', operation);
   }
 
-  return { data: json.data, cookie: setCookie ?? opts.cookie };
+  return { data: json.data, cookie };
 }
 
 export class FixtureGraphQLClient {
@@ -80,16 +132,18 @@ export class FixtureGraphQLClient {
 
   constructor(private readonly host: string) {}
 
-  /** Scope subsequent Shop-API calls to a tenant channel. Admin-API calls stay unscoped unless you also set a session for that channel. */
+  /** Scope subsequent calls — Admin and Shop alike — to a tenant channel via the `vendure-token` header. The tenant's own admin session plus its channel token is the actor every fixture mutation runs as (matches the marketplace e2e pattern: setChannelToken + tenant credentials). */
   withChannelToken(token: string): this {
     this.channelToken = token;
     return this;
   }
 
+  /** Admin-API call. Forwards `vendure-token` when set — Admin reads/writes are channel-scoped the same way Shop calls are. */
   async adminQuery<T>(operation: string, query: string, variables?: Record<string, unknown>): Promise<T> {
     const { data, cookie } = await post<T>(`${this.host}/admin-api`, query, variables, operation, {
       host: this.host,
       cookie: this.cookie,
+      channelToken: this.channelToken,
     });
     this.cookie = cookie;
     return data;
