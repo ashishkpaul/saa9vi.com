@@ -49,6 +49,7 @@ import { CmsPlugin } from '../../cms/cms.plugin';
 import { ReviewsPlugin } from '../../reviews/reviews-plugin';
 import { SubscriptionPlugin } from '../../subscription/subscription.plugin';
 import { E2E_INITIAL_DATA } from '../../tenant-plugin/e2e/fixtures/e2e-initial-data';
+import { verifyTenantAdminViaApi } from '../../tenant-plugin/e2e/fixtures/verify-tenant-admin';
 
 // ─── Postgres initializer — isolated schema ────────────────────────────────
 registerInitializer('postgres', new SchemaPostgresInitializer());
@@ -221,6 +222,10 @@ describe('BBB Channel Isolation (Phase A)', () => {
       tenantAChannelIdEncoded = channelId;
       tenantAChannelToken = channelToken;
       tenantAAdminId = administratorId;
+
+      // 3.7.3 login gate (GHSA-wr5h-x3x6-4h23): complete Phase 1.5
+      // verification through the application API before any admin login.
+      await verifyTenantAdminViaApi(server, shopClient, tenantAEmail);
     });
 
     it('registers tenant B', async () => {
@@ -244,6 +249,9 @@ describe('BBB Channel Isolation (Phase A)', () => {
       tenantBChannelId = channelId.replace(/^T_/, '');
       tenantBChannelIdEncoded = channelId;
       tenantBChannelToken = channelToken;
+
+      // 3.7.3 login gate — verify tenant B's admin too (see tenant A above).
+      await verifyTenantAdminViaApi(server, shopClient, tenantBEmail);
     });
   });
 

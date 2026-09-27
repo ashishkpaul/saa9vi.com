@@ -48,6 +48,7 @@ import {
   testConfig,
 } from '@vendure/testing';
 import { SchemaPostgresInitializer } from './schema-postgres-initializer';
+import { verifyTenantAdminViaApi } from './fixtures/verify-tenant-admin';
 import {
   Administrator,
   Asset,
@@ -677,6 +678,12 @@ describe('TenantPlugin', () => {
       tenantAChannelId = channelId.replace(/^T_/, '');
       tenantAChannelToken = channelToken;
       tenantAAdminId = administratorId;
+
+      // 3.7.3 login gate (GHSA-wr5h-x3x6-4h23): complete Phase 1.5
+      // verification through the application API before any admin login —
+      // login is refused while a pending token exists, even with
+      // requireVerification=false.
+      await verifyTenantAdminViaApi(server, shopClient, tenantAEmail);
     });
 
     it('registers a second independent tenant (tenant B)', async () => {
@@ -702,6 +709,9 @@ describe('TenantPlugin', () => {
       // Store the raw channel ID (strip Vendure's entity type prefix like "T_")
       tenantBChannelId = channelId.replace(/^T_/, '');
       tenantBChannelToken = channelToken;
+
+      // 3.7.3 login gate — verify tenant B's admin too (see tenant A above).
+      await verifyTenantAdminViaApi(server, shopClient, tenantBEmail);
     });
 
     it('rejects a duplicate email address', async () => {
@@ -1196,17 +1206,41 @@ describe('TenantPlugin', () => {
       expect(emails).toContain(readAdminEmail);
       expect(emails).not.toContain('superadmin');
 
+      const tenantAdmin = administrators.items.find(
+        (a: any) => a.emailAddress === tenantAEmail,
+      );
+      expect(tenantAdmin, 'tenant A admin must be visible to own-channel read-admin').toBeTruthy();
+
       // BUG-030: the nested user.roles.channels relation must be populated
       // consistently with the direct `roles` query. Without loading
       // `user.roles.channels`, TypeORM returns `channels: []` even though the
       // role-channel join exists.
-      const tenantAdmin = administrators.items.find(
-        (a: any) => a.emailAddress === tenantAEmail,
+      //
+      // V1.0.9 / Vendure 3.7.3: `User.roles` is now a @ResolveField filtered
+      // by RoleService.getVisibleRoleIds (@since 3.7.3) — a viewer may only
+      // read a Role if they hold EVERY permission that Role grants on every
+      // channel it is assigned to. The read-admin holds only
+      // [Authenticated, ReadAdministrator], so the tenant-admin role's
+      // details are hidden from them (anti-enumeration hardening): the
+      // visibility filter is expected to leave NO roles here, while the
+      // administrator row itself stays visible (INV-016 channel scoping,
+      // asserted above).
+      expect(tenantAdmin.user.roles).toHaveLength(0);
+
+      // BUG-030 regression guard on a role the read-admin CAN see: their own
+      // read-admin role grants exactly the permissions they hold, so it
+      // passes the 3.7.3 visibility filter — and its nested channels must be
+      // hydrated by the resolver's leftJoinAndSelect (not `[]`).
+      const readAdminSelf = administrators.items.find(
+        (a: any) => a.emailAddress === readAdminEmail,
       );
-      const roleChannels = tenantAdmin.user.roles.flatMap((r: any) =>
+      expect(readAdminSelf, 'read-admin must be visible in own channel').toBeTruthy();
+      const readAdminRoleChannels = readAdminSelf.user.roles.flatMap((r: any) =>
         r.channels.map((c: any) => c.code),
       );
-      expect(roleChannels.some((code: string) => code.startsWith('mehta-coaching'))).toBe(true);
+      expect(
+        readAdminRoleChannels.some((code: string) => code.startsWith('mehta-coaching')),
+      ).toBe(true);
     });
 
     it('tenant B read-admin only sees administrators in their own channel', async () => {

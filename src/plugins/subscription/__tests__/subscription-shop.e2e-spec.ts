@@ -76,6 +76,7 @@ import { SubscriptionPlan } from '../entities/subscription-plan.entity';
 import { BbbCapacityGrant } from '../../bigbluebutton-plugin/entities/bbb-capacity-grant.entity';
 import { BbbOrganization } from '../../bigbluebutton-plugin/entities/bbb-organization.entity';
 import { E2E_INITIAL_DATA } from '../../tenant-plugin/e2e/fixtures/e2e-initial-data';
+import { verifyTenantAdminViaApi } from '../../tenant-plugin/e2e/fixtures/verify-tenant-admin';
 
 // ─── Postgres initializer — uses the same DB as dev but an isolated schema ──
 registerInitializer('postgres', new SchemaPostgresInitializer());
@@ -315,6 +316,13 @@ describe('SubscriptionPlugin — Shop API commercial reads (slice 8)', () => {
     // GraphQL ids arrive encoded (T_<id>); DB rows use the decoded form.
     tenantAChannelId = channelId.replace(/^T_/, '');
     tenantAChannelToken = channelToken;
+
+    // 3.7.3 login gate (GHSA-wr5h-x3x6-4h23): complete Phase 1.5
+    // verification through the application API before the tenant-admin
+    // login below — login is refused while a pending token exists, even
+    // with requireVerification=false. shopClient still targets the default
+    // channel here (set above), so the public mutation routes correctly.
+    await verifyTenantAdminViaApi(server, shopClient, tenantAEmail);
 
     // Listener outcomes this suite asserts against (non-vacuous by construction):
     await waitFor(

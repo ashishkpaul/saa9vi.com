@@ -10,6 +10,16 @@
  *
  * Each cross-channel attempt MUST FAIL (throw or ErrorResult).
  * Same two-tenant harness + isolated schema as the sibling suite.
+ *
+ * Evidence quality: permission denial ≠ channel-scope enforcement. The
+ * updateAdministrator probe is duplicated with an ELEVATED actor that HOLDS
+ * UpdateAdministrator within tenant A (Admin-API-created), so its denials
+ * evidence the 3.7.3 visibility/priv-esc rule rather than the bare @Allow
+ * guard. Governance: no direct database writes — probe actors are created
+ * via createRole/createAdministrator, and Phase 1.5 admin verification is
+ * completed through the public verifyTenantAdmin mutation (required on
+ * 3.7.3: login is refused while a pending verificationToken exists, even
+ * with requireVerification=false).
  */
 import 'reflect-metadata';
 import 'dotenv/config';
@@ -31,6 +41,8 @@ import { CmsPlugin } from '../../plugins/cms/cms.plugin';
 import { ReviewsPlugin } from '../../plugins/reviews/reviews-plugin';
 import { SubscriptionPlugin } from '../../plugins/subscription/subscription.plugin';
 import { E2E_INITIAL_DATA } from '../../plugins/tenant-plugin/e2e/fixtures/e2e-initial-data';
+import { createElevatedTenantAdmin, ElevatedTenantAdmin } from './elevated-tenant-admin';
+import { verifyTenantAdminViaApi } from '../../plugins/tenant-plugin/e2e/fixtures/verify-tenant-admin';
 
 registerInitializer('postgres', new SchemaPostgresInitializer());
 
@@ -162,6 +174,12 @@ describe('Vendure 3.7.2/3.7.3 channel-isolation probes (INV-001)', () => {
   let tenantAEmail: string;
   let tenantAToken: string;
   let tenantAChannelId: string;
+  // Elevated probe actors (Admin API only): same permission set scoped to
+  // DIFFERENT channels, so a denial between them is pure channel scope.
+  let elevatedA: ElevatedTenantAdmin;
+  let elevatedAPeer: ElevatedTenantAdmin;
+  let elevatedDefault: ElevatedTenantAdmin;
+  let defaultChannelId: string;
   let defaultProductId: string;
   let defaultFacetId: string;
   let defaultPromotionId: string | null = null;
@@ -201,7 +219,7 @@ describe('Vendure 3.7.2/3.7.3 channel-isolation probes (INV-001)', () => {
   });
 
   describe('bootstrap: tenant A + default-channel fixtures', () => {
-    it('registers tenant A and verifies its admin', async () => {
+    it('registers tenant A (admin login via requireVerification=false — no DB writes)', async () => {
       shopClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
       tenantAEmail = `v373i-a-${Date.now()}@example.com`;
       const result = await shopClient.query(REGISTER_NEW_TENANT, {
@@ -216,14 +234,9 @@ describe('Vendure 3.7.2/3.7.3 channel-isolation probes (INV-001)', () => {
       });
       tenantAToken = result.registerNewTenant.channelToken;
       tenantAChannelId = result.registerNewTenant.channelId;
-      const { TransactionalConnection, User } = await import('@vendure/core');
-      const connection = server.app.get(TransactionalConnection);
-      const repo = connection.rawConnection.getRepository(User);
-      const user = await repo.findOne({ where: { identifier: tenantAEmail } });
-      if (user && !user.verified) {
-        user.verified = true;
-        await repo.save(user);
-      }
+      // Phase 1.5 verification through the application API (no DB writes):
+      // required on 3.7.3 — login is refused while a pending token exists.
+      await verifyTenantAdminViaApi(server, shopClient, tenantAEmail);
     });
 
     it('captures default-channel fixtures as superadmin', async () => {
@@ -305,6 +318,34 @@ describe('Vendure 3.7.2/3.7.3 channel-isolation probes (INV-001)', () => {
         defaultOptionGroupId = created.createProductOptionGroup.id;
       }
       expect(defaultOptionGroupId).toBeTruthy();
+    });
+
+    it('creates elevated probe actors via Admin API (no DB writes)', async () => {
+      await adminClient.asSuperAdmin();
+      const { channels }: any = await adminClient.query(gql`
+        query DefaultChannel { channels { items { id token } } }
+      `);
+      const def = (channels.items as any[]).find(
+        (c: any) => c.token === E2E_DEFAULT_CHANNEL_TOKEN,
+      );
+      expect(def).toBeTruthy();
+      defaultChannelId = def.id;
+
+      elevatedA = await createElevatedTenantAdmin(adminClient, tenantAChannelId, 'tenant-a', [
+        'ReadAdministrator',
+        'UpdateAdministrator',
+      ]);
+      elevatedAPeer = await createElevatedTenantAdmin(adminClient, tenantAChannelId, 'tenant-a-peer', [
+        'ReadAdministrator',
+        'UpdateAdministrator',
+      ]);
+      elevatedDefault = await createElevatedTenantAdmin(adminClient, defaultChannelId, 'default', [
+        'ReadAdministrator',
+        'UpdateAdministrator',
+      ]);
+      expect(elevatedA.administratorId).toBeTruthy();
+      expect(elevatedAPeer.administratorId).toBeTruthy();
+      expect(elevatedDefault.administratorId).toBeTruthy();
     });
   });
 
@@ -390,12 +431,62 @@ describe('Vendure 3.7.2/3.7.3 channel-isolation probes (INV-001)', () => {
     });
 
     it('cannot update another administrator', async () => {
-      // Tenant template lacks UpdateAdministrator → FORBIDDEN also passes.
+      // Permission-layer probe: tenant template lacks UpdateAdministrator, so
+      // FORBIDDEN also passes. The ELEVATED describe below re-runs this with
+      // the permission GRANTED — that is the channel-scope probe.
       await expectDenied('updateAdministrator', () =>
         adminClient.query(UPDATE_ADMINISTRATOR, {
           input: { id: 'T_1', firstName: 'Hacked' },
         }),
       );
+    });
+  });
+
+  describe('elevated tenant-A actor — updateAdministrator (permission granted)', () => {
+    // elevatedA HOLDS UpdateAdministrator scoped to channel A. Denials below
+    // therefore evidence Vendure 3.7.3's activeUserHasPermissionsOfRoles /
+    // priv-esc rule — NOT the bare @Allow(UpdateAdministrator) guard.
+    beforeAll(async () => {
+      await adminClient.asUserWithCredentials(elevatedA.email, 'ElevatedP@ss1');
+      adminClient.setChannelToken(tenantAToken);
+    });
+
+    it('control: updateAdministrator on a peer admin in channel A succeeds', async () => {
+      const { updateAdministrator }: any = await adminClient.query(UPDATE_ADMINISTRATOR, {
+        input: { id: elevatedAPeer.administratorId, firstName: 'PeerA' },
+      });
+      expect(updateAdministrator?.id).toBeTruthy();
+    });
+
+    it('updateAdministrator on superadmin (T_1) MUST FAIL — priv-esc blocked', async () => {
+      // 3.7.3: a non-SuperAdmin whose roles cannot be granted the SuperAdmin
+      // role gets EntityNotFound from the visibility check, not an update.
+      await expectDenied('updateAdministrator → superadmin', () =>
+        adminClient.query(UPDATE_ADMINISTRATOR, {
+          input: { id: 'T_1', firstName: 'Hacked' },
+        }),
+      );
+    });
+
+    it('updateAdministrator on default-channel elevated admin MUST FAIL (same permissions, other channel → pure channel scope)', async () => {
+      await expectDenied('updateAdministrator → default-channel elevated', () =>
+        adminClient.query(UPDATE_ADMINISTRATOR, {
+          input: { id: elevatedDefault.administratorId, firstName: 'Hacked' },
+        }),
+      );
+    });
+
+    it('administrators read on channel A excludes elevatedDefault + superadmin (INV-016)', async () => {
+      const { administrators }: any = await adminClient.query(gql`
+        query AdminAdministrators {
+          administrators { items { id emailAddress } totalItems }
+        }
+      `);
+      const emails: string[] = (administrators?.items ?? []).map((a: any) => a.emailAddress);
+      expect(emails).toContain(elevatedA.email);
+      expect(emails).toContain(elevatedAPeer.email);
+      expect(emails).not.toContain(elevatedDefault.email);
+      expect(emails).not.toContain('superadmin');
     });
   });
 });
