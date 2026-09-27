@@ -151,10 +151,7 @@ The accepted contract adds two authenticated Shop API mutations:
 and invocation-scoped; Redis `SET NX EX 300` provides the per-channel plan-change
 cooldown and fails closed; provider activation remains webhook-authoritative.
 
-Current implementation is on the dedicated ADR-046 backend/frontend branches.
-The merge gate is the ADR's evidence set: ownership boundary, cooldown/idempotency,
-transient redirect origin, provider-internals read-boundary regression, and
-cancellation behavior.
+Implementation is merged on `main`. Code/test evidence covers ownership boundary, cooldown/idempotency, transient redirect origin, provider-internals read-boundary regression, cancellation, and backend/frontend build gates. Production-provider/live-environment evidence remains a separate production-readiness gate.
 
 ------------------------------------------------------------------------
 
@@ -217,11 +214,12 @@ cancellation behavior.
   Backup/restore drill    **NOT VERIFIED**        Operational drill not yet
                                                   evidenced
 
-  R2 recurring            **CODE HARDENED     R2-A, R2-E, R2-F
-  subscriptions           (ADR-041) /         VERIFIED
-                          R2-G RUNTIME        (2026-09-20);
-                          RE-VERIF            R2-G runtime
-                          REQUIRED**          evidence pending
+  R2 recurring            **CODE/TEST VERIFIED** R2-A, R2-E, R2-F runtime evidence captured
+                          (ADR-041) /         2026-09-20. R2-G halted-state, stale-cycle,
+                          R2-G code/test      missing-cycle fail-closed, replay idempotency,
+                          verified             and webhook-failure tenant attribution are
+                                              covered by the post-refactor suite; live
+                                              provider/runtime closure remains a V1 gate.
 
 
   R3 one-time commerce    **VERIFIED**            Slice 11 R3 is code-complete on
@@ -233,12 +231,12 @@ cancellation behavior.
                                                   runtime evidence recorded by
                                                   the R4 lifecycle suite.
 
-  ADR-046 self-serve       **IMPLEMENTATION IN     Accepted contract; backend and
-  subscription             PROGRESS**              storefront implementation is
-                                                  on the ADR-046 branches.
-                                                  Runtime ownership/cooldown/
-                                                  redirect/cancellation evidence
-                                                  is still required before merge.
+  ADR-046 self-serve       **CODE/TEST VERIFIED**  Accepted contract; implementation
+  subscription                                      merged on `main`. Ownership,
+                                                   cooldown, redirect/read-boundary,
+                                                   cancellation, and build/test evidence
+                                                   are recorded. Live production-provider
+                                                   evidence remains a separate V1 gate.
 
   R4 BBB paid access /    **VERIFIED**            End-to-end payment-to-
   usage                   (2026-09-25)            entitlement evidence
