@@ -50,8 +50,13 @@ changes.patch
 # Generated development email mailbox output
 /static/email/test-emails/
 
-# Third-party reference material (external code samples — not part of the platform)
-reference/
+# Redundant copies of the E2E fixture-layer sources (canonical copies: scripts/e2e/)
+reference/files/
 
 # E2E fixture run artifacts (manifests are outputs of a seeding run, not fixtures)
 scripts/e2e/.fixtures/
+
+# NOTE: reference/buylits/** is deliberately TRACKED — it is the Step 0 BuyLits
+# reference-analysis deliverable (commit 02b7ec5), cited by
+# docs/architecture/adr-037-juspay-provider-contract.md, docs/implementation/roadmap.md
+# and docs/implementation/release-notes.md. Do not ignore or untrack it.
