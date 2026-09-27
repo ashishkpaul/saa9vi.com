@@ -18,7 +18,7 @@
 > (`b3a3704`) turned out to be an **incomplete** fix whose regression test could not pass.
 > The pre-fix record below is retained in full — every symptom in it was reproduced live
 > before the fix.
-> **Completion commit:** `pending-push` (this change set — see the fix block at the end of
+> **Completion commit:** `2b447d7` (see the fix block at the end of
 > this section). **Still open:** its sibling defect **BUG-041** (the provider refuses to
 > cancel a never-billed mandate), which now accounts for every remaining acceptance
 > failure and is *not* part of this defect.
