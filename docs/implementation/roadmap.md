@@ -101,7 +101,7 @@ Every tenant lands on a permanent **Free Basic** plan at registration (no card, 
 
 ### ADR-046 — Tenant self-serve subscription lifecycle
 
-**Accepted 2026-09-26; implementation in progress.**
+**Accepted 2026-09-26; implementation complete. Code/test evidence is verified; production-provider/runtime closure remains governed by `production-readiness.md`.**
 
 - [x] Shop API contract: `requestMySubscriptionPlanChange(planId)` and
   `cancelMySubscription(atPeriodEnd)`, tenant resolved exclusively from
@@ -112,8 +112,10 @@ Every tenant lands on a permanent **Free Basic** plan at registration (no card, 
 - [x] Tenant business-account/provenance guard distinguishes
   `tenant-self-serve` from `platform-superadmin`.
 - [x] Storefront billing mutations and controls added to the ADR-046 frontend branch.
-- [ ] Runtime evidence: ownership boundary, cooldown/idempotency, transient redirect origin,
-  read-boundary regression, cancellation, and full build/test gates.
+- [x] Code/test evidence: ownership boundary, cooldown/idempotency, transient redirect origin,
+  read-boundary regression, cancellation, and build/test gates verified by the ADR-046 Shop API
+  suite and subsequent backend/frontend gates. Production-provider/live-environment evidence
+  remains a separate release gate.
 
 ---
 

@@ -151,10 +151,7 @@ The accepted contract adds two authenticated Shop API mutations:
 and invocation-scoped; Redis `SET NX EX 300` provides the per-channel plan-change
 cooldown and fails closed; provider activation remains webhook-authoritative.
 
-Current implementation is on the dedicated ADR-046 backend/frontend branches.
-The merge gate is the ADR's evidence set: ownership boundary, cooldown/idempotency,
-transient redirect origin, provider-internals read-boundary regression, and
-cancellation behavior.
+Implementation is merged on `main`. Code/test evidence covers ownership boundary, cooldown/idempotency, transient redirect origin, provider-internals read-boundary regression, cancellation, and backend/frontend build gates. Production-provider/live-environment evidence remains a separate production-readiness gate.
 
 ------------------------------------------------------------------------
 
@@ -217,11 +214,12 @@ cancellation behavior.
   Backup/restore drill    **NOT VERIFIED**        Operational drill not yet
                                                   evidenced
 
-  R2 recurring            **CODE HARDENED     R2-A, R2-E, R2-F
-  subscriptions           (ADR-041) /         VERIFIED
-                          R2-G RUNTIME        (2026-09-20);
-                          RE-VERIF            R2-G runtime
-                          REQUIRED**          evidence pending
+  R2 recurring            **CODE/TEST VERIFIED** R2-A, R2-E, R2-F runtime evidence captured
+                          (ADR-041) /         2026-09-20. R2-G halted-state, stale-cycle,
+                          R2-G code/test      missing-cycle fail-closed, replay idempotency,
+                          verified             and webhook-failure tenant attribution are
+                                              covered by the post-refactor suite; live
+                                              provider/runtime closure remains a V1 gate.
 
 
   R3 one-time commerce    **VERIFIED**            Slice 11 R3 is code-complete on
@@ -233,12 +231,12 @@ cancellation behavior.
                                                   runtime evidence recorded by
                                                   the R4 lifecycle suite.
 
-  ADR-046 self-serve       **IMPLEMENTATION IN     Accepted contract; backend and
-  subscription             PROGRESS**              storefront implementation is
-                                                  on the ADR-046 branches.
-                                                  Runtime ownership/cooldown/
-                                                  redirect/cancellation evidence
-                                                  is still required before merge.
+  ADR-046 self-serve       **CODE/TEST VERIFIED**  Accepted contract; implementation
+  subscription                                      merged on `main`. Ownership,
+                                                   cooldown, redirect/read-boundary,
+                                                   cancellation, and build/test evidence
+                                                   are recorded. Live production-provider
+                                                   evidence remains a separate V1 gate.
 
   R4 BBB paid access /    **VERIFIED**            End-to-end payment-to-
   usage                   (2026-09-25)            entitlement evidence
@@ -932,9 +930,9 @@ For each failure event:
 
 ### Current status
 
-**RUNTIME VERIFIED (2026-09-20) — R2-G PARTIALLY CLOSED**
+**CODE/TEST VERIFIED (post-refactor); live-provider runtime closure remains a separate production gate**
 
-`subscription.pending` → `past_due` evidenced end-to-end:
+The post-refactor suite now covers the failure bridge, freshness guards, replay idempotency, and webhook-failure tenant attribution. The earlier 2026-09-20 runtime observation below remains historical evidence for `subscription.pending` → `past_due` but no longer represents the complete current R2-G evidence set:
 
 | Evidence item | Value |
 |---|---|
@@ -947,11 +945,12 @@ For each failure event:
 | version | 3 (CAS advanced exactly once) ✅ |
 | No spurious billing attempt | 1 attempt total (succeeded, from activation) — no failure attempt created ✅ |
 
-**Still open:**
-- `subscription.halted` runtime evidence (retry exhaustion → halted state)
-- Out-of-order `subscription.pending` for a stale cycle (freshness guard no-op test)
-- Duplicate/replay failure delivery idempotency
-- Runtime halted recovery: the existing successful-charge finalization path can transition a Saa9vi `past_due`/halted subscription to `active` when a later provider charge finalizes a newer billing cycle (no `halted` exclusion in the CAS — only `cancelled` is excluded). Runtime evidence for the full recovery sequence (halted → provider charge → `subscription.charged`/`activated` webhooks → `active`) remains open. Previously stated as "no code path" which was incorrect.
+**Post-refactor code/test evidence now covered:**
+- `subscription.halted` bridge: valid fresh cycle → binding halted + subscription `past_due` + grace + one failed attempt.
+- Stale halted-cycle guard: stale provider cycle does not transition an active subscription.
+- Missing provider cycle start: fails closed with no subscription/binding mutation; event remains retryable and retains resolved tenant `channelId`.
+- Cross-event payment replay: no duplicate billing attempt and no FSM drift.
+- The successful-charge CAS path can recover a `past_due` subscription when a later provider cycle succeeds; a full live-provider recovery sequence remains a separate production/runtime gate.
 
 ------------------------------------------------------------------------
 
@@ -1403,30 +1402,20 @@ Then verify the actual changed files.
 
 # 15. Immediate next action
 
-**R2-A, R2-E, and R2-F are now VERIFIED (2026-09-20).**
+R2-A, R2-E, R2-F, and the post-refactor R2-G failure-state bridge are covered by
+the current code/test evidence set. The next work is **V1 production hardening**, not
+another subscription-state implementation pass.
 
-R2-A closed: post-restart `provider-webhook-processing` queue execution observed
-during the R2-E run (3 jobs, all processed).
+Priority order:
 
-R2-E closed: fresh Test Mode authorization with UPI (`pay_TeJk63hHNo32gI`),
-subscription `sub_TeJjWjzzC0dU4W`, provider-cycle identity confirmed, no period
-drift. BUG C also found and fixed during this run (see `known-bugs.md`).
-
-R2-F closed: signed webhook lifecycle end-to-end — inbox persist, BullMQ queue,
-processor, billing attempt, cycle-monotonic CAS, period finalization, idempotency.
-
-**Next action: R2-G** — Razorpay failure lifecycle (Test Mode):
-
-Trigger `subscription.pending` → retry → `subscription.halted` against the
-runtime and verify:
-
-1. `OrganizationSubscription.status` → `past_due` on `subscription.pending`
-2. Cycle-identity freshness guard fires correctly for stale failure events
-3. `subscription.halted` → `past_due` (not double-transition)
-4. Out-of-order `subscription.pending` for an already-finalized cycle → no-op
-
-Use the existing Razorpay Test Mode subscription (`sub_TeJjWjzzC0dU4W`) or
-create a new one and simulate payment failure via the Razorpay Test Dashboard.
+1. Rotate and validate the production Razorpay secrets.
+2. Close the webhook perimeter/configuration controls (HTTPS, request-size/rate limits,
+   proxy exposure, raw-body preservation, and secret hygiene).
+3. Close P0-K so production fails startup when PostgreSQL or Redis is unavailable instead
+   of silently degrading to pg-mem or an in-process queue.
+4. Complete provider webhook/queue observability and production failure-boundary tests.
+5. Re-verify the ADR-046 tenant self-service journey in the target runtime and capture the
+   remaining live-provider evidence before declaring the launch gate closed.
 
 ------------------------------------------------------------------------
 

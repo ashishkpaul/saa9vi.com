@@ -118,7 +118,61 @@ The marketplace is a **discovery layer only**. It does not transact. The platfor
 
 ---
 
-## Billing Lifecycle
+## Subscription Billing Lifecycle
+
+Saa9vi has a separate tenant SaaS subscription lifecycle in addition to BBB usage billing. `SubscriptionPlan` is the platform-global plan catalogue; `OrganizationSubscription` is the channel-scoped tenant subscription. Subscription state governs plan capacity and subscription-backed entitlements, while `BbbUsageLedger` remains the append-only record of actual BBB meeting usage.
+
+```
+Tenant registers
+  → permanent Free Basic subscription provisioned
+  → tenant views available plans
+  → tenant requests plan change or cancellation
+  → Shop API resolves tenant from ctx.channelId
+  → plan-change cooldown acquired
+  → provider authorization required?
+      ├── no → provider-free/local transition
+      └── yes
+            → provider subscription created
+            → transient authorizationUrl returned
+            → tenant authorizes with Razorpay
+            → Razorpay webhook received
+  → OrganizationSubscription converges to provider-confirmed state
+  → plan-derived capacity/entitlement policy converges
+  → renewal becomes due
+  → renewal claim
+  → SubscriptionBillingAttempt created
+  → provider charge initiated
+      ├── success → terminal result reconciled → billing period finalized
+      └── failure → failed attempt → subscription becomes past_due
+            → dunning / grace handling
+            → newer-cycle success may recover past_due → active
+            → valid subscription.halted event bridges to past_due
+  → tenant cancellation
+      ├── at period end → provider cancellation + local flag
+      └── immediate → provider cancellation + immediate local cancellation
+```
+
+### Tenant self-service
+
+Tenant administrators use the Shop API for plan changes and cancellation. Tenant identity is derived exclusively from `ctx.channelId`; the mutation does not accept a client-supplied channel id. `MySubscriptionChangeResult.authorizationUrl` is transient and invocation-scoped: it is returned only when the current provider operation requires authorization and is never persisted on `MySubscription` or sourced from a stored provider URL.
+
+Plan changes use an atomic per-channel Redis cooldown (`SET NX EX 300`) and fail closed when Redis is unavailable. The existing `SubscriptionService` owns the subscription FSM and provider boundary; the Shop resolver performs ownership/provenance checks, channel resolution, cooldown, audit logging, and result shaping.
+
+### Platform-admin billing
+
+The Vendure Admin Dashboard is the platform/operator billing surface. Its Billing section is SuperAdmin-gated and provides operational read views for organization subscriptions, provider mandates, payment attempts, and reconciliation. The Admin API's explicit-channel mutations remain the support/operations path; tenant self-service remains on the Shop API and storefront.
+
+### Renewal and failure semantics
+
+Recurring provider HTTP calls remain outside the narrow local database transactions. An accepted or initiated provider response is not terminal payment success. Terminal outcomes arrive through the Razorpay webhook path: verify the delivery, persist the provider event before processing, enqueue it for BullMQ processing, then reconcile the binding, billing attempt, subscription period, and related incidents.
+
+A fresh provider failure cycle can move a subscription to `past_due`. The freshness guard rejects stale cycles, while a missing authoritative provider cycle start fails closed without a domain transition. A valid `subscription.halted` event mirrors provider binding state, records the halted cycle as a failed billing attempt, and bridges the subscription to `past_due` with the applicable grace window. A later successful charge for a newer provider cycle can recover the subscription to `active`.
+
+### Subscription billing and usage billing are separate
+
+Subscription billing uses `OrganizationSubscription`, provider binding/mandate state, `SubscriptionBillingAttempt`, provider webhook inbox records, and reconciliation incidents. BBB usage billing uses `BbbUsageLedger`, which remains append-only and is driven by completed meeting lifecycle processing. Subscription state may control capacity and entitlements, but it does not replace or rewrite historical BBB usage facts.
+
+## BBB Usage Billing Lifecycle
 
 ```
 Meeting ends
@@ -144,15 +198,16 @@ Every 60 seconds, `BbbReconciliationService` runs three loops:
 
 ---
 
-## Three-Stream Revenue Model
+## Revenue Model
 
-| Stream | What it charges | Control mechanism | Ledger behavior |
+Saa9vi has four distinct commercial/usage streams. Tenant subscription billing and BBB usage billing are separate lifecycles and records; marketplace commission and advertising are separate platform revenue streams.
+
+| Stream | What it charges | Control mechanism | Ledger / source of truth |
 |---|---|---|---|
-| **1 — Tenant Billing** | BBB usage + portal/hosting | Always on (not a toggle) | `BbbUsageLedger` rows only on actual usage |
-| **2 — Marketplace Commission** | % of marketplace order | `MARKETPLACE_COMMISSION_PERCENT` env var (default 0%) | `CommissionLedger` ALWAYS writes a row per marketplace order, even at 0% ($0 rows preserve GMV history) |
-| **3 — Advertising** | Sponsored listings + banners | Opt-in, tenant-initiated via `AdWallet` top-up | `AdSpendLedger` rows only on actual impression/click/conversion |
-
----
+| **1 — SaaS Subscription** | Tenant plan / recurring subscription | `SubscriptionPlan` + Razorpay recurring lifecycle | `OrganizationSubscription` + provider binding/mandate + `SubscriptionBillingAttempt` + webhook inbox/reconciliation |
+| **2 — BBB Usage** | Actual live-teaching / BBB usage | Capacity grants and usage policy | `BbbUsageLedger` append-only usage facts |
+| **3 — Marketplace Commission** | % of marketplace-originated order | `MARKETPLACE_COMMISSION_PERCENT` env var (default 0%) | `CommissionLedger` always records marketplace attribution, including $0 rows |
+| **4 — Advertising** | Sponsored listings / campaign spend | Tenant-initiated `AdWallet` funding and campaign controls | `AdSpendLedger` actual spend facts |
 
 ## Workflow Diagram
 
