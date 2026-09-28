@@ -2,15 +2,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, Input, Label, Checkbox, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
 import { toast } from 'sonner';
 import { useState } from 'react';
-
-const STATE_BADGE: Record<string, 'success' | 'warning' | 'default' | 'destructive'> = {
-  Pending: 'warning',
-  Provisioning: 'warning',
-  Active: 'success',
-  Completed: 'default',
-  Archived: 'default',
-  Failed: 'destructive',
-};
+import { MeetingStateBadge } from '../../shared/StatusBadge';
+import { ConfirmDialog } from '../../shared/ConfirmDialog';
+import { formatDateTime } from '../../shared/dates';
 
 const GET_MEETINGS = `
   query GetBbbMeetings($options: BbbMeetingListOptions) {
@@ -132,6 +126,7 @@ export function MeetingsList() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['bbbMeetings'] });
       toast.success('Meeting deleted');
+      setDeleteTargetId(null);
     },
     onError: (err: Error) => toast.error('Error', { description: err.message }),
   });
@@ -141,6 +136,7 @@ export function MeetingsList() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['bbbMeetings'] });
       toast.success('Meeting ended');
+      setEndTargetId(null);
     },
     onError: (err: Error) => toast.error('Error', { description: err.message }),
   });
@@ -161,6 +157,7 @@ export function MeetingsList() {
   }
 
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [endTargetId, setEndTargetId] = useState<string | null>(null);
 
   function handleDeleteClick(m: BbbMeeting) {
     setDeleteTargetId(m.id);
@@ -176,7 +173,12 @@ export function MeetingsList() {
   return (
     <div className="p-6">
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">BBB Meetings</h1>
+        <div>
+          <h1 className="text-2xl font-bold">Meeting log</h1>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+            Technical operations record. Live scheduling happens under Sessions; rooms under Rooms.
+          </p>
+        </div>
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>
           <DialogTrigger render={<Button>Create Meeting</Button>} />
           <DialogContent>
@@ -186,7 +188,9 @@ export function MeetingsList() {
                 <Label htmlFor="meeting-org">Organization</Label>
                 <Select value={newOrgId} onValueChange={setNewOrgId}>
                   <SelectTrigger id="meeting-org">
-                    <SelectValue placeholder={orgsQuery.isLoading ? 'Loading organizations...' : 'Select organization'} />
+                    <SelectValue placeholder={orgsQuery.isLoading ? 'Loading organizations...' : 'Select organization'}>
+                      {(v) => (typeof v === 'string' && organizations.find((o) => o.id === v)?.name) || undefined}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {organizations.length === 0 ? (
@@ -246,20 +250,20 @@ export function MeetingsList() {
                   <TableRow key={m.id}>
                     <TableCell>
                       <div className="font-medium">{m.title}</div>
-                      <div className="text-xs text-muted-foreground">{new Date(m.createdAt).toLocaleString()}</div>
+                      <div className="text-xs text-muted-foreground">{formatDateTime(m.createdAt)}</div>
                     </TableCell>
                     <TableCell>
                       <div className="font-medium">{m.organization.name}</div>
                       <div className="text-xs text-muted-foreground">{m.organization.slug}</div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant={STATE_BADGE[m.state] ?? 'default'}>{m.state}</Badge>
+                      <MeetingStateBadge state={m.state} />
                       {m.state === 'Failed' && m.failureReason && (
                         <div className="text-xs text-red-500 mt-1">{m.failureReason}</div>
                       )}
                     </TableCell>
                     <TableCell><code className="text-xs">{m.bbbMeetingId || '—'}</code></TableCell>
-                    <TableCell className="text-sm">{m.provisionedAt ? new Date(m.provisionedAt).toLocaleString() : 'Pending'}</TableCell>
+                    <TableCell className="text-sm">{m.provisionedAt ? formatDateTime(m.provisionedAt) : 'Pending'}</TableCell>
                     <TableCell>
                       <Badge variant={m.recordingEnabled ? 'success' : 'warning'}>{m.recordingEnabled ? 'Enabled' : 'Disabled'}</Badge>
                     </TableCell>
@@ -270,7 +274,7 @@ export function MeetingsList() {
                           <Button variant="outline" size="sm" onClick={() => openEdit(m)}>Edit</Button>
                         )}
                         {m.state === 'Active' && (
-                          <Button variant="destructive" size="sm" onClick={() => endMutation.mutate(m.id)}>End</Button>
+                          <Button variant="destructive" size="sm" onClick={() => setEndTargetId(m.id)}>End</Button>
                         )}
                         {m.state === 'Failed' && (
                           <Button variant="outline" size="sm" onClick={() => retryMutation.mutate(m.id)}>Retry</Button>
@@ -294,20 +298,24 @@ export function MeetingsList() {
         )}
       </Card>
 
-      <Dialog open={!!deleteTargetId} onOpenChange={(o) => !o && setDeleteTargetId(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete Meeting</DialogTitle>
-            <DialogDescription>Are you sure you want to delete this meeting? This action cannot be undone.</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTargetId(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleDeleteConfirm} disabled={deleteMutation.isPending}>
-              {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={!!deleteTargetId}
+        title="Delete meeting record"
+        description="The meeting record is removed from this log. Billing ledger entries are kept because they are immutable. This cannot be undone."
+        pending={deleteMutation.isPending}
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setDeleteTargetId(null)}
+      />
+
+      <ConfirmDialog
+        open={!!endTargetId}
+        title="End meeting"
+        description="Everyone in this meeting is disconnected immediately. The meeting record stays in this log."
+        confirmLabel="End meeting"
+        pending={endMutation.isPending}
+        onConfirm={() => endTargetId && endMutation.mutate(endTargetId)}
+        onCancel={() => setEndTargetId(null)}
+      />
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent>

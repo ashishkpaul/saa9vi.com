@@ -1,13 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, Badge, Button, Card, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
+import { api, Badge, Button, Card, Input, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
 import { toast } from 'sonner';
-import { useEffect, useState } from 'react';
-
-const GET_ORGS = `
-  query GetBbbOrgsForPlans {
-    bbbOrganizations { items { id name slug } }
-  }
-`;
+import { useState } from 'react';
+import { OrgSwitcher, useBbbOrgs } from '../../shared/OrgSwitcher';
+import { useSelectedOrgId } from '../../shared/orgStore';
+import { PageHeader, EmptyState } from '../../shared/PageHeader';
+import { GrantStatusBadge } from '../../shared/StatusBadge';
+import { formatDate, formatRelative, formatDateTime } from '../../shared/dates';
 
 const GET_GRANTS = `
   query GetBbbCapacityGrants($organizationId: ID!) {
@@ -49,27 +48,14 @@ interface GrantList {
 
 export function PlansList() {
   const qc = useQueryClient();
-  const [selectedOrgId, setSelectedOrgId] = useState('');
+  const [selectedOrgId] = useSelectedOrgId();
   const [showCreate, setShowCreate] = useState(false);
   const [hours, setHours] = useState(10);
   const [validityDays, setValidityDays] = useState(30);
   const [saving, setSaving] = useState(false);
 
-  const orgsQuery = useQuery<any>({
-    queryKey: ['bbbOrgsForPlans'],
-    queryFn: () => api.query(GET_ORGS),
-    staleTime: 5 * 60 * 1000, // 5 min — orgs don't change frequently
-  });
-  const organizations = orgsQuery.data?.bbbOrganizations?.items ?? [];
-
-  // Select first org by default — depend on query data, not derived array,
-  // to avoid stale closures when data arrives after initial mount
-  useEffect(() => {
-    const items = orgsQuery.data?.bbbOrganizations?.items ?? [];
-    if (!selectedOrgId && items.length > 0) {
-      setSelectedOrgId(items[0].id);
-    }
-  }, [orgsQuery.data, selectedOrgId]);
+  // Shared org list (single fetch, cached 5 min) keeps the switcher warm.
+  useBbbOrgs();
 
   const grantsQuery = useQuery<{ bbbCapacityGrants: GrantList }>({
     queryKey: ['bbbGrants', selectedOrgId],
@@ -90,14 +76,30 @@ export function PlansList() {
 
   function toHours(minutes: number) { return (minutes ?? 0) / 60; }
 
+  /**
+   * `grantedMinutes === -1` is the sentinel for an UNBOUNDED grant
+   * (internal_overhead). It is not negative capacity: feeding it into a total
+   * subtracts 1/60h, and `(-1 - consumed)` makes "Remaining" go negative, so
+   * unbounded grants are excluded from both aggregates and reported separately.
+   */
+  function isUnbounded(g: Grant) {
+    return (g.grantedMinutes ?? 0) < 0;
+  }
+
   function usagePct(g: Grant) {
-    if (!g.grantedMinutes) return 0;
+    // An unbounded grant has no denominator, so it has no progress bar.
+    if (isUnbounded(g) || !g.grantedMinutes) return 0;
     return Math.min(100, Math.round(((g.consumedMinutes ?? 0) / g.grantedMinutes) * 100));
   }
 
   const activeGrants = grants.filter(g => isActive(g));
-  const totalGrantedHours = activeGrants.reduce((s, g) => s + toHours(g.grantedMinutes), 0);
-  const totalRemainingHours = activeGrants.reduce((s, g) => s + toHours((g.grantedMinutes ?? 0) - (g.consumedMinutes ?? 0)), 0);
+  const boundedGrants = activeGrants.filter(g => !isUnbounded(g));
+  const unboundedGrants = activeGrants.filter(isUnbounded);
+  const totalGrantedHours = boundedGrants.reduce((s, g) => s + toHours(g.grantedMinutes), 0);
+  const totalRemainingHours = boundedGrants.reduce(
+    (s, g) => s + toHours(g.grantedMinutes - (g.consumedMinutes ?? 0)),
+    0,
+  );
 
   async function createGrant() {
     if (!selectedOrgId || hours <= 0 || validityDays <= 0) return;
@@ -131,19 +133,14 @@ export function PlansList() {
 
   return (
     <div className="p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Capacity Grants</h1>
-        <Button onClick={() => setShowCreate(!showCreate)}>Grant Capacity (Admin Override)</Button>
-      </div>
+      <PageHeader
+        title="Capacity"
+        description="Meeting hours this organization can use. Oldest-expiring hours are used first."
+        action={<Button onClick={() => setShowCreate(!showCreate)}>Add manual grant</Button>}
+      />
 
-      <div className="max-w-xs mb-6">
-        <Label>Organization</Label>
-        <Select value={selectedOrgId} onValueChange={setSelectedOrgId}>
-          <SelectTrigger><SelectValue placeholder="Select organization" /></SelectTrigger>
-          <SelectContent>
-            {organizations.map((o: any) => <SelectItem key={o.id} value={o.id}>{o.name} ({o.slug})</SelectItem>)}
-          </SelectContent>
-        </Select>
+      <div className="mb-6">
+        <OrgSwitcher />
       </div>
 
       {showCreate && selectedOrgId && (
@@ -161,7 +158,7 @@ export function PlansList() {
             <div>
               <Label>Valid for (days)</Label>
               <Input type="number" value={validityDays} onChange={(e) => setValidityDays(Number(e.target.value))} min={1} max={3650} />
-              <p className="text-xs text-muted-foreground mt-1">Expires {expiryDate.toLocaleDateString()}</p>
+              <p className="text-xs text-muted-foreground mt-1">Expires {formatDate(expiryDate.toISOString())}</p>
             </div>
           </div>
           <div className="flex gap-2">
@@ -173,7 +170,7 @@ export function PlansList() {
         </Card>
       )}
 
-      {selectedOrgId && (
+      {selectedOrgId ? (
         <>
           {/* Summary */}
           {grants.length > 0 && (
@@ -196,6 +193,13 @@ export function PlansList() {
                   <div className="text-xs text-muted-foreground uppercase tracking-wide">Total Grants</div>
                 </div>
               </div>
+              {unboundedGrants.length > 0 && (
+                <p className="mt-3 text-xs text-muted-foreground">
+                  Excludes {unboundedGrants.length} unbounded grant
+                  {unboundedGrants.length === 1 ? '' : 's'} (no minute limit), which are shown as
+                  “Unlimited” in the table below.
+                </p>
+              )}
             </Card>
           )}
 
@@ -203,11 +207,11 @@ export function PlansList() {
             {grantsQuery.isLoading ? (
               <div className="p-4 space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
             ) : grants.length === 0 ? (
-              <div className="p-6 text-center">
-                <p className="text-muted-foreground mb-4">No capacity grants yet for this organization.</p>
-                <p className="text-sm text-muted-foreground mb-4">Capacity grants allocate meeting-hour capacity. Without an active grant, meeting provisioning will fail. Grants are normally created via fulfilled orders.</p>
-                <Button onClick={() => setShowCreate(true)}>Grant First Capacity (Admin Override)</Button>
-              </div>
+              <EmptyState
+                title="No capacity grants yet"
+                hint="Without an active grant, meeting provisioning fails. Grants normally come from fulfilled orders."
+                action={<Button onClick={() => setShowCreate(true)}>Add manual grant</Button>}
+              />
             ) : (
               <Table>
                 <TableHeader>
@@ -223,25 +227,23 @@ export function PlansList() {
                   {grants.map((g) => (
                     <TableRow key={g.id}>
                       <TableCell>
-                        {isActive(g) && <Badge variant="success">Active</Badge>}
-                        {g.exhausted && <Badge variant="destructive">Exhausted</Badge>}
-                        {isExpired(g) && !g.exhausted && <Badge variant="warning">Expired</Badge>}
+                        <GrantStatusBadge grant={g} />
                       </TableCell>
                       <TableCell>
-                        <div className="text-sm">{toHours(g.consumedMinutes).toFixed(1)}h / {toHours(g.grantedMinutes).toFixed(1)}h</div>
+                        <div className="text-sm">{g.grantedMinutes < 0 ? `${toHours(g.consumedMinutes).toFixed(1)}h / Unlimited` : `${toHours(g.consumedMinutes).toFixed(1)}h / ${toHours(g.grantedMinutes).toFixed(1)}h`}</div>
                         <div className="w-40 h-1.5 bg-muted rounded-full mt-1 overflow-hidden">
                           <div
                             className={`h-full rounded-full transition-all ${
-                              usagePct(g) > 75 ? 'bg-orange-500' :
-                              usagePct(g) >= 100 || g.exhausted ? 'bg-red-500' : 'bg-green-500'
+                              usagePct(g) >= 100 || g.exhausted ? 'bg-red-500' :
+                              usagePct(g) > 75 ? 'bg-orange-500' : 'bg-green-500'
                             }`}
                             style={{ width: `${Math.min(usagePct(g), 100)}%` }}
                           />
                         </div>
                       </TableCell>
-                      <TableCell className="text-sm">{new Date(g.validFrom).toLocaleDateString()}</TableCell>
-                      <TableCell className={`text-sm ${isExpired(g) ? 'text-red-500' : ''}`}>
-                        {new Date(g.validUntil).toLocaleDateString()}
+                      <TableCell className="text-sm" title={formatDateTime(g.validFrom)}>{formatRelative(g.validFrom)}</TableCell>
+                      <TableCell className={`text-sm ${isExpired(g) ? 'text-red-500' : ''}`} title={formatDateTime(g.validUntil)}>
+                        {formatRelative(g.validUntil)}
                       </TableCell>
                       <TableCell>
                         {g.orderId ? (
@@ -250,7 +252,7 @@ export function PlansList() {
                             {g.productVariantId && <div className="text-xs text-muted-foreground">Variant: {g.productVariantId}</div>}
                           </div>
                         ) : (
-                          <span className="text-sm text-muted-foreground">Admin Override</span>
+                          <span className="text-sm text-muted-foreground">Manual grant</span>
                         )}
                       </TableCell>
                     </TableRow>
@@ -260,6 +262,13 @@ export function PlansList() {
             )}
           </Card>
         </>
+      ) : (
+        <Card>
+          <EmptyState
+            title="Select an organization"
+            hint="Capacity data is scoped per organization. Choose one above to continue."
+          />
+        </Card>
       )}
     </div>
   );

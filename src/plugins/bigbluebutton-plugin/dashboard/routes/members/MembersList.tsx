@@ -3,12 +3,10 @@ import { api, Badge, Button, Card, Input, Label, Select, SelectContent, SelectIt
 import { toast } from 'sonner';
 import { useDebounce } from '@uidotdev/usehooks';
 import { useEffect, useState } from 'react';
-
-const GET_ORGS = `
-  query GetBbbOrganizationsForStaff {
-    bbbOrganizations { items { id name slug } totalItems }
-  }
-`;
+import { ConfirmDialog } from '../../shared/ConfirmDialog';
+import { OrgSwitcher, useBbbOrgs } from '../../shared/OrgSwitcher';
+import { useSelectedOrgId } from '../../shared/orgStore';
+import { PageHeader, EmptyState } from '../../shared/PageHeader';
 
 const GET_MEMBERS = `
   query GetBbbOrganizationStaff($organizationId: ID!, $options: BbbOrganizationMemberListOptions) {
@@ -49,15 +47,15 @@ interface Member { id: string; customerId: string; customerName?: string; custom
 
 export function MembersList() {
   const qc = useQueryClient();
-  const [selectedOrgId, setSelectedOrgId] = useState('');
+  const [selectedOrgId] = useSelectedOrgId();
   const [customerSearch, setCustomerSearch] = useState('');
   const debouncedSearch = useDebounce(customerSearch, 300);
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
   const [customers, setCustomers] = useState<any[]>([]);
   const [newRole, setNewRole] = useState('trainer');
 
-  const orgsQuery = useQuery<any>({ queryKey: ['bbbOrgsForMembers'], queryFn: () => api.query(GET_ORGS) });
-  const organizations = orgsQuery.data?.bbbOrganizations?.items ?? [];
+  // Shared org list (single fetch, cached 5 min) keeps the switcher warm.
+  useBbbOrgs();
 
   const membersQuery = useQuery<{ bbbOrganizationMembers: { items: Member[]; totalItems: number } }>({
     queryKey: ['bbbMembers', selectedOrgId],
@@ -80,15 +78,9 @@ export function MembersList() {
 
   const removeMutation = useMutation({
     mutationFn: (id: string) => api.mutate(REMOVE_MEMBER, { id }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['bbbMembers'] }); toast.success('Staff member removed'); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['bbbMembers'] }); toast.success('Staff member removed'); setRemoveTargetId(null); },
     onError: (err: Error) => toast.error('Error', { description: err.message }),
   });
-
-  useEffect(() => {
-    if (organizations.length > 0 && !selectedOrgId) {
-      setSelectedOrgId(organizations[0].id);
-    }
-  }, [organizations]);
 
   useEffect(() => {
     let cancelled = false;
@@ -102,20 +94,19 @@ export function MembersList() {
     return () => { cancelled = true; };
   }, [debouncedSearch]);
 
+  const [removeTargetId, setRemoveTargetId] = useState<string | null>(null);
+
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold mb-4">Organization Staff</h1>
-      <div className="max-w-xs mb-6">
-        <Label>Organization</Label>
-        <Select value={selectedOrgId} onValueChange={(v) => { setSelectedOrgId(v); }}>
-          <SelectTrigger><SelectValue placeholder="-- Select organization --" /></SelectTrigger>
-          <SelectContent>
-            {organizations.map((o: any) => <SelectItem key={o.id} value={o.id}>{o.name} ({o.slug})</SelectItem>)}
-          </SelectContent>
-        </Select>
+      <PageHeader
+        title="Staff"
+        description="Administrators and trainers for this organization. Students gain access through purchases."
+      />
+      <div className="mb-6">
+        <OrgSwitcher />
       </div>
 
-      {selectedOrgId && (
+      {selectedOrgId ? (
         <>
           <Card className="mb-6 p-4">
             <h3 className="font-semibold mb-3">Add Staff Member</h3>
@@ -167,7 +158,10 @@ export function MembersList() {
             {membersQuery.isLoading ? (
               <div className="p-4 space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
             ) : members.length === 0 ? (
-              <div className="p-6 text-center text-muted-foreground">No staff members found</div>
+              <EmptyState
+                title="No staff yet"
+                hint="Add the first administrator or trainer for this organization."
+              />
             ) : (
               <Table>
                 <TableHeader>
@@ -201,7 +195,7 @@ export function MembersList() {
                           <Button variant="outline" size="sm" onClick={() => updateMutation.mutate({ id: m.id, input: { active: !m.active } })}>
                             {m.active ? 'Deactivate' : 'Activate'}
                           </Button>
-                          <Button variant="destructive" size="sm" onClick={() => removeMutation.mutate(m.id)}>Remove</Button>
+                          <Button variant="destructive" size="sm" onClick={() => setRemoveTargetId(m.id)}>Remove</Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -211,7 +205,24 @@ export function MembersList() {
             )}
           </Card>
         </>
+      ) : (
+        <Card>
+          <EmptyState
+            title="Select an organization"
+            hint="Staff data is scoped per organization. Choose one above to continue."
+          />
+        </Card>
       )}
+
+      <ConfirmDialog
+        open={removeTargetId !== null}
+        title="Remove staff member"
+        description="Trainer/admin access to this organization is revoked immediately. The customer record and their history are kept."
+        confirmLabel="Remove"
+        pending={removeMutation.isPending}
+        onConfirm={() => removeTargetId && removeMutation.mutate(removeTargetId)}
+        onCancel={() => setRemoveTargetId(null)}
+      />
     </div>
   );
 }

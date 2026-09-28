@@ -1,30 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, Badge, Button, Card, Checkbox, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
+import { api, Badge, Button, Card, Checkbox, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Input, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
 import { toast } from 'sonner';
-import { useState } from 'react';
-
-const STATE_BADGE_VARIANT: Record<string, 'default' | 'success' | 'warning' | 'destructive'> = {
-  Idle: 'default',
-  Provisioning: 'warning',
-  Active: 'success',
-  Failed: 'destructive',
-};
-
-const STATE_LABEL: Record<string, string> = {
-  Idle: 'Ready',
-  Provisioning: 'Starting',
-  Active: 'Live',
-  Failed: 'Unavailable',
-};
-
-const GET_ORGS = `
-  query GetBbbOrgsForRoomPicker {
-    bbbOrganizations {
-      items { id name slug }
-      totalItems
-    }
-  }
-`;
+import { useEffect, useState } from 'react';
+import { OrgSwitcher, useBbbOrgs } from '../../shared/OrgSwitcher';
+import { useSelectedOrgId } from '../../shared/orgStore';
+import { PageHeader, EmptyState } from '../../shared/PageHeader';
+import { RoomStateBadge } from '../../shared/StatusBadge';
+import { ConfirmDialog } from '../../shared/ConfirmDialog';
 
 const GET_ROOMS = `
   query GetBbbRooms($organizationId: ID!, $options: BbbRoomListOptions) {
@@ -65,19 +47,20 @@ export function RoomsList() {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const pageSize = 25;
-  const [selectedOrgId, setSelectedOrgId] = useState('');
+  const [selectedOrgId] = useSelectedOrgId();
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [newSlug, setNewSlug] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [newRecording, setNewRecording] = useState(false);
 
-  const orgsQuery = useQuery<any>({
-    queryKey: ['bbbOrgsForRooms'],
-    queryFn: () => api.query(GET_ORGS),
-    enabled: true,
-  });
-  const organizations = orgsQuery.data?.bbbOrganizations?.items ?? [];
+  // Shared org list (single fetch, cached 5 min) keeps the switcher warm.
+  useBbbOrgs();
+
+  // Reset paging whenever the shared org selection changes.
+  useEffect(() => {
+    setPage(1);
+  }, [selectedOrgId]);
 
   const roomsQuery = useQuery<RoomsResponse>({
     queryKey: ['bbbRooms', selectedOrgId, page],
@@ -109,6 +92,7 @@ export function RoomsList() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['bbbRooms', selectedOrgId] });
       toast.success('Room deleted');
+      setDeleteTargetId(null);
     },
     onError: (err: Error) => toast.error('Error', { description: err.message }),
   });
@@ -137,29 +121,17 @@ export function RoomsList() {
 
   return (
     <div className="p-6">
+      <PageHeader
+        title="Rooms"
+        description="Persistent meeting spaces. Meetings are created on demand inside a room."
+        action={<Button onClick={() => selectedOrgId && setCreateOpen(true)} disabled={!selectedOrgId}>Create Room</Button>}
+      />
       <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-4">BBB Rooms</h1>
-        <div className="max-w-xs">
-          <Label htmlFor="org-picker">Organization</Label>
-          <Select value={selectedOrgId} onValueChange={(v) => { setSelectedOrgId(v); setPage(1); }}>
-            <SelectTrigger id="org-picker">
-              <SelectValue placeholder="-- Select organization --" />
-            </SelectTrigger>
-            <SelectContent>
-              {organizations.map((org: any) => (
-                <SelectItem key={org.id} value={org.id}>{org.name} ({org.slug})</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        <OrgSwitcher />
       </div>
 
-      {selectedOrgId && (
+      {selectedOrgId ? (
         <>
-          <div className="mb-4">
-            <Button onClick={() => setCreateOpen(true)}>Create Room</Button>
-          </div>
-
           <Card>
             {roomsQuery.isLoading ? (
               <div className="p-4 space-y-3">
@@ -168,7 +140,11 @@ export function RoomsList() {
             ) : roomsQuery.isError ? (
               <div className="p-6 text-center text-red-500">Failed to load rooms</div>
             ) : rooms.length === 0 ? (
-              <div className="p-6 text-center text-muted-foreground">No rooms yet. Create one above.</div>
+              <EmptyState
+                title="No rooms yet"
+                hint="Create the first room for this organization to schedule sessions and host meetings."
+                action={<Button onClick={() => setCreateOpen(true)}>Create room</Button>}
+              />
             ) : (
               <>
                 <Table>
@@ -190,9 +166,7 @@ export function RoomsList() {
                           <div className="text-xs text-muted-foreground">{room.description || '—'} | Slug: {room.slug || '—'}</div>
                         </TableCell>
                         <TableCell>
-                          <Badge variant={STATE_BADGE_VARIANT[room.state] ?? 'default'}>
-                            {STATE_LABEL[room.state] ?? room.state}
-                          </Badge>
+                          <RoomStateBadge state={room.state} />
                         </TableCell>
                         <TableCell>
                           <Badge variant={room.recordingEnabled ? 'success' : 'warning'}>
@@ -225,22 +199,24 @@ export function RoomsList() {
             )}
           </Card>
         </>
+      ) : (
+        <Card>
+          <EmptyState
+            title="Select an organization"
+            hint="Room data is scoped per organization. Choose one above to continue."
+          />
+        </Card>
       )}
 
-      <Dialog open={!!deleteTargetId} onOpenChange={(o) => !o && setDeleteTargetId(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete Room</DialogTitle>
-            <DialogDescription>Are you sure you want to delete this room? This action cannot be undone.</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTargetId(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleDeleteConfirm} disabled={deleteMutation.isPending}>
-              {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={!!deleteTargetId}
+        title="Delete room"
+        description="The room is removed permanently. Scheduled sessions and enrollment mappings that point at this room stop working. This cannot be undone."
+        confirmLabel="Delete room"
+        pending={deleteMutation.isPending}
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setDeleteTargetId(null)}
+      />
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>

@@ -3,12 +3,11 @@ import { api, Badge, Button, Card, Input, Label, Select, SelectContent, SelectIt
 import { toast } from 'sonner';
 import { useDebounce } from '@uidotdev/usehooks';
 import { useEffect, useState } from 'react';
-
-const GET_ORGS = `
-  query GetBbbOrgsForEnrollments {
-    bbbOrganizations { items { id name slug } }
-  }
-`;
+import { OrgSwitcher, useBbbOrgs } from '../../shared/OrgSwitcher';
+import { useSelectedOrgId } from '../../shared/orgStore';
+import { PageHeader, EmptyState } from '../../shared/PageHeader';
+import { ConfirmDialog } from '../../shared/ConfirmDialog';
+import { formatDate } from '../../shared/dates';
 
 const GET_ROOMS = `
   query GetBbbRoomsForEnrollments($organizationId: ID!) {
@@ -69,7 +68,7 @@ const DEACTIVATE_ENROLLMENT = `
 
 export function EnrollmentsList() {
   const qc = useQueryClient();
-  const [selectedOrgId, setSelectedOrgId] = useState('');
+  const [selectedOrgId] = useSelectedOrgId();
   const [selectedRoomId, setSelectedRoomId] = useState('');
   const [page, setPage] = useState(1);
   const pageSize = 25;
@@ -88,8 +87,12 @@ export function EnrollmentsList() {
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
   const [enrollAccessDays, setEnrollAccessDays] = useState<number | null>(null);
 
-  const orgsQuery = useQuery<any>({ queryKey: ['bbbOrgsForEnroll'], queryFn: () => api.query(GET_ORGS) });
-  const organizations = orgsQuery.data?.bbbOrganizations?.items ?? [];
+  // Destructive actions ask first instead of firing straight from the row button.
+  const [removeMappingTarget, setRemoveMappingTarget] = useState<string | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
+
+  // Shared org list (single fetch, cached 5 min) keeps the switcher warm.
+  useBbbOrgs();
 
   const roomsQuery = useQuery<any>({
     queryKey: ['bbbRoomsForEnroll', selectedOrgId],
@@ -125,10 +128,9 @@ export function EnrollmentsList() {
   }
 
   useEffect(() => {
-    if (organizations.length > 0 && !selectedOrgId) {
-      setSelectedOrgId(organizations[0].id);
-    }
-  }, [organizations]);
+    setSelectedRoomId('');
+    setPage(1);
+  }, [selectedOrgId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -162,7 +164,7 @@ export function EnrollmentsList() {
 
   const deleteProductAccessMutation = useMutation({
     mutationFn: (id: string) => api.mutate(DELETE_PRODUCT_ACCESS, { id }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['bbbProductAccess'] }); toast.success('Mapping removed'); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['bbbProductAccess'] }); toast.success('Mapping removed'); setRemoveMappingTarget(null); },
     onError: (err: Error) => toast.error('Error', { description: err.message }),
   });
 
@@ -174,30 +176,26 @@ export function EnrollmentsList() {
 
   const deactivateMutation = useMutation({
     mutationFn: (id: string) => api.mutate(DEACTIVATE_ENROLLMENT, { id }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['bbbEnrollments'] }); toast.success('Enrollment revoked'); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['bbbEnrollments'] }); toast.success('Enrollment revoked'); setRevokeTarget(null); },
     onError: (err: Error) => toast.error('Error', { description: err.message }),
   });
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold mb-4">Enrollments</h1>
+      <PageHeader
+        title="Enrollments"
+        description="Room-level learner access. Purchases enroll automatically; manual adds are recorded as admin."
+      />
 
-      {/* Organization Picker */}
-      <div className="max-w-xs mb-4">
-        <Label>Organization</Label>
-        <Select value={selectedOrgId} onValueChange={(v: string) => { setSelectedOrgId(v); setSelectedRoomId(''); }}>
-          <SelectTrigger><SelectValue placeholder="-- Select organization --" /></SelectTrigger>
-          <SelectContent>
-            {organizations.map((o: any) => <SelectItem key={o.id} value={o.id}>{o.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
+      <div className="mb-4">
+        <OrgSwitcher />
       </div>
 
       {selectedOrgId && (
         <div className="max-w-xs mb-6">
           <Label>Room</Label>
           <Select value={selectedRoomId} onValueChange={(v: string) => { setSelectedRoomId(v); setPage(1); }}>
-            <SelectTrigger><SelectValue placeholder="-- Select room --" /></SelectTrigger>
+            <SelectTrigger><SelectValue placeholder="-- Select room --">{(v) => (typeof v === 'string' && rooms.find((r: any) => String(r.id) === v)?.name) || undefined}</SelectValue></SelectTrigger>
             <SelectContent>
               {rooms.map((r: any) => <SelectItem key={r.id} value={r.id}>{r.name} ({r.state})</SelectItem>)}
             </SelectContent>
@@ -217,7 +215,7 @@ export function EnrollmentsList() {
                 {productAccess.map((pa: any) => (
                   <div key={pa.id} className="flex items-center justify-between px-3 py-2 border-b last:border-b-0">
                     <span className="text-sm"><code>{pa.productVariantId}</code> {pa.accessDays ? `— ${pa.accessDays} days` : '— Unlimited'}</span>
-                    <Button variant="destructive" size="sm" onClick={() => deleteProductAccessMutation.mutate(pa.id)}>Remove</Button>
+                    <Button variant="destructive" size="sm" onClick={() => setRemoveMappingTarget(pa.id)}>Remove</Button>
                   </div>
                 ))}
               </div>
@@ -312,10 +310,10 @@ export function EnrollmentsList() {
                         <TableCell>
                           <Badge variant={isActive(e) ? 'success' : 'warning'}>{isActive(e) ? 'Active' : 'Expired/Inactive'}</Badge>
                         </TableCell>
-                        <TableCell className="text-sm">{e.validUntil || e.expiresAt ? new Date(e.validUntil || e.expiresAt).toLocaleDateString() : 'Never'}</TableCell>
-                        <TableCell className="text-sm">{new Date(e.createdAt).toLocaleDateString()}</TableCell>
+                        <TableCell className="text-sm">{e.validUntil || e.expiresAt ? formatDate(e.validUntil || e.expiresAt) : 'Never'}</TableCell>
+                        <TableCell className="text-sm">{formatDate(e.createdAt)}</TableCell>
                         <TableCell>
-                          {e.active && <Button variant="destructive" size="sm" onClick={() => deactivateMutation.mutate(e.id)}>Revoke</Button>}
+                          {e.active && <Button variant="destructive" size="sm" onClick={() => setRevokeTarget(e.id)}>Revoke</Button>}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -334,6 +332,26 @@ export function EnrollmentsList() {
           </Card>
         </>
       )}
+
+      <ConfirmDialog
+        open={removeMappingTarget !== null}
+        title="Remove product mapping"
+        description="Customers who buy this product stop being enrolled automatically. Existing enrollments are untouched, and you can add the mapping again."
+        confirmLabel="Remove mapping"
+        pending={deleteProductAccessMutation.isPending}
+        onConfirm={() => removeMappingTarget && deleteProductAccessMutation.mutate(removeMappingTarget)}
+        onCancel={() => setRemoveMappingTarget(null)}
+      />
+
+      <ConfirmDialog
+        open={revokeTarget !== null}
+        title="Revoke enrollment"
+        description="This learner immediately loses access to the room. The enrollment record and its history are kept."
+        confirmLabel="Revoke"
+        pending={deactivateMutation.isPending}
+        onConfirm={() => revokeTarget && deactivateMutation.mutate(revokeTarget)}
+        onCancel={() => setRevokeTarget(null)}
+      />
     </div>
   );
 }

@@ -1,16 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, Badge, Button, Card, CardContent, CardHeader, CardTitle, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Skeleton, DashboardRouteDefinition } from '@vendure/dashboard';
+import { api, Badge, Button, Card, CardContent, CardHeader, CardTitle, Skeleton, DashboardRouteDefinition } from '@vendure/dashboard';
 import type { AnyRoute } from '@vendure/dashboard';
 import { toast } from 'sonner';
 import { useState } from 'react';
 import { Link } from '@vendure/dashboard';
-
-const STATUS_BADGE: Record<string, 'success' | 'warning' | 'default' | 'destructive'> = {
-  SCHEDULED: 'default',
-  LIVE: 'success',
-  FINISHED: 'default',
-  CANCELLED: 'destructive',
-};
+import { formatDate, formatRelative, formatDateTime, formatTime } from '../../shared/dates';
+import { SessionStatusBadge } from '../../shared/StatusBadge';
+import { ConfirmDialog } from '../../shared/ConfirmDialog';
 
 const GET_SESSION = `
   query GetBbbScheduledSession($id: ID!) {
@@ -124,9 +120,7 @@ function SessionDetailPage({ route }: { route: AnyRoute }) {
             {session.organization.name} ({session.organization.slug})
           </p>
         </div>
-        <Badge variant={STATUS_BADGE[session.status] ?? 'default'} className="text-sm px-3 py-1">
-          {session.status}
-        </Badge>
+        <SessionStatusBadge status={session.status} />
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
@@ -138,15 +132,19 @@ function SessionDetailPage({ route }: { route: AnyRoute }) {
           <CardContent className="space-y-3">
             <div className="flex justify-between">
               <span className="text-sm text-muted-foreground">Status</span>
-              <Badge variant={STATUS_BADGE[session.status] ?? 'default'}>{session.status}</Badge>
+              <SessionStatusBadge status={session.status} />
             </div>
             <div className="flex justify-between">
               <span className="text-sm text-muted-foreground">Start Time</span>
-              <span className="text-sm font-medium">{new Date(session.startTime).toLocaleString()}</span>
+              <span className="text-sm font-medium" title={formatDateTime(session.startTime)}>
+                {formatRelative(session.startTime)}
+              </span>
             </div>
             <div className="flex justify-between">
               <span className="text-sm text-muted-foreground">End Time</span>
-              <span className="text-sm font-medium">{new Date(session.endTime).toLocaleString()}</span>
+              <span className="text-sm font-medium" title={formatDateTime(session.endTime)}>
+                {formatDate(session.endTime)} ({formatTime(session.endTime)})
+              </span>
             </div>
             <div className="flex justify-between">
               <span className="text-sm text-muted-foreground">Duration</span>
@@ -219,26 +217,16 @@ function SessionDetailPage({ route }: { route: AnyRoute }) {
         )}
       </div>
 
-      <Dialog open={showCancelDialog} onOpenChange={(o) => !o && setShowCancelDialog(false)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Cancel Session</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to cancel "{session.title}"? This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCancelDialog(false)}>Keep</Button>
-            <Button
-              variant="destructive"
-              onClick={() => cancelMutation.mutate(session.id)}
-              disabled={cancelMutation.isPending}
-            >
-              {cancelMutation.isPending ? 'Cancelling...' : 'Cancel Session'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={showCancelDialog}
+        title="Cancel session"
+        description={`Enrolled learners lose access to "${session.title}". The session record is kept for history. This cannot be undone.`}
+        confirmLabel="Cancel session"
+        cancelLabel="Keep"
+        pending={cancelMutation.isPending}
+        onConfirm={() => cancelMutation.mutate(session.id)}
+        onCancel={() => setShowCancelDialog(false)}
+      />
     </div>
   );
 }

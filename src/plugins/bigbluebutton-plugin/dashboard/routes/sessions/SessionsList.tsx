@@ -1,15 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
+import { api, Badge, Button, Card, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
 import { toast } from 'sonner';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from '@vendure/dashboard';
-
-const STATUS_BADGE: Record<string, 'success' | 'warning' | 'default' | 'destructive'> = {
-  SCHEDULED: 'default',
-  LIVE: 'success',
-  FINISHED: 'default',
-  CANCELLED: 'destructive',
-};
+import { OrgSwitcher, useBbbOrgs } from '../../shared/OrgSwitcher';
+import { useSelectedOrgId } from '../../shared/orgStore';
+import { PageHeader, EmptyState } from '../../shared/PageHeader';
+import { formatDate, formatRelative, formatDateTime } from '../../shared/dates';
+import { SessionStatusBadge } from '../../shared/StatusBadge';
+import { ConfirmDialog } from '../../shared/ConfirmDialog';
 
 const GET_SESSIONS = `
   query GetBbbScheduledSessions($organizationId: ID!) {
@@ -27,12 +26,6 @@ const GET_SESSIONS = `
       activeMeetingId
       organization { id name slug }
     }
-  }
-`;
-
-const GET_ORGS = `
-  query GetBbbOrgsForSessions {
-    bbbOrganizations { items { id name slug } }
   }
 `;
 
@@ -61,33 +54,20 @@ interface SessionsResponse {
   bbbScheduledSessions: BbbScheduledSession[];
 }
 
-interface OrgsResponse {
-  bbbOrganizations: { items: { id: string; name: string; slug: string }[] };
-}
-
-function formatOrgLabel(org: { name: string; slug: string }) {
-  const displaySlug = org.slug === '__default_channel__' ? 'default' : org.slug;
-  return `${org.name} (${displaySlug})`;
-}
-
 export function SessionsList() {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const pageSize = 25;
-  const [selectedOrgId, setSelectedOrgId] = useState('');
+  const [selectedOrgId] = useSelectedOrgId();
   const [cancelTargetId, setCancelTargetId] = useState<string | null>(null);
 
-  const orgsQuery = useQuery<OrgsResponse>({
-    queryKey: ['bbbOrganizations'],
-    queryFn: () => api.query(GET_ORGS),
-  });
+  // Shared org list (single fetch, cached 5 min) keeps the switcher warm.
+  useBbbOrgs();
 
-  const organizations = orgsQuery.data?.bbbOrganizations?.items ?? [];
-
-  // Auto-select first org when orgs load
-  if (!selectedOrgId && organizations.length > 0) {
-    setSelectedOrgId(organizations[0].id);
-  }
+  // Reset paging whenever the shared org selection changes.
+  useEffect(() => {
+    setPage(1);
+  }, [selectedOrgId]);
 
   const { data, isLoading, isError } = useQuery<SessionsResponse>({
     queryKey: ['bbbScheduledSessions', selectedOrgId],
@@ -113,41 +93,29 @@ export function SessionsList() {
 
   return (
     <div className="p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Scheduled Sessions</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            View and manage educational sessions across organizations.
-          </p>
-        </div>
-        <div className="w-72">
-          <Select value={selectedOrgId} onValueChange={(v) => { setSelectedOrgId(v); setPage(1); }}>
-            <SelectTrigger>
-              <SelectValue placeholder={orgsQuery.isLoading ? 'Loading organizations...' : 'Select organization'} />
-            </SelectTrigger>
-            <SelectContent>
-              {organizations.length === 0 ? (
-                <SelectItem value="__no-organizations__" disabled>No organizations available</SelectItem>
-              ) : (
-                organizations.map((org) => (
-                  <SelectItem key={org.id} value={org.id}>{formatOrgLabel(org)}</SelectItem>
-                ))
-              )}
-            </SelectContent>
-          </Select>
-          {orgsQuery.isError && <p className="mt-1 text-xs text-red-500">Failed to load organizations</p>}
-        </div>
+      <PageHeader
+        title="Sessions"
+        description="Scheduled class slots. Sessions become joinable when the trainer starts the live meeting."
+      />
+      <div className="mb-6">
+        <OrgSwitcher />
       </div>
 
       <Card>
         {!selectedOrgId ? (
-          <div className="p-6 text-center text-muted-foreground">Select an organization to view sessions</div>
+          <EmptyState
+            title="Select an organization"
+            hint="Session data is scoped per organization. Choose one above to continue."
+          />
         ) : isLoading ? (
           <div className="p-4 space-y-3">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
         ) : isError ? (
           <div className="p-6 text-center text-red-500">Failed to load sessions</div>
         ) : sessions.length === 0 ? (
-          <div className="p-6 text-center text-muted-foreground">No sessions found for this organization</div>
+          <EmptyState
+            title="No sessions yet"
+            hint="Schedule the first session for this organization to start hosting classes."
+          />
         ) : (
           <>
             <Table>
@@ -170,14 +138,13 @@ export function SessionsList() {
                       <Link to={`/bbb/sessions/${s.id}`} className="font-medium hover:underline">
                         {s.title}
                       </Link>
-                      <div className="text-xs text-muted-foreground">{new Date(s.startTime).toLocaleDateString()}</div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant={STATUS_BADGE[s.status] ?? 'default'}>{s.status}</Badge>
+                      <SessionStatusBadge status={s.status} />
                     </TableCell>
                     <TableCell className="text-sm">
-                      <div>{new Date(s.startTime).toLocaleString()}</div>
-                      <div className="text-xs text-muted-foreground">→ {new Date(s.endTime).toLocaleString()}</div>
+                      <div title={formatDateTime(s.startTime)}>{formatRelative(s.startTime)}</div>
+                      <div className="text-xs text-muted-foreground">ends {formatDate(s.endTime)}</div>
                     </TableCell>
                     <TableCell><code className="text-xs">{s.trainerId}</code></TableCell>
                     <TableCell>
@@ -209,20 +176,16 @@ export function SessionsList() {
         )}
       </Card>
 
-      <Dialog open={!!cancelTargetId} onOpenChange={(o) => !o && setCancelTargetId(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Cancel Session</DialogTitle>
-            <DialogDescription>Are you sure you want to cancel this scheduled session? This action cannot be undone.</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCancelTargetId(null)}>Keep</Button>
-            <Button variant="destructive" onClick={() => cancelTargetId && cancelMutation.mutate(cancelTargetId)} disabled={cancelMutation.isPending}>
-              {cancelMutation.isPending ? 'Cancelling...' : 'Cancel Session'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={!!cancelTargetId}
+        title="Cancel session"
+        description="Enrolled learners lose access to this slot. The session record is kept for history. This cannot be undone."
+        confirmLabel="Cancel session"
+        cancelLabel="Keep session"
+        pending={cancelMutation.isPending}
+        onConfirm={() => cancelTargetId && cancelMutation.mutate(cancelTargetId)}
+        onCancel={() => setCancelTargetId(null)}
+      />
     </div>
   );
 }

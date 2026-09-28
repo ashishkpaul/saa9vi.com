@@ -3,6 +3,8 @@ import { api, Badge, Button, Card, Input, Label, Select, SelectContent, SelectIt
 import { toast } from 'sonner';
 import { useDebounce } from '@uidotdev/usehooks';
 import { useEffect, useState } from 'react';
+import { ConfirmDialog } from '../../shared/ConfirmDialog';
+import { formatDate } from '../../shared/dates';
 
 const GET_ORGS = `
   query GetBbbOrganizationsForMemberships {
@@ -78,9 +80,11 @@ export function MembershipsList() {
     onError: (err: Error) => toast.error('Error', { description: err.message }),
   });
 
+  const [removeTargetId, setRemoveTargetId] = useState<string | null>(null);
+
   const removeMutation = useMutation({
     mutationFn: (id: string) => api.mutate(REMOVE_MEMBERSHIP, { id }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['bbbMemberships'] }); toast.success('Membership removed'); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['bbbMemberships'] }); toast.success('Membership removed'); setRemoveTargetId(null); },
     onError: (err: Error) => toast.error('Error', { description: err.message }),
   });
 
@@ -206,13 +210,13 @@ export function MembershipsList() {
                       <TableCell>
                         <Badge variant={m.isActive ? 'success' : 'warning'}>{m.isActive ? 'Active' : 'Inactive'}</Badge>
                       </TableCell>
-                      <TableCell className="text-sm">{new Date(m.createdAt).toLocaleDateString()}</TableCell>
+                      <TableCell className="text-sm">{formatDate(m.createdAt)}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
                           <Button variant="outline" size="sm" onClick={() => updateMutation.mutate({ id: m.id, input: { isActive: !m.isActive } })}>
                             {m.isActive ? 'Deactivate' : 'Activate'}
                           </Button>
-                          <Button variant="destructive" size="sm" onClick={() => removeMutation.mutate(m.id)}>Remove</Button>
+                          <Button variant="destructive" size="sm" onClick={() => setRemoveTargetId(m.id)}>Remove</Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -223,6 +227,16 @@ export function MembershipsList() {
           </Card>
         </>
       )}
+
+      <ConfirmDialog
+        open={removeTargetId !== null}
+        title="Remove membership"
+        description="This customer loses the role's access to the organization immediately. The customer record is kept."
+        confirmLabel="Remove"
+        pending={removeMutation.isPending}
+        onConfirm={() => removeTargetId && removeMutation.mutate(removeTargetId)}
+        onCancel={() => setRemoveTargetId(null)}
+      />
     </div>
   );
 }

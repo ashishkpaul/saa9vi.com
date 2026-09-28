@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, Input, Label, Switch, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
 import { toast } from 'sonner';
 import { useState } from 'react';
+import { PageHeader, EmptyState } from '../../shared/PageHeader';
+import { ConfirmDialog } from '../../shared/ConfirmDialog';
 
 const GET_SERVERS = `
   query GetBbbServers($options: BbbServerListOptions) {
@@ -141,6 +143,7 @@ export function ServersList() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['bbbServers'] });
       toast.success('Server deleted');
+      setDeleteTargetId(null);
     },
     onError: (err: Error) => {
         toast.error('Error', { description: err.message });
@@ -176,85 +179,85 @@ export function ServersList() {
   }
 
   function handleDeleteConfirm() {
-    if (deleteTargetId) {
-      deleteMutation.mutate(deleteTargetId);
-      setDeleteTargetId(null);
-    }
+    if (deleteTargetId) deleteMutation.mutate(deleteTargetId);
   }
 
   return (
     <div className="p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">BBB Servers</h1>
-        <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-          <DialogTrigger render={<Button>Add Server</Button>} />
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Add BBB Server</DialogTitle>
-              <DialogDescription>
-                Add a new BigBlueButton server to the pool.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid gap-2">
-                <Label htmlFor="name">Name</Label>
-                <Input
-                  id="name"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="Primary BBB Server"
-                />
+      <PageHeader
+        title="Servers"
+        description="BigBlueButton server pool. Rooms and sessions are routed to healthy servers based on current load."
+        action={
+          <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+            <DialogTrigger render={<Button>Add Server</Button>} />
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Add BBB Server</DialogTitle>
+                <DialogDescription>
+                  Add a new BigBlueButton server to the pool.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-4 py-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="name">Name</Label>
+                  <Input
+                    id="name"
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="Primary BBB Server"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="apiUrl">API URL</Label>
+                  <Input
+                    id="apiUrl"
+                    value={newApiUrl}
+                    onChange={(e) => setNewApiUrl(e.target.value)}
+                    placeholder="https://bbb.example.com/bigbluebutton"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="apiSecret">API Secret</Label>
+                  <Input
+                    id="apiSecret"
+                    type="password"
+                    value={newApiSecret}
+                    onChange={(e) => setNewApiSecret(e.target.value)}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="maxLoad">Max Load</Label>
+                  <Input
+                    id="maxLoad"
+                    type="number"
+                    value={newMaxLoad}
+                    onChange={(e) => setNewMaxLoad(Number(e.target.value))}
+                    min={1}
+                  />
+                </div>
               </div>
-              <div className="grid gap-2">
-                <Label htmlFor="apiUrl">API URL</Label>
-                <Input
-                  id="apiUrl"
-                  value={newApiUrl}
-                  onChange={(e) => setNewApiUrl(e.target.value)}
-                  placeholder="https://bbb.example.com/bigbluebutton"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="apiSecret">API Secret</Label>
-                <Input
-                  id="apiSecret"
-                  type="password"
-                  value={newApiSecret}
-                  onChange={(e) => setNewApiSecret(e.target.value)}
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="maxLoad">Max Load</Label>
-                <Input
-                  id="maxLoad"
-                  type="number"
-                  value={newMaxLoad}
-                  onChange={(e) => setNewMaxLoad(Number(e.target.value))}
-                  min={1}
-                />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={() =>
-                  createMutation.mutate({
-                    name: newName,
-                    apiUrl: newApiUrl,
-                    apiSecret: newApiSecret,
-                    maxLoad: newMaxLoad,
-                  })
-                }
-                disabled={!newName || !newApiUrl || !newApiSecret || createMutation.isPending}
-              >
-                {createMutation.isPending ? 'Adding...' : 'Add Server'}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() =>
+                    createMutation.mutate({
+                      name: newName,
+                      apiUrl: newApiUrl,
+                      apiSecret: newApiSecret,
+                      maxLoad: newMaxLoad,
+                    })
+                  }
+                  disabled={!newName || !newApiUrl || !newApiSecret || createMutation.isPending}
+                >
+                  {createMutation.isPending ? 'Adding...' : 'Add Server'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        }
+      />
 
       <Card>
         {isLoading ? (
@@ -266,7 +269,11 @@ export function ServersList() {
         ) : isError ? (
           <div className="p-6 text-center text-red-500">Failed to load servers</div>
         ) : servers.length === 0 ? (
-          <div className="p-6 text-center text-muted-foreground">No BBB servers configured</div>
+          <EmptyState
+            title="No BBB servers configured"
+            hint="Add your first BigBlueButton server to start hosting meetings."
+            action={<Button onClick={() => setCreateDialogOpen(true)}>Add Server</Button>}
+          />
         ) : (
           <>
             <Table>
@@ -361,20 +368,14 @@ export function ServersList() {
         )}
       </Card>
 
-      <Dialog open={!!deleteTargetId} onOpenChange={(o) => !o && setDeleteTargetId(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete Server</DialogTitle>
-            <DialogDescription>Are you sure you want to delete this server? This action cannot be undone.</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTargetId(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleDeleteConfirm} disabled={deleteMutation.isPending}>
-              {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={!!deleteTargetId}
+        title="Delete Server"
+        description="The server is removed from the routing pool. Meetings still running on it are interrupted, and its capacity is lost. This cannot be undone."
+        pending={deleteMutation.isPending}
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setDeleteTargetId(null)}
+      />
 
       {/* Edit Dialog */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>

@@ -2,6 +2,10 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { api, Badge, Button, Card, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@vendure/dashboard';
 import { toast } from 'sonner';
 import { useState } from 'react';
+import { PageHeader, EmptyState } from '../../shared/PageHeader';
+import { EntitlementStatusBadge } from '../../shared/StatusBadge';
+import { ConfirmDialog } from '../../shared/ConfirmDialog';
+import { formatDate } from '../../shared/dates';
 
 const GET_ENTITLEMENTS = `
   query GetBbbEntitlements($options: BbbEntitlementListOptions) {
@@ -37,20 +41,18 @@ export function EntitlementsList() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.mutate(DELETE_ENTITLEMENT, { id }),
-    onSuccess: () => { query.refetch(); toast.success('Entitlement deleted'); },
+    onSuccess: () => { query.refetch(); toast.success('Entitlement deleted'); setDeleteTargetId(null); },
     onError: (err: Error) => toast.error('Error', { description: err.message }),
   });
 
-  function isValidNow(e: any) {
-    const now = new Date();
-    if (e.validFrom && new Date(e.validFrom) > now) return false;
-    if (e.validUntil && new Date(e.validUntil) < now) return false;
-    return true;
-  }
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold mb-4">Entitlements</h1>
+      <PageHeader
+        title="Entitlements"
+        description="Learner access grants. Rows with an end date before the start date are data errors — fix the source record."
+      />
 
       <Card className="mb-6 p-4">
         <div className="flex items-end gap-4">
@@ -95,15 +97,13 @@ export function EntitlementsList() {
                   <TableCell className="font-mono text-xs">{e.resourceId}</TableCell>
                   <TableCell><Badge variant="outline">{e.source}</Badge></TableCell>
                   <TableCell>
-                    <Badge variant={isValidNow(e) ? 'success' : 'warning'}>
-                      {isValidNow(e) ? 'Active' : 'Expired'}
-                    </Badge>
+                    <EntitlementStatusBadge entitlement={e} />
                   </TableCell>
-                  <TableCell className="text-sm">{e.validFrom ? new Date(e.validFrom).toLocaleDateString() : '—'}</TableCell>
-                  <TableCell className="text-sm">{e.validUntil ? new Date(e.validUntil).toLocaleDateString() : 'Never'}</TableCell>
-                  <TableCell className="text-sm">{new Date(e.createdAt).toLocaleDateString()}</TableCell>
+                  <TableCell className="text-sm">{e.validFrom ? formatDate(e.validFrom) : '—'}</TableCell>
+                  <TableCell className="text-sm">{e.validUntil ? formatDate(e.validUntil) : 'Never'}</TableCell>
+                  <TableCell className="text-sm">{formatDate(e.createdAt)}</TableCell>
                   <TableCell>
-                    <Button variant="destructive" size="sm" onClick={() => deleteMutation.mutate(e.id)}>Delete</Button>
+                    <Button variant="destructive" size="sm" onClick={() => setDeleteTargetId(e.id)}>Delete</Button>
                   </TableCell>
                 </TableRow>
               ))}
@@ -119,6 +119,15 @@ export function EntitlementsList() {
           </div>
         </Card>
       )}
+
+      <ConfirmDialog
+        open={deleteTargetId !== null}
+        title="Delete entitlement"
+        description="The learner immediately loses access to this resource. Order and grant history is kept — the ledger is immutable. This cannot be undone."
+        pending={deleteMutation.isPending}
+        onConfirm={() => deleteTargetId && deleteMutation.mutate(deleteTargetId)}
+        onCancel={() => setDeleteTargetId(null)}
+      />
     </div>
   );
 }
