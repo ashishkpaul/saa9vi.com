@@ -1,8 +1,18 @@
+// MUST be first: the production-secret guard below reads process.env, and .env
+// is the only place APP_ENV / SUPERADMIN_PASSWORD / COOKIE_SECRET are set.
+import 'dotenv/config';
+
 import { bootstrap, runMigrations, DefaultJobQueuePlugin } from '@vendure/core';
 import { config } from './vendure-config';
+import { assertProductionSecrets } from './platform/security/require-production-secrets';
 import { Client } from 'pg';
 import { newDb } from 'pg-mem';
 import Redis from 'ioredis';
+
+// Fail fast (uncaught → non-zero exit) before anything else starts. Kept out of
+// vendure-config.ts so config-only consumers (Dashboard build, `vendure migrate`)
+// do not require runtime secrets.
+assertProductionSecrets();
 
 async function isRedisReachable(): Promise<boolean> {
     if (!process.env.REDIS_HOST) return false;

@@ -2,6 +2,8 @@ import { PluginCommonModule, RuntimeVendureConfig, VendurePlugin } from '@vendur
 import { razorpayPaymentHandler } from './config/razorpay-payment-handler';
 import { RazorpayOrdersClient } from './services/razorpay-orders.client';
 import { RazorpayCheckoutService } from './services/razorpay-checkout.service';
+import { PaymentWebhookQueueService } from './services/payment-webhook-queue.service';
+import { PaymentWebhookEvent } from './entities/payment-webhook-event.entity';
 import { razorpayShopApiExtensions } from './api/razorpay-shop.schema';
 import { RazorpayShopResolver } from './api/razorpay-shop.resolver';
 import { RazorpayPaymentsWebhookController } from './api/razorpay-payments-webhook.controller';
@@ -20,7 +22,8 @@ import { RazorpayPaymentsWebhookController } from './api/razorpay-payments-webho
  */
 @VendurePlugin({
   imports: [PluginCommonModule],
-  providers: [RazorpayOrdersClient, RazorpayCheckoutService],
+  entities: [PaymentWebhookEvent],
+  providers: [RazorpayOrdersClient, RazorpayCheckoutService, PaymentWebhookQueueService],
   controllers: [RazorpayPaymentsWebhookController],
   shopApiExtensions: {
     schema: razorpayShopApiExtensions,
