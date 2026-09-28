@@ -222,14 +222,21 @@ Implementation is merged on `main`. Code/test evidence covers ownership boundary
                                               provider/runtime closure remains a V1 gate.
 
 
-  R3 one-time commerce    **VERIFIED**            Slice 11 R3 is code-complete on
-                          (2026-09-26)            current main (commit
-                                                  3a8d3bd): Razorpay handler,
+  R3 one-time commerce    **CODE/TEST VERIFIED**  Slice 11 R3 is code-complete on
+                          (2026-09-26;            current main (commit
+                          narrowed 2026-09-27)    3a8d3bd): Razorpay handler,
                                                   Shop checkout mutation,
                                                   webhook reconciliation, and
-                                                  Option A auto-fulfillment;
-                                                  runtime evidence recorded by
-                                                  the R4 lifecycle suite.
+                                                  Option A auto-fulfillment.
+                                                  NOT full-payment VERIFIED: the
+                                                  runtime evidence came from the
+                                                  R4 lifecycle suite, which pays
+                                                  with `dummyPaymentHandler`
+                                                  (`automaticSettle: false`) — no
+                                                  live Razorpay Test Mode payment,
+                                                  provider webhook lifecycle, or
+                                                  failure/refund evidence exists.
+                                                  See §9 (Required evidence).
 
   ADR-046 self-serve       **CODE/TEST VERIFIED**  Accepted contract; implementation
   subscription                                      merged on `main`. Ownership,
@@ -392,13 +399,22 @@ Verify that production does not use:
 
 ### Current status
 
-**OPEN — RUNTIME ENV CHECK NEEDED**
+**GUARDED ON BRANCH `vendure-3.7.3-upgrade` (commit `16389d8`, V1.0.9) — DEPLOYED-ENV CHECK PENDING.**
 
-The source allows insecure defaults when the relevant environment variables are unset. That establishes a code-level risk, but does not prove that the deployed production environment is actually using those defaults.
+`src/index.ts` + `src/index-worker.ts` call `assertProductionSecrets()`
+(`src/platform/security/require-production-secrets.ts`) before Vendure
+bootstraps: any `APP_ENV ≠ "dev"` with `SUPERADMIN_PASSWORD` or
+`COOKIE_SECRET` unset aborts with exit 1 (`Refusing to start: …`).
+Fail-fast proven 2026-09-28 on both entrypoints (see
+`v1.0.9-vendure-373-validation.md` § "V1.0.9 hardening evidence");
+`APP_ENV=dev` keeps the documented dev fallbacks. `.env.example`
+documents both variables plus rotation guidance.
 
-Verify the effective production environment without recording secret values in this document.
-
-Do not record secret values in this document.
+What remains: verify the effective production
+environment sets both variables (without recording secret values here)
+— the guard makes a default-secret deployment a loud boot failure
+rather than a silent compromise, but the deployed env itself still
+needs its one-time check.
 
 ------------------------------------------------------------------------
 
@@ -416,7 +432,17 @@ origin: (origin, callback) => callback(null, true)
 There is no environment variable or `IS_DEV` gate that changes this
 behavior for production.
 
-### Required correction
+### CSRF (update 2026-09-28, V1.0.9 branch diff — does NOT close this gate)
+
+`csrfPrevention: true` is set in `src/vendure-config.ts` (rebuilt into
+`dist/vendure-config.js`) and runtime-probed on the live 3.7.3 server:
+`text/plain` POST without a preflight header → 400 CSRF block; bare GET
+→ 400 CSRF block; GET with `Apollo-Require-Preflight: true` → 200;
+`application/json` POST (all storefront/dashboard traffic) → 200.
+Full probe matrix in `v1.0.9-vendure-373-validation.md`. The CORS
+allow-all origin below is unaffected and still requires the V1.2 fix.
+
+### Required correction (CORS)
 
 - restrict origins to the intended production storefront/admin origins
 - preserve credential behavior only where explicitly required
@@ -730,7 +756,7 @@ ss -tnp | grep 50135
 | pg-mem fallback inactive               | DB-backed shop query returns persisted data; `synchronize: false` in config |
 | Real Redis/BullMQ                      | `redis:6.2.17-bookworm` container, `PING` → `PONG`; 7 live conns from server pid; `bull:vendure-job-queue:*` keys present |
 | DefaultJobQueuePlugin fallback inactive | `vendure-config.ts` selects `BullMQJobQueuePlugin` + `RedisCachePlugin` when `REDIS_HOST` is set (it is set in `.env`); startup log shows BullMQ connection ✔ and merged-worker queue start |
-| Migrations applied via Vendure CLI     | *Observed 2026-09-19 pre-cleanup-apply snapshot:* `migrations` table 53 rows. *Post-apply (2026-09-19, commit `466a4ef` baseline):* 55 rows; latest `1789797901115-subscription-reconciliation-and-legacy-cleanup`; `npx vendure migrate -r` → "No pending migrations found". The two counts are different observation times of the same converged history, not a discrepancy. |
+| Migrations applied via Vendure CLI     | *Observed 2026-09-19 pre-cleanup-apply snapshot:* `migrations` table 53 rows. *Post-apply (2026-09-19, commit `466a4ef` baseline):* 55 rows; latest `1789797901115-subscription-reconciliation-and-legacy-cleanup`; `npx vendure migrate -r` → "No pending migrations found". The two counts are different observation times of the same converged history, not a discrepancy. **History-vs-working-tree gap explained (2026-09-27):** the table now holds **63 rows** while `src/migrations/` ships **33 files**. 33 rows match a current file exactly (every shipped migration is applied); the other **30 rows belong to 28 migration files that were later deleted from the directory** (`git log --all --diff-filter=D --name-only -- src/migrations/`), e.g. `1781787047829-initial.ts`, `1781955717365-bbb.ts`. `npx vendure migrate -r` reports no pending work, so the gap is retained applied history, not a missing or extra migration. |
 | Application + worker operational       | merged-worker mode: single process serving APIs and consuming queues; all 10 queues started |
 | Queue job executes                     | **Partially evidenced.** BullMQ `completed` zset holds 330 jobs; latest observed execution (`provider-webhook-processing` job 2090, finished 2026-09-17) predates the 12:52 restart. No post-restart execution has been triggered/observed yet (queues idle, no inbound events). This is the one remaining R2-A item. |
 
@@ -1064,7 +1090,12 @@ ArrangingPayment
 
 ### Current status
 
-**CODE-COMPLETE & RUNTIME-VERIFIED — Option A auto-fulfillment landed and proven on real Postgres (`R4_E2E=true` 10/10).**
+**CODE-COMPLETE; RUNTIME-VERIFIED ONLY ON THE INTERNAL PAYMENT PATH — NOT full-payment verified.**
+Option A auto-fulfillment landed and proven on real Postgres (`R4_E2E=true` 10/10), but that
+suite pays with `dummyPaymentHandler` (`automaticSettle: false`, see
+`r4-runtime-lifecycle.e2e-spec.ts` line 134), not the Razorpay handler. The ⛔ items in
+"Required evidence" below therefore remain open: no live Razorpay Test Mode payment, no live
+provider webhook lifecycle, and no failure/refund evidence.
 
 Landed & Verified:
 
@@ -1080,8 +1111,15 @@ Landed & Verified:
   (`api/razorpay-shop.schema.ts`, `api/razorpay-shop.resolver.ts`) creates the
   Razorpay order and returns `{ razorpayOrderId, amountMinor, currency, keyId }`.
 - **One-time payment webhook endpoint**: `RazorpayPaymentsWebhookController`
-  (`POST /payments/razorpay/checkout-webhook`) for out-of-band `payment.captured` / `order.paid`
-  recovery with constant-time HMAC-SHA256 signature verification.
+  (`POST /payments/razorpay/checkout-webhook`) — INV-004 persist-first
+  boundary: verifies HMAC-SHA256, persists `PaymentWebhookEvent`
+  (`payment_webhook_event`, UNIQUE(provider, providerEventId)), enqueues
+  the inbox ID to BullMQ `payment-webhook-reconciliation`, returns 2xx
+  immediately. Reconciliation lives in `PaymentWebhookQueueService`
+  (worker loads the row by ID, re-reads the order, settles via
+  `razorpayPaymentHandler` when still `ArrangingPayment`; terminal
+  states PROCESSED / IGNORED / FAILED). Migration
+  `1790583381147-add-payment-webhook-event.ts` (Vendure CLI-generated).
 - **Option A auto-fulfillment wiring**: `bbbOrderProcess.onTransitionEnd`
   (`src/plugins/bigbluebutton-plugin/config/bbb-fulfillment.ts`) captures `OrderService`
   and executes `orderService.createFulfillment` on transition to `PaymentSettled`.
@@ -1091,16 +1129,18 @@ Landed & Verified:
 
 ### Required evidence
 
--   handler source
--   Shop API checkout/payment mutation
--   Razorpay order ID
--   successful Test Mode payment
--   provider webhook lifecycle
--   Vendure payment state
--   order state
--   fulfillment
--   failure/refund behavior
--   idempotency
+| Item | State (2026-09-27) |
+| ---- | ------------------ |
+| handler source | ✅ `src/plugins/payments/config/razorpay-payment-handler.ts` |
+| Shop API checkout/payment mutation | ✅ `createRazorpayCheckoutOrder` (`api/razorpay-shop.resolver.ts`) |
+| Razorpay order ID | ⛔ none recorded — no live Orders API call is part of the evidence |
+| successful Test Mode payment | ⛔ NOT EVIDENCED — every runtime run paid with `dummyPaymentHandler` |
+| provider webhook lifecycle | ⛔ NOT EVIDENCED live — only policy-level HMAC tests (`razorpay-checkout.policy.spec.ts` 32/32) |
+| Vendure payment state | ✅ `PaymentSettled` (internal path) |
+| order state | ✅ `ArrangingPayment → PaymentSettled` (internal path) |
+| fulfillment | ✅ Option A auto-fulfillment → `BbbCapacityGrant(sourceType='order')` |
+| failure/refund behavior | ⛔ NOT EVIDENCED |
+| idempotency | ✅ fulfillment idempotency verified in the R4 suite |
 
 Do not use R2 subscription evidence as R3 evidence.
 
@@ -1388,8 +1428,11 @@ Then verify the actual changed files.
                                                           attempt. Halted/stale-
                                                           cycle still open.
 
-  R3                One-time commerce   OPEN              `dummyPaymentHandler` /
-                                                          full payment evidence
+  R3                One-time commerce   CODE/TEST         Live Razorpay Test Mode
+                                        VERIFIED;         payment, provider webhook
+                                        full-payment      lifecycle, failure/refund.
+                                        evidence OPEN     Runtime evidence so far
+                                                          used `dummyPaymentHandler`.
 
   R4                BBB paid access     OPEN              Payment → entitlement →
                                                           usage evidence

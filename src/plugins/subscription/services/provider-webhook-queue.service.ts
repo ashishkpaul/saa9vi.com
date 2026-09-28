@@ -29,6 +29,34 @@ export interface ProviderWebhookJobData {
 }
 
 /**
+ * Narrow check: is this error a UNIQUE(provider, providerEventId)
+ * violation on the provider-webhook inbox? Prefer the machine-readable
+ * PostgreSQL SQLSTATE (23505 = unique_violation); fall back to the
+ * human-readable message for drivers that lose code metadata.
+ * Anything else (connection loss, serialization failure, other
+ * constraints) must NOT take the duplicate-delivery path — the caller
+ * rethrows so the webhook returns non-2xx and Razorpay retries.
+ */
+export function isProviderWebhookDuplicateViolation(err: any): boolean {
+    if (err?.code === '23505') {
+        const meta =
+            String(err?.constraint ?? '') +
+            String(err?.detail ?? '') +
+            String(err?.message ?? '');
+        // Generated index names (e.g. IDX_759a6376a901f027d4a130bc5e) carry
+        // no column info; only narrow when metadata names the inbox key.
+        if (!meta) return true;
+        return /provider/i.test(meta) && /providerEventId/i.test(meta);
+    }
+    const msg = String(err?.message ?? '') + String(err?.detail ?? '');
+    return (
+        /duplicate key/i.test(msg) &&
+        /provider/i.test(msg) &&
+        /providerEventId|provider_event|providerEvent/i.test(msg)
+    );
+}
+
+/**
  * BullMQ job queue for processing provider webhooks.
  *
  * Architecture (INV-004):

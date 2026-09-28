@@ -68,6 +68,7 @@ import { BbbScheduledSession } from '../../bigbluebutton-plugin/entities/bbb-sch
 import { BbbOrganization } from '../../bigbluebutton-plugin/entities/bbb-organization.entity';
 import { ReviewApprovedEvent } from '../../reviews/events/review.events';
 import { TransactionalConnection } from '@vendure/core';
+import { verifyTenantAdminViaApi } from '../../tenant-plugin/e2e/fixtures/verify-tenant-admin';
 import { AdSpendLedgerImmutableSubscriber } from '../ad-spend-ledger-immutable.subscriber';
 
 // Schema-based isolation: creates e2e_marketplace with a clean slate per run
@@ -313,6 +314,24 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
     // Gate 1.5 acceptance rule: fail hard, never fall back.
     await assertInfrastructure();
 
+    // V1.0.9 evidence hygiene: the e2e Postgres schema is recreated per run
+    // (session PKs restart at 1), but the ES indices were only cleaned in
+    // afterAll (best-effort). A stale session doc from a previous run with a
+    // recycled PK satisfies waitFor() immediately and carries that run's
+    // channelToken — an order/state-dependent false failure. Clean FIRST so
+    // setup is idempotent regardless of how the previous run ended.
+    try {
+      const es = new EsClient({
+        node: process.env.ELASTICSEARCH_NODE ?? 'http://localhost:9200',
+        ...(process.env.ELASTICSEARCH_PASSWORD
+          ? { auth: { username: 'elastic', password: process.env.ELASTICSEARCH_PASSWORD } }
+          : {}),
+      });
+      await es.indices.delete({ index: 'e2e_marketplace_*', ignore_unavailable: true });
+    } catch {
+      // pre-clean is best-effort; assertInfrastructure() already proved ES is up
+    }
+
     await server.init({
       initialData: E2E_INITIAL_DATA,
       productsCsvPath: path.join(__dirname, '../../tenant-plugin/e2e/fixtures/e2e-products.csv'),
@@ -374,6 +393,13 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
       email: emailB,
       adminId: resB.registerNewTenant.administratorId,
     };
+
+    // 3.7.3 login gate (GHSA-wr5h-x3x6-4h23): both tenant admins must
+    // complete Phase 1.5 verification through the application API before
+    // any asUserWithCredentials login below — login is refused while a
+    // pending token exists, even with requireVerification=false.
+    await verifyTenantAdminViaApi(server, shopClient, emailA);
+    await verifyTenantAdminViaApi(server, shopClient, emailB);
 
     // ADR-042 / INV-024: marketplace listing is a SUBSCRIPTION ENTITLEMENT, so
     // both publishing channels must be seeded as eligible BEFORE the first

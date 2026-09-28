@@ -16,6 +16,7 @@ import { ReviewsPlugin } from "../../reviews/reviews-plugin";
 import { BigBlueButtonPlugin } from "../../bigbluebutton-plugin";
 import { SubscriptionPlugin } from "../subscription.plugin";
 import { E2E_INITIAL_DATA } from "../../tenant-plugin/e2e/fixtures/e2e-initial-data";
+import { verifyTenantAdminViaApi } from "../../tenant-plugin/e2e/fixtures/verify-tenant-admin";
 import { RazorpaySubscriptionProvider } from "../providers/razorpay/razorpay-subscription.provider";
 import { TenantSelfServeSubscriptionCooldownService } from "../services/tenant-self-serve-subscription-cooldown.service";
 
@@ -259,6 +260,12 @@ describe("ADR-046 — tenant self-serve subscription Shop API", () => {
           timezone: "Asia/Kolkata",
         },
       });
+      // 3.7.3 login gate (GHSA-wr5h-x3x6-4h23): complete Phase 1.5
+      // verification through the application API before any admin login —
+      // login is refused while a pending token exists, even with
+      // requireVerification=false. shopClient still targets the default
+      // channel here (set above), so the public mutation routes correctly.
+      await verifyTenantAdminViaApi(server, shopClient, email);
       return {
         email,
         token: result.registerNewTenant.channelToken,

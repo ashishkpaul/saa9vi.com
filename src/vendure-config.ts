@@ -65,6 +65,11 @@ const IS_DEV = process.env.APP_ENV === "dev";
 const serverPort = 3000;
 
 export const config: VendureConfig = {
+  // The SuperAdmin password / cookie secret below fall back to published
+  // literals for `APP_ENV=dev` only. Non-dev startup calls
+  // `assertProductionSecrets()` (src/platform/security/require-production-secrets.ts,
+  // invoked from src/index.ts and src/index-worker.ts) which refuses to boot
+  // when either is unset.
 apiOptions: {
     // NOTE: Do NOT set `hostname` to a bind address like "0.0.0.0" — the GraphiQL
     // plugin injects `window.GRAPHIQL_SETTINGS` with an absolute URL built from
@@ -76,6 +81,28 @@ apiOptions: {
     port: serverPort,
     adminApiPath: "admin-api",
     shopApiPath: "shop-api",
+
+    // Login-CSRF protection. Vendure 3.7.3 defaults this to false and logs a
+    // startup warning until it is enabled ("Login CSRF is possible ..."), because
+    // `tokenMethod` includes `cookie`.
+    //
+    // Effect: Apollo rejects requests whose content-type is one a browser can
+    // send cross-site without a preflight — `application/x-www-form-urlencoded`,
+    // `multipart/form-data`, `text/plain`, and GET requests (which carry no
+    // content-type) — unless they also carry `Apollo-Require-Preflight` or
+    // `x-apollo-operation-name`. `application/json` is unaffected.
+    //
+    // Client audit before enabling (V1.0.9):
+    //   - edu-frontend (nextjs-starter-vendure, src/lib/vendure/api.ts): every
+    //     GraphQL request is a POST with `Content-Type: application/json`; no
+    //     GET queries and no multipart uploads to the GraphQL APIs — unaffected.
+    //   - @vendure/dashboard and @vendure/testing send the header natively.
+    //   - Saa9vi's non-GraphQL controllers (e.g. POST /reviews-api/upload-asset)
+    //     are outside the GraphQL module and are NOT covered by this option.
+    //
+    // Supersedes the "V1.0 keeps csrfPrevention:false ... V1.2 owns the rollout"
+    // decision in docs/implementation/v1.0.1-vendure-373-upgrade-impact-assessment.md §5.
+    csrfPrevention: true,
 
     // Trust proxy headers from Nginx (use true for AI Studio proxy chain)
     trustProxy: 1,

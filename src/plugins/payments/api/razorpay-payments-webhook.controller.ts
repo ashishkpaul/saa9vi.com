@@ -10,18 +10,16 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 import {
-  Order,
-  OrderService,
-  RequestContext,
   RequestContextService,
   TransactionalConnection,
 } from '@vendure/core';
-import {
-  RAZORPAY_HANDLER_CODE,
-  razorpayPaymentsWebhookSecret,
-} from '../constants';
+import { razorpayPaymentsWebhookSecret } from '../constants';
 import { verifyWebhookSignature } from '../razorpay-checkout.policy';
-import { RazorpayCheckoutService } from '../services/razorpay-checkout.service';
+import { PaymentWebhookEvent } from '../entities/payment-webhook-event.entity';
+import {
+  isPaymentWebhookDuplicateViolation,
+  PaymentWebhookQueueService,
+} from '../services/payment-webhook-queue.service';
 
 const loggerCtx = 'RazorpayPaymentsWebhookController';
 
@@ -30,27 +28,28 @@ const loggerCtx = 'RazorpayPaymentsWebhookController';
  *
  * Endpoint: POST /payments/razorpay/checkout-webhook
  *
- * Boundary: handles asynchronous reconciliation for one-time orders (e.g.
- * `payment.captured` or `order.paid`).
+ * INV-004 persist-first boundary: this controller does NOT touch orders or
+ * payments. It only authenticates, persists to the immutable inbox, enqueues
+ * the inbox ID, and returns 2xx immediately. Reconciliation lives in
+ * `PaymentWebhookQueueService` (BullMQ `payment-webhook-reconciliation`).
  *
  * When a customer closes the browser before the frontend handshake returns,
- * Razorpay's webhook delivers `payment.captured` directly to this endpoint.
- * We authenticate the signature, extract the Vendure order from the receipt / notes,
- * and settle the payment if it is still in `ArrangingPayment`.
+ * Razorpay's webhook delivers `payment.captured` directly to this endpoint;
+ * the worker settles the payment if the order is still `ArrangingPayment`.
  */
 @Controller('payments/razorpay')
 export class RazorpayPaymentsWebhookController {
   constructor(
-    private readonly checkoutService: RazorpayCheckoutService,
-    private readonly orderService: OrderService,
-    private readonly connection: TransactionalConnection,
+    private readonly webhookQueue: PaymentWebhookQueueService,
     private readonly requestContextService: RequestContextService,
+    private readonly connection: TransactionalConnection,
   ) {}
 
   @Post('checkout-webhook')
   @HttpCode(200)
   async handleWebhook(
     @Headers('x-razorpay-signature') signature: string,
+    @Headers('x-razorpay-event-id') headerEventId: string,
     @Body() payload: any,
     @Req() req: Request,
   ): Promise<{ status: string }> {
@@ -78,79 +77,70 @@ export class RazorpayPaymentsWebhookController {
       throw new UnauthorizedException('Invalid webhook signature');
     }
 
-    const event = payload?.event;
-    if (event !== 'payment.captured' && event !== 'order.paid') {
-      Logger.debug(`Ignoring non-settling event: ${event}`, loggerCtx);
-      return { status: 'ignored' };
-    }
+    const eventType: string = payload?.event ?? 'unknown';
+    const payloadHash = PaymentWebhookQueueService.hashRawBody(rawBody);
+    const providerEventId = PaymentWebhookQueueService.resolveProviderEventId({
+      headerEventId,
+      payloadHash,
+    });
 
-    // Extract payment/order entity from payload
+    // Informational only — the worker re-reads the order from the DB.
     const paymentEntity = payload?.payload?.payment?.entity;
-    const razorpayPaymentId = paymentEntity?.id;
-    const razorpayOrderId = paymentEntity?.order_id ?? payload?.payload?.order?.entity?.id;
-    const vendureOrderCode =
+    const vendureOrderCode: string | null =
       paymentEntity?.notes?.vendureOrderCode ??
       payload?.payload?.order?.entity?.receipt ??
-      paymentEntity?.receipt;
+      paymentEntity?.receipt ??
+      null;
 
-    if (!razorpayPaymentId || !razorpayOrderId || !vendureOrderCode) {
-      Logger.warn(
-        `Webhook payload missing required identifiers (paymentId=${razorpayPaymentId}, orderId=${razorpayOrderId}, code=${vendureOrderCode})`,
-        loggerCtx,
-      );
-      return { status: 'missing_identifiers' };
-    }
-
-    // Find the Vendure order by code
-    const order = await this.connection.rawConnection.getRepository(Order).findOne({
-      where: { code: vendureOrderCode },
-      relations: { channels: true },
+    const ctx = await this.requestContextService.create({ apiType: 'admin' });
+    const eventRepo = this.connection.getRepository(ctx, PaymentWebhookEvent);
+    const webhookEvent = eventRepo.create({
+      provider: 'razorpay',
+      providerEventId,
+      eventType,
+      payloadHash,
+      rawPayload: payload,
+      verifiedAt: new Date(),
+      processingStatus: 'pending',
+      vendureOrderCode,
     });
 
-    if (!order) {
-      Logger.warn(
-        `Webhook received for unknown Vendure order code: ${vendureOrderCode}`,
-        loggerCtx,
-      );
-      return { status: 'order_not_found' };
+    let savedEvent: PaymentWebhookEvent;
+    try {
+      savedEvent = await eventRepo.save(webhookEvent);
+    } catch (err: any) {
+      // Narrow the duplicate path to an actual UNIQUE(provider,
+      // providerEventId) violation. Any other DB failure (connection loss,
+      // serialization error, unrelated constraint) is rethrown so this
+      // request returns non-2xx and Razorpay retries — returning 2xx here
+      // would falsely claim the inbox row was persisted (INV-004).
+      if (!isPaymentWebhookDuplicateViolation(err)) {
+        throw err;
+      }
+      // UNIQUE(provider, providerEventId) violation → duplicate delivery.
+      // Razorpay retries non-2xx responses, so the duplicate path must also
+      // recover the "persisted but enqueue failed" mode: if still pending,
+      // re-enqueue before returning 2xx (mirrors RazorpayWebhookController).
+      const existing = await eventRepo.findOne({
+        where: { provider: 'razorpay', providerEventId },
+      });
+      if (existing && existing.processingStatus === 'pending') {
+        await this.webhookQueue.enqueueWebhookEvent(existing.id as number);
+        Logger.warn(
+          `Duplicate payments webhook ${providerEventId}: pending event re-enqueued`,
+          loggerCtx,
+        );
+      } else {
+        Logger.warn(
+          `Payments webhook event already received: ${providerEventId}${existing ? ` (${existing.processingStatus})` : ''}`,
+          loggerCtx,
+        );
+      }
+      return { status: 'ok' };
     }
 
-    if (order.state !== 'ArrangingPayment') {
-      Logger.debug(
-        `Order ${order.code} already in state ${order.state}; skipping webhook settlement`,
-        loggerCtx,
-      );
-      return { status: 'already_settled' };
-    }
-
-    // Create an internal admin RequestContext scoped to the order's primary channel
-    const channel = order.channels?.[0];
-    const ctx = await this.requestContextService.create({
-      apiType: 'admin',
-      channelOrToken: channel,
-    });
-
-    const addPaymentResult = await this.orderService.addPaymentToOrder(ctx, order.id, {
-      method: RAZORPAY_HANDLER_CODE,
-      metadata: {
-        razorpay_order_id: razorpayOrderId,
-        razorpay_payment_id: razorpayPaymentId,
-        // Webhook traffic has no client signature; the service relies on provider re-read.
-      },
-    });
-
-    if ('state' in addPaymentResult && (addPaymentResult.state === 'PaymentSettled' || addPaymentResult.state === 'ArrangingPayment')) {
-      Logger.debug(
-        `Webhook reconciled order ${order.code} successfully (order state: ${addPaymentResult.state})`,
-        loggerCtx,
-      );
-      return { status: 'reconciled' };
-    }
-
-    Logger.error(
-      `Webhook failed to settle order ${order.code}: ${JSON.stringify(addPaymentResult)}`,
-      loggerCtx,
-    );
-    return { status: 'settle_failed' };
+    await this.webhookQueue.enqueueWebhookEvent(savedEvent.id as number);
+    return { status: 'ok' };
   }
 }
+

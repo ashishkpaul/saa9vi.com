@@ -91,6 +91,7 @@ BBB:
 
 Payments:
   POST /payments/razorpay/webhook → ProviderWebhookEvent → BullMQ → Razorpay processor
+  POST /payments/razorpay/checkout-webhook → PaymentWebhookEvent → BullMQ → payment reconciliation worker
   (The legacy Juspay provider implementation was fully removed in the provider-neutral
   refactor (9a31beb) and its legacy tables dropped (466a4ef, ADR-040). Only the
   Razorpay provider/controller is present — ADR-038.)

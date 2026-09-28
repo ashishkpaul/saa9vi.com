@@ -47,6 +47,7 @@ import { CmsPlugin } from '../../cms/cms.plugin';
 import { ReviewsPlugin } from '../../reviews/reviews-plugin';
 import { MarketplaceIndexerPlugin } from '../marketplace-indexer.plugin';
 import { E2E_INITIAL_DATA } from '../../tenant-plugin/e2e/fixtures/e2e-initial-data';
+import { verifyTenantAdminViaApi } from '../../tenant-plugin/e2e/fixtures/verify-tenant-admin';
 import { SchemaPostgresInitializer } from '../../tenant-plugin/e2e/schema-postgres-initializer';
 import { BbbScheduledSession } from '../../bigbluebutton-plugin/entities/bbb-scheduled-session.entity';
 import { BbbOrganization } from '../../bigbluebutton-plugin/entities/bbb-organization.entity';
@@ -259,6 +260,16 @@ describe('Marketplace convergence / recovery (3D.1b Step 9)', () => {
   beforeAll(async () => {
     await assertInfrastructure();
 
+    // V1.0.9 evidence hygiene (same as marketplace.e2e-spec): the e2e schema
+    // is recreated per run (session PKs restart), while index cleanup was
+    // afterAll-only — a stale doc from a previous run would satisfy state
+    // assertions with recycled PKs. Clean FIRST for idempotent setup.
+    try {
+      await es.indices.delete({ index: 'e2e_convergence_*', ignore_unavailable: true });
+    } catch {
+      // pre-clean is best-effort; assertInfrastructure() already proved ES is up
+    }
+
     await server.init({
       initialData: E2E_INITIAL_DATA,
       productsCsvPath: path.join(__dirname, '../../tenant-plugin/e2e/fixtures/e2e-products.csv'),
@@ -289,6 +300,11 @@ describe('Marketplace convergence / recovery (3D.1b Step 9)', () => {
       channelToken: resA.registerNewTenant.channelToken,
       email: emailA,
     };
+
+    // 3.7.3 login gate (GHSA-wr5h-x3x6-4h23): complete Phase 1.5
+    // verification through the application API before the tenant-admin
+    // login below — login is refused while a pending token exists.
+    await verifyTenantAdminViaApi(server, shopClient, emailA);
 
     // ADR-042/INV-024: seed the publishing channel as marketplace-eligible
     // BEFORE any session is created — an unentitled channel is delisted by
