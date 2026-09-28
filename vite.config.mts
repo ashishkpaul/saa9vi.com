@@ -40,6 +40,14 @@ export default defineConfig({
             // This allows all plugins to reference a shared set of
             // GraphQL types.
             '@/gql': resolve(__dirname, './src/gql/graphql.ts'),
+            // PATCH(bbb-nav): exact-key alias — matched before the plugin's
+            // '@/vdb' prefix alias (user alias keys are merged first) — so the
+            // sidebar uses our expanded-by-default NavMain fork.
+            // See src/platform/dashboard/nav-main.tsx for the patch notes.
+            '@/vdb/components/layout/nav-main.js': resolve(
+                __dirname,
+                './src/platform/dashboard/nav-main.tsx',
+            ),
         },
     },
 });

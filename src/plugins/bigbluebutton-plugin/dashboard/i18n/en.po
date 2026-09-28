@@ -1,0 +1,53 @@
+msgid ""
+msgstr ""
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#. Sidebar labels for the BBB dashboard extension (dashboard/index.tsx).
+#. Registered here because NavMain renders titles through i18n.t() and the
+#. production compiled catalog does not contain these custom ids — Lingui's
+#. runtime message compiler is only installed outside production, so missing
+#. ids surface as "Uncompiled message detected!" console warnings.
+msgid "BBB · Platform"
+msgstr "BBB · Platform"
+
+msgid "BBB · Classes"
+msgstr "BBB · Classes"
+
+msgid "BBB · People & access"
+msgstr "BBB · People & access"
+
+msgid "BBB · Capacity"
+msgstr "BBB · Capacity"
+
+msgid "Servers"
+msgstr "Servers"
+
+msgid "Organizations"
+msgstr "Organizations"
+
+msgid "Rooms"
+msgstr "Rooms"
+
+msgid "Sessions"
+msgstr "Sessions"
+
+msgid "Meeting log"
+msgstr "Meeting log"
+
+msgid "Staff"
+msgstr "Staff"
+
+msgid "Enrollments"
+msgstr "Enrollments"
+
+msgid "Trial Registrations"
+msgstr "Trial Registrations"
+
+msgid "Entitlements"
+msgstr "Entitlements"
+
+msgid "Capacity"
+msgstr "Capacity"

@@ -3,6 +3,7 @@
     "composite": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "downlevelIteration": true,
     "jsx": "react-jsx",
     "types": ["vite/client"],
     "paths": {
@@ -17,6 +18,7 @@
   "include": [
     "src/plugins/**/dashboard/**/*",
     "src/gql/**/*.ts",
+    "src/platform/dashboard/nav-main.tsx",
     "vite.*.*ts"
   ]
 }
