@@ -399,7 +399,7 @@ Verify that production does not use:
 
 ### Current status
 
-**GUARDED ON BRANCH `vendure-3.7.3-upgrade` (uncommitted V1.0.9 diff) — PENDING COMMIT + DEPLOYED-ENV CHECK.**
+**GUARDED ON BRANCH `vendure-3.7.3-upgrade` (commit `16389d8`, V1.0.9) — DEPLOYED-ENV CHECK PENDING.**
 
 `src/index.ts` + `src/index-worker.ts` call `assertProductionSecrets()`
 (`src/platform/security/require-production-secrets.ts`) before Vendure
@@ -410,7 +410,7 @@ Fail-fast proven 2026-09-28 on both entrypoints (see
 `APP_ENV=dev` keeps the documented dev fallbacks. `.env.example`
 documents both variables plus rotation guidance.
 
-What remains: (1) commit the diff; (2) verify the effective production
+What remains: verify the effective production
 environment sets both variables (without recording secret values here)
 — the guard makes a default-secret deployment a loud boot failure
 rather than a silent compromise, but the deployed env itself still

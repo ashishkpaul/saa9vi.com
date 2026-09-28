@@ -2,7 +2,7 @@ import { Controller, Post, Headers, Body, UnauthorizedException, Req } from '@ne
 import { Request } from 'express';
 import { RequestContextService, TransactionalConnection, Logger } from '@vendure/core';
 import { RazorpayWebhookVerifier } from './razorpay-webhook.verifier';
-import { ProviderWebhookQueueService } from '../../services/provider-webhook-queue.service';
+import { isProviderWebhookDuplicateViolation, ProviderWebhookQueueService } from '../../services/provider-webhook-queue.service';
 import { ProviderWebhookEvent } from '../../entities/provider-webhook-event.entity';
 
 const loggerCtx = 'RazorpayWebhookController';
@@ -95,6 +95,15 @@ export class RazorpayWebhookController {
         try {
             savedEvent = await eventRepo.save(webhookEvent);
         } catch (err: any) {
+            // Narrow the duplicate path to an actual UNIQUE(provider,
+            // providerEventId) violation. Any other DB failure (connection
+            // loss, serialization error, unrelated constraint) is rethrown
+            // so this request returns non-2xx and Razorpay retries —
+            // returning 2xx here would falsely claim the inbox row was
+            // persisted (INV-004).
+            if (!isProviderWebhookDuplicateViolation(err)) {
+                throw err;
+            }
             // UNIQUE(provider, providerEventId) violation → duplicate delivery.
             // Razorpay retries non-2xx responses, so the duplicate path must also
             // recover the "persisted but enqueue failed" failure mode: if the event
