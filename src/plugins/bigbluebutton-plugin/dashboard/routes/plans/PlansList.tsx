@@ -1,13 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, Badge, Button, Card, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
+import { api, Badge, Button, Card, Input, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
 import { toast } from 'sonner';
-import { useEffect, useState } from 'react';
-
-const GET_ORGS = `
-  query GetBbbOrgsForPlans {
-    bbbOrganizations { items { id name slug } }
-  }
-`;
+import { useState } from 'react';
+import { useCurrentOrganization } from '../../shared/useCurrentOrganization';
 
 const GET_GRANTS = `
   query GetBbbCapacityGrants($organizationId: ID!) {
@@ -49,32 +44,19 @@ interface GrantList {
 
 export function PlansList() {
   const qc = useQueryClient();
-  const [selectedOrgId, setSelectedOrgId] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [hours, setHours] = useState(10);
   const [validityDays, setValidityDays] = useState(30);
   const [saving, setSaving] = useState(false);
 
-  const orgsQuery = useQuery<any>({
-    queryKey: ['bbbOrgsForPlans'],
-    queryFn: () => api.query(GET_ORGS),
-    staleTime: 5 * 60 * 1000, // 5 min — orgs don't change frequently
-  });
-  const organizations = orgsQuery.data?.bbbOrganizations?.items ?? [];
-
-  // Select first org by default — depend on query data, not derived array,
-  // to avoid stale closures when data arrives after initial mount
-  useEffect(() => {
-    const items = orgsQuery.data?.bbbOrganizations?.items ?? [];
-    if (!selectedOrgId && items.length > 0) {
-      setSelectedOrgId(items[0].id);
-    }
-  }, [orgsQuery.data, selectedOrgId]);
+  // Channel = Tenant (INV-001): the organization is resolved server-side from
+  // the active channel — a client-side picker could disagree with ctx.channelId.
+  const { organizationId, label, isLoading: orgLoading } = useCurrentOrganization();
 
   const grantsQuery = useQuery<{ bbbCapacityGrants: GrantList }>({
-    queryKey: ['bbbGrants', selectedOrgId],
-    queryFn: () => api.query(GET_GRANTS, { organizationId: selectedOrgId }),
-    enabled: !!selectedOrgId,
+    queryKey: ['bbbGrants', organizationId],
+    queryFn: () => api.query(GET_GRANTS, { organizationId }),
+    enabled: !!organizationId,
   });
   const grants = grantsQuery.data?.bbbCapacityGrants?.items ?? [];
 
@@ -100,7 +82,7 @@ export function PlansList() {
   const totalRemainingHours = activeGrants.reduce((s, g) => s + toHours((g.grantedMinutes ?? 0) - (g.consumedMinutes ?? 0)), 0);
 
   async function createGrant() {
-    if (!selectedOrgId || hours <= 0 || validityDays <= 0) return;
+    if (!organizationId || hours <= 0 || validityDays <= 0) return;
     setSaving(true);
     try {
       const now = new Date();
@@ -108,7 +90,7 @@ export function PlansList() {
       const validUntil = new Date(now.getTime() + validityDays * 86400000).toISOString();
       await api.mutate(CREATE_GRANT, {
         input: {
-          organizationId: selectedOrgId,
+          organizationId,
           grantedMinutes: hours * 60,
           validFrom,
           validUntil,
@@ -138,15 +120,12 @@ export function PlansList() {
 
       <div className="max-w-xs mb-6">
         <Label>Organization</Label>
-        <Select value={selectedOrgId} onValueChange={setSelectedOrgId}>
-          <SelectTrigger><SelectValue placeholder="Select organization" /></SelectTrigger>
-          <SelectContent>
-            {organizations.map((o: any) => <SelectItem key={o.id} value={o.id}>{o.name} ({o.slug})</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {orgLoading ? 'Loading…' : label || 'No organization is bound to this channel'}
+        </p>
       </div>
 
-      {showCreate && selectedOrgId && (
+      {showCreate && organizationId && (
         <Card className="mb-6 p-4">
           <h3 className="font-semibold mb-3">Grant Capacity</h3>
           <p className="text-sm text-muted-foreground mb-4">
@@ -173,7 +152,7 @@ export function PlansList() {
         </Card>
       )}
 
-      {selectedOrgId && (
+      {organizationId && (
         <>
           {/* Summary */}
           {grants.length > 0 && (

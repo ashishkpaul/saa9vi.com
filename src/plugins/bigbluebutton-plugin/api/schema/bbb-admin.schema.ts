@@ -270,6 +270,15 @@ export const adminApiExtensions = gql`
     bbbOrganizations(options: BbbOrganizationListOptions): BbbOrganizationList!
     poolCapacityDashboard: PoolCapacityDashboard!
     bbbOrganization(id: ID!): BbbOrganization
+    """
+    The organization bound to the active channel (Channel = Tenant, INV-001).
+    Resolved server-side from the request context channelId — the same value
+    BbbChannelAccessService enforces — so tenant screens never need a
+    client-side organization selector and can never display another tenant's
+    organization. Returns null when the active channel has no organization.
+    Platform-tier cross-tenant browsing uses bbbOrganizations.
+    """
+    bbbMyOrganization: BbbOrganization
     bbbMeetings(
       organizationId: ID
       options: BbbMeetingListOptions

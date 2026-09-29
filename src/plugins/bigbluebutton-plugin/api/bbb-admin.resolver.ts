@@ -244,6 +244,32 @@ export class BbbAdminResolver {
     return this.orgService.findById(ctx, id);
   }
 
+  /**
+   * Resolve the BbbOrganization bound to the active channel (Channel = Tenant).
+   *
+   * Mirrors the Shop API's `orgService.findByChannelId(ctx)` resolution
+   * (bbb-shop.resolver.ts `myBbbMeetings`) so tenant screens read the tenant
+   * from the channel context instead of asking the client to pick one.
+   * Returns null when the active channel has no organization.
+   *
+   * Every granular BBB permission is allowed: this exposes only the caller's
+   * own channel, which BbbChannelAccessService already treats as readable.
+   */
+  @Query()
+  @Allow(
+    BbbAdminPermission.Permission,
+    BbbPlatformInfrastructurePermission.Permission,
+    BbbManageOrganizationsPermission.Permission,
+    BbbManageRoomsPermission.Permission,
+    BbbManageSessionsPermission.Permission,
+    BbbManageMeetingsPermission.Permission,
+    BbbManageEntitlementsPermission.Permission,
+    BbbManageMembersPermission.Permission,
+  )
+  bbbMyOrganization(@Ctx() ctx: RequestContext): Promise<BbbOrganization | null> {
+    return this.orgService.findByChannelId(ctx);
+  }
+
   @Allow(BbbAdminPermission.Permission, BbbManageOrganizationsPermission.Permission)
   @Transaction()
   @Mutation()

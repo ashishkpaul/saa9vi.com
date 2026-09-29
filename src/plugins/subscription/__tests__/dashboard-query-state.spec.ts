@@ -34,6 +34,7 @@ import {
     type LedgerQueryLike,
     type ListPayload,
 } from '../../../platform/dashboard/query-state';
+import { extractDocumentsFromSource } from '../../../platform/invariants/graphql-contract.checker';
 
 /** Repository root: src/plugins/subscription/__tests__ → up four levels. */
 const ROOT = path.resolve(__dirname, '../../../..');
@@ -376,7 +377,6 @@ const LEGACY_UNGUARDED_EMPTY_STATE = new Set<string>([
     'src/plugins/bigbluebutton-plugin/dashboard/routes/members/MembersList.tsx',
     'src/plugins/bigbluebutton-plugin/dashboard/routes/memberships/MembershipsList.tsx',
     'src/plugins/bigbluebutton-plugin/dashboard/routes/plans/PlansList.tsx',
-    'src/plugins/bigbluebutton-plugin/dashboard/routes/trials/TrialRegistrationsList.tsx',
     'src/plugins/reviews/dashboard/review-list.tsx',
     'src/plugins/tenant-plugin/dashboard/routes/instructors/InstructorsList.tsx',
     'src/plugins/tenant-plugin/dashboard/routes/media/MediaResourcesList.tsx',
@@ -460,6 +460,117 @@ describe('C. Structural ratchet: no list screen may hide a failure as an empty s
             );
             expect(source, `${screen} must derive the active channel`).toContain('activeChannelId');
         }
+    });
+});
+
+
+/**
+ * D. Organization context ratchet (DL-031, INV-001).
+ *
+ * Channel = Tenant: a `BbbOrganization` is 1:1 with a Vendure Channel, and the
+ * backend evaluates every BBB read against `ctx.channelId` via
+ * `BbbChannelAccessService` — any organization the client names is ignored. A
+ * screen-side picker is therefore not a filter the server honours: it can show
+ * organization B while the server keeps answering for channel A, which is what
+ * makes the displayed entitlements, capacity and ledger rows unsound (and the
+ * stale value survives a channel switch in `localStorage`).
+ *
+ * Tenant screens resolve their organization from the channel context instead
+ * (`useCurrentOrganization` → `bbbMyOrganization`). Only Platform-tier screens,
+ * whose purpose is browsing across tenants, may offer a picker.
+ */
+const TENANT_ORGANIZATION_SCREENS = [
+    'src/plugins/bigbluebutton-plugin/dashboard/routes/rooms/RoomsList.tsx',
+    'src/plugins/bigbluebutton-plugin/dashboard/routes/sessions/SessionsList.tsx',
+    'src/plugins/bigbluebutton-plugin/dashboard/routes/plans/PlansList.tsx',
+    'src/plugins/bigbluebutton-plugin/dashboard/routes/trials/TrialRegistrationsList.tsx',
+    'src/plugins/bigbluebutton-plugin/dashboard/routes/members/MembersList.tsx',
+    'src/plugins/bigbluebutton-plugin/dashboard/routes/enrollments/EnrollmentsList.tsx',
+];
+
+/** Platform tier — cross-tenant browsing is the purpose of these screens. */
+const PLATFORM_TIER_PICKER_SCREENS = new Set<string>([
+    'src/plugins/bigbluebutton-plugin/dashboard/routes/organizations/OrganizationsList.tsx',
+    'src/plugins/bigbluebutton-plugin/dashboard/routes/servers/ServersList.tsx',
+]);
+
+/**
+ * SHRINK-ONLY deviations (DL-031):
+ *   - MeetingsList picks the *creation target* only; its list read is already
+ *     channel-scoped and `bbbCreateMeeting` re-checks ownership server-side
+ *     (`BbbChannelAccessService.assertOrganizationAccess`), so the picker is UX
+ *     noise rather than a cross-tenant leak.
+ *   - MembershipsList has no registered route in the BBB dashboard extension
+ *     (unrouted legacy component).
+ * Remove an entry here as the screen is migrated or deleted.
+ */
+const LEGACY_ORG_PICKER_SCREENS = new Set<string>([
+    'src/plugins/bigbluebutton-plugin/dashboard/routes/meetings/MeetingsList.tsx',
+    'src/plugins/bigbluebutton-plugin/dashboard/routes/memberships/MembershipsList.tsx',
+]);
+
+/** `bbbOrganizations(options: …)` or `bbbOrganizations {` inside a document. */
+const ORG_COLLECTION_FIELD = /[\s{(,]bbbOrganizations\s*[({]/;
+
+function screensDeclaringOrgPicker(files: string[]): string[] {
+    return files.filter(file =>
+        extractDocumentsFromSource(readSource(file), file).some(document =>
+            ORG_COLLECTION_FIELD.test(document.body),
+        ),
+    );
+}
+
+describe('D. Structural ratchet: tenant screens read the organization from the channel', () => {
+    it('finds the Dashboard sources to scan (guards against a silently empty scan)', () => {
+        const files = dashboardFiles();
+        expect(files.length).toBeGreaterThan(40);
+        for (const screen of TENANT_ORGANIZATION_SCREENS) {
+            expect(files, `${screen} must exist`).toContain(screen);
+        }
+    });
+
+    it('leaves no tenant screen with its own organization picker', () => {
+        const offenders = screensDeclaringOrgPicker(TENANT_ORGANIZATION_SCREENS);
+
+        expect(
+            offenders,
+            'Tenant screens must resolve the organization from the channel context ' +
+                '(useCurrentOrganization / bbbMyOrganization), not from a client-side ' +
+                'picker the server does not honour (DL-031).',
+        ).toEqual([]);
+
+        for (const screen of TENANT_ORGANIZATION_SCREENS) {
+            expect(
+                readSource(screen),
+                `${screen} must read the active organization from the channel`,
+            ).toContain('useCurrentOrganization(');
+        }
+    });
+
+    it('allows an organization picker only on platform-tier screens and tracked deviations', () => {
+        const unexpected = screensDeclaringOrgPicker(dashboardFiles()).filter(
+            file => !PLATFORM_TIER_PICKER_SCREENS.has(file) && !LEGACY_ORG_PICKER_SCREENS.has(file),
+        );
+
+        expect(
+            unexpected,
+            'These screens declare their own bbbOrganizations picker. Resolve the organization ' +
+                'from the channel context (useCurrentOrganization), or record the deviation in ' +
+                'LEGACY_ORG_PICKER_SCREENS with a reason (DL-031).',
+        ).toEqual([]);
+    });
+
+    it('keeps the org-picker baseline shrink-only', () => {
+        const stillDeclaring = new Set(screensDeclaringOrgPicker(dashboardFiles()));
+        const stale = Array.from(LEGACY_ORG_PICKER_SCREENS).filter(
+            file => !stillDeclaring.has(file),
+        );
+
+        expect(
+            stale,
+            'These files no longer declare an organization picker — remove them from ' +
+                'LEGACY_ORG_PICKER_SCREENS so the baseline keeps shrinking.',
+        ).toEqual([]);
     });
 });
 

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
+import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
 import { toast } from 'sonner';
+import { useCurrentOrganization } from '../../shared/useCurrentOrganization';
 import { useState } from 'react';
 import { Link } from '@vendure/dashboard';
 
@@ -30,12 +31,6 @@ const GET_SESSIONS = `
   }
 `;
 
-const GET_ORGS = `
-  query GetBbbOrgsForSessions {
-    bbbOrganizations { items { id name slug } }
-  }
-`;
-
 const CANCEL_SESSION = `
   mutation CancelBbbScheduledSession($id: ID!) {
     cancelBbbScheduledSession(id: $id) { id status }
@@ -61,38 +56,20 @@ interface SessionsResponse {
   bbbScheduledSessions: BbbScheduledSession[];
 }
 
-interface OrgsResponse {
-  bbbOrganizations: { items: { id: string; name: string; slug: string }[] };
-}
-
-function formatOrgLabel(org: { name: string; slug: string }) {
-  const displaySlug = org.slug === '__default_channel__' ? 'default' : org.slug;
-  return `${org.name} (${displaySlug})`;
-}
-
 export function SessionsList() {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const pageSize = 25;
-  const [selectedOrgId, setSelectedOrgId] = useState('');
   const [cancelTargetId, setCancelTargetId] = useState<string | null>(null);
 
-  const orgsQuery = useQuery<OrgsResponse>({
-    queryKey: ['bbbOrganizations'],
-    queryFn: () => api.query(GET_ORGS),
-  });
-
-  const organizations = orgsQuery.data?.bbbOrganizations?.items ?? [];
-
-  // Auto-select first org when orgs load
-  if (!selectedOrgId && organizations.length > 0) {
-    setSelectedOrgId(organizations[0].id);
-  }
+  // Channel = Tenant (INV-001): the organization is resolved server-side from
+  // the active channel — a client-side picker could disagree with ctx.channelId.
+  const { organizationId, label, isLoading: orgLoading, isError: orgError } = useCurrentOrganization();
 
   const { data, isLoading, isError } = useQuery<SessionsResponse>({
-    queryKey: ['bbbScheduledSessions', selectedOrgId],
-    queryFn: () => api.query(GET_SESSIONS, { organizationId: selectedOrgId }),
-    enabled: !!selectedOrgId,
+    queryKey: ['bbbScheduledSessions', organizationId],
+    queryFn: () => api.query(GET_SESSIONS, { organizationId }),
+    enabled: !!organizationId,
     placeholderData: (prev) => prev,
   });
 
@@ -120,28 +97,18 @@ export function SessionsList() {
             View and manage educational sessions across organizations.
           </p>
         </div>
-        <div className="w-72">
-          <Select value={selectedOrgId} onValueChange={(v) => { setSelectedOrgId(v); setPage(1); }}>
-            <SelectTrigger>
-              <SelectValue placeholder={orgsQuery.isLoading ? 'Loading organizations...' : 'Select organization'} />
-            </SelectTrigger>
-            <SelectContent>
-              {organizations.length === 0 ? (
-                <SelectItem value="__no-organizations__" disabled>No organizations available</SelectItem>
-              ) : (
-                organizations.map((org) => (
-                  <SelectItem key={org.id} value={org.id}>{formatOrgLabel(org)}</SelectItem>
-                ))
-              )}
-            </SelectContent>
-          </Select>
-          {orgsQuery.isError && <p className="mt-1 text-xs text-red-500">Failed to load organizations</p>}
+        <div className="w-72 text-right">
+          <Label>Organization</Label>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {orgLoading ? 'Loading…' : label || 'No organization is bound to this channel'}
+          </p>
+          {orgError && <p className="mt-1 text-xs text-red-500">Failed to load organization</p>}
         </div>
       </div>
 
       <Card>
-        {!selectedOrgId ? (
-          <div className="p-6 text-center text-muted-foreground">Select an organization to view sessions</div>
+        {!organizationId ? (
+          <div className="p-6 text-center text-muted-foreground">No organization is bound to this channel</div>
         ) : isLoading ? (
           <div className="p-4 space-y-3">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
         ) : isError ? (

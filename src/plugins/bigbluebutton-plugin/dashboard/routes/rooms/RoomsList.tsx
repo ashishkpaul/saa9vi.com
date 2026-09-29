@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, Badge, Button, Card, Checkbox, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
+import { api, Badge, Button, Card, Checkbox, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Input, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
+import { useCurrentOrganization } from '../../shared/useCurrentOrganization';
 import { toast } from 'sonner';
 import { useState } from 'react';
 
@@ -16,15 +17,6 @@ const STATE_LABEL: Record<string, string> = {
   Active: 'Live',
   Failed: 'Unavailable',
 };
-
-const GET_ORGS = `
-  query GetBbbOrgsForRoomPicker {
-    bbbOrganizations {
-      items { id name slug }
-      totalItems
-    }
-  }
-`;
 
 const GET_ROOMS = `
   query GetBbbRooms($organizationId: ID!, $options: BbbRoomListOptions) {
@@ -65,27 +57,22 @@ export function RoomsList() {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const pageSize = 25;
-  const [selectedOrgId, setSelectedOrgId] = useState('');
+  // Channel = Tenant (INV-001): the organization is resolved server-side from
+  // the active channel — a client-side picker could disagree with ctx.channelId.
+  const { organizationId, label, isLoading: orgLoading } = useCurrentOrganization();
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [newSlug, setNewSlug] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [newRecording, setNewRecording] = useState(false);
 
-  const orgsQuery = useQuery<any>({
-    queryKey: ['bbbOrgsForRooms'],
-    queryFn: () => api.query(GET_ORGS),
-    enabled: true,
-  });
-  const organizations = orgsQuery.data?.bbbOrganizations?.items ?? [];
-
   const roomsQuery = useQuery<RoomsResponse>({
-    queryKey: ['bbbRooms', selectedOrgId, page],
+    queryKey: ['bbbRooms', organizationId, page],
     queryFn: () => api.query(GET_ROOMS, {
-      organizationId: selectedOrgId,
+      organizationId,
       options: { skip: (page - 1) * pageSize, take: pageSize },
     }),
-    enabled: !!selectedOrgId,
+    enabled: !!organizationId,
     placeholderData: (prev) => prev,
   });
 
@@ -96,7 +83,7 @@ export function RoomsList() {
   const createMutation = useMutation({
     mutationFn: (input: any) => api.mutate(CREATE_ROOM, { input }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['bbbRooms', selectedOrgId] });
+      queryClient.invalidateQueries({ queryKey: ['bbbRooms', organizationId] });
       setCreateOpen(false);
       setNewName(''); setNewSlug(''); setNewDescription(''); setNewRecording(false);
       toast.success('Room created');
@@ -107,7 +94,7 @@ export function RoomsList() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.mutate(DELETE_ROOM, { id }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['bbbRooms', selectedOrgId] });
+      queryClient.invalidateQueries({ queryKey: ['bbbRooms', organizationId] });
       toast.success('Room deleted');
     },
     onError: (err: Error) => toast.error('Error', { description: err.message }),
@@ -116,7 +103,7 @@ export function RoomsList() {
   const resetMutation = useMutation({
     mutationFn: (id: string) => api.mutate(RESET_ROOM, { id }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['bbbRooms', selectedOrgId] });
+      queryClient.invalidateQueries({ queryKey: ['bbbRooms', organizationId] });
       toast.success('Room reset to Idle');
     },
     onError: (err: Error) => toast.error('Error', { description: err.message }),
@@ -140,21 +127,14 @@ export function RoomsList() {
       <div className="mb-6">
         <h1 className="text-2xl font-bold mb-4">BBB Rooms</h1>
         <div className="max-w-xs">
-          <Label htmlFor="org-picker">Organization</Label>
-          <Select value={selectedOrgId} onValueChange={(v) => { setSelectedOrgId(v); setPage(1); }}>
-            <SelectTrigger id="org-picker">
-              <SelectValue placeholder="-- Select organization --" />
-            </SelectTrigger>
-            <SelectContent>
-              {organizations.map((org: any) => (
-                <SelectItem key={org.id} value={org.id}>{org.name} ({org.slug})</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Label>Organization</Label>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {orgLoading ? 'Loading…' : label || 'No organization is bound to this channel'}
+          </p>
         </div>
       </div>
 
-      {selectedOrgId && (
+      {organizationId && (
         <>
           <div className="mb-4">
             <Button onClick={() => setCreateOpen(true)}>Create Room</Button>
@@ -267,7 +247,7 @@ export function RoomsList() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button onClick={() => createMutation.mutate({ organizationId: selectedOrgId, name: newName, slug: newSlug || undefined, description: newDescription || undefined, recordingEnabled: newRecording })} disabled={!newName || createMutation.isPending}>
+            <Button onClick={() => createMutation.mutate({ organizationId, name: newName, slug: newSlug || undefined, description: newDescription || undefined, recordingEnabled: newRecording })} disabled={!newName || createMutation.isPending}>
               {createMutation.isPending ? 'Creating...' : 'Create Room'}
             </Button>
           </DialogFooter>

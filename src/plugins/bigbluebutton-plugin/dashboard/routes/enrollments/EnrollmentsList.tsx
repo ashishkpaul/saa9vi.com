@@ -3,12 +3,7 @@ import { api, Badge, Button, Card, Input, Label, Select, SelectContent, SelectIt
 import { toast } from 'sonner';
 import { useDebounce } from '@uidotdev/usehooks';
 import { useEffect, useState } from 'react';
-
-const GET_ORGS = `
-  query GetBbbOrgsForEnrollments {
-    bbbOrganizations { items { id name slug } }
-  }
-`;
+import { useCurrentOrganization } from '../../shared/useCurrentOrganization';
 
 const GET_ROOMS = `
   query GetBbbRoomsForEnrollments($organizationId: ID!) {
@@ -69,7 +64,6 @@ const DEACTIVATE_ENROLLMENT = `
 
 export function EnrollmentsList() {
   const qc = useQueryClient();
-  const [selectedOrgId, setSelectedOrgId] = useState('');
   const [selectedRoomId, setSelectedRoomId] = useState('');
   const [page, setPage] = useState(1);
   const pageSize = 25;
@@ -88,13 +82,14 @@ export function EnrollmentsList() {
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
   const [enrollAccessDays, setEnrollAccessDays] = useState<number | null>(null);
 
-  const orgsQuery = useQuery<any>({ queryKey: ['bbbOrgsForEnroll'], queryFn: () => api.query(GET_ORGS) });
-  const organizations = orgsQuery.data?.bbbOrganizations?.items ?? [];
+  // Channel = Tenant (INV-001): the organization is resolved server-side from
+  // the active channel — a client-side picker could disagree with ctx.channelId.
+  const { organizationId, label, isLoading: orgLoading } = useCurrentOrganization();
 
   const roomsQuery = useQuery<any>({
-    queryKey: ['bbbRoomsForEnroll', selectedOrgId],
-    queryFn: () => api.query(GET_ROOMS, { organizationId: selectedOrgId }),
-    enabled: !!selectedOrgId,
+    queryKey: ['bbbRoomsForEnroll', organizationId],
+    queryFn: () => api.query(GET_ROOMS, { organizationId }),
+    enabled: !!organizationId,
   });
   const rooms = roomsQuery.data?.bbbRooms?.items ?? [];
 
@@ -123,12 +118,6 @@ export function EnrollmentsList() {
     if (!e.validUntil && e.expiresAt && new Date(e.expiresAt) < now) return false;
     return true;
   }
-
-  useEffect(() => {
-    if (organizations.length > 0 && !selectedOrgId) {
-      setSelectedOrgId(organizations[0].id);
-    }
-  }, [organizations]);
 
   useEffect(() => {
     let cancelled = false;
@@ -182,18 +171,15 @@ export function EnrollmentsList() {
     <div className="p-6">
       <h1 className="text-2xl font-bold mb-4">Enrollments</h1>
 
-      {/* Organization Picker */}
+      {/* Organization: resolved from the active channel (Channel = Tenant) */}
       <div className="max-w-xs mb-4">
         <Label>Organization</Label>
-        <Select value={selectedOrgId} onValueChange={(v: string) => { setSelectedOrgId(v); setSelectedRoomId(''); }}>
-          <SelectTrigger><SelectValue placeholder="-- Select organization --" /></SelectTrigger>
-          <SelectContent>
-            {organizations.map((o: any) => <SelectItem key={o.id} value={o.id}>{o.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {orgLoading ? 'Loading…' : label || 'No organization is bound to this channel'}
+        </p>
       </div>
 
-      {selectedOrgId && (
+      {organizationId && (
         <div className="max-w-xs mb-6">
           <Label>Room</Label>
           <Select value={selectedRoomId} onValueChange={(v: string) => { setSelectedRoomId(v); setPage(1); }}>

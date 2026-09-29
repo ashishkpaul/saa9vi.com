@@ -1,14 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, Badge, Button, Card, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
+import { api, Badge, Button, Card, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
 import { toast } from 'sonner';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { graphql } from '@/gql';
-
-const GET_ORGS = graphql(`
-  query GetOrgsForTrialRegistrations {
-    bbbOrganizations { items { id name slug } totalItems }
-  }
-`);
+import { useCurrentOrganization } from '../../shared/useCurrentOrganization';
 
 const GET_TRIAL_REGISTRATIONS = graphql(`
   query GetBbbTrialRegistrations($organizationId: ID!) {
@@ -57,28 +52,14 @@ type TrialRegistrationRow = {
 
 export function TrialRegistrationsList() {
   const qc = useQueryClient();
-  const [selectedOrgId, setSelectedOrgId] = useState('');
-
-  const orgsQuery = useQuery({
-    queryKey: ['orgsForTrials'],
-    queryFn: () => api.query(GET_ORGS),
-    staleTime: 5 * 60 * 1000, // 5 min — orgs don't change frequently
-  });
-  const organizations = orgsQuery.data?.bbbOrganizations?.items ?? [];
-
-  // Auto-select first org — depend on query data, not derived array,
-  // to avoid stale closures when data arrives after initial mount
-  useEffect(() => {
-    const items = orgsQuery.data?.bbbOrganizations?.items ?? [];
-    if (!selectedOrgId && items.length > 0) {
-      setSelectedOrgId(items[0].id);
-    }
-  }, [orgsQuery.data, selectedOrgId]);
+  // Channel = Tenant (INV-001): the organization is resolved server-side from
+  // the active channel — a client-side picker could disagree with ctx.channelId.
+  const { organizationId, label, isLoading: orgLoading } = useCurrentOrganization();
 
   const registrationsQuery = useQuery({
-    queryKey: ['trialRegistrations', selectedOrgId],
-    queryFn: () => api.query(GET_TRIAL_REGISTRATIONS, { organizationId: selectedOrgId }),
-    enabled: !!selectedOrgId,
+    queryKey: ['trialRegistrations', organizationId],
+    queryFn: () => api.query(GET_TRIAL_REGISTRATIONS, { organizationId }),
+    enabled: !!organizationId,
   });
   const registrations = registrationsQuery.data?.bbbTrialRegistrationsByOrganization ?? [];
 
@@ -124,19 +105,16 @@ export function TrialRegistrationsList() {
 
       <div className="max-w-xs mb-6">
         <Label>Organization</Label>
-        <Select value={selectedOrgId} onValueChange={setSelectedOrgId}>
-          <SelectTrigger><SelectValue placeholder="Select organization" /></SelectTrigger>
-          <SelectContent>
-            {organizations.map((o) => <SelectItem key={o.id} value={String(o.id)}>{o.name} ({o.slug})</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {orgLoading ? 'Loading…' : label || 'No organization is bound to this channel'}
+        </p>
       </div>
 
       <Card>
         {registrationsQuery.isLoading ? (
           <div className="p-4 space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
-        ) : !selectedOrgId ? (
-          <div className="p-6 text-center text-muted-foreground">Select an organization to view trial registrations</div>
+        ) : !organizationId ? (
+          <div className="p-6 text-center text-muted-foreground">No organization is bound to this channel</div>
         ) : registrations.length === 0 ? (
           <div className="p-6 text-center">
             <p className="text-muted-foreground">No trial registrations found for this organization.</p>
