@@ -63,6 +63,22 @@ export type BillingMode = (typeof BILLING_MODE)[keyof typeof BILLING_MODE];
  */
 export const DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR = 2000;
 
+// ─── Tenant provisioning defaults (ADR-047 Phase 3) ─────────────────────────
+
+/**
+ * Default room names seeded for every newly provisioned organization when the
+ * `defaultRooms` plugin option is omitted (ADR-047 Phase 3).
+ *
+ * A tenant must never be dropped into an empty back office: registration
+ * provisions the organization and this room set together. Rooms are
+ * organization-scoped and the organization's `concurrentMeetingLimit` remains
+ * the sole concurrency enforcement surface (ADR-031), so the size of this list
+ * is a UX choice, not a capacity one — multi-room needs no further code change.
+ *
+ * An explicit `defaultRooms: []` means "seed nothing" (opt-out).
+ */
+export const DEFAULT_SEEDED_ROOM_NAMES: readonly string[] = ["Main Classroom"];
+
 // ─── Organisation Member Roles ───────────────────────────────────────────────
 
 /**

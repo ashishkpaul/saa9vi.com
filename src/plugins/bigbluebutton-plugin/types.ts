@@ -146,6 +146,23 @@ export interface BigBlueButtonPluginOptions {
    */
   defaultRatePaisePerLearnerHour?: number;
 
+  // ─── Tenant provisioning (ADR-047 Phase 3) ──────────────────────────────
+
+  /**
+   * Room names created for every newly provisioned `BbbOrganization` as part of
+   * tenant registration, so a fresh tenant lands in a working academy instead
+   * of an empty room list (Phase 3).
+   *
+   * Seeding is idempotent: it runs only while the organization has ZERO rooms
+   * (`BbbTenantProvisioningListener.seedDefaultRooms`), so a re-delivered
+   * `TenantRegisteredEvent` never duplicates them, and a seeding failure is
+   * logged without failing organization provisioning.
+   *
+   * @default `DEFAULT_SEEDED_ROOM_NAMES` (constants.ts) — `["Main Classroom"]`.
+   * An explicit `[]` disables seeding (a deliberate opt-out, not a fallback).
+   */
+  defaultRooms?: string[];
+
   // ─── Capacity Intelligence Load Estimation (CI-001) ──────────────────────
 
   /**

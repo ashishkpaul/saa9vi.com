@@ -227,6 +227,8 @@ BigBlueButton                       BigBlueButton
 
 **Acceptance:** registering a tenant yields org + default room(s) with `billingMode='metered'`; replaying the event adds nothing.
 
+> **Status (S3, 2026-09-30): LANDED (backend).** Plugin option `defaultRooms?: string[]` (types.ts) with `DEFAULT_SEEDED_ROOM_NAMES = ["Main Classroom"]` (constants.ts); `BbbTenantProvisioningListener` now seeds them through the existing channel-scoped `orgCtx` + `BbbRoomService.create` (i.e. ADR-031 capacity clamping and org-derived `recordingEnabled` apply unchanged), guarded by a **zero-room check** so re-delivery cannot duplicate, and wrapped so a seeding failure is logged and never fails org provisioning. `defaultRooms: []` is an explicit opt-out. Evidence: `bbb-channel-isolation.e2e-spec.ts` §2 — the org's own room list returns exactly the seeded room, `billingMode` is `metered` with a null per-org rate (platform default), and a **replayed `TenantRegisteredEvent`** (published on the real `EventBus`) leaves org count and room ids identical; suite **46/46** on real Postgres. En route, the S3 ownership assertion exposed **BUG-051** (`BbbRoom.organizationId` was non-null in the SDL but populated by nothing) — fixed for `BbbRoom` with `@RelationId` (no schema change); sibling types are flagged in `known-bugs.md` for the Phase 6 audit. **No schema change:** `npx vendure migrate -g bbb_s3_check` answers *"No changes in database schema were found, so no migration was generated"* (`@RelationId` projects an existing FK column — nothing hand-written, nothing to run). Dashboard surfacing of these rooms is Phase 6 (S6).
+
 ---
 
 ### Phase 4 — Billing read API (tenant + platform)

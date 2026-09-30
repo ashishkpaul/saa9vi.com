@@ -509,6 +509,11 @@ interface BigBlueButtonPluginOptions {
   attendeeJoinUrlTtlSeconds?: number;  // Join URL TTL in seconds (default: 86400)
   runScheduledTasks?: boolean;         // Register reconciliation scheduler (default: true)
 
+  // Tenant provisioning (ADR-047 Phase 3)
+  defaultRooms?: string[];             // Rooms seeded per new organization (default: ["Main Classroom"])
+                                       // Idempotent: seeds only while the org has zero rooms.
+                                       // [] = seed nothing (explicit opt-out).
+
   // Redis
   redisHost?: string;                  // Falls back to REDIS_HOST env
   redisPort?: number;                  // Falls back to REDIS_PORT env

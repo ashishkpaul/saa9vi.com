@@ -10,6 +10,9 @@
  * Scenarios covered:
  *   1. Tenant A creates a BbbOrganization for its channel (via SuperAdmin).
  *   2. Tenant B creates a BbbOrganization for its channel (via SuperAdmin).
+ *      Phase 3 (ADR-047): the same provisioning listener seeds the plugin's
+ *      `defaultRooms` for the new organization — exactly once, even when the
+ *      TenantRegisteredEvent is replayed.
  *   3. Tenant A admin CAN read/update its own organization.
  *   4. Tenant A admin CANNOT read/update/delete tenant B's organization
  *      (ForbiddenError).
@@ -53,6 +56,7 @@ import {
   EventBus,
   mergeConfig,
   RequestContext,
+  RequestContextService,
   TransactionalConnection,
 } from '@vendure/core';
 import { getSuperadminContext } from '@vendure/testing/lib/utils/get-superadmin-context';
@@ -77,6 +81,7 @@ import { BbbRoom } from '../entities/bbb-room.entity';
 import { BbbMeteredUsage } from '../entities/bbb-metered-usage.entity';
 import { MeetingCompletedEvent } from '../events/bbb-events';
 import { BbbMeetingService } from '../services/bbb-meeting.service';
+import { TenantRegisteredEvent } from '../../tenant-plugin/events/tenant-events';
 import {
   DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR,
   MEETING_STATE,
@@ -184,6 +189,33 @@ const BBB_ORGANIZATION_ADMIN_STATE = gql`
       concurrentMeetingLimit
       maxParticipantsPerMeeting
       maxSessionsPerOrg
+    }
+  }
+`;
+
+// ─── Phase 3 (S3) documents — default rooms seeded at tenant provisioning ──
+
+const BBB_ROOMS = gql`
+  query BbbRooms($organizationId: ID!) {
+    bbbRooms(organizationId: $organizationId) {
+      items {
+        id
+        name
+        organizationId
+      }
+      totalItems
+    }
+  }
+`;
+
+const BBB_ORGANIZATION_BILLING = gql`
+  query BbbOrganizationBilling($id: ID!) {
+    bbbOrganization(id: $id) {
+      id
+      billingMode
+      ratePaisePerLearnerHour
+      monthlySpendLimitPaise
+      concurrentMeetingLimit
     }
   }
 `;
@@ -543,6 +575,119 @@ describe('BBB Channel Isolation (Phase A)', () => {
         tenantBChannelToken,
       );
       expect(orgBId).toBeTruthy();
+    });
+
+    // ─── ADR-047 Phase 3 (S3): default rooms at provisioning ───────────────
+    //
+    // The same listener that creates the organization seeds the plugin's
+    // `defaultRooms` (default ["Main Classroom"]) through BbbRoomService, so a
+    // new tenant lands in a usable academy. These cases are deliberately the
+    // FIRST assertions about rooms in this suite: §8's fixtures create their
+    // own rooms for orgA/orgB, so a later section could not assert "exactly the
+    // seeded room".
+
+    /** Rooms are created after the org row, and the listener is async → poll. */
+    const waitForRooms = async (
+      organizationId: string,
+      channelToken: string,
+      expectedTotal: number,
+    ) => {
+      adminClient.setChannelToken(channelToken);
+      const deadline = Date.now() + 20_000;
+      for (;;) {
+        const { bbbRooms } = await adminClient.query(BBB_ROOMS, {
+          organizationId,
+        });
+        if (bbbRooms.totalItems >= expectedTotal) {
+          return bbbRooms;
+        }
+        if (Date.now() > deadline) {
+          throw new Error(
+            `Expected ${expectedTotal} default room(s) for org ${organizationId}, saw ${bbbRooms.totalItems}`,
+          );
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    };
+
+    it('seeds the configured default room(s) for a new tenant (Phase 3)', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+
+      // Read through the tenant's own channel-scoped query — the room must be
+      // visible to the academy that owns it (INV-029), not only to SuperAdmin.
+      const rooms = await waitForRooms(orgAId, tenantAChannelToken, 1);
+
+      expect(rooms.totalItems).toBe(1);
+      expect(rooms.items[0].name).toBe('Main Classroom');
+      expect(rooms.items[0].organizationId).toBe(orgAId);
+    });
+
+    it('provisions the organization as metered with a null per-org rate (D7/Q2)', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+
+      const { bbbOrganization } = await adminClient.query(
+        BBB_ORGANIZATION_BILLING,
+        { id: orgAId },
+      );
+      // D7 — new organizations are metered (never backfilled 'grant').
+      expect(bbbOrganization.billingMode).toBe('metered');
+      // Q2 — the rate is intentionally unset so the single resolution point
+      // (platformDefaultRatePaisePerHour) supplies the placeholder/default.
+      expect(bbbOrganization.ratePaisePerLearnerHour).toBeNull();
+      expect(bbbOrganization.monthlySpendLimitPaise).toBeNull();
+    });
+
+    it('a replayed TenantRegisteredEvent adds no second org and no second room', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+
+      const beforeRooms = (
+        await adminClient.query(BBB_ROOMS, { organizationId: orgAId })
+      ).bbbRooms;
+      const beforeOrgs = (await adminClient.query(BBB_ORGANIZATIONS))
+        .bbbOrganizations;
+      expect(beforeRooms.totalItems).toBe(1);
+
+      // The real provisioning event, replayed on the real EventBus — the
+      // listener is registered on it in the running app, so this exercises the
+      // production idempotency path rather than a stubbed handler.
+      const org = await server.app
+        .get(TransactionalConnection)
+        .rawConnection.getRepository(BbbOrganization)
+        .findOne({ where: { id: orgAId.replace(/^T_/, '') as any } });
+      expect(org).toBeTruthy();
+
+      const ctx = await server.app
+        .get(RequestContextService)
+        .create({ apiType: 'admin', channelOrToken: tenantAChannelToken });
+      await server.app
+        .get(EventBus)
+        .publish(
+          new TenantRegisteredEvent(
+            ctx,
+            String(org!.tenantProfileId),
+            tenantAChannelId,
+            org!.slug,
+            org!.name,
+          ),
+        );
+      // The listener's handler is asynchronous with no completion signal the
+      // test can await; a duplicate would be written immediately, so a short
+      // settle beat is enough to make the assertion meaningful.
+      await new Promise((r) => setTimeout(r, 2_000));
+
+      const afterRooms = (
+        await adminClient.query(BBB_ROOMS, { organizationId: orgAId })
+      ).bbbRooms;
+      const afterOrgs = (await adminClient.query(BBB_ORGANIZATIONS))
+        .bbbOrganizations;
+
+      expect(afterOrgs.totalItems).toBe(beforeOrgs.totalItems);
+      expect(afterRooms.totalItems).toBe(beforeRooms.totalItems);
+      expect(afterRooms.items.map((r: any) => r.id).sort()).toEqual(
+        beforeRooms.items.map((r: any) => r.id).sort(),
+      );
     });
   });
 
