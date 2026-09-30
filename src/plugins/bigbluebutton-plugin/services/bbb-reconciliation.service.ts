@@ -14,6 +14,7 @@ import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbServerService } from "./bbb-server.service";
 import { BbbApiService } from "./bbb-api.service";
 import { BbbMeetingService } from "./bbb-meeting.service";
+import { BbbMeteringService } from "./bbb-metering.service";
 import { GrantReaderService } from "./grant-reader.service";
 import {
   GrantConsumedEvent,
@@ -35,6 +36,7 @@ export class BbbReconciliationService {
     private readonly bbbApiService: BbbApiService,
     @Inject(forwardRef(() => BbbMeetingService))
     private readonly meetingService: BbbMeetingService,
+    private readonly meteringService: BbbMeteringService,
     private readonly eventBus: EventBus,
     private readonly grantReader: GrantReaderService,
     @Inject(BBB_PLUGIN_OPTIONS)
@@ -431,6 +433,52 @@ export class BbbReconciliationService {
       } catch (err: any) {
         Logger.error(
           `[reconcilePendingBilling] Billing recovery failed for meeting ${meeting.id}: ${err.message} ` +
+            `(MeetingCompletedEvent not re-published; session remains LIVE until recovery succeeds)`,
+          loggerCtx,
+        );
+      }
+    }
+    return billed;
+  }
+
+  /**
+   * ADR-047 Phase 2B — metered recovery scan.
+   *
+   * COMPLETED meetings of metered orgs with no `BbbMeteredUsage` row (crashed
+   * between completion and billing, or billed zero-row write failed) are
+   * billed, then their `MeetingCompletedEvent` is re-published so the linked
+   * session can leave LIVE — mirrors the grant recovery above.
+   */
+  async reconcilePendingMeteredBilling(): Promise<number> {
+    const ctx = await this.ctxService.create({ apiType: "admin" });
+    const meetingIds = await this.meteringService.findUnbilledCompletedMeetings();
+    let billed = 0;
+    for (const meetingId of meetingIds) {
+      try {
+        const usageId = await this.meteringService.billMeteredMeeting(ctx, meetingId);
+        if (!usageId) continue;
+        billed++;
+        Logger.info(
+          `[reconcilePendingMeteredBilling] Recovered metered billing for completed meeting ${meetingId}`,
+          loggerCtx,
+        );
+        const meeting = await this.connection
+          .getRepository(ctx, BbbMeeting)
+          .findOne({ where: { id: meetingId }, relations: ["organization"] });
+        if (!meeting) continue;
+        this.eventBus.publish(
+          new MeetingCompletedEvent(
+            ctx,
+            meeting.id as string,
+            meeting.roomId ?? null,
+            (meeting.organization as { id?: unknown })?.id as string,
+            "reconciliation",
+            0,
+          ),
+        );
+      } catch (err: any) {
+        Logger.error(
+          `[reconcilePendingMeteredBilling] Recovery failed for meeting ${meetingId}: ${err.message} ` +
             `(MeetingCompletedEvent not re-published; session remains LIVE until recovery succeeds)`,
           loggerCtx,
         );

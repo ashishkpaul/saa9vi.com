@@ -29,24 +29,20 @@ registerNewTenant(input)
 ```
 bbbJoinRoom(roomId, participantName)
   │
+  ├─ INV-027: BbbRoomAccessService.evaluate()   ← BEFORE provisioning (BUG-045 fix)
+  │    ├─ Source 1: BbbOrganizationMembership? → org_admin/moderator = MODERATOR, staff = VIEWER
+  │    ├─ Source 2: BbbOrganizationMember (legacy)? → MODERATOR
+  │    ├─ Source 3: BbbEntitlement { type: 'bbb_room' } (valid window)? → attendee
+  │    ├─ Source 4: BbbEnrollment (active, in-window)? → attendee
+  │    └─ No source passes → Access Denied (nothing enqueued, no grant linkage)
+  │
   ├─ requestProvisioning(roomId)
   │    └─ Acquires Redis distributed lock on roomId
-  │
-  ├─ Gate 1: Organization Membership?
-  │    ├─ Yes → provisionAndJoin() → moderator/attendee join URL
-  │    └─ No → continue
-  │
-  ├─ Gate 2: BbbOrganizationMember (legacy)?
-  │    ├─ Yes → isModerator? → moderator/attendee join URL
-  │    └─ No → continue
-  │
-  ├─ Gate 3: BbbEntitlement { type: 'bbb_room' }?
-  │    ├─ Yes → attendee join URL
-  │    └─ No → Access Denied
   │
   └─ If room is Idle:
        └─ createRoomMeetingAndEnqueue()
             └─ BullMQ: bbb-meeting-provisioning
+  (If room is Active: join URL built from access.isModerator)
 ```
 
 ---
@@ -588,21 +584,26 @@ leaveAcademy() / deleteMyAccount()
 
 ---
 
-## Auth Waterfall (joinRoom)
+## Room Access Evaluation (INV-027 — shared by joinRoom and bbbRoomStatus)
 
 ```
-joinRoom(roomId)
+joinRoom(roomId) / bbbRoomStatus(id)
   │
-  ├─ Gate 1: BbbOrganizationMembership.findActiveMembership()
-  │    ├─ Found → provisionAndJoin(membership.role)
-  │    │    ├─ org_admin/moderator → MODERATOR join URL
-  │    │    └─ staff → VIEWER join URL
-  │    └─ Not found → continue
+  ├─ BbbRoomAccessService.evaluate() — ONE decision, both surfaces (BUG-045 fix)
+  │    ├─ Source 1: BbbOrganizationMembership.findActiveMembership()
+  │    │    ├─ Found → allowed; org_admin/moderator → MODERATOR, staff → VIEWER
+  │    │    └─ Not found → continue
+  │    ├─ Source 2: BbbMemberService.findActiveMembership() (legacy)
+  │    │    ├─ Found → allowed; valid legacy roles (org-admin/trainer) → MODERATOR
+  │    │    └─ Not found → continue
+  │    ├─ Source 3: BbbEntitlement { type: 'bbb_room' }, validFrom <= now <= validUntil
+  │    │    ├─ Valid → allowed (attendee)
+  │    │    └─ Invalid → continue
+  │    └─ Source 4: BbbEnrollment (active: true, validUntil/expiresAt in window)
+  │         ├─ Valid → allowed (attendee)
+  │         └─ Invalid or absent → Access Denied
   │
-  ├─ Gate 2: BbbMemberService.findActiveMembership() (legacy)
-  │    ├─ Found + isModerator → MODERATOR join URL
-  │    └─ Not found → continue
-  │
-  └─ Gate 3: BbbEntitlementService.hasAccess(type: 'bbb_room')
-       ├─ True → attendee join URL
-       └─ False → Access Denied
+  └─ joinRoom only: evaluation runs BEFORE requestProvisioning (BUG-045 #3) —
+     a denied customer never enqueues a meeting;
+     bbbRoomStatus throws ForbiddenError on denial (preview denial ⇔ join denial)
+```

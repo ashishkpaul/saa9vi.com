@@ -183,9 +183,14 @@ apiOptions: {
     // MarketplaceIndexerPlugin reads these to join Product → BbbScheduledSession
     // and Product → InstructorProfile when building the platform-level ES indices.
     // Must be set in BbbScheduledSessionService.create() when productVariantId is provided.
+    // readonly:true + public:false → not writable via any GraphQL API (Admin or Shop),
+    // still readable via Admin API output type, writable only via plugin TypeScript
+    // (TransactionalConnection Product repository save). Same pattern as the
+    // readonly Order fields in MarketplaceIndexerPlugin and Customer.status below.
+    // No DB migration: readonly does not change column type/nullability.
     Product: [
-      { name: 'bbbSessionId',        type: 'string' as const, nullable: true, public: false },
-      { name: 'instructorProfileId', type: 'string' as const, nullable: true, public: false },
+      { name: 'bbbSessionId',        type: 'string' as const, nullable: true, public: false, readonly: true },
+      { name: 'instructorProfileId', type: 'string' as const, nullable: true, public: false, readonly: true },
     ],
     // Customer status field for platform-wide suspension (INV-014)
     Customer: [

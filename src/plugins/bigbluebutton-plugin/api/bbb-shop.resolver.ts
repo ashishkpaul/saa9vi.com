@@ -19,6 +19,7 @@ import { BbbMeetingService } from "../services/bbb-meeting.service";
 import { BbbOrganizationService } from "../services/bbb-organization.service";
 import { BbbRoomService } from "../services/bbb-room.service";
 import { BbbMemberService } from "../services/bbb-member.service";
+import { BbbRoomAccessService } from "../services/room-access.service";
 import { BbbScheduledSessionService } from "../services/bbb-scheduled-session.service";
 import { TrialRegistrationService } from "../services/trial-registration.service";
 import { LearningDashboardService } from "../services/learning-dashboard.service";
@@ -49,6 +50,7 @@ export class BbbShopResolver {
     private readonly customerDeletionService: CustomerDeletionService,
     private readonly authService: AuthService,
     private readonly attendanceAnalytics: AttendanceAnalyticsService,
+    private readonly roomAccessService: BbbRoomAccessService,
   ) {}
 
   @Query()
@@ -183,33 +185,20 @@ export class BbbShopResolver {
     const room = await this.roomService.findById(ctx, id);
     if (!room) throw new ForbiddenError();
 
-    // Allow access if customer has a valid enrollment, a valid entitlement,
-    // or an org membership (BUG-022: also check BbbEntitlement).
-    const now = new Date();
-    let [enrollment, entitlement, member] = await Promise.all([
-      this.connection.getRepository(ctx, BbbEnrollment).findOne({
-        where: { roomId: id, customerId: customer.id as string, active: true },
-      }),
-      this.connection.getRepository(ctx, BbbEntitlement).findOne({
-        where: {
-          resourceId: id,
-          customerId: customer.id as string,
-          type: "bbb_room",
-        },
-      }),
-      this.memberService.findActiveMembership(
-        ctx,
-        customer.id,
-        room.organization.id,
-      ),
-    ]);
-    if (enrollment?.expiresAt && enrollment.expiresAt < now) enrollment = null;
-    const isExpired =
-      (enrollment?.validUntil && enrollment.validUntil < now) ||
-      (!enrollment?.validUntil && enrollment?.expiresAt && enrollment.expiresAt < now);
-    if (isExpired) enrollment = null;
-    if (entitlement?.validUntil && entitlement.validUntil < now) entitlement = null;
-    if (!enrollment && !entitlement && !member) throw new ForbiddenError();
+    // INV-027 (BUG-045): the shared evaluation — same four sources (membership
+    // → legacy member → entitlement → enrollment), same window semantics, same
+    // decision as joinRoom, so preview denial ⇔ join denial. This previously
+    // hand-rolled {enrollment | entitlement | legacy member}: it accepted
+    // enrollments join never honored, and never checked
+    // BbbOrganizationMembership, so FEAT-001 staff saw ForbiddenError here
+    // while joinRoom would have admitted them as moderator.
+    const access = await this.roomAccessService.evaluate(
+      ctx,
+      customer.id as string,
+      room.organization.id,
+      id,
+    );
+    if (!access.allowed) throw new ForbiddenError();
 
     return room;
   }
@@ -231,8 +220,9 @@ export class BbbShopResolver {
     const room = await this.roomService.findById(ctx, roomId);
     if (!room) throw new ForbiddenError();
 
-    // Membership check is enforced inside meetingService.joinRoom via
-    // memberService.assertActiveMembership. No need to check it here too.
+    // INV-027: authorization is enforced inside meetingService.joinRoom via
+    // BbbRoomAccessService.evaluate — evaluated BEFORE provisioning, and the
+    // same evaluation bbbRoomStatus uses above. No check needed here too.
     const result = await this.meetingService.joinRoom(
       ctx,
       roomId,

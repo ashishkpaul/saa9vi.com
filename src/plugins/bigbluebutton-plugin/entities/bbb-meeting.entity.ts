@@ -80,9 +80,16 @@ export class BbbMeeting extends VendureEntity {
    * that was active WHEN the meeting was provisioned, not when it ended.
    * This eliminates the race condition of org-level grant changes during
    * a meeting's lifetime.
+   *
+   * `null` for metered orgs (ADR-047 Phase 2B): metered meetings carry no grant
+   * linkage at all — they are billed from BbbMeteredUsage instead.
+   *
+   * `type` is explicit because TypeORM cannot infer a Postgres type from a
+   * union TS type (`string | null` reflects as `Object`) — same reason
+   * `attendeeJoinUrl` and `BbbMeteredUsage.roomId` declare it.
    */
-  @Column({ nullable: true })
-  grantId: string;
+  @Column({ type: "varchar", nullable: true })
+  grantId: string | null;
 
   // ─── Deprecated: kept for backward compatibility ────────────────────────
 

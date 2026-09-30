@@ -15,6 +15,9 @@ import {
 import { In } from "typeorm";
 import { BbbServerService } from "../services/bbb-server.service";
 import { BbbOrganizationService } from "../services/bbb-organization.service";
+// H3 (BUG-049 / INV-029): capacity-grant reads are channel-asserted, exactly as
+// `BbbOrganizationService.findById/update/delete` already are.
+import { BbbChannelAccessService } from "../services/bbb-channel-access.service";
 import { BbbMeetingService } from "../services/bbb-meeting.service";
 import { BbbMemberService } from "../services/bbb-member.service";
 import { BbbScheduledSessionService } from "../services/bbb-scheduled-session.service";
@@ -145,6 +148,8 @@ interface CreateBbbScheduledSessionInput {
   subjectTags?: string[];
   isTrial?: boolean;
   visibility?: string;
+  /** Optional room linkage (ADR-047 / D5); validated against the session's org. */
+  roomId?: string;
 }
 
 interface CreateBbbSessionTemplateInput {
@@ -165,6 +170,8 @@ interface UpdateBbbScheduledSessionInput {
   subjectTags?: string[];
   visibility?: string;
   isTrial?: boolean;
+  /** Room linkage (ADR-047 / D5); null detaches. Must belong to the same org. */
+  roomId?: string | null;
 }
 
 @Resolver()
@@ -172,6 +179,7 @@ export class BbbAdminResolver {
   constructor(
     private readonly serverService: BbbServerService,
     private readonly orgService: BbbOrganizationService,
+    private readonly channelAccess: BbbChannelAccessService,
     private readonly meetingService: BbbMeetingService,
     private readonly memberService: BbbMemberService,
     private readonly roomService: BbbRoomService,
@@ -549,7 +557,16 @@ export class BbbAdminResolver {
     return true;
   }
 
-  @Allow(BbbAdminPermission.Permission, BbbManageOrganizationsPermission.Permission)
+  /**
+   * H2 / BUG-047 sibling (SEC-008): deleting an organization is **platform**
+   * capacity governance, not a tenant act. Retargeted from
+   * `BbbManageOrganizations` (held by every tenant admin role) to
+   * `BBBPlatformInfrastructure`, which ADR-033 deliberately excludes from the
+   * tenant role — the gate is the permission, never a tenant-role edit (A15).
+   * The channel assert in `BbbOrganizationService.delete` stays as defence in
+   * depth (INV-029).
+   */
+  @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
   @Transaction()
   @Mutation()
   async deleteBbbOrganization(
@@ -576,6 +593,18 @@ export class BbbAdminResolver {
 
   // ─── Capacity Grants ────────────────────────────────────────────────────────
 
+  /**
+   * H3 / BUG-049 (SEC-008): the query accepts an arbitrary `organizationId`, so
+   * it must assert channel ownership before reading — exactly the contract
+   * `BbbOrganizationService.findById()` enforces for the same id shape.
+   *
+   * Resolved scope decision (2026-09-30, plan §7 Q2): *assert*, do not make the
+   * query platform-only. Reading one's own channel's grants is legitimate (the
+   * shipped `PlansList` resolves the organization from the active channel —
+   * INV-029), so the tenant boundary is `ctx.channelId`, not the presence of an
+   * explicit argument. Cross-tenant reads are now ForbiddenError; a SuperAdmin
+   * short-circuits inside `assertOrganizationAccess`.
+   */
   @Query()
   @Allow(BbbAdminPermission.Permission, BbbManageOrganizationsPermission.Permission)
   async bbbCapacityGrants(
@@ -583,6 +612,10 @@ export class BbbAdminResolver {
     @Args("organizationId") orgId: string,
     @Args("options") options?: { skip?: number; take?: number },
   ): Promise<{ items: BbbCapacityGrant[]; totalItems: number }> {
+    // Throws ForbiddenError for another tenant's org (missing org included),
+    // so no cross-tenant row can reach the mapper below.
+    await this.channelAccess.assertOrganizationAccess(ctx, orgId);
+
     const take = Math.min(Math.max(options?.take ?? 25, 1), 100);
     const skip = Math.max(options?.skip ?? 0, 0);
     const [items, totalItems] = await this.connection
@@ -596,7 +629,14 @@ export class BbbAdminResolver {
     return { items, totalItems };
   }
 
-  @Allow(BbbAdminPermission.Permission, BbbManageOrganizationsPermission.Permission)
+  /**
+   * H2 / BUG-047 sibling (SEC-008): minting capacity is a **platform** act.
+   * Retargeted from `BbbManageOrganizations` (held by every tenant admin role) to
+   * `BBBPlatformInfrastructure`: a tenant admin can no longer grant itself free
+   * capacity. `sourceType: 'manual'` is retained so platform overrides stay
+   * distinguishable from purchases (BUG-044).
+   */
+  @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
   @Transaction()
   @Mutation()
   async createBbbCapacityGrant(
@@ -623,6 +663,9 @@ export class BbbAdminResolver {
       validFrom: input.validFrom ? new Date(input.validFrom) : now,
       validUntil: input.validUntil ? new Date(input.validUntil) : thirtyDaysOut,
       exhausted: false,
+      // BUG-044: was unset, so every manual override silently stored the
+      // 'order' default and was indistinguishable from a purchase.
+      sourceType: "manual",
     });
     return this.connection.getRepository(ctx, BbbCapacityGrant).save(grant);
   }

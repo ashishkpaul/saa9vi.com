@@ -30,6 +30,27 @@ export const MEETING_STATE_TRANSITIONS: Record<MeetingState, MeetingState[]> = {
   Stale:        [],
 };
 
+// ─── Billing Mode (ADR-047) ──────────────────────────────────────────────────
+
+/**
+ * How an organization is billed.
+ *
+ * GRANT   — pre-purchased capacity grants (the shipped model). Kept as the DDL
+ *           default so existing organizations are untouched by the metered
+ *           rollout (`'grant'` is inherited, never backfilled — D7).
+ * METERED — postpaid: `ratePaisePerLearnerHour × billable learner-hours`,
+ *           metered by per-minute sampling into BbbMeteredUsage (ADR-047).
+ *
+ * INV-028: for a `metered` organization the metered fact table is the billing
+ * truth and the grant path is dormant; the provisioning grant gate is skipped.
+ */
+export const BILLING_MODE = {
+  GRANT: "grant",
+  METERED: "metered",
+} as const;
+
+export type BillingMode = (typeof BILLING_MODE)[keyof typeof BILLING_MODE];
+
 // ─── Organisation Member Roles ───────────────────────────────────────────────
 
 /**

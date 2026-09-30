@@ -5,6 +5,8 @@ import { BbbMeeting } from "./bbb-meeting.entity";
 import { BbbCapacityGrant } from "./bbb-capacity-grant.entity";
 import { BbbOrganizationMember } from "./bbb-organization-member.entity";
 import { BbbRoom } from "./bbb-room.entity";
+import { BILLING_MODE } from "../constants";
+import type { BillingMode } from "../constants";
 
 @Entity("bbb_organization")
 export class BbbOrganization extends VendureEntity implements ChannelAware {
@@ -58,6 +60,40 @@ export class BbbOrganization extends VendureEntity implements ChannelAware {
 
   @Column({ default: false })
   suspended: boolean;
+
+  // ─── Billing (ADR-047) ───────────────────────────────────────────────────
+
+  /**
+   * 'grant' (pre-purchased capacity) or 'metered' (postpaid attendee-hours).
+   *
+   * The entity default MUST stay identical to the DDL default so a re-generated
+   * migration is a no-op (D7); existing rows inherit 'grant' — never backfilled.
+   * New organizations are created as 'metered' in BbbOrganizationService.create()
+   * (the single, testable place).
+   */
+  @Column({ type: "varchar", default: BILLING_MODE.GRANT })
+  billingMode: BillingMode;
+
+  /**
+   * Learner-hour rate in paise for this organization.
+   * null → the platform default (`defaultRatePaisePerLearnerHour` plugin option).
+   *
+   * Snapshotted onto each BbbMeteredUsage row when the meeting completes, so a
+   * later rate change never re-prices historical usage (ADR-047 / INV-028).
+   */
+  @Column({ type: "int", nullable: true })
+  ratePaisePerLearnerHour: number | null;
+
+  /**
+   * Postpaid credit ceiling in paise. null = unlimited.
+   *
+   * Together with `suspended`, this is the only v1 guard against metered credit
+   * exposure; both are settable ONLY through the platform-gated
+   * `setBbbOrganizationBilling` mutation (ADR-047, security register H1) — never
+   * through the tenant-callable `updateBbbOrganization`.
+   */
+  @Column({ type: "int", nullable: true })
+  monthlySpendLimitPaise: number | null;
 
   @OneToMany(() => BbbMeeting, (m) => m.organization)
   meetings: BbbMeeting[];

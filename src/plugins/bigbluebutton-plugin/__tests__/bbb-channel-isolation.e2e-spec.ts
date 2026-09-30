@@ -14,6 +14,11 @@
  *   4. Tenant A admin CANNOT read/update/delete tenant B's organization
  *      (ForbiddenError).
  *   5. Tenant A admin's bbbOrganizations list only returns channel A's org.
+ *   6. H2 — `createBbbCapacityGrant` / `deleteBbbOrganization` are platform-only:
+ *      a tenant admin can neither mint capacity nor delete its own organization,
+ *      while a platform operator still can.
+ *   7. H3 — `bbbCapacityGrants` is channel-asserted (INV-029): a tenant admin can
+ *      read only its own channel's grants.
  *
  * Run:  npm run test:e2e:bbb-isolation
  *
@@ -105,6 +110,45 @@ const DELETE_BBB_ORGANIZATION = gql`
     deleteBbbOrganization(id: $id)
   }
 `;
+
+// ─── H2/H3 (SEC-008) documents ─────────────────────────────────────────────
+// `createBbbCapacityGrant` is the H2 platform-only mutation; `bbbCapacityGrants`
+// is the H3 channel-asserted read (BUG-047 sibling / BUG-049).
+
+const CREATE_BBB_CAPACITY_GRANT = gql`
+  mutation CreateBbbCapacityGrant($input: CreateBbbCapacityGrantInput!) {
+    createBbbCapacityGrant(input: $input) {
+      id
+      grantedMinutes
+      sourceType
+    }
+  }
+`;
+
+const BBB_CAPACITY_GRANTS = gql`
+  query BbbCapacityGrants($organizationId: ID!) {
+    bbbCapacityGrants(organizationId: $organizationId) {
+      items {
+        id
+        grantedMinutes
+        sourceType
+      }
+      totalItems
+    }
+  }
+`;
+
+/**
+ * Awaits a rejection and returns the error itself, so a denial can be asserted
+ * for its *reason* (`not currently authorized` = permission layer, `Forbidden` =
+ * channel assert) instead of passing on any failure — e.g. a malformed document.
+ */
+async function rejectionOf(promise: Promise<unknown>): Promise<any> {
+  return promise.then(
+    () => null,
+    (e: unknown) => e,
+  );
+}
 
 // ─── Test suite ───────────────────────────────────────────────────────────
 
@@ -420,6 +464,135 @@ describe('BBB Channel Isolation (Phase A)', () => {
         id: orgAId,
       });
       await expect(promise).rejects.toThrow();
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 6. H2 — capacity governance is platform-only (SEC-008 / BUG-047 sibling)
+  //    A tenant admin must not be able to mint capacity grants or delete its
+  //    own organization; the platform tier still must. The tenant boundary is
+  //    the permission (BBBPlatformInfrastructure), never a tenant-role edit.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('H2 — capacity governance is platform-only', () => {
+    beforeAll(async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+    });
+
+    it('tenant A admin CANNOT mint a capacity grant, and no row is written', async () => {
+      // Own-channel read is legitimate (H3), so it is also the "nothing was
+      // written" probe: the rejected mutation must not have created a row.
+      const before: any = await adminClient.query(BBB_CAPACITY_GRANTS, {
+        organizationId: orgAId,
+      });
+
+      const mintError = await rejectionOf(
+        adminClient.query(CREATE_BBB_CAPACITY_GRANT, {
+          input: { organizationId: orgAId, grantedMinutes: 60_000 },
+        }),
+      );
+      // The permission layer must be what refuses: the tenant admin role holds
+      // BbbManageOrganizations but not BBBPlatformInfrastructure.
+      expect(mintError).toBeTruthy();
+      expect(String(mintError.message)).toMatch(/not currently authorized/i);
+
+      const after: any = await adminClient.query(BBB_CAPACITY_GRANTS, {
+        organizationId: orgAId,
+      });
+      expect(after.bbbCapacityGrants.totalItems).toBe(
+        before.bbbCapacityGrants.totalItems,
+      );
+      expect(
+        after.bbbCapacityGrants.items.some(
+          (g: any) => g.grantedMinutes === 60_000,
+        ),
+      ).toBe(false);
+    });
+
+    it('tenant A admin CANNOT delete its own organization', async () => {
+      const deleteError = await rejectionOf(
+        adminClient.query(DELETE_BBB_ORGANIZATION, {
+          id: orgAId,
+        }),
+      );
+      expect(deleteError).toBeTruthy();
+      // Denied at the permission layer (BBBPlatformInfrastructure), not by the
+      // service channel assert — the tenant *owns* this org.
+      expect(String(deleteError.message)).toMatch(/not currently authorized/i);
+
+      // Rejection must be a gate, not a partial delete: the org is still there
+      // and still readable by its own tenant.
+      const { bbbOrganization } = await adminClient.query(BBB_ORGANIZATION, {
+        id: orgAId,
+      });
+      expect(bbbOrganization.id).toBe(orgAId);
+    });
+
+    it('platform operator CAN mint the grant, and tenant A can then read it', async () => {
+      await adminClient.asSuperAdmin();
+      const created: any = await adminClient.query(CREATE_BBB_CAPACITY_GRANT, {
+        input: { organizationId: orgAId, grantedMinutes: 60_000 },
+      });
+      expect(created.createBbbCapacityGrant.grantedMinutes).toBe(60_000);
+      // BUG-044: a platform override stays distinguishable from a purchase.
+      expect(created.createBbbCapacityGrant.sourceType).toBe('manual');
+
+      // The platform write is visible to the owning tenant on its own channel
+      // (the legitimate H3 path) — proving the retarget gated the actor, not the
+      // data.
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const listed: any = await adminClient.query(BBB_CAPACITY_GRANTS, {
+        organizationId: orgAId,
+      });
+      const manual = listed.bbbCapacityGrants.items.find(
+        (g: any) => g.id === created.createBbbCapacityGrant.id,
+      );
+      expect(manual).toBeTruthy();
+      expect(manual.sourceType).toBe('manual');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 7. H3 — grant reads are channel-asserted (BUG-049 / INV-029)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('H3 — bbbCapacityGrants is channel-asserted', () => {
+    beforeAll(async () => {
+      await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
+      adminClient.setChannelToken(tenantBChannelToken);
+    });
+
+    it('tenant B admin CANNOT read tenant A grants (cross-tenant read closed)', async () => {
+      const readError = await rejectionOf(
+        adminClient.query(BBB_CAPACITY_GRANTS, {
+          organizationId: orgAId,
+        }),
+      );
+      expect(readError).toBeTruthy();
+      // Unlike the H2 denials, this one passes the permission layer (tenant B
+      // also holds BbbManageOrganizations) and is refused by the channel assert
+      // in BbbChannelAccessService — i.e. the fix is the assert, not the gate.
+      // Vendure's ForbiddenError i18n message is "You are not currently
+      // authorized to perform this action" (error.forbidden), so match that
+      // rather than the literal word "forbidden".
+      expect(String(readError.message)).toMatch(/not currently authorized/i);
+    });
+
+    it('tenant B admin CAN still read its own grants', async () => {
+      const { bbbCapacityGrants } = await adminClient.query(
+        BBB_CAPACITY_GRANTS,
+        { organizationId: orgBId },
+      );
+      // Own-channel reads stay legitimate: the org auto-provisions exactly one
+      // unbounded `internal_overhead` grant (FEAT-002).
+      expect(bbbCapacityGrants.totalItems).toBeGreaterThanOrEqual(1);
+      expect(
+        bbbCapacityGrants.items.some(
+          (g: any) => g.sourceType === 'internal_overhead',
+        ),
+      ).toBe(true);
     });
   });
 });

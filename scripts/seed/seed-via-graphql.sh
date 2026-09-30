@@ -365,11 +365,24 @@ if [ -z "$TRAINER_MEMBER_ID" ]; then
 fi
 
 # 10. Grant BBB Capacity
-echo "[10] Creating BBB Capacity Grant (50 Hours)..."
+# H2 (SEC-008): createBbbCapacityGrant is now gated by BBBPlatformInfrastructure,
+# which the tenant admin role deliberately does not hold (ADR-033) — the old
+# `-b "$COOKIE_MOD"` call would fail authorization. Grant minting is a platform
+# act, so authenticate as SuperAdmin for this step only. The tenant channel token
+# is kept on the request so ctx.channelId stays the tenant's channel.
+echo "[10] Creating BBB Capacity Grant (50 Hours) as platform operator..."
+COOKIE_SUPER="/tmp/apex_super_cookie.txt"
+SUPER_LOGIN_RESP=$(curl -s -X POST "$HOST/admin-api" \
+  -H "Content-Type: application/json" \
+  -H "vendure-token: $CHANNEL_TOKEN" \
+  -c "$COOKIE_SUPER" \
+  -d '{"query":"mutation { login(username:\"superadmin\", password:\"superadmin\") { ... on CurrentUser { id identifier } } }"}')
+validate_graphql "$SUPER_LOGIN_RESP" "SuperAdmin Login (capacity grant)"
+
 BBB_GRANT_RESP=$(curl -s -X POST "$HOST/admin-api" \
   -H "Content-Type: application/json" \
   -H "vendure-token: $CHANNEL_TOKEN" \
-  -b "$COOKIE_MOD" \
+  -b "$COOKIE_SUPER" \
   -d "{
     \"query\": \"mutation CreateBbbCapacityGrant(\$input: CreateBbbCapacityGrantInput!) { createBbbCapacityGrant(input: \$input) { id grantedMinutes validFrom validUntil } }\",
     \"variables\": {

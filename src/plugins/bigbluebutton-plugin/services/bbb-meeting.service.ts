@@ -13,7 +13,7 @@ import {
   RequestContext,
   TransactionalConnection,
 } from "@vendure/core";
-import { BbbMembershipService } from "./bbb-membership.service";
+import { BbbRoomAccessService } from "./room-access.service";
 import { BbbProvisioningWorkerService } from "./bbb-provisioning-worker.service";
 import * as crypto from "crypto";
 import { EntityManager } from "typeorm";
@@ -35,6 +35,8 @@ import { BbbMetricsService } from "./bbb-metrics.service";
 import { BbbReconciliationService } from "./bbb-reconciliation.service";
 import { BbbEntitlementService } from "./bbb-entitlement.service";
 import { BbbChannelAccessService } from "./bbb-channel-access.service";
+import { BbbMeteringService } from "./bbb-metering.service";
+import { isMeteredOrganization } from "./metered-billing.policy";
 import { SessionAttendanceService } from "./session-attendance.service";
 import {
   MeetingProvisionedEvent,
@@ -93,8 +95,9 @@ export class BbbMeetingService implements OnModuleInit {
     private readonly reconciliationService: BbbReconciliationService,
     private readonly eventBus: EventBus,
     private readonly entitlementService: BbbEntitlementService,
-    private readonly membershipService: BbbMembershipService,
+    private readonly roomAccessService: BbbRoomAccessService,
     private readonly channelAccess: BbbChannelAccessService,
+    private readonly meteringService: BbbMeteringService,
     private readonly sessionAttendanceService: SessionAttendanceService,
     @Inject(forwardRef(() => BbbProvisioningWorkerService))
     private readonly provisioningWorker: BbbProvisioningWorkerService,
@@ -263,10 +266,25 @@ export class BbbMeetingService implements OnModuleInit {
     );
 
     const run = async (manager: EntityManager) => {
-      const meeting = await manager.findOne(BbbMeeting, {
-        where: { id: meetingId as string },
-        lock: { mode: "pessimistic_write" },
-      });
+      // A13 fix: load WITH the organization — the completion event below
+      // previously carried `meeting.organization?.id` from a relation-less
+      // load, which was always `undefined` on this path.
+      //
+      // The pessimistic lock is scoped to `bbb_meeting` (`FOR UPDATE OF
+      // "meeting"`). A relation-less `findOne({ lock })` cannot simply gain
+      // `relations: ["organization"]`: the resulting outer join makes Postgres
+      // reject the lock outright ("FOR UPDATE cannot be applied to the nullable
+      // side of an outer join"). Neither fact is optional — the meeting row is
+      // the transaction's serialization point and the organization's
+      // `billingMode` decides which billing path runs — so the lock names its
+      // table instead of being dropped.
+      const meeting = await manager
+        .getRepository(BbbMeeting)
+        .createQueryBuilder("meeting")
+        .leftJoinAndSelect("meeting.organization", "organization")
+        .where("meeting.id = :meetingId", { meetingId })
+        .setLock("pessimistic_write", undefined, ["meeting"])
+        .getOne();
 
       if (!meeting) {
         throw new Error(`Meeting ${meetingId} not found`);
@@ -338,7 +356,13 @@ export class BbbMeetingService implements OnModuleInit {
     }
 
     try {
-      await this.reconciliationService.consumeGrantHours(ctx, meeting);
+      // Metered orgs freeze samples into BbbMeteredUsage; grant orgs keep the
+      // append-only ledger path untouched (INV-028).
+      if (isMeteredOrganization(meeting.organization)) {
+        await this.meteringService.billMeteredMeeting(ctx, meetingId as string);
+      } else {
+        await this.reconciliationService.consumeGrantHours(ctx, meeting);
+      }
       this.metrics.recordBillingSuccess();
       // Causal order (documented): the meeting terminal fact is established,
       // billing is performed synchronously, and MeetingCompletedEvent is
@@ -694,32 +718,10 @@ export class BbbMeetingService implements OnModuleInit {
 
   // ─── Room-based Join ────────────────────────────────────────────────────────
 
-  /**
-   * Generates a role-based join URL for a membership-authenticated staff member.
-   * This is the FEAT-001 provisionAndJoin method — it bypasses the entitlement
-   * check and directly builds a join URL based on the membership role.
-   *
-   * org_admin / moderator → MODERATOR join URL
-   * staff                  → VIEWER (attendee) join URL
-   */
-  private async provisionAndJoin(
-    ctx: RequestContext,
-    meetingId: string,
-    participantName: string,
-    bbbRole: "MODERATOR" | "VIEWER",
-  ): Promise<{ status: string; joinUrl: string }> {
-    Logger.info(
-      `[provisionAndJoin] meetingId=${meetingId} participant=${participantName} role=${bbbRole}`,
-      loggerCtx,
-    );
-
-    const joinUrl =
-      bbbRole === "MODERATOR"
-        ? await this.getModeratorJoinUrl(ctx, meetingId, participantName)
-        : await this.getAttendeeJoinUrl(ctx, meetingId, participantName);
-
-    return { status: "active", joinUrl };
-  }
+  // INV-027: the old `provisionAndJoin` seam (Gate 1's private join-URL
+  // wrapper) was removed with the gates — joinRoom now resolves access through
+  // BbbRoomAccessService before provisioning and builds the role-based URL
+  // inline, exactly as the entitlement/enrollment path always did.
 
   private async createRoomMeetingAndEnqueue(
     ctx: RequestContext,
@@ -818,6 +820,38 @@ export class BbbMeetingService implements OnModuleInit {
       `[joinRoom] timestamp=${new Date().toISOString()} roomId=${roomId}`,
       loggerCtx,
     );
+
+    // ── INV-027 (BUG-045) — authorize BEFORE provisioning ────────────────────
+    // Single shared evaluation (BbbRoomAccessService): membership → legacy
+    // member → entitlement → enrollment — the same sources bbbRoomStatus uses,
+    // so preview denial ⇔ join denial. Previously the gates ran only inside the
+    // `status === 'active'` branch AFTER requestProvisioning, so a denied
+    // customer could still enqueue a meeting on an idle room, and the two
+    // surfaces' source lists had drifted apart (enrollment honored by preview
+    // but not join; membership honored by join but not preview).
+    const room = await this.roomService.findById(ctx, roomId);
+    if (!room) throw new Error("Room not found");
+
+    const access = await this.roomAccessService.evaluate(
+      ctx,
+      customerId,
+      room.organization.id,
+      roomId,
+    );
+    if (!access.allowed) {
+      Logger.warn(
+        `[joinRoom] access DENIED (INV-027) roomId=${roomId} customerId=${customerId} orgId=${room.organization.id}`,
+        loggerCtx,
+      );
+      throw new Error(
+        "You do not have access to this room. Please purchase a plan to join.",
+      );
+    }
+    Logger.info(
+      `[joinRoom] access allowed (INV-027) source=${access.source} isModerator=${access.isModerator} customerId=${customerId} roomId=${roomId}`,
+      loggerCtx,
+    );
+
     const result = await this.roomService.requestProvisioning(ctx, roomId);
     Logger.info(
       `[joinRoom] requestProvisioning returned status=${result.status} currentMeetingId=${result.currentMeetingId ?? "null"} shouldEnqueue=${!!result.shouldEnqueue}`,
@@ -825,67 +859,7 @@ export class BbbMeetingService implements OnModuleInit {
     );
 
     if (result.status === "active" && result.currentMeetingId) {
-      const room = await this.roomService.findById(ctx, roomId);
-      Logger.info(
-        `[joinRoom] room found: id=${room?.id} orgId=${(room as any)?.organization?.id ?? "null"} state=${(room as any)?.state ?? "null"}`,
-        loggerCtx,
-      );
-
-      // ── Gate 1 — BbbOrganizationMembership short-circuit (FEAT-001) ─────────
-      // Staff members with an active BbbOrganizationMembership can join internal
-      // rooms without purchasing. They bypass the entitlement check entirely.
-      const membership = await this.membershipService.findActiveMembership(
-        ctx,
-        customerId,
-        room!.organization.id,
-      );
-
-      if (membership) {
-        Logger.info(
-          `[joinRoom] membership short-circuit: customerId=${customerId} orgId=${room!.organization.id} role=${membership.role}`,
-          loggerCtx,
-        );
-        const bbbRole = (["org_admin", "moderator"] as const).includes(membership.role as "org_admin" | "moderator")
-          ? "MODERATOR"
-          : "VIEWER";
-        return this.provisionAndJoin(ctx, String(result.currentMeetingId), participantName, bbbRole);
-      }
-
-      // ── Gate 2 — Existing BbbOrganizationMember (org-admin/trainer) ─────────
-      let isModerator = false;
-      const staffMember = await this.memberService.findActiveMembership(
-        ctx,
-        customerId,
-        room!.organization.id,
-      );
-
-      if (staffMember && this.memberService.isModerator(staffMember)) {
-        isModerator = true;
-        Logger.info(
-          `[joinRoom] staff path: memberId=${(staffMember as any).id} isModerator=true`,
-          loggerCtx,
-        );
-      } else {
-        // Gate 3 — Entitlement path: authorized via BbbEntitlement type='bbb_room'.
-        const hasRoomAccess = await this.entitlementService.hasAccess(
-          ctx,
-          customerId,
-          "bbb_room",
-          roomId as string,
-        );
-
-        if (!hasRoomAccess) {
-          throw new Error(
-            "You do not have access to this room. Please purchase a plan to join.",
-          );
-        }
-
-        Logger.info(
-          `[joinRoom] entitlement path: customerId=${customerId} roomId=${roomId}`,
-          loggerCtx,
-        );
-      }
-
+      const isModerator = access.isModerator;
       Logger.info(
         `[joinRoom] authorization resolved isModerator=${isModerator}`,
         loggerCtx,

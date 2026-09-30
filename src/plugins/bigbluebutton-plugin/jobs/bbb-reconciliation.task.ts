@@ -16,26 +16,28 @@ export const bbbReconciliationTask = new ScheduledTask({
     metricsService.logSnapshot();
     metricsService.reset();
 
-    const [provisioningFixed, activeReconciled, roomsReconciled, billingRecovered] =
+    const [provisioningFixed, activeReconciled, roomsReconciled, billingRecovered, meteredRecovered] =
       await Promise.all([
         reconciliationService.reconcileProvisioning(),
         reconciliationService.reconcileActiveMeetings(),
         reconciliationService.reconcileRooms(),
         reconciliationService.reconcilePendingBilling(),
+        reconciliationService.reconcilePendingMeteredBilling(),
       ]);
 
     if (
       provisioningFixed > 0 ||
       activeReconciled > 0 ||
       roomsReconciled > 0 ||
-      billingRecovered > 0
+      billingRecovered > 0 ||
+      meteredRecovered > 0
     ) {
       Logger.log(
-        `provisioningFixed=${provisioningFixed} activeReconciled=${activeReconciled} roomsReconciled=${roomsReconciled} billingRecovered=${billingRecovered}`,
+        `provisioningFixed=${provisioningFixed} activeReconciled=${activeReconciled} roomsReconciled=${roomsReconciled} billingRecovered=${billingRecovered} meteredRecovered=${meteredRecovered}`,
         loggerCtx,
       );
     }
 
-    return { provisioningFixed, activeReconciled, roomsReconciled, billingRecovered };
+    return { provisioningFixed, activeReconciled, roomsReconciled, billingRecovered, meteredRecovered };
   },
 });

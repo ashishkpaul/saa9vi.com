@@ -12,6 +12,7 @@ import { BbbOrganizationService } from "./bbb-organization.service";
 import { BbbMeetingService } from "./bbb-meeting.service";
 import { BbbMemberService } from "./bbb-member.service";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
+import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbOrganizationMember } from "../entities/bbb-organization-member.entity";
 import { Customer, Product, ProductVariant } from "@vendure/core";
 import { InstructorProfile } from "../../tenant-plugin/entities/instructor-profile.entity";
@@ -98,6 +99,32 @@ export class BbbScheduledSessionService {
 
   // ─── Admin Mutations ──────────────────────────────────────────────────────
 
+  /**
+   * Validate and normalize a client-supplied room linkage (ADR-047 / D5).
+   *
+   * INV-001 / INV-029: the reference is never trusted. The room must belong to the
+   * SAME organization that owns the session, so a tenant cannot point its session
+   * at another tenant's room. `undefined`/`null` means "no room" — legacy sessions
+   * stay room-less and are never backfilled (§5).
+   */
+  private async resolveRoomIdForOrganization(
+    ctx: RequestContext,
+    organizationId: string,
+    roomId: string | null | undefined,
+  ): Promise<string | null> {
+    if (roomId === undefined || roomId === null) return null;
+    const room = await this.connection.getRepository(ctx, BbbRoom).findOne({
+      where: {
+        id: String(roomId),
+        organization: { id: String(organizationId) },
+      },
+    });
+    if (!room) {
+      throw new EntityNotFoundError("BbbRoom", roomId);
+    }
+    return String(room.id);
+  }
+
   async create(
     ctx: RequestContext,
     input: {
@@ -110,6 +137,8 @@ export class BbbScheduledSessionService {
       subjectTags?: string[];
       isTrial?: boolean;
       visibility?: string;
+      /** Optional room linkage (ADR-047 / D5) — validated against this org. */
+      roomId?: string;
     },
   ): Promise<BbbScheduledSession> {
     await this.channelAccess.assertOrganizationAccess(ctx, input.organizationId);
@@ -168,6 +197,9 @@ export class BbbScheduledSessionService {
     // from creating a session whose tenant scope disagrees with its organization.
     const channelId = (org.channelId as string | undefined) ?? (ctx.channelId as string | undefined);
 
+    // ADR-047 / D5: optional room linkage, validated to belong to this org.
+    const roomId = await this.resolveRoomIdForOrganization(ctx, String(org.id), input.roomId);
+
     const session = new BbbScheduledSession({
       organization: org,
       organizationId: String(org.id),
@@ -181,6 +213,7 @@ export class BbbScheduledSessionService {
       status: "DRAFT",
       activeMeeting: null,
       channelId: channelId ?? null,
+      roomId,
       productVariantId: input.productVariantId ?? null,
       subjectTags: input.subjectTags ?? null,
       isTrial: input.isTrial ?? false,
@@ -548,6 +581,8 @@ export class BbbScheduledSessionService {
       subjectTags?: string[];
       visibility?: string;
       isTrial?: boolean;
+      /** Room linkage (ADR-047 / D5): null detaches, undefined leaves unchanged. */
+      roomId?: string | null;
     },
   ): Promise<BbbScheduledSession> {
     await this.channelAccess.assertSessionAccess(ctx, id);
@@ -560,6 +595,14 @@ export class BbbScheduledSessionService {
     if (input.subjectTags !== undefined) session.subjectTags = input.subjectTags;
     if (input.visibility !== undefined) session.visibility = input.visibility;
     if (input.isTrial !== undefined) session.isTrial = input.isTrial;
+    if (input.roomId !== undefined) {
+      // undefined = leave unchanged (no payload field); null = detach.
+      session.roomId = await this.resolveRoomIdForOrganization(
+        ctx,
+        String(session.organizationId),
+        input.roomId,
+      );
+    }
 
     const saved = await this.connection
       .getRepository(ctx, BbbScheduledSession)

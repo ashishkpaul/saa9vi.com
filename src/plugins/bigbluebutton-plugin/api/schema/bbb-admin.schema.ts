@@ -74,6 +74,11 @@ export const adminApiExtensions = gql`
     validFrom: DateTime!
     validUntil: DateTime!
     exhausted: Boolean!
+    """
+    Source discriminator: order | subscription | manual | internal_overhead
+    (BUG-044: 'manual' = Admin createBbbCapacityGrant override).
+    """
+    sourceType: String!
   }
 
   type BbbCapacityGrantList {
@@ -221,6 +226,8 @@ export const adminApiExtensions = gql`
     visibility: String!
     maxAttendees: Int
     subjectTags: [String!]
+    """Room this session belongs to. null for legacy sessions created before the room-centric model (ADR-047/D5)."""
+    roomId: ID
   }
 
   """
@@ -524,6 +531,8 @@ export const adminApiExtensions = gql`
     subjectTags: [String!]
     isTrial: Boolean
     visibility: String
+    """Optional room linkage; the room must belong to the same organization (ADR-047/D5)."""
+    roomId: ID
   }
 
   input UpdateBbbScheduledSessionInput {
@@ -533,6 +542,8 @@ export const adminApiExtensions = gql`
     subjectTags: [String!]
     visibility: String
     isTrial: Boolean
+    """Optional room linkage; pass null to detach (room must belong to the same organization)."""
+    roomId: ID
   }
 
   input CreateBbbSessionTemplateInput {

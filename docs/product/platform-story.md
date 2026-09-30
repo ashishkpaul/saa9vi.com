@@ -54,10 +54,13 @@ A student clicks "Join free trial". `TrialRegistrationService.register()` valida
 
 ### Join Live Class
 
-`joinRoom()` runs a three-path auth check:
-1. **Gate 1**: Organization membership (staff short-circuit)
-2. **Gate 2**: Legacy BbbOrganizationMember check
-3. **Gate 3**: `BbbEntitlement { type: 'bbb_room' }` check
+`joinRoom()` and `bbbRoomStatus` share **one** room-access evaluation (INV-027, `BbbRoomAccessService.evaluate`) over four sources, in order:
+1. **Source 1**: Organization membership (FEAT-001 staff — `org_admin`/`moderator` → moderator URL, `staff` → viewer)
+2. **Source 2**: Legacy `BbbOrganizationMember` (staff)
+3. **Source 3**: `BbbEntitlement { type: 'bbb_room' }` (purchase)
+4. **Source 4**: `BbbEnrollment` (legacy / admin-created)
+
+Authorization runs **before** provisioning is requested (BUG-045): a denied customer never enqueues a meeting, and preview denial ⇔ join denial.
 
 If granted, `requestProvisioning()` acquires a distributed lock, transitions the room from Idle to Provisioning, and enqueues a BullMQ job. The worker selects the BBB server with the lowest `currentLoad`, resolves the earliest-expiring capacity grant, calls the BBB `createMeeting` API, encrypts passwords with AES-256-GCM, and writes the `grantId` to the meeting. The student gets a HMAC-signed join URL.
 

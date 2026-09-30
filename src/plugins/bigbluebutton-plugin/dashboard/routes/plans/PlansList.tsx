@@ -17,6 +17,7 @@ const GET_GRANTS = `
         orderId
         orderLineId
         productVariantId
+        sourceType
       }
       totalItems
     }
@@ -26,7 +27,7 @@ const GET_GRANTS = `
 const CREATE_GRANT = `
   mutation CreateBbbCapacityGrant($input: CreateBbbCapacityGrantInput!) {
     createBbbCapacityGrant(input: $input) {
-      id grantedMinutes consumedMinutes validFrom validUntil exhausted
+      id grantedMinutes consumedMinutes validFrom validUntil exhausted sourceType
     }
   }
 `;
@@ -35,6 +36,8 @@ interface Grant {
   id: string; grantedMinutes: number; consumedMinutes: number;
   validFrom: string; validUntil: string; exhausted: boolean; orderId?: string;
   orderLineId?: string; productVariantId?: string;
+  /** order | subscription | manual | internal_overhead (BUG-044); absent on pre-upgrade caches */
+  sourceType?: string;
 }
 
 interface GrantList {
@@ -223,11 +226,19 @@ export function PlansList() {
                         {new Date(g.validUntil).toLocaleDateString()}
                       </TableCell>
                       <TableCell>
-                        {g.orderId ? (
+                        {g.sourceType === 'order' && g.orderId ? (
                           <div>
                             <span className="text-sm">Order #{g.orderId}</span>
                             {g.productVariantId && <div className="text-xs text-muted-foreground">Variant: {g.productVariantId}</div>}
                           </div>
+                        ) : g.sourceType === 'subscription' ? (
+                          <span className="text-sm text-muted-foreground">Subscription</span>
+                        ) : g.sourceType === 'manual' ? (
+                          <span className="text-sm text-muted-foreground">Admin Override</span>
+                        ) : g.sourceType === 'internal_overhead' ? (
+                          <span className="text-sm text-muted-foreground">Ops Overhead</span>
+                        ) : g.orderId ? (
+                          <span className="text-sm">Order #{g.orderId}</span>
                         ) : (
                           <span className="text-sm text-muted-foreground">Admin Override</span>
                         )}

@@ -48,7 +48,7 @@ export class MeetingProvisionedEvent extends VendureEvent {
     public readonly bbbMeetingId: string,
     public readonly roomId: string | null,
     public readonly organizationId: string,
-    public readonly grantId: string,
+    public readonly grantId: string | null,
   ) {
     super();
   }
@@ -91,6 +91,21 @@ export class GrantConsumedEvent extends VendureEvent {
     public readonly organizationId: string,
     public readonly consumedHours: number,
     public readonly remainingHours: number,
+  ) {
+    super();
+  }
+}
+
+export class MeteredUsageRecordedEvent extends VendureEvent {
+  constructor(
+    public readonly ctx: RequestContext,
+    public readonly meetingId: string,
+    public readonly organizationId: string,
+    public readonly channelId: string,
+    public readonly periodMonth: string,
+    public readonly learnerMinutes: number,
+    public readonly ratePaisePerHour: number,
+    public readonly billingCapped: boolean,
   ) {
     super();
   }

@@ -130,6 +130,20 @@ export interface BigBlueButtonPluginOptions {
    */
   provisioningJobBackoffMs?: number;
 
+  /**
+   * Platform default learner-hour rate in paise for `metered` organizations
+   * (ADR-047 / D2).
+   *
+   * Used only when the organization has no `ratePaisePerLearnerHour`. This is a
+   * plugin option on purpose: `BbbPlatformCapacityPolicy` documents itself as a
+   * *capacity* policy (ADR-031) and must not absorb pricing.
+   *
+   * @default 0 — "not configured". A missing rate bills 0 rather than fabricating
+   * a price for real usage; the platform must set a real rate before metered
+   * organizations are charged.
+   */
+  defaultRatePaisePerLearnerHour?: number;
+
   // ─── Capacity Intelligence Load Estimation (CI-001) ──────────────────────
 
   /**

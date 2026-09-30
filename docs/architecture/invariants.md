@@ -151,7 +151,7 @@ Payments:
 
 **Rejection criterion:** Any service method that calls `.update()` on an `AdSpendLedger` row is rejected.
 
-> **INV-011 is intentionally unassigned.** The current canonical sequence runs INV-010 → INV-012; nothing in `invariants.md` or the legacy ADR defines an INV-011. When adding a new invariant, use the next free number (**INV-027**) rather than claiming INV-011. The canonical sequence currently runs through **INV-026** (INV-020–INV-026 were assigned after this note was written; INV-011 remains reserved, not a free slot).
+> **INV-011 is intentionally unassigned.** The current canonical sequence runs INV-010 → INV-012; nothing in `invariants.md` or the legacy ADR defines an INV-011. When adding a new invariant, use the next free number (**INV-028**) rather than claiming INV-011. The canonical sequence currently runs through **INV-027** (INV-020–INV-027 were assigned after this note was written; INV-011 remains reserved, not a free slot).
 
 ---
 
@@ -431,4 +431,109 @@ window is half-open-free and disjoint, the per-key advisory lock and the idempot
 present, the writer is the only module writing daily grants, the task is hourly and registered,
 both triggers call the writer, the paid-plan ban is in the writer, the read model is unchanged,
 and no pre-enqueue allowance probe was added. Runs under `npm run verify:invariants`.
+
+## INV-027: Room Preview and Room Join Evaluate the Same Authorization Sources (BUG-045)
+
+**Rule:** The customer-facing room access decision exists in exactly one place. `bbbRoomStatus`
+(preview), `joinRoom` (action), and any future room-access surface MUST derive their answer from
+a single shared evaluation — the pure policy module `room-access.policy.ts` (expiry/role
+semantics) plus the shared service evaluator — over the same four sources, in this order:
+
+1. active `BbbOrganizationMembership` (FEAT-001 staff short-circuit; `org_admin`/`moderator` →
+   `MODERATOR`, any other role → `VIEWER`),
+2. active `BbbOrganizationMember` (legacy staff; moderator-capable roles → `MODERATOR`),
+3. valid `BbbEntitlement { type: 'bbb_room', resourceId: roomId }` (`validFrom <= now <=
+   validUntil`) → `VIEWER`,
+4. valid `BbbEnrollment { roomId, customerId, active: true }` (legacy / admin-created; the same
+   `validUntil`/`expiresAt` window semantics the preview applies today) → `VIEWER`.
+
+`allowed = any source passes`; `isModerator` derives only from sources 1–2.
+
+**Corollaries:**
+- Authorization runs **before** provisioning is requested. `joinRoom` MUST evaluate the shared
+  decision before calling `requestProvisioning`; a denied customer must never enqueue a meeting,
+  acquire a grant linkage, or reach BBB `createMeeting`.
+- Preview denial ⇔ join denial for the same `(customer, room)` at the same instant. A source
+  recognized by one surface MUST be recognized by the other (BUG-045's two contradictions:
+  enrollment visible-but-unjoinable; membership joinable-but-preview-denied).
+- Expiry and role semantics live in the policy module only; no call site re-implements
+  `validUntil`/`expiresAt` comparisons or role-to-BBB-role mapping for room access.
+- This invariant governs **room** access only. Session access (`getJoinUrl` for
+  `BbbScheduledSession`) and tenant scoping (`BbbChannelAccessService`) are unchanged.
+
+**Rejection criterion:** Any new room-access surface that hand-rolls its own source list, any
+edit that adds or removes a source from `joinRoom` or `bbbRoomStatus` without changing the shared
+evaluation, and any ordering that authorizes after `requestProvisioning` — is rejected.
+
+**Structural checker (since 2026-09-30):** `RoomAccessChecker`
+(`src/platform/invariants/room-access.checker.ts`) — verifies both call sites delegate to the
+shared evaluator, the policy module enumerates all four sources, and `joinRoom` evaluates access
+before `requestProvisioning`. Registered in `src/platform/invariants/cli.ts`; runs under
+`npm run verify:invariants`.
+
+---
+
+## INV-028: Metered Billing Truth Is `BbbMeteredUsage`; Money Is Rounded Once per Month (ADR-047)
+
+**Rule:** For an organization with `billingMode = 'metered'`, the billing fact is the
+**`BbbMeteredUsage` row** — one append-only row per completed meeting, `UNIQUE(meetingId)`,
+written by the database write itself (`INSERT … ON CONFLICT (meetingId) DO NOTHING RETURNING id`),
+never by check-then-insert (INV-002, extended). Four consequences are binding:
+
+1. **Learner math is one formula.** `learnerCount = max(0, participantCount − moderatorCount)`;
+   moderators/trainers are never billable; `learnerMinutes` is the sum of per-minute samples, so
+   the charge tracks attendance, not wall-clock duration. The formula exists once, in the pure
+   module `services/metered-billing.policy.ts`.
+2. **Money is derived, never stored.** No `chargePaise` column exists on any metered entity.
+   The rupee amount is computed by the single pure helper `computeMonthChargePaise(...)`, which
+   **both** the read summaries and the spend-limit guard call — one rounding implementation, so a
+   guard can never disagree with the number it protects. Money is integer paise; floats are
+   prohibited. Rounding happens **once per month**, not per meeting.
+3. **Every completed metered meeting produces a row, even at zero charge** (no learners,
+   trainer-only, or under the fair-billing threshold). Absence of a row means "not yet billed",
+   so the recovery scan terminates; the grant path's under-threshold gap is explicitly *not*
+   inherited.
+4. **`periodMonth char(7)` is snapshotted at write time**; month aggregation is string equality
+   with no timezone arithmetic in SQL.
+
+**Rejection criterion:** any service method that updates or deletes a `BbbMeteredUsage` row, any
+second implementation of learner math or of monthly rounding (including a stored `chargePaise`),
+any float in a money path, any metered meeting completed without a usage row, or any row written
+outside the metered billing service — is rejected.
+
+**Structural checker (since 2026-09-30):** `MeteredBillingChecker`
+(`src/platform/invariants/metered-billing.checker.ts`) — Phase 0 asserts the documentation and
+registration shape; Phase 2 extends it with the code-level assertions (metered provisioning never
+consults grants, single rounding implementation, no money column, purity of the policy module).
+Registered in `src/platform/invariants/cli.ts`.
+
+---
+
+## INV-029: Tenant-Tier Reads Resolve Their Organization From the Channel (ADR-047)
+
+**Rule:** On every tenant-facing BBB read, the organization is derived from `ctx.channelId`
+(`BbbChannelAccessService`) and the API **accepts no `organizationId` argument at all**. An
+optional `organizationId` parameter whose omission widens the result set is a cross-tenant leak:
+omitting it must mean "the caller's own tenant", never "all tenants".
+
+**Corollaries:**
+- Cross-tenant reads are legitimate only on **platform-tier** surfaces gated by
+  `BBBPlatformInfrastructure` (e.g. `bbbOrganizations`, platform billing summaries), which may
+  accept an explicit organization id because browsing across tenants *is* their function.
+- A caller-supplied organization id must never be trusted: it is either absent from the schema
+  (tenant tier) or exercised only after a platform-permission check.
+- Extended by SEC-008: the billing controls that guard postpaid exposure (`billingMode`,
+  `ratePaisePerLearnerHour`, `monthlySpendLimitPaise`, `suspended`) are platform-only writes, so a
+  tenant cannot widen its own exposure or clear its own suspension.
+
+**Rejection criterion:** any tenant-tier resolver that threads a client-provided
+`organizationId`/`channelId` into a read or write, any optional-argument path where omission
+returns other tenants' data, and any tenant-callable mutation that mutates platform billing
+controls — is rejected.
+
+**Known violation being remediated:** BUG-046 (`bbbMeetings` with `organizationId` omitted
+applies no channel filter) is fixed in Phase 5 of
+`docs/implementation/bbb-attendee-hour-billing-plan.md`; this invariant is added now so the
+checker and the fix have a documented rule to converge on.
+
 

@@ -287,7 +287,7 @@ Pending → Provisioning → Active → Completed → Archived
 
 **Invariants:**
 - `(organizationId, customerId)` unique composite index
-- Membership check is Gate 1 in joinRoom auth waterfall (short-circuits entitlement)
+- Room-access source 1 in the INV-027 shared evaluation (joinRoom + bbbRoomStatus) — short-circuits the later sources
 
 ---
 
@@ -310,7 +310,7 @@ Pending → Provisioning → Active → Completed → Archived
 **Lifecycle:**
 - Created by OrderFulfillmentListener (on PaymentSettled)
 - Created by TrialRegistrationService (on trial registration)
-- Checked by joinRoom() Gate 3
+- Checked as room-access source 3 by the INV-027 shared evaluation (joinRoom + bbbRoomStatus)
 - Soft-deleted on customer deletion
 
 **Invariants:**

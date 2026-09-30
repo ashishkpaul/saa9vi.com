@@ -12,7 +12,7 @@ import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbOrganizationMember } from "../entities/bbb-organization-member.entity";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
-import { MEETING_STATE } from "../constants";
+import { MEETING_STATE, BILLING_MODE } from "../constants";
 import { BbbChannelAccessService } from "./bbb-channel-access.service";
 import { BbbPlatformCapacityPolicyService } from "./bbb-platform-capacity-policy.service";
 
@@ -213,6 +213,13 @@ export class BbbOrganizationService {
       concurrentMeetingLimit: input.concurrentMeetingLimit ?? 5,
       maxParticipantsPerMeeting: input.maxParticipantsPerMeeting ?? 30,
       recordingEnabled: input.recordingEnabled ?? false,
+      // ADR-047 / D7: new organizations are metered (postpaid attendee-hours).
+      // 'grant' remains the DDL default so existing rows are untouched; setting
+      // it here — one testable place — is what makes new tenants metered. The
+      // rate is intentionally left null → platform default
+      // (`defaultRatePaisePerLearnerHour`) until a platform operator sets one
+      // via setBbbOrganizationBilling.
+      billingMode: BILLING_MODE.METERED,
     });
     await this.channelService.assignToCurrentChannel(org, ctx);
     const saved = await this.connection.getRepository(ctx, BbbOrganization).save(org);

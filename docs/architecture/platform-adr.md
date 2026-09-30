@@ -935,3 +935,59 @@ ephemeral `authorizationUrl` (for provider-wired upgrades needing e-mandate/UPI 
 
 **Implementation note:** `SubscriptionService` exposes the invocation-scoped provider authorization URL through a typed operation result. The Shop resolver never reads persisted `subscription.providerShortUrl` to populate `authorizationUrl`.
 **Migrations required:** none.
+
+---
+
+## ADR-047: Attendee-Hour (Metered) Billing Is a Second Append-Only Billing Fact
+
+**Status:** Accepted (2026-09-30)  
+**Full record:** `docs/architecture/adr-047-bbb-attendee-hour-billing.md`
+
+**Core decision:** BBB billing gains a second, mutually exclusive mode. `BbbOrganization.billingMode`
+(`'grant' | 'metered'`, DDL default `'grant'`) selects between the shipped pre-purchased-grant model
+and a **postpaid, metered** model charged as `rate × billable learner-hours`, where
+`billable learners = max(0, participantCount − moderatorCount)` sampled once per minute.
+The grant system is dormant — not removed — for `metered` orgs.
+
+**Key decisions:**
+- **New fact table, not a widened one** — `BbbMeteredUsage`, one row per completed metered meeting,
+  `UNIQUE(meetingId)`, `INSERT … ON CONFLICT DO NOTHING RETURNING` (INV-002). `BbbUsageLedger.grant`
+  stays non-nullable: making it nullable would defeat `ON CONFLICT` through Postgres NULL-distinctness.
+- **No money column** — exact `learnerMinutes` + snapshotted `ratePaisePerHour` are stored; money is
+  rounded **once per month** by one pure helper (`metered-billing.policy.ts#computeMonthChargePaise`)
+  shared by summaries and the spend-limit guard, so the rounding rule cannot drift.
+- **A zero-charge row is still written** (no learners / under fair-billing threshold) — provable
+  billing and a terminating recovery scan, deliberately unlike the grant path's re-scanned gap.
+- **Sampling, not webhooks** — a per-minute task samples `getMeetingInfo` into prunable
+  `BbbMeetingSample` (`UNIQUE(meetingId, bucketMinute)`), bounded concurrency, per-meeting error
+  isolation, sample-gap logging (under-billing is customer-favourable and made *visible*).
+- **Provisioning gate skipped for metered orgs** — no grant selection, `grantId = null`
+  (`MeetingProvisionedEvent.grantId` widens to `string | null`); capacity reservation and server
+  selection unchanged; failure still lands terminal `FAILED` + `MeetingFailedEvent`.
+- **Postpaid guards are platform-only** — `billingMode`, `ratePaisePerLearnerHour`,
+  `monthlySpendLimitPaise` and `suspended` are settable only through the new
+  `BBBPlatformInfrastructure`-gated `setBbbOrganizationBilling`, never through
+  `UpdateBbbOrganizationInput` (BUG-047 — a tenant must not be able to clear its own suspension).
+- **Tenant billing reads take no organization argument** — org always derived from `ctx.channelId`
+  (extends D3/INV-001 to all tenant-tier reads; BUG-046 fixes the one existing violation).
+- **`periodMonth char(7)` snapshotted at write time** — no timezone math in queries.
+- **`BbbScheduledSession.roomId` nullable** — sessions name their room; existing rows stay NULL.
+
+**Key additions:** `services/metered-billing.policy.ts` (pure), `services/bbb-metering.service.ts`,
+`jobs/bbb-metering.task.ts`, entities `BbbMeetingSample` / `BbbMeteredUsage`,
+`MeteredUsageRecordedEvent`, `bbbBillingSummary` / `bbbMeteredMeetings` /
+`setBbbOrganizationBilling`, `MeteredBillingChecker`. INV-028 + INV-029 added to
+`invariants.md`; SEC-008 added to `security.md`.
+
+**Migrations required:** yes, additive only, via `npx vendure migrate` — three
+`bbb_organization` columns, `bbb_meeting_sample`, `bbb_metered_usage`,
+`bbb_scheduled_session.roomId`. No drops, no re-types, grant tables untouched.
+
+**Resolved 2026-09-30 (plan §7 answered — not assumed by this ADR):** `createBbbCapacityGrant`
+and `deleteBbbOrganization` are retargeted to `BBBPlatformInfrastructure`, and the missing channel
+assert on `bbbCapacityGrants` (BUG-049) is fixed with `assertOrganizationAccess`; the
+`Capacity Grants` and `Trial Registrations` nav gates became platform-only in the same change.
+H1 (the four billing controls on `updateBbbOrganization`, including `suspended`) remains Phase 4.
+
+**Plan of record:** `docs/implementation/bbb-attendee-hour-billing-plan.md` (Phases 0–6).
+

@@ -15,6 +15,8 @@ import { BbbOrganization } from "./entities/bbb-organization.entity";
 import { BbbMeeting } from "./entities/bbb-meeting.entity";
 import { BbbCapacityGrant } from "./entities/bbb-capacity-grant.entity";
 import { BbbUsageLedger } from "./entities/bbb-usage-ledger.entity";
+import { BbbMeetingSample } from "./entities/bbb-meeting-sample.entity";
+import { BbbMeteredUsage } from "./entities/bbb-metered-usage.entity";
 import { BbbOrganizationMember } from "./entities/bbb-organization-member.entity";
 import { BbbScheduledSession } from "./entities/bbb-scheduled-session.entity";
 import { BbbRoom } from "./entities/bbb-room.entity";
@@ -50,9 +52,13 @@ import { BbbWebhookProcessorService } from "./services/bbb-webhook-processor.ser
 import { BbbEntitlementService } from "./services/bbb-entitlement.service";
 import { BbbDeletionService } from "./services/bbb-deletion.service";
 import { BbbMembershipService } from "./services/bbb-membership.service";
+import { BbbRoomAccessService } from "./services/room-access.service";
 import { GrantReaderService } from "./services/grant-reader.service";
 import { BbbDailyAllowanceService } from "./services/bbb-daily-allowance.service";
+import { BbbMeteringService } from "./services/bbb-metering.service";
 import { bbbDailyAllowanceTask } from "./jobs/bbb-daily-allowance.task";
+import { bbbMeteringTask } from "./jobs/bbb-metering.task";
+import { bbbMeteringPruneTask } from "./jobs/bbb-metering-prune.task";
 import { LearningDashboardService } from "./services/learning-dashboard.service";
 import { CapacityIntelligenceService } from "./services/capacity-intelligence.service";
 import { AttendanceAnalyticsService } from "./services/attendance-analytics.service";
@@ -97,6 +103,8 @@ import {
     BbbMeeting,
     BbbCapacityGrant,
     BbbUsageLedger,
+    BbbMeetingSample,
+    BbbMeteredUsage,
     BbbOrganizationMember,
     BbbScheduledSession,
     BbbRoom,
@@ -141,12 +149,16 @@ import {
     BbbEntitlementService,
     BbbDeletionService,
     BbbMembershipService,
+    // INV-027 (BUG-045): the single room-access evaluation shared by
+    // bbbRoomStatus (preview) and joinRoom (action).
+    BbbRoomAccessService,
     GrantReaderService,
     // Slice 6 — the single writer of daily live-allowance grants (ADR-045 /
     // INV-026). Provider-free plans get a 60-minute grant per server day; every
     // consumer of "today's allowance" reads it back from BbbCapacityGrant, so
     // there is no parallel allowance store.
     BbbDailyAllowanceService,
+    BbbMeteringService,
     LearningDashboardService,
     BbbPlatformCapacityPolicyService,
     BbbJoinUrlService,
@@ -196,9 +208,24 @@ import {
         bbbCapacityAlertTask,
       ];
     }
-    // Slice 6 / D-7: the daily-allowance refresh. Idempotent, so duplicate
-    // registration or an extra run can never hand out a second allowance for
-    // the same day; the guard is the same id-dedupe every other task here uses.
+    // ADR-047 Phase 2B: the per-minute metered sampling tick. Its write is
+    // idempotent (`ON CONFLICT (meetingId, bucketMinute) DO NOTHING`), so
+    // duplicate registration or an overlapping run can never double-count
+    // minutes; the guard is the same id-dedupe every other task here uses.
+    if (!existingIds.has(bbbMeteringTask.id)) {
+      config.schedulerOptions.tasks = [
+        ...(config.schedulerOptions.tasks ?? []),
+        bbbMeteringTask,
+      ];
+    }
+    // ADR-047 Phase 2B: sample retention. Idempotent DELETE, scoped to meetings
+    // that can no longer be billed.
+    if (!existingIds.has(bbbMeteringPruneTask.id)) {
+      config.schedulerOptions.tasks = [
+        ...(config.schedulerOptions.tasks ?? []),
+        bbbMeteringPruneTask,
+      ];
+    }
     if (!existingIds.has(bbbDailyAllowanceTask.id)) {
       config.schedulerOptions.tasks = [
         ...(config.schedulerOptions.tasks ?? []),

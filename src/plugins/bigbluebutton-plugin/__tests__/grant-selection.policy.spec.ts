@@ -48,6 +48,7 @@ describe('BUG-036 grant-selection policy', () => {
       expect([...TENANT_SELECTABLE_SOURCE_TYPES]).toEqual([
         'order',
         'subscription',
+        'manual',
       ]);
     });
   });
