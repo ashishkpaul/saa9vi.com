@@ -31,6 +31,7 @@ import {
   learnerCountFrom,
   monthOf,
   resolveRatePaisePerLearnerHour,
+  platformDefaultRatePaisePerHour,
 } from "./metered-billing.policy";
 
 const loggerCtx = "BbbMeteringService";
@@ -55,8 +56,11 @@ export class BbbMeteringService {
     private readonly options: BigBlueButtonPluginOptions,
   ) {}
 
-  private get defaultRate(): number | null | undefined {
-    return this.options.defaultRatePaisePerLearnerHour;
+  private get defaultRate(): number {
+    // Q2: plugin option, else the clearly marked placeholder price — the same
+    // single resolution the billing read API uses (platformDefaultRatePaisePerHour),
+    // so the metered write and the summary never disagree on the rate.
+    return platformDefaultRatePaisePerHour(this.options);
   }
 
   /**

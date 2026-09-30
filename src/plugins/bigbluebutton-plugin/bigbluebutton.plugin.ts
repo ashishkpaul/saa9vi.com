@@ -56,6 +56,7 @@ import { BbbRoomAccessService } from "./services/room-access.service";
 import { GrantReaderService } from "./services/grant-reader.service";
 import { BbbDailyAllowanceService } from "./services/bbb-daily-allowance.service";
 import { BbbMeteringService } from "./services/bbb-metering.service";
+import { BbbBillingService } from "./services/bbb-billing.service";
 import { bbbDailyAllowanceTask } from "./jobs/bbb-daily-allowance.task";
 import { bbbMeteringTask } from "./jobs/bbb-metering.task";
 import { bbbMeteringPruneTask } from "./jobs/bbb-metering-prune.task";
@@ -159,6 +160,9 @@ import {
     // there is no parallel allowance store.
     BbbDailyAllowanceService,
     BbbMeteringService,
+    // ADR-047 Phase 4 — billing READ API (summary / metered history / platform
+    // roll-up). Money is computed only through metered-billing.policy (D2).
+    BbbBillingService,
     LearningDashboardService,
     BbbPlatformCapacityPolicyService,
     BbbJoinUrlService,

@@ -1,4 +1,4 @@
-import { BILLING_MODE } from "../constants";
+import { BILLING_MODE, DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR } from "../constants";
 import type { BillingMode } from "../constants";
 
 /** Month key used by `BbbMeteredUsage.periodMonth` — `YYYY-MM` (D4). */
@@ -79,6 +79,8 @@ export function monthOf(date: Date): PeriodMonth {
  *
  * Money is rounded exactly once per month:
  * `round( Σ(learnerMinutes × ratePaisePerHour) / 60 )`.
+ * Rounding is **half-up to the nearest paisa** (Q2): `Math.round` on the
+ * non-negative total moves an exact `.5` upward (1.5 → 2, 0.5 → 1).
  * Per-meeting rounding is forbidden — summing rounded rows drifts from the
  * auditable total, and two implementations of the same rule always diverge.
  *
@@ -117,6 +119,26 @@ export function resolveRatePaisePerLearnerHour(
     normaliseRate(org?.ratePaisePerLearnerHour) ??
     normaliseRate(defaultRatePaisePerLearnerHour) ??
     0
+  );
+}
+
+/**
+ * Effective platform default rate: the `defaultRatePaisePerLearnerHour` plugin
+ * option when it is a valid non-negative integer (an explicit `0` counts as
+ * "configured — bill nothing"), otherwise the clearly marked PLACEHOLDER price
+ * (Q2 / `DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR`).
+ *
+ * Per-org overrides never flow through here — they win first via
+ * `resolveRatePaisePerLearnerHour(org, platformDefaultRatePaisePerHour(options))`,
+ * which is how both the billing write (metering) and the billing read API
+ * (summary) derive the same answer.
+ */
+export function platformDefaultRatePaisePerHour(
+  options: { defaultRatePaisePerLearnerHour?: number } | null | undefined,
+): number {
+  return (
+    normaliseRate(options?.defaultRatePaisePerLearnerHour) ??
+    DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR
   );
 }
 

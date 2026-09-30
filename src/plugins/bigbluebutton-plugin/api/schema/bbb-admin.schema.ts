@@ -36,6 +36,18 @@ export const adminApiExtensions = gql`
     maxSessionsPerOrg: Int!
     recordingEnabled: Boolean!
     suspended: Boolean!
+    """
+    'grant' or 'metered' (ADR-047). Writable ONLY through the platform-gated
+    setBbbOrganizationBilling — never through updateBbbOrganization.
+    """
+    billingMode: String!
+    """
+    Per-org learner-hour rate in paise; null → platform default (plugin option,
+    else the clearly marked placeholder). Platform-writable only.
+    """
+    ratePaisePerLearnerHour: Int
+    "Postpaid ceiling in paise; null = unlimited. Platform-writable only."
+    monthlySpendLimitPaise: Int
   }
 
   type BbbMeeting {
@@ -810,5 +822,111 @@ export const adminApiExtensions = gql`
 
     "Delete a policy row by id. Portal infrastructure only."
     deletePlatformCapacityPolicy(id: ID!): Boolean!
+  }
+
+  # ─── Metered billing reads + platform billing control (ADR-047 Phase 4) ──
+
+  """
+  Tenant monthly billing summary. The organization is derived from the caller's
+  channel (D3) — there is no organizationId argument. totalChargePaise is
+  computed once per month via computeMonthChargePaise (D2, half-up to the paisa).
+  """
+  type BbbBillingSummary {
+    month: String!
+    """
+    Effective rate for display: per-org ratePaisePerLearnerHour override, else
+    the defaultRatePaisePerLearnerHour plugin option, else the clearly marked
+    placeholder default.
+    """
+    ratePaisePerHour: Int!
+    totalLearnerMinutes: Int!
+    totalChargePaise: Int!
+    "null = unlimited."
+    spendLimitPaise: Int
+    spendLimitReached: Boolean!
+    byRoom: [BbbBillingRoomRow!]!
+  }
+
+  type BbbBillingRoomRow {
+    roomId: ID
+    roomName: String
+    learnerMinutes: Int!
+    chargePaise: Int!
+  }
+
+  """
+  One billed meeting of a month, joined to its meeting row for title/recording.
+  recordingUrl is whatever the rap-publish-ended webhook stored — null until BBB
+  reports a playback URL (never invented).
+  """
+  type BbbMeteredMeeting {
+    id: ID!
+    title: String!
+    roomId: ID
+    roomName: String
+    startedAt: DateTime!
+    completedAt: DateTime!
+    peakLearners: Int!
+    peakModerators: Int!
+    learnerMinutes: Int!
+    chargePaise: Int!
+    billingCapped: Boolean!
+    recordingUrl: String
+  }
+
+  type BbbMeteredMeetingList {
+    items: [BbbMeteredMeeting!]!
+    totalItems: Int!
+  }
+
+  "Platform-wide roll-up across tenants (platform tier only)."
+  type BbbPlatformBillingSummary {
+    month: String!
+    totalLearnerMinutes: Int!
+    totalChargePaise: Int!
+    byOrganization: [BbbPlatformBillingOrganizationRow!]!
+  }
+
+  type BbbPlatformBillingOrganizationRow {
+    organizationId: ID!
+    organizationName: String!
+    learnerMinutes: Int!
+    chargePaise: Int!
+  }
+
+  extend type Query {
+    """
+    Tenant billing summary for a month (YYYY-MM; defaults to the current UTC
+    month). Organization from ctx.channelId — D3: no organizationId argument.
+    """
+    bbbBillingSummary(month: String): BbbBillingSummary!
+    """
+    Tenant billed meeting history for a month with per-meeting charge shares
+    and recordingUrl. Organization from ctx.channelId — D3: no organizationId.
+    """
+    bbbMeteredMeetings(month: String, skip: Int, take: Int): BbbMeteredMeetingList!
+    """
+    Platform-wide metered roll-up across all tenants. Platform tier only
+    (BBBAdmin / BBBPlatformInfrastructure) — never a tenant-held permission.
+    """
+    bbbPlatformBillingSummary(month: String): BbbPlatformBillingSummary!
+  }
+
+  extend type Mutation {
+    """
+    The ONLY way to change billingMode / ratePaisePerLearnerHour /
+    monthlySpendLimitPaise / suspended (ADR-047 H1) — those fields never appear
+    on updateBbbOrganization. Platform tier only (BBBAdmin /
+    BBBPlatformInfrastructure). Full replace: rate null clears the per-org
+    override back to the platform default; monthlySpendLimitPaise null clears
+    the ceiling to unlimited.
+    """
+    setBbbOrganizationBilling(
+      organizationId: ID!
+      billingMode: String!
+      ratePaisePerLearnerHour: Int
+      monthlySpendLimitPaise: Int
+      suspended: Boolean!
+    ): BbbOrganization!
   }
 `;

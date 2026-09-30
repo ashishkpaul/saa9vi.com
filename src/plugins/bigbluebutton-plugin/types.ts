@@ -138,9 +138,11 @@ export interface BigBlueButtonPluginOptions {
    * plugin option on purpose: `BbbPlatformCapacityPolicy` documents itself as a
    * *capacity* policy (ADR-031) and must not absorb pricing.
    *
-   * @default 0 — "not configured". A missing rate bills 0 rather than fabricating
-   * a price for real usage; the platform must set a real rate before metered
-   * organizations are charged.
+   * @default `DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR` (constants.ts) —
+   * a clearly marked PLACEHOLDER (2000 paise = ₹20.00/learner-hour, Q2) applied
+   * only when this option is omitted. Set an explicit value (including `0`,
+   * which means "configured — bill nothing") to override the placeholder; a
+   * per-org `ratePaisePerLearnerHour` overrides both.
    */
   defaultRatePaisePerLearnerHour?: number;
 

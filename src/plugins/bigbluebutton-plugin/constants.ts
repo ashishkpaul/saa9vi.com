@@ -51,6 +51,18 @@ export const BILLING_MODE = {
 
 export type BillingMode = (typeof BILLING_MODE)[keyof typeof BILLING_MODE];
 
+/**
+ * PLACEHOLDER platform rate — 2000 paise = ₹20.00 per learner-hour (Q2).
+ *
+ * TODO(PRICE): Ashish to replace with the real launch price. Clearly marked so
+ * it is never mistaken for a business decision: it applies ONLY when the
+ * `defaultRatePaisePerLearnerHour` plugin option is omitted (an explicit `0`
+ * still means "configured — bill nothing"), and a per-org
+ * `ratePaisePerLearnerHour` override always wins over both. The single
+ * resolution lives in `metered-billing.policy.ts#platformDefaultRatePaisePerHour`.
+ */
+export const DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR = 2000;
+
 // ─── Organisation Member Roles ───────────────────────────────────────────────
 
 /**

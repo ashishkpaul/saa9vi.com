@@ -26,6 +26,9 @@
  *   9. H1 — `updateBbbOrganization` allowlist (BUG-047): tenants may change only
  *      name/recordingEnabled; suspended + capacity limits are platform-only.
  *   10. BUG-050 — `createBbbOrganization` cannot target a foreign channel.
+ *   11. S2 (Phase 4) — billing reads derive the org from the channel (D3),
+ *       recordingUrl never crosses tenants, platform billing surfaces are
+ *       platform-only, money is half-up via computeMonthChargePaise (D2/Q2).
  *
  * Run:  npm run test:e2e:bbb-isolation
  *
@@ -71,9 +74,13 @@ import { verifyTenantAdminViaApi } from '../../tenant-plugin/e2e/fixtures/verify
 import { BbbMeeting } from '../entities/bbb-meeting.entity';
 import { BbbOrganization } from '../entities/bbb-organization.entity';
 import { BbbRoom } from '../entities/bbb-room.entity';
+import { BbbMeteredUsage } from '../entities/bbb-metered-usage.entity';
 import { MeetingCompletedEvent } from '../events/bbb-events';
 import { BbbMeetingService } from '../services/bbb-meeting.service';
-import { MEETING_STATE } from '../constants';
+import {
+  DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR,
+  MEETING_STATE,
+} from '../constants';
 
 // ─── Postgres initializer — isolated schema ────────────────────────────────
 registerInitializer('postgres', new SchemaPostgresInitializer());
@@ -177,6 +184,100 @@ const BBB_ORGANIZATION_ADMIN_STATE = gql`
       concurrentMeetingLimit
       maxParticipantsPerMeeting
       maxSessionsPerOrg
+    }
+  }
+`;
+
+// ─── S2 (Phase 4) billing read documents ───────────────────────────────────
+// D3: no organizationId variable exists on the tenant queries — §11 proves the
+// schema rejects one. SET_BBB_ORGANIZATION_BILLING is the platform-only H1
+// mutation; BBB_BILLING_SUMMARY_WITH_ORG is the deliberate D3-violation probe.
+
+const BBB_BILLING_SUMMARY = gql`
+  query BbbBillingSummary($month: String) {
+    bbbBillingSummary(month: $month) {
+      month
+      ratePaisePerHour
+      totalLearnerMinutes
+      totalChargePaise
+      spendLimitPaise
+      spendLimitReached
+      byRoom {
+        roomId
+        roomName
+        learnerMinutes
+        chargePaise
+      }
+    }
+  }
+`;
+
+const BBB_BILLING_SUMMARY_WITH_ORG = gql`
+  query BbbBillingSummaryWithOrg($month: String, $organizationId: ID) {
+    bbbBillingSummary(month: $month, organizationId: $organizationId) {
+      month
+    }
+  }
+`;
+
+const BBB_METERED_MEETINGS = gql`
+  query BbbMeteredMeetings($month: String, $skip: Int, $take: Int) {
+    bbbMeteredMeetings(month: $month, skip: $skip, take: $take) {
+      items {
+        id
+        title
+        roomId
+        roomName
+        startedAt
+        completedAt
+        peakLearners
+        peakModerators
+        learnerMinutes
+        chargePaise
+        billingCapped
+        recordingUrl
+      }
+      totalItems
+    }
+  }
+`;
+
+const BBB_PLATFORM_BILLING_SUMMARY = gql`
+  query BbbPlatformBillingSummary($month: String) {
+    bbbPlatformBillingSummary(month: $month) {
+      month
+      totalLearnerMinutes
+      totalChargePaise
+      byOrganization {
+        organizationId
+        organizationName
+        learnerMinutes
+        chargePaise
+      }
+    }
+  }
+`;
+
+const SET_BBB_ORGANIZATION_BILLING = gql`
+  mutation SetBbbOrganizationBilling(
+    $organizationId: ID!
+    $billingMode: String!
+    $ratePaisePerLearnerHour: Int
+    $monthlySpendLimitPaise: Int
+    $suspended: Boolean!
+  ) {
+    setBbbOrganizationBilling(
+      organizationId: $organizationId
+      billingMode: $billingMode
+      ratePaisePerLearnerHour: $ratePaisePerLearnerHour
+      monthlySpendLimitPaise: $monthlySpendLimitPaise
+      suspended: $suspended
+    ) {
+      id
+      billingMode
+      ratePaisePerLearnerHour
+      monthlySpendLimitPaise
+      suspended
     }
   }
 `;
@@ -931,6 +1032,278 @@ describe('BBB Channel Isolation (Phase A)', () => {
         .getRepository(superCtx, BbbOrganization)
         .count({ where: { channelId: tenantBChannelId } });
       expect(count).toBe(1);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 11. S2 — billing read API (D3/INV-029): tenant billing reads derive the
+  //     org from the channel, recordingUrl never crosses tenants, platform
+  //     billing surfaces are platform-only, money is half-up via D2/Q2.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('S2 — billing reads, recordingUrl isolation, platform-only billing (D2/D3)', () => {
+    const SEED_MONTH = '2030-01';
+    const EMPTY_MONTH = '2030-02';
+    const REC_A = 'https://playback.a.example/iso-a';
+    const REC_B = 'https://playback.b.example/iso-b';
+    let meetingA: BbbMeeting;
+    let meetingB: BbbMeeting;
+
+    beforeAll(async () => {
+      // §8's fixture vars are describe-scoped — re-resolve by their unique names.
+      const meetingRepo = connection.getRepository(superCtx, BbbMeeting);
+      const roomRepo = connection.getRepository(superCtx, BbbRoom);
+      meetingA = (await meetingRepo.findOne({
+        where: { title: 'Iso meeting A' },
+      }))!;
+      meetingB = (await meetingRepo.findOne({
+        where: { title: 'Iso meeting B' },
+      }))!;
+      const roomA = (await roomRepo.findOne({ where: { name: 'Iso Room A' } }))!;
+      const roomB = (await roomRepo.findOne({ where: { name: 'Iso Room B' } }))!;
+      expect(meetingA).toBeTruthy();
+      expect(meetingB).toBeTruthy();
+      expect(roomA).toBeTruthy();
+      expect(roomB).toBeTruthy();
+
+      // recordingUrl is populated by the rap-publish-ended webhook in
+      // production; seed it directly to prove the isolation boundary (Q2 add).
+      await meetingRepo.update(String(meetingA.id), { recordingUrl: REC_A });
+      await meetingRepo.update(String(meetingB.id), { recordingUrl: REC_B });
+
+      const usageRepo = connection.getRepository(superCtx, BbbMeteredUsage);
+      // Upsert, not insert: §8's A13 completion already wrote a zero-minute
+      // usage row for meetingA (metered orgs bill on completion), and the
+      // unique meetingId index forbids a second row — reseed that row instead.
+      const seed = async (row: any) => {
+        const existing = await usageRepo.findOne({
+          where: { meetingId: row.meetingId },
+        });
+        if (existing) {
+          await usageRepo.save(Object.assign(existing, row));
+        } else {
+          await usageRepo.save(usageRepo.create(row));
+        }
+      };
+      // Tenant A — 90 min @ 2000 paise/hr (room-linked) + 1 min @ 90 paise/hr
+      // (roomless): Σ = 180090, /60 = 3001.5 → half-up 3002 (D2 end-to-end).
+      await seed({
+        meetingId: String(meetingA.id),
+        organizationId: String(orgA.id),
+        channelId: String(orgA.channelId),
+        roomId: String(roomA.id),
+        startedAt: new Date('2030-01-10T10:00:00Z'),
+        completedAt: new Date('2030-01-10T11:30:00Z'),
+        learnerMinutes: 90,
+        peakLearners: 5,
+        peakModerators: 1,
+        ratePaisePerHour: 2000,
+        periodMonth: SEED_MONTH,
+      });
+      // Summary-only row (no bbb_meeting row): counted in money, never listed.
+      await seed({
+        meetingId: 'iso-synthetic-a2',
+        organizationId: String(orgA.id),
+        channelId: String(orgA.channelId),
+        startedAt: new Date('2030-01-11T10:00:00Z'),
+        completedAt: new Date('2030-01-11T10:01:00Z'),
+        learnerMinutes: 1,
+        peakLearners: 0,
+        peakModerators: 0,
+        ratePaisePerHour: 90,
+        periodMonth: SEED_MONTH,
+      });
+      // Tenant B — 60 min @ 1000 paise/hr (the cross-tenant read must never see it).
+      await seed({
+        meetingId: String(meetingB.id),
+        organizationId: String(orgB.id),
+        channelId: String(orgB.channelId),
+        roomId: String(roomB.id),
+        startedAt: new Date('2030-01-12T10:00:00Z'),
+        completedAt: new Date('2030-01-12T11:00:00Z'),
+        learnerMinutes: 60,
+        peakLearners: 4,
+        peakModerators: 1,
+        ratePaisePerHour: 1000,
+        periodMonth: SEED_MONTH,
+      });
+    });
+
+    it('tenant A summary derives the org from the channel and rounds half-up once (D3/D2)', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const { bbbBillingSummary } = await adminClient.query(BBB_BILLING_SUMMARY, {
+        month: SEED_MONTH,
+      });
+      expect(bbbBillingSummary.month).toBe(SEED_MONTH);
+      expect(bbbBillingSummary.totalLearnerMinutes).toBe(91);
+      // (90×2000 + 1×90) / 60 = 3001.5 → 3002 — the ONE rounding pass (D2/Q2).
+      expect(bbbBillingSummary.totalChargePaise).toBe(3002);
+      // No per-org override and no plugin option in this suite → placeholder.
+      expect(bbbBillingSummary.ratePaisePerHour).toBe(
+        DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR,
+      );
+      expect(bbbBillingSummary.spendLimitPaise).toBeNull();
+      expect(bbbBillingSummary.spendLimitReached).toBe(false);
+      expect(bbbBillingSummary.byRoom).toHaveLength(2);
+      const roomRow = bbbBillingSummary.byRoom.find((r: any) => r.roomId);
+      const roomless = bbbBillingSummary.byRoom.find((r: any) => r.roomId === null);
+      expect(roomRow.roomName).toBe('Iso Room A');
+      expect(roomRow.learnerMinutes).toBe(90);
+      expect(roomRow.chargePaise).toBe(3000);
+      expect(roomless.learnerMinutes).toBe(1);
+      expect(roomless.chargePaise).toBe(2); // 1.5 → 2, half-up
+    });
+
+    it('tenant A metered history exposes recordingUrl — and NEVER tenant B\'s (isolation)', async () => {
+      const res = await adminClient.query(BBB_METERED_MEETINGS, { month: SEED_MONTH });
+      const { bbbMeteredMeetings } = res;
+      // The summary-only synthetic row is counted in money but never listed.
+      expect(bbbMeteredMeetings.totalItems).toBe(1);
+      const [row] = bbbMeteredMeetings.items;
+      expect(row.title).toBe('Iso meeting A');
+      expect(row.recordingUrl).toBe(REC_A);
+      expect(row.roomName).toBe('Iso Room A');
+      expect(row.learnerMinutes).toBe(90);
+      expect(row.chargePaise).toBe(3000);
+      const wire = JSON.stringify(res);
+      expect(wire).not.toContain(REC_B);
+      expect(wire).not.toContain('Iso meeting B');
+    });
+
+    it('an empty month returns zeros — not an error', async () => {
+      const { bbbBillingSummary } = await adminClient.query(BBB_BILLING_SUMMARY, {
+        month: EMPTY_MONTH,
+      });
+      expect(bbbBillingSummary.totalLearnerMinutes).toBe(0);
+      expect(bbbBillingSummary.totalChargePaise).toBe(0);
+      expect(bbbBillingSummary.byRoom).toHaveLength(0);
+      const { bbbMeteredMeetings } = await adminClient.query(BBB_METERED_MEETINGS, {
+        month: EMPTY_MONTH,
+      });
+      expect(bbbMeteredMeetings.totalItems).toBe(0);
+      expect(bbbMeteredMeetings.items).toHaveLength(0);
+    });
+
+    it('D3: the tenant billing summary accepts NO organizationId argument', async () => {
+      const err = await rejectionOf(
+        adminClient.query(BBB_BILLING_SUMMARY_WITH_ORG, {
+          month: SEED_MONTH,
+          organizationId: orgBId,
+        }),
+      );
+      expect(String(err.message)).toMatch(/Unknown argument "organizationId"/);
+    });
+
+    it('tenant A CANNOT read the platform billing roll-up', async () => {
+      const err = await rejectionOf(
+        adminClient.query(BBB_PLATFORM_BILLING_SUMMARY, { month: SEED_MONTH }),
+      );
+      expect(String(err.message)).toMatch(/not currently authorized/i);
+    });
+
+    it('tenant A CANNOT call setBbbOrganizationBilling (H1 gate)', async () => {
+      const err = await rejectionOf(
+        adminClient.query(SET_BBB_ORGANIZATION_BILLING, {
+          organizationId: orgAId,
+          billingMode: 'metered',
+          ratePaisePerLearnerHour: 1,
+          monthlySpendLimitPaise: 1,
+          suspended: false,
+        }),
+      );
+      expect(String(err.message)).toMatch(/not currently authorized/i);
+    });
+
+    it('platform CAN set rate + spend limit; the tenant summary reflects them', async () => {
+      await adminClient.asSuperAdmin();
+      const set: any = await adminClient.query(SET_BBB_ORGANIZATION_BILLING, {
+        organizationId: orgAId,
+        billingMode: 'metered',
+        ratePaisePerLearnerHour: 1500,
+        monthlySpendLimitPaise: 500_000,
+        suspended: false,
+      });
+      expect(set.setBbbOrganizationBilling.billingMode).toBe('metered');
+      expect(set.setBbbOrganizationBilling.ratePaisePerLearnerHour).toBe(1500);
+      expect(set.setBbbOrganizationBilling.monthlySpendLimitPaise).toBe(500_000);
+
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const summary: any = (
+        await adminClient.query(BBB_BILLING_SUMMARY, { month: SEED_MONTH })
+      ).bbbBillingSummary;
+      expect(summary.ratePaisePerHour).toBe(1500);
+      expect(summary.spendLimitPaise).toBe(500_000);
+      expect(summary.spendLimitReached).toBe(false); // 3002 < 500000
+
+      // Flip the ceiling below the charge — the guard flag must flip with it.
+      await adminClient.asSuperAdmin();
+      await adminClient.query(SET_BBB_ORGANIZATION_BILLING, {
+        organizationId: orgAId,
+        billingMode: 'metered',
+        ratePaisePerLearnerHour: 1500,
+        monthlySpendLimitPaise: 1000,
+        suspended: false,
+      });
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const reached: any = (
+        await adminClient.query(BBB_BILLING_SUMMARY, { month: SEED_MONTH })
+      ).bbbBillingSummary;
+      expect(reached.spendLimitPaise).toBe(1000);
+      expect(reached.spendLimitReached).toBe(true);
+    });
+
+    it('an invalid billingMode is rejected (validation, not a silent write)', async () => {
+      await adminClient.asSuperAdmin();
+      const err = await rejectionOf(
+        adminClient.query(SET_BBB_ORGANIZATION_BILLING, {
+          organizationId: orgAId,
+          billingMode: 'bogus',
+          suspended: false,
+        }),
+      );
+      expect(String(err.message)).toMatch(/billingMode must be/);
+    });
+
+    it('clearing rate/limit (null) restores the placeholder default + unlimited', async () => {
+      await adminClient.asSuperAdmin();
+      await adminClient.query(SET_BBB_ORGANIZATION_BILLING, {
+        organizationId: orgAId,
+        billingMode: 'metered',
+        ratePaisePerLearnerHour: null,
+        monthlySpendLimitPaise: null,
+        suspended: false,
+      });
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const summary: any = (
+        await adminClient.query(BBB_BILLING_SUMMARY, { month: SEED_MONTH })
+      ).bbbBillingSummary;
+      expect(summary.ratePaisePerHour).toBe(
+        DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR,
+      );
+      expect(summary.spendLimitPaise).toBeNull();
+      expect(summary.spendLimitReached).toBe(false);
+    });
+
+    it('platform roll-up aggregates both tenants with one half-up pass (D2)', async () => {
+      await adminClient.asSuperAdmin();
+      const { bbbPlatformBillingSummary } = await adminClient.query(
+        BBB_PLATFORM_BILLING_SUMMARY,
+        { month: SEED_MONTH },
+      );
+      expect(bbbPlatformBillingSummary.totalLearnerMinutes).toBe(151);
+      // (180090 + 60000) / 60 = 4001.5 → 4002 — one rounding pass across tenants.
+      expect(bbbPlatformBillingSummary.totalChargePaise).toBe(4002);
+      const rows = bbbPlatformBillingSummary.byOrganization;
+      expect(rows).toHaveLength(2);
+      expect(rows[0].organizationId).toBe(orgAId);
+      expect(rows[0].learnerMinutes).toBe(91);
+      expect(rows[0].chargePaise).toBe(3002);
+      expect(rows[1].organizationId).toBe(orgBId);
+      expect(rows[1].chargePaise).toBe(1000);
     });
   });
 });

@@ -54,6 +54,7 @@ export class MeteredBillingChecker implements Checker {
       this.noMoneyColumnOnMeteredPath(),
       this.phase2BOperationalWiringPresent(),
       this.channelScopedReadsRemediated(),
+      this.billingApiChannelScoped(),
     ];
 
     const results = await Promise.all(checks);
@@ -621,6 +622,111 @@ export class MeteredBillingChecker implements Checker {
     return next === -1
       ? source.slice(at)
       : source.slice(at, at + signature.length + next + 1);
+  }
+
+  /**
+   * Phase 4 billing read API (D2 / D3 / Q2 / SEC-008): tenant billing reads
+   * take no organization argument and derive scope from ctx.channelId, the
+   * platform billing surfaces are platform-gated (never a tenant-held
+   * `BbbManage*`), money flows only through `computeMonthChargePaise`, and the
+   * placeholder rate resolution is wired into both the write and read paths.
+   */
+  private async billingApiChannelScoped(): Promise<CheckResult> {
+    const resolverRel =
+      "src/plugins/bigbluebutton-plugin/api/bbb-admin.resolver.ts";
+    const billingRel =
+      "src/plugins/bigbluebutton-plugin/services/bbb-billing.service.ts";
+    const meteringRel =
+      "src/plugins/bigbluebutton-plugin/services/bbb-metering.service.ts";
+    const constantsRel = "src/plugins/bigbluebutton-plugin/constants.ts";
+    const resolverSrc = this.readOrEmpty(resolverRel);
+    const billingSrc = this.readOrEmpty(billingRel);
+    const meteringSrc = this.readOrEmpty(meteringRel);
+    const constantsSrc = this.readOrEmpty(constantsRel);
+    const failures: string[] = [];
+
+    // D3: tenant billing reads expose no organizationId argument or passthrough.
+    for (const query of ["bbbBillingSummary(", "bbbMeteredMeetings("]) {
+      const raw = this.bodyFor(resolverSrc, query);
+      if (!raw) {
+        failures.push(`${resolverRel} must declare ${query} (Phase 4 read)`);
+        continue;
+      }
+      // bodyFor's slice can carry the NEXT member's leading docblock; strip
+      // comments so prose mentioning `organizationId` cannot fail the check.
+      const body = raw
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/[^\n]*/g, "");
+      if (body.includes("organizationId")) {
+        failures.push(
+          `${query} must not accept or forward an organizationId — D3: the organization comes from ctx.channelId`,
+        );
+      }
+    }
+
+    // Platform billing surfaces must never be reachable via a tenant-held
+    // permission (a BbbManage* in the gate would reopen BUG-047).
+    for (const sig of ["bbbPlatformBillingSummary(", "setBbbOrganizationBilling("]) {
+      const decorators = this.decoratorsFor(resolverSrc, sig);
+      if (!decorators) {
+        failures.push(`${resolverRel} must declare ${sig}`);
+        continue;
+      }
+      if (!decorators.includes("BbbPlatformInfrastructurePermission")) {
+        failures.push(
+          `${sig} must be gated on BbbPlatformInfrastructurePermission (platform tier only)`,
+        );
+      }
+      if (decorators.includes("BbbManage")) {
+        failures.push(
+          `${sig} must not be reachable through a tenant-held BbbManage* permission (BUG-047 regression)`,
+        );
+      }
+    }
+
+    // D2: money only through the policy helper — no local rounding anywhere in
+    // the read path.
+    if (!billingSrc.includes("computeMonthChargePaise(")) {
+      failures.push(
+        `${billingRel} must compute money via computeMonthChargePaise (D2)`,
+      );
+    }
+    if (billingSrc.includes("Math.round")) {
+      failures.push(
+        `${billingRel} must not round locally — Math.round lives only in metered-billing.policy (D2)`,
+      );
+    }
+
+    // Q2: one rate resolution shared by the summary and the snapshot write.
+    if (
+      !billingSrc.includes("resolveRatePaisePerLearnerHour(") ||
+      !billingSrc.includes("platformDefaultRatePaisePerHour(")
+    ) {
+      failures.push(
+        `${billingRel} must resolve the displayed rate through resolveRatePaisePerLearnerHour + platformDefaultRatePaisePerHour (Q2)`,
+      );
+    }
+    if (!meteringSrc.includes("platformDefaultRatePaisePerHour(")) {
+      failures.push(
+        `${meteringRel} must resolve the snapshotted default rate through platformDefaultRatePaisePerHour (Q2 write-path parity)`,
+      );
+    }
+    if (!constantsSrc.includes("DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR")) {
+      failures.push(
+        `${constantsRel} must define the clearly marked placeholder rate constant (Q2)`,
+      );
+    }
+
+    return {
+      checker: this.name,
+      name: "billing-api-channel-scoped",
+      passed: failures.length === 0,
+      severity: failures.length > 0 ? "error" : "info",
+      message:
+        failures.length === 0
+          ? "Phase 4 billing API present: D3 no-org tenant reads, platform-gated billing surfaces, D2 money via policy only, Q2 placeholder wired into write+read"
+          : failures.join("; "),
+    };
   }
 
   /** Text between the nearest preceding `@Allow(` and the method declaration. */

@@ -11,6 +11,7 @@ import {
   RequestContext,
   Transaction,
   TransactionalConnection,
+  UserInputError,
 } from "@vendure/core";
 import { In } from "typeorm";
 import { BbbServerService } from "../services/bbb-server.service";
@@ -34,6 +35,7 @@ import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbSessionTemplate } from "../entities/bbb-session-template.entity";
 import {
+  BILLING_MODE,
   BbbAdminPermission,
   BbbManageEntitlementsPermission,
   BbbManageMeetingsPermission,
@@ -56,6 +58,7 @@ import { SessionAttendance } from "../entities/session-attendance.entity";
 
 import { Customer, EntityNotFoundError } from "@vendure/core";
 import { AttendanceAnalyticsService } from "../services/attendance-analytics.service";
+import { BbbBillingService } from "../services/bbb-billing.service";
 
 /** Shape returned to GraphQL with augmented customer info */
 interface MemberWithCustomer extends BbbOrganizationMember {
@@ -190,6 +193,7 @@ export class BbbAdminResolver {
     private readonly capacityPolicyService: BbbPlatformCapacityPolicyService,
     private readonly connection: TransactionalConnection,
     private readonly attendanceAnalytics: AttendanceAnalyticsService,
+    private readonly billingService: BbbBillingService,
   ) {}
 
   // ─── Capacity Intelligence Dashboard (ADR v1.7 §6A CI-003) ────────────────
@@ -1269,5 +1273,94 @@ export class BbbAdminResolver {
     @Args("to") to: Date,
   ) {
     return this.attendanceAnalytics.getChannelAttendanceSummary(ctx, from, to);
+  }
+
+  // ─── Metered billing reads + platform billing control (ADR-047 Phase 4) ───
+
+  /**
+   * Tenant billing summary (D3): the organization is derived from
+   * `ctx.channelId` — this query deliberately exposes NO `organizationId`
+   * argument. Every paise figure comes from `computeMonthChargePaise` (D2).
+   */
+  @Query()
+  @Allow(BbbAdminPermission.Permission, BbbManageMeetingsPermission.Permission)
+  bbbBillingSummary(@Ctx() ctx: RequestContext, @Args("month") month?: string) {
+    return this.billingService.getSummary(ctx, month);
+  }
+
+  /**
+   * Tenant billed history for a month (D3): organization from the channel, no
+   * `organizationId` argument; rows expose the stored `recordingUrl`.
+   */
+  @Query()
+  @Allow(BbbAdminPermission.Permission, BbbManageMeetingsPermission.Permission)
+  bbbMeteredMeetings(
+    @Ctx() ctx: RequestContext,
+    @Args("month") month?: string,
+    @Args("skip") skip?: number,
+    @Args("take") take?: number,
+  ) {
+    return this.billingService.getMeteredMeetings(ctx, month, skip, take);
+  }
+
+  /**
+   * Platform-wide roll-up across tenants — platform tier only. Tenants hold
+   * neither `BBBAdmin` nor `BBBPlatformInfrastructure`, never a `BbbManage*`
+   * permission (a tenant-held permission here would be a permission regression).
+   */
+  @Query()
+  @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
+  bbbPlatformBillingSummary(
+    @Ctx() ctx: RequestContext,
+    @Args("month") month?: string,
+  ) {
+    return this.billingService.getPlatformSummary(ctx, month);
+  }
+
+  /**
+   * H1 landing spot (ADR-047 / SEC-008 / BUG-047): `billingMode`,
+   * `ratePaisePerLearnerHour`, `monthlySpendLimitPaise` and `suspended` are
+   * settable ONLY here — never through `updateBbbOrganization`, whose tenant
+   * allowlist rejects them. Full-replace semantics: `rate: null` clears the
+   * per-org override back to the platform default; `monthlySpendLimitPaise:
+   * null` clears the ceiling to unlimited.
+   */
+  @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
+  @Transaction()
+  @Mutation()
+  async setBbbOrganizationBilling(
+    @Ctx() ctx: RequestContext,
+    @Args("organizationId") organizationId: string,
+    @Args("billingMode") billingMode: string,
+    @Args("ratePaisePerLearnerHour") ratePaisePerLearnerHour?: number | null,
+    @Args("monthlySpendLimitPaise") monthlySpendLimitPaise?: number | null,
+    @Args("suspended") suspended?: boolean,
+  ): Promise<BbbOrganization> {
+    if (
+      billingMode !== BILLING_MODE.GRANT &&
+      billingMode !== BILLING_MODE.METERED
+    ) {
+      throw new UserInputError(
+        `billingMode must be "${BILLING_MODE.GRANT}" or "${BILLING_MODE.METERED}"`,
+      );
+    }
+    if (ratePaisePerLearnerHour != null && ratePaisePerLearnerHour < 0) {
+      throw new UserInputError(
+        "ratePaisePerLearnerHour must be >= 0 (paise per learner-hour)",
+      );
+    }
+    if (monthlySpendLimitPaise != null && monthlySpendLimitPaise < 0) {
+      throw new UserInputError("monthlySpendLimitPaise must be >= 0 (paise)");
+    }
+    const org = await this.connection.getEntityOrThrow(
+      ctx,
+      BbbOrganization,
+      organizationId,
+    );
+    org.billingMode = billingMode as BbbOrganization["billingMode"];
+    org.ratePaisePerLearnerHour = ratePaisePerLearnerHour ?? null;
+    org.monthlySpendLimitPaise = monthlySpendLimitPaise ?? null;
+    org.suspended = suspended ?? org.suspended;
+    return this.connection.getRepository(ctx, BbbOrganization).save(org);
   }
 }

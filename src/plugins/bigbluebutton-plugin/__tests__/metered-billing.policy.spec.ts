@@ -20,11 +20,13 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR } from "../constants";
 import {
   computeMonthChargePaise,
   isMeteredOrganization,
   learnerCountFrom,
   monthOf,
+  platformDefaultRatePaisePerHour,
   resolveRatePaisePerLearnerHour,
 } from "../services/metered-billing.policy";
 
@@ -202,5 +204,60 @@ describe("computeMonthChargePaise", () => {
         { learnerMinutes: 2.5, ratePaisePerHour: 12_000 },
       ]),
     ).toBe(6_000);
+  });
+});
+
+describe("half-up rounding to the paisa (Q2)", () => {
+  it("rounds an exact .5 paisa UP — 1.5 → 2, 0.5 → 1 (never banker's rounding)", () => {
+    // 1 min × 90 paise/hr / 60 = 1.5 → 2.
+    expect(
+      computeMonthChargePaise([{ learnerMinutes: 1, ratePaisePerHour: 90 }]),
+    ).toBe(2);
+    // 3 min × 10 paise/hr / 60 = 0.5 → 1.
+    expect(
+      computeMonthChargePaise([{ learnerMinutes: 3, ratePaisePerHour: 10 }]),
+    ).toBe(1);
+  });
+
+  it("rounds the monthly total's exact .5 UP once, after the sum (D2)", () => {
+    // (90 × 2000 + 1 × 90) / 60 = 180090 / 60 = 3001.5 → 3002.
+    expect(
+      computeMonthChargePaise([
+        { learnerMinutes: 90, ratePaisePerHour: 2000 },
+        { learnerMinutes: 1, ratePaisePerHour: 90 },
+      ]),
+    ).toBe(3002);
+  });
+});
+
+describe("platformDefaultRatePaisePerHour (Q2 placeholder)", () => {
+  it("falls back to the clearly marked placeholder when the option is omitted", () => {
+    expect(platformDefaultRatePaisePerHour(undefined)).toBe(
+      DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR,
+    );
+    expect(platformDefaultRatePaisePerHour(null)).toBe(
+      DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR,
+    );
+    expect(platformDefaultRatePaisePerHour({})).toBe(
+      DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR,
+    );
+  });
+
+  it("honours an explicit option — including 0 (configured: bill nothing)", () => {
+    expect(
+      platformDefaultRatePaisePerHour({ defaultRatePaisePerLearnerHour: 0 }),
+    ).toBe(0);
+    expect(
+      platformDefaultRatePaisePerHour({ defaultRatePaisePerLearnerHour: 4500 }),
+    ).toBe(4500);
+  });
+
+  it("treats a malformed option as unconfigured (never a negative/fractional price)", () => {
+    expect(
+      platformDefaultRatePaisePerHour({ defaultRatePaisePerLearnerHour: -1 }),
+    ).toBe(DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR);
+    expect(
+      platformDefaultRatePaisePerHour({ defaultRatePaisePerLearnerHour: 12.5 }),
+    ).toBe(DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR);
   });
 });
