@@ -19,6 +19,10 @@ import { BbbOrganizationMember } from "../entities/bbb-organization-member.entit
 import { BbbOrganizationMembership } from "../entities/bbb-organization-membership.entity";
 import { BbbProductAccess } from "../entities/bbb-product-access.entity";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
+import {
+  BbbAdminPermission,
+  BbbPlatformInfrastructurePermission,
+} from "../constants";
 
 /**
  * Centralized channel-ownership guard for all BBB entities.
@@ -71,6 +75,26 @@ export class BbbChannelAccessService {
    */
   private isSuperAdmin(ctx: RequestContext): boolean {
     return ctx.userHasPermissions([Permission.SuperAdmin]);
+  }
+
+  /**
+   * Platform-tier caller: SuperAdmin, or a holder of either platform BBB
+   * permission (ADR-033 — `BBBPlatformInfrastructure` is Portal/SuperAdmin-only
+   * and tenant roles never hold `BBBAdmin`; see BUG-029 /
+   * TENANT_ADMIN_ROLE_PERMISSIONS).
+   *
+   * This is the single definition of "platform" for list-read visibility
+   * (`meetingService.findAll`, `orgService.findAll`), the organization-update
+   * allowlist, and the organization-create channel guard — so the call sites
+   * cannot drift apart (Q5 / INV-029). `RequestContext.userHasPermissions` is
+   * OR (any-of) semantics.
+   */
+  isPlatformCaller(ctx: RequestContext): boolean {
+    return ctx.userHasPermissions([
+      BbbAdminPermission.Permission,
+      BbbPlatformInfrastructurePermission.Permission,
+      Permission.SuperAdmin,
+    ]);
   }
 
   /**

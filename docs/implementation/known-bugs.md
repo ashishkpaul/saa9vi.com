@@ -6,9 +6,17 @@
 
 ## Active Bugs
 
-**BUG-046 — `bbbMeetings` with `organizationId` omitted applies no channel filter, so any tenant admin can read every tenant's meetings — **OPEN** (found 2026-09-30 by code audit; A16 / INV-029 / SEC-008).**
+**BUG-050 — `createBbbOrganization` accepted an arbitrary `channelId`, so a tenant admin could provision an organization row on another tenant's channel — ✅ FIXED 2026-09-30 (found 2026-09-30 by read-before-edit audit during S1; INV-001 / SEC-008).**
 
-> **Status:** OPEN. Fix scheduled in Phase 5 of `docs/implementation/bbb-attendee-hour-billing-plan.md`; INV-029 + SEC-008 document the rule being violated.
+> **Status:** FIXED 2026-09-30. `BbbOrganizationService.create()` now rejects a non-platform caller whose normalized `input.channelId` differs from `ctx.channelId` with `ForbiddenError`; platform callers (SuperAdmin / `BBBAdmin` / `BBBPlatformInfrastructure` via the shared `isPlatformCaller()`) keep any-channel creation. This also guarantees the scalar `channelId` and the `channels` many-to-many assignment (`assignToCurrentChannel(org, ctx)`) can never diverge. Listener/system provisioning (`BbbTenantProvisioningListener`) creates with a channel-scoped, user-less ctx, so it stays on its own channel and is unaffected. Regression e2e: `bbb-channel-isolation.e2e-spec.ts` §10; source guard: `channel-scoped-reads-remediated` in `MeteredBillingChecker`.
+
+**Severity:** High (cross-tenant write — an org row on a foreign channel, with the caller's own channel attached to the `channels` join) · **Components:** `services/bbb-organization.service.ts` (`create()`), `api/bbb-admin.resolver.ts` (`createBbbOrganization`)
+
+**What the code did.** `create()` normalized and stored `input.channelId` and called `assignToCurrentChannel(org, ctx)` without ever comparing the two, while `createBbbOrganization` is gated `@Allow(BbbAdmin, BbbManageOrganizations)` — the latter held by every tenant admin role.
+
+**BUG-046 — `bbbMeetings` with `organizationId` omitted applied no channel filter, so any tenant admin could read every tenant's meetings — ✅ FIXED 2026-09-30 (found 2026-09-30 by code audit; A16 / INV-029 / SEC-008).**
+
+> **Status:** FIXED 2026-09-30 (S1). `meetingService.findAll()` now derives the no-argument organization set from `ctx.channelId` (org→channels join) for non-platform callers, channel-asserts explicit `organizationId`/`roomId` arguments through `BbbChannelAccessService`, and keeps the unrestricted listing behind the shared `isPlatformCaller()` helper. Regression e2e: `bbb-channel-isolation.e2e-spec.ts` §8; source guard: `channel-scoped-reads-remediated` in `MeteredBillingChecker`. The shipped screen (`MeetingsList.tsx`) reads its own tenant's rows even before Phase 6 removes its org picker.
 
 **Severity:** High (cross-tenant read through a shipped tenant screen) · **Components:** `src/plugins/bigbluebutton-plugin/services/bbb-meeting.service.ts:137-160`, `api/bbb-admin.resolver.ts:491-497`, `dashboard/routes/meetings/MeetingsList.tsx:91-103`
 
@@ -16,9 +24,9 @@
 
 **Fix plan (Phase 5).** (1) Non-platform callers get the organization derived from `ctx.channelId` (`BbbChannelAccessService`) and the argument is ignored/removed; (2) the cross-tenant (no-org) path becomes platform-only behind `@Allow(BbbAdmin, BBBPlatformInfrastructure)`; (3) verify the `bbbOrganizations` resolver guard; (4) add cross-tenant regression cases to `bbb-channel-isolation.e2e-spec.ts`.
 
-**BUG-047 — Tenant admins can un-suspend their own organization, mint free capacity grants, and delete their own organization — **PARTIALLY FIXED 2026-09-30** (H2 landed; H1 remains) (found 2026-09-30 by code audit; A17 / SEC-008 / H1+H2).**
+**BUG-047 — Tenant admins could un-suspend their own organization, mint free capacity grants, and delete their own organization — ✅ FIXED 2026-09-30 (H1 + H2 both landed) (found 2026-09-30 by code audit; A17 / SEC-008 / H1+H2).**
 
-> **Status:** **H2 FIXED 2026-09-30** (go-ahead given in the plan's §7 register): `createBbbCapacityGrant` and `deleteBbbOrganization` are retargeted to `BBBPlatformInfrastructure`; the tenant role is untouched (A15) and the shipped `Capacity Grants` nav gate mirrors the backend gate. Regression e2e: `bbb-channel-isolation.e2e-spec.ts` §6 (tenant denied on its **own** org, no grant row written, no partial delete, platform operator still allowed); source guard: `sec-008-platform-guards` in `MeteredBillingChecker`. Seed script step 10 now authenticates as platform operator. **H1 (the `suspended` field and the three other billing controls move to a platform-only mutation) remains OPEN — executed in Phase 4.**
+> **Status:** **H2 FIXED 2026-09-30** (go-ahead given in the plan's §7 register): `createBbbCapacityGrant` and `deleteBbbOrganization` are retargeted to `BBBPlatformInfrastructure`; the tenant role is untouched (A15) and the shipped `Capacity Grants` nav gate mirrors the backend gate. Regression e2e: `bbb-channel-isolation.e2e-spec.ts` §6 (tenant denied on its **own** org, no grant row written, no partial delete, platform operator still allowed); source guard: `sec-008-platform-guards` in `MeteredBillingChecker`. Seed script step 10 now authenticates as platform operator. **H1 FIXED 2026-09-30 (S1):** `orgService.update()` now applies the `TENANT_EDITABLE_ORG_FIELDS` allowlist (`name`, `recordingEnabled`) — `suspended`, `maxSessionsPerOrg`, `concurrentMeetingLimit` and `maxParticipantsPerMeeting` are rejected with `ForbiddenError` for non-platform callers; billing fields (`billingMode`, `ratePaisePerLearnerHour`, `monthlySpendLimitPaise`) stay outside `UpdateBbbOrganizationInput` entirely and arrive with `setBbbOrganizationBilling` in Phase 4. Platform callers keep the full input (the INV-015 capacity re-sync still applies to them). Regression e2e: `bbb-channel-isolation.e2e-spec.ts` §9; source guard: `channel-scoped-reads-remediated` in `MeteredBillingChecker`.
 
 **Severity:** High (privilege escalation; with ADR-047 landed, `suspended` is the postpaid credit guard) · **Components:** `api/bbb-admin.resolver.ts:280-289` (`updateBbbOrganization`), `:552-561` (`deleteBbbOrganization`), `:599-631` (`createBbbCapacityGrant`); `services/bbb-organization.service.ts:277`; input types `api/schema/bbb-admin.schema.ts:90-98`
 
@@ -26,9 +34,9 @@
 
 **Fix plan.** H1 (Phase 4): `billingMode`, `ratePaisePerLearnerHour`, `monthlySpendLimitPaise`, `suspended` are settable **only** via the new `BBBPlatformInfrastructure`-gated `setBbbOrganizationBilling`, never via `UpdateBbbOrganizationInput` (grep seed scripts — `scripts/seed/seed-via-graphql.sh` calls `updateBbbOrganization`). H2: retarget the other two mutations to `BBBPlatformInfrastructure`.
 
-**BUG-048 — `MeetingCompletedEvent.organizationId` is published as `undefined` from the completion path — **OPEN** (found 2026-09-30 by code audit; A13).**
+**BUG-048 — `MeetingCompletedEvent.organizationId` was published as `undefined` from the completion path — ✅ FIXED 2026-09-30 (verified at `04247fc`; regression assertion added with S1) (found 2026-09-30 by code audit; A13).**
 
-> **Status:** OPEN. Fixed in Phase 2, immediately before `billMeteredMeeting` starts consuming the event.
+> **Status:** FIXED. `completeMeetingLifecycle` loads the meeting with `leftJoinAndSelect("meeting.organization")` under a meeting-scoped pessimistic lock, and the publish site passes `meeting.organization?.id` — both verified at `04247fc`. Regression e2e: `bbb-channel-isolation.e2e-spec.ts` §8 ("A13 regression: `MeetingCompletedEvent` carries the organization id").
 
 **Severity:** Medium (silent downstream no-op — an org-scoped consumer sees `undefined` and does nothing) · **Components:** `src/plugins/bigbluebutton-plugin/services/bbb-meeting.service.ts:266-269`, `:349-358`
 

@@ -255,8 +255,10 @@ BigBlueButton                       BigBlueButton
 
 **Read:** `services/bbb-room.service.ts` (full), `services/bbb-meeting.service.ts#joinRoom` + `createRoomMeetingAndEnqueue`, `api/bbb-admin.resolver.ts`, `api/bbb-shop.resolver.ts#startScheduledSession`, `services/bbb-scheduled-session.service.ts` (`create`, `startSession`), `services/room-access.policy.ts`, `services/bbb-channel-access.service.ts`.
 
+**Status update (S1, 2026-09-30):** Item 1 (channel-isolation) and item 5 (room-scoped `roomId` arg) are **landed** — `meetingService.findAll` derives the tenant organization set from `ctx.channelId` behind the shared `isPlatformCaller()` helper, channel-asserts explicit `organizationId`/`roomId` arguments, and keeps the unrestricted listing platform-only; regressions in `bbb-channel-isolation.e2e-spec.ts` §8 (incl. the A13/BUG-048 `MeetingCompletedEvent.organizationId` assertion), source guard `channel-scoped-reads-remediated` in `MeteredBillingChecker`. Also landed with S1 (outside this list): BUG-047-H1 (`TENANT_EDITABLE_ORG_FIELDS` allowlist on `orgService.update` — `suspended` + capacity limits are platform-only) and BUG-050 (`createBbbOrganization` cannot target a foreign channel), regressions §9/§10. **Deferred by scope decision:** item 3 (session↔room propagation) and item 4's `trainerCount` (studentCount remains). Items 2, 4 (studentCount), 6, 7 remain pending in the S1–S6 workstream order (S4, S4, S2, S5 respectively).
+
 **Do:**
-1. **Channel-isolation fix (A16 — do this first):**
+1. **Channel-isolation fix (A16 — do this first):** ✅ done (S1 — see status note above).
    - `bbbMeetings` with omitted `organizationId`: derive the org from `ctx.channelId` for non-platform callers; the truly cross-tenant path becomes platform-only (`BBBPlatformInfrastructure`/`BBBAdmin`).
    - Verify the `bbbOrganizations` guard while here; a tenant must not list other tenants' orgs.
    - Add channel-isolation regression cases alongside `bbb-channel-isolation.e2e-spec.ts` (tenant calling `bbbMeetings` with no org sees only its own; tenant passing another tenant's `organizationId` is rejected).

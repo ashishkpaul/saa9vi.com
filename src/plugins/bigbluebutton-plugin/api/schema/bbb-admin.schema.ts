@@ -288,6 +288,7 @@ export const adminApiExtensions = gql`
     bbbMyOrganization: BbbOrganization
     bbbMeetings(
       organizationId: ID
+      roomId: ID
       options: BbbMeetingListOptions
     ): BbbMeetingList!
     bbbMeeting(id: ID!): BbbMeeting

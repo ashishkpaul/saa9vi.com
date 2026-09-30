@@ -500,8 +500,9 @@ export class BbbAdminResolver {
     @Ctx() ctx: RequestContext,
     @Args("organizationId") orgId?: string,
     @Args("options") options?: { skip?: number; take?: number },
+    @Args("roomId") roomId?: string,
   ) {
-    return this.meetingService.findAll(ctx, orgId, options);
+    return this.meetingService.findAll(ctx, orgId, options, roomId);
   }
 
   @Query()

@@ -19,6 +19,13 @@
  *      while a platform operator still can.
  *   7. H3 — `bbbCapacityGrants` is channel-asserted (INV-029): a tenant admin can
  *      read only its own channel's grants.
+ *   8. BUG-046 — `bbbMeetings` derives the tenant's organization set from
+ *      ctx.channelId; cross-tenant organizationId/roomId arguments are rejected
+ *      and the unrestricted listing stays platform-only. Also carries the
+ *      A13/BUG-048 regression: MeetingCompletedEvent.organizationId is set.
+ *   9. H1 — `updateBbbOrganization` allowlist (BUG-047): tenants may change only
+ *      name/recordingEnabled; suspended + capacity limits are platform-only.
+ *   10. BUG-050 — `createBbbOrganization` cannot target a foreign channel.
  *
  * Run:  npm run test:e2e:bbb-isolation
  *
@@ -39,7 +46,13 @@ import {
   testConfig,
 } from '@vendure/testing';
 import { SchemaPostgresInitializer } from '../../tenant-plugin/e2e/schema-postgres-initializer';
-import { mergeConfig } from '@vendure/core';
+import {
+  EventBus,
+  mergeConfig,
+  RequestContext,
+  TransactionalConnection,
+} from '@vendure/core';
+import { getSuperadminContext } from '@vendure/testing/lib/utils/get-superadmin-context';
 import {
   afterAll,
   beforeAll,
@@ -55,6 +68,12 @@ import { ReviewsPlugin } from '../../reviews/reviews-plugin';
 import { SubscriptionPlugin } from '../../subscription/subscription.plugin';
 import { E2E_INITIAL_DATA } from '../../tenant-plugin/e2e/fixtures/e2e-initial-data';
 import { verifyTenantAdminViaApi } from '../../tenant-plugin/e2e/fixtures/verify-tenant-admin';
+import { BbbMeeting } from '../entities/bbb-meeting.entity';
+import { BbbOrganization } from '../entities/bbb-organization.entity';
+import { BbbRoom } from '../entities/bbb-room.entity';
+import { MeetingCompletedEvent } from '../events/bbb-events';
+import { BbbMeetingService } from '../services/bbb-meeting.service';
+import { MEETING_STATE } from '../constants';
 
 // ─── Postgres initializer — isolated schema ────────────────────────────────
 registerInitializer('postgres', new SchemaPostgresInitializer());
@@ -108,6 +127,57 @@ const UPDATE_BBB_ORGANIZATION = gql`
 const DELETE_BBB_ORGANIZATION = gql`
   mutation DeleteBbbOrganization($id: ID!) {
     deleteBbbOrganization(id: $id)
+  }
+`;
+
+// ─── BUG-046 / H1 / BUG-050 (S1) documents ─────────────────────────────────
+// `bbbMeetings` is the channel-isolation read under test (BUG-046),
+// `createBbbOrganization` the cross-channel write guard (BUG-050), and
+// `bbbOrganizationAdminState` the allowlist read-back (BUG-047-H1).
+
+const BBB_MEETINGS = gql`
+  query BbbMeetings($organizationId: ID, $roomId: ID, $options: BbbMeetingListOptions) {
+    bbbMeetings(organizationId: $organizationId, roomId: $roomId, options: $options) {
+      items {
+        id
+        organization {
+          id
+        }
+      }
+      totalItems
+    }
+  }
+`;
+
+const CREATE_BBB_ORGANIZATION = gql`
+  mutation CreateBbbOrganization($input: CreateBbbOrganizationInput!) {
+    createBbbOrganization(input: $input) {
+      id
+      channelId
+    }
+  }
+`;
+
+const CREATE_BBB_ROOM = gql`
+  mutation CreateBbbRoom($input: CreateBbbRoomInput!) {
+    createBbbRoom(input: $input) {
+      id
+      name
+    }
+  }
+`;
+
+const BBB_ORGANIZATION_ADMIN_STATE = gql`
+  query BbbOrganizationAdminState($id: ID!) {
+    bbbOrganization(id: $id) {
+      id
+      name
+      suspended
+      recordingEnabled
+      concurrentMeetingLimit
+      maxParticipantsPerMeeting
+      maxSessionsPerOrg
+    }
   }
 `;
 
@@ -215,6 +285,12 @@ describe('BBB Channel Isolation (Phase A)', () => {
 
   let orgAId: string;
   let orgBId: string;
+
+  // S1 (§8–§10) shared fixtures/helpers — assigned in §8's beforeAll.
+  let connection: TransactionalConnection;
+  let superCtx: RequestContext;
+  let orgA: BbbOrganization;
+  let orgB: BbbOrganization;
 
   // ── Bootstrap ────────────────────────────────────────────────────────────
 
@@ -593,6 +669,268 @@ describe('BBB Channel Isolation (Phase A)', () => {
           (g: any) => g.sourceType === 'internal_overhead',
         ),
       ).toBe(true);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 8. BUG-046 — bbbMeetings derives tenant scope from ctx.channelId
+  //    (INV-029), plus the A13/BUG-048 regression assertion.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('BUG-046 — bbbMeetings channel scope (INV-029)', () => {
+    let meetingA: BbbMeeting;
+    let meetingB: BbbMeeting;
+    let roomAEncoded: string;
+    let roomBEncoded: string;
+
+    beforeAll(async () => {
+      connection = server.app.get(TransactionalConnection);
+      superCtx = await getSuperadminContext(server.app);
+      const orgRepo = connection.getRepository(superCtx, BbbOrganization);
+      orgA = (await orgRepo.findOne({
+        where: { channelId: tenantAChannelId },
+      }))!;
+      orgB = (await orgRepo.findOne({
+        where: { channelId: tenantBChannelId },
+      }))!;
+      expect(orgA).toBeTruthy();
+      expect(orgB).toBeTruthy();
+
+      // Rooms via the tenant-visible mutation — DB-only, no provisioning.
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const roomA: any = await adminClient.query(CREATE_BBB_ROOM, {
+        input: { organizationId: orgAId, name: 'Iso Room A' },
+      });
+      roomAEncoded = roomA.createBbbRoom.id;
+
+      await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
+      adminClient.setChannelToken(tenantBChannelToken);
+      const roomB: any = await adminClient.query(CREATE_BBB_ROOM, {
+        input: { organizationId: orgBId, name: 'Iso Room B' },
+      });
+      roomBEncoded = roomB.createBbbRoom.id;
+
+      // Fixture meetings inserted directly — no BBB API / queue involvement.
+      // Room PKs come from the repository (raw, strategy-independent): a
+      // T_-encoded GraphQL id must never reach a column — the completion path
+      // treats meeting.roomId as a raw room PK.
+      const roomRepo = connection.getRepository(superCtx, BbbRoom);
+      const rawRoomA = await roomRepo.findOne({ where: { name: 'Iso Room A' } });
+      const rawRoomB = await roomRepo.findOne({ where: { name: 'Iso Room B' } });
+      expect(rawRoomA).toBeTruthy();
+      expect(rawRoomB).toBeTruthy();
+
+      const meetingRepo = connection.getRepository(superCtx, BbbMeeting);
+      meetingA = await meetingRepo.save(
+        meetingRepo.create({
+          title: 'Iso meeting A',
+          state: MEETING_STATE.ACTIVE,
+          organization: orgA,
+          roomId: String(rawRoomA!.id),
+          provisionedAt: new Date(),
+        }),
+      );
+      meetingB = await meetingRepo.save(
+        meetingRepo.create({
+          title: 'Iso meeting B',
+          state: MEETING_STATE.ACTIVE,
+          organization: orgB,
+          roomId: String(rawRoomB!.id),
+          provisionedAt: new Date(),
+        }),
+      );
+    });
+
+    it('tenant A with no arguments reads ONLY tenant A meetings', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const { bbbMeetings } = await adminClient.query(BBB_MEETINGS);
+      expect(bbbMeetings.totalItems).toBeGreaterThanOrEqual(1);
+      expect(
+        bbbMeetings.items.every((m: any) => m.organization.id === orgAId),
+      ).toBe(true);
+      expect(
+        bbbMeetings.items.some((m: any) => m.organization.id === orgBId),
+      ).toBe(false);
+    });
+
+    it('tenant A with its own organizationId still reads its meetings', async () => {
+      const { bbbMeetings } = await adminClient.query(BBB_MEETINGS, {
+        organizationId: orgAId,
+      });
+      expect(bbbMeetings.totalItems).toBeGreaterThanOrEqual(1);
+      expect(
+        bbbMeetings.items.every((m: any) => m.organization.id === orgAId),
+      ).toBe(true);
+    });
+
+    it('tenant A CANNOT read tenant B meetings via organizationId', async () => {
+      const err = await rejectionOf(
+        adminClient.query(BBB_MEETINGS, { organizationId: orgBId }),
+      );
+      expect(String(err.message)).toMatch(/not currently authorized/i);
+    });
+
+    it('tenant A CANNOT read tenant B meetings via roomId', async () => {
+      const err = await rejectionOf(
+        adminClient.query(BBB_MEETINGS, { roomId: roomBEncoded }),
+      );
+      expect(String(err.message)).toMatch(/not currently authorized/i);
+    });
+
+    it('tenant A with its own roomId reads only its own room meetings', async () => {
+      const { bbbMeetings } = await adminClient.query(BBB_MEETINGS, {
+        roomId: roomAEncoded,
+      });
+      expect(bbbMeetings.totalItems).toBeGreaterThanOrEqual(1);
+      expect(
+        bbbMeetings.items.every((m: any) => m.organization.id === orgAId),
+      ).toBe(true);
+    });
+
+    it('platform (SuperAdmin) still lists meetings across tenants', async () => {
+      await adminClient.asSuperAdmin();
+      const { bbbMeetings } = await adminClient.query(BBB_MEETINGS);
+      const orgIds = bbbMeetings.items.map((m: any) => m.organization.id);
+      expect(orgIds).toContain(orgAId);
+      expect(orgIds).toContain(orgBId);
+    });
+
+    it('A13 regression: MeetingCompletedEvent carries the organization id (BUG-048)', async () => {
+      const meetingService = server.app.get(BbbMeetingService);
+      const events: MeetingCompletedEvent[] = [];
+      const sub = server.app
+        .get(EventBus)
+        .ofType(MeetingCompletedEvent)
+        .subscribe(e => events.push(e));
+      try {
+        await meetingService.completeMeetingLifecycle(
+          superCtx,
+          meetingA.id as string,
+          { source: 'manual' },
+        );
+      } finally {
+        sub.unsubscribe();
+      }
+      expect(events).toHaveLength(1);
+      expect(String(events[0].organizationId)).toBe(String(orgA.id));
+      expect(String(events[0].organizationId)).not.toBe('undefined');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 9. H1 — organization update allowlist (BUG-047): tenants may change only
+  //    name/recordingEnabled; suspended + capacity limits are platform-only.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('H1 — organization update allowlist (BUG-047)', () => {
+    let beforeState: any;
+
+    beforeAll(async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const state: any = await adminClient.query(BBB_ORGANIZATION_ADMIN_STATE, {
+        id: orgAId,
+      });
+      beforeState = state.bbbOrganization;
+    });
+
+    it('tenant A CAN still change name and recordingEnabled', async () => {
+      const res: any = await adminClient.query(UPDATE_BBB_ORGANIZATION, {
+        id: orgAId,
+        input: { name: 'Academy A (renamed)', recordingEnabled: true },
+      });
+      expect(res.updateBbbOrganization.name).toBe('Academy A (renamed)');
+    });
+
+    const platformOnly: Array<[string, Record<string, unknown>]> = [
+      ['suspended', { suspended: true }],
+      ['maxSessionsPerOrg', { maxSessionsPerOrg: 7 }],
+      ['concurrentMeetingLimit', { concurrentMeetingLimit: 9 }],
+      ['maxParticipantsPerMeeting', { maxParticipantsPerMeeting: 99 }],
+    ];
+    for (const [label, input] of platformOnly) {
+      it(`tenant A CANNOT set ${label} on its own org`, async () => {
+        const err = await rejectionOf(
+          adminClient.query(UPDATE_BBB_ORGANIZATION, { id: orgAId, input }),
+        );
+        // The allowlist rejects loudly at the service layer (ForbiddenError),
+        // not the permission gate — the tenant owns this org.
+        expect(String(err.message)).toMatch(/not currently authorized/i);
+      });
+    }
+
+    it('the rejected writes left no partial state', async () => {
+      const state: any = await adminClient.query(BBB_ORGANIZATION_ADMIN_STATE, {
+        id: orgAId,
+      });
+      expect(state.bbbOrganization.suspended).toBe(beforeState.suspended);
+      expect(state.bbbOrganization.maxSessionsPerOrg).toBe(
+        beforeState.maxSessionsPerOrg,
+      );
+      expect(state.bbbOrganization.concurrentMeetingLimit).toBe(
+        beforeState.concurrentMeetingLimit,
+      );
+      expect(state.bbbOrganization.maxParticipantsPerMeeting).toBe(
+        beforeState.maxParticipantsPerMeeting,
+      );
+      // The allowlisted write from the positive case did stick.
+      expect(state.bbbOrganization.recordingEnabled).toBe(true);
+    });
+
+    it('platform (SuperAdmin) CAN still set suspended', async () => {
+      await adminClient.asSuperAdmin();
+      const res: any = await adminClient.query(UPDATE_BBB_ORGANIZATION, {
+        id: orgAId,
+        input: { suspended: true },
+      });
+      expect(res.updateBbbOrganization.id).toBe(orgAId);
+      const set: any = await adminClient.query(BBB_ORGANIZATION_ADMIN_STATE, {
+        id: orgAId,
+      });
+      expect(set.bbbOrganization.suspended).toBe(true);
+
+      await adminClient.query(UPDATE_BBB_ORGANIZATION, {
+        id: orgAId,
+        input: { suspended: false },
+      });
+      const restored: any = await adminClient.query(
+        BBB_ORGANIZATION_ADMIN_STATE,
+        { id: orgAId },
+      );
+      expect(restored.bbbOrganization.suspended).toBe(false);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 10. BUG-050 — createBbbOrganization cannot target a foreign channel
+  //     (INV-001: Channel=Tenant).
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('BUG-050 — createBbbOrganization cannot target a foreign channel', () => {
+    beforeAll(async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+    });
+
+    it('tenant A CANNOT create an organization on tenant B channel', async () => {
+      const err = await rejectionOf(
+        adminClient.query(CREATE_BBB_ORGANIZATION, {
+          input: {
+            channelId: tenantBChannelIdEncoded,
+            slug: 'foreign-org-attempt',
+            name: 'Foreign Org',
+          },
+        }),
+      );
+      expect(String(err.message)).toMatch(/not currently authorized/i);
+
+      // Nothing landed on channel B: exactly the provisioned org remains.
+      const count = await connection
+        .getRepository(superCtx, BbbOrganization)
+        .count({ where: { channelId: tenantBChannelId } });
+      expect(count).toBe(1);
     });
   });
 });

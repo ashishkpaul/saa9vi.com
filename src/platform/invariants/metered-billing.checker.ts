@@ -31,6 +31,13 @@ import { CheckResult, Checker } from './runner';
  * plan's Phase 6 restructures the nav (relabeling/moving `Capacity`,
  * `Trial Registrations`), so pinning ids here would only produce a false alarm.
  *
+ * **S1 channel-isolation remediation (2026-09-30, BUG-046 / BUG-047-H1 / BUG-050):**
+ * the same checker pins the isolation fixes: `meetingService.findAll` derives the
+ * tenant no-argument organization set from `ctx.channelId`, both list reads share
+ * the single `isPlatformCaller()` helper (Q5 anti-drift), organization updates are
+ * gated by the `TENANT_EDITABLE_ORG_FIELDS` allowlist, and organization creation
+ * cannot target a foreign channel.
+ *
  * Pure source inspection — no database, consistent with `RoomAccessChecker`.
  */
 export class MeteredBillingChecker implements Checker {
@@ -46,6 +53,7 @@ export class MeteredBillingChecker implements Checker {
       this.policyModuleIsPureAndSingle(),
       this.noMoneyColumnOnMeteredPath(),
       this.phase2BOperationalWiringPresent(),
+      this.channelScopedReadsRemediated(),
     ];
 
     const results = await Promise.all(checks);
@@ -506,6 +514,113 @@ export class MeteredBillingChecker implements Checker {
           ? "Phase 2B wiring present: sampling tick registered + metered-scoped, both writes idempotent, recovery scan wired, metered provision gate in place, sample retention scheduled"
           : failures.join("; "),
     };
+  }
+
+  /**
+   * S1 channel-isolation remediation (BUG-046 / BUG-047-H1 / BUG-050, INV-029):
+   * the list reads derive visibility from the shared platform helper, the
+   * organization update stays on a tenant allowlist, and organization creation
+   * cannot target a foreign channel. Source-shape pins for the security
+   * boundaries a reviewer would otherwise have to re-eyeball on every edit.
+   */
+  private async channelScopedReadsRemediated(): Promise<CheckResult> {
+    const meetingRel =
+      "src/plugins/bigbluebutton-plugin/services/bbb-meeting.service.ts";
+    const orgRel =
+      "src/plugins/bigbluebutton-plugin/services/bbb-organization.service.ts";
+    const accessRel =
+      "src/plugins/bigbluebutton-plugin/services/bbb-channel-access.service.ts";
+    const meetingSrc = this.readOrEmpty(meetingRel);
+    const orgSrc = this.readOrEmpty(orgRel);
+    const accessSrc = this.readOrEmpty(accessRel);
+    const failures: string[] = [];
+
+    const meetingFindAll = this.serviceBodyFor(meetingSrc, "async findAll(");
+    if (!meetingFindAll) {
+      failures.push(`${meetingRel} must define findAll()`);
+    } else {
+      if (!meetingFindAll.includes("isPlatformCaller")) {
+        failures.push(
+          "meeting findAll must gate the unrestricted path on isPlatformCaller() — BUG-046/INV-029",
+        );
+      }
+      if (!meetingFindAll.includes("org.channels")) {
+        failures.push(
+          "meeting findAll must derive the tenant no-argument organization set from the org→channels join on ctx.channelId — BUG-046/INV-029",
+        );
+      }
+      if (!meetingFindAll.includes("assertRoomAccess")) {
+        failures.push(
+          "meeting findAll must channel-assert an explicit roomId argument — INV-029",
+        );
+      }
+    }
+
+    const orgFindAll = this.serviceBodyFor(orgSrc, "async findAll(");
+    if (!orgFindAll || !orgFindAll.includes("isPlatformCaller")) {
+      failures.push(
+        "organization findAll must gate platform visibility on the shared isPlatformCaller() helper — Q5 anti-drift",
+      );
+    }
+    if (orgSrc.includes("userHasPermissions([Permission.SuperAdmin])")) {
+      failures.push(
+        "organization service must not keep its own SuperAdmin visibility check — use isPlatformCaller() (single shared definition)",
+      );
+    }
+
+    const orgUpdate = this.serviceBodyFor(orgSrc, "async update(");
+    if (!orgUpdate || !orgUpdate.includes("TENANT_EDITABLE_ORG_FIELDS")) {
+      failures.push(
+        "organization update must apply the TENANT_EDITABLE_ORG_FIELDS allowlist — BUG-047-H1/SEC-008",
+      );
+    }
+    if (orgUpdate && !orgUpdate.includes("isPlatformCaller")) {
+      failures.push(
+        "organization update must branch on isPlatformCaller() before the allowlist — BUG-047-H1",
+      );
+    }
+
+    const orgCreate = this.serviceBodyFor(orgSrc, "async create(");
+    if (!orgCreate || !orgCreate.includes("isPlatformCaller")) {
+      failures.push(
+        "organization create must reject a non-platform caller whose input.channelId differs from ctx.channelId — BUG-050/INV-001",
+      );
+    }
+
+    const helperDefs = (
+      accessSrc.match(/isPlatformCaller\(ctx: RequestContext\): boolean/g) ?? []
+    ).length;
+    if (helperDefs !== 1) {
+      failures.push(
+        `isPlatformCaller() must be defined exactly once in ${accessRel} (found ${helperDefs}) — one shared definition (Q5)`,
+      );
+    }
+
+    return {
+      checker: this.name,
+      name: "channel-scoped-reads-remediated",
+      passed: failures.length === 0,
+      severity: failures.length > 0 ? "error" : "info",
+      message:
+        failures.length === 0
+          ? "S1 isolation present: channel-derived meeting list, platform-gated org list, tenant org-update allowlist, channel-safe org creation, single isPlatformCaller()"
+          : failures.join("; "),
+    };
+  }
+
+  /**
+   * Body of a service method bounded by the next method declaration. Services
+   * carry no `@Allow`/`@Query`/`@Mutation` decorators, so `bodyFor` would run
+   * to EOF and produce false positives from sibling methods.
+   */
+  private serviceBodyFor(source: string, signature: string): string {
+    const at = source.indexOf(signature);
+    if (at === -1) return "";
+    const rest = source.slice(at + signature.length);
+    const next = rest.search(/\n  (?:async |private |public |protected )/);
+    return next === -1
+      ? source.slice(at)
+      : source.slice(at, at + signature.length + next + 1);
   }
 
   /** Text between the nearest preceding `@Allow(` and the method declaration. */

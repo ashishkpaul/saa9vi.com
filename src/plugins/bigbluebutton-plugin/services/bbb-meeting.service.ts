@@ -6,6 +6,7 @@ import {
 } from "@nestjs/common";
 import { EntityNotFoundError } from "@vendure/core";
 import {
+  ConfigService,
   Customer,
   EventBus,
   ID,
@@ -82,6 +83,7 @@ interface CompleteMeetingLifecycleOptions {
 export class BbbMeetingService implements OnModuleInit {
   constructor(
     private readonly connection: TransactionalConnection,
+    private readonly configService: ConfigService,
     private readonly bbbApiService: BbbApiService,
     private readonly serverService: BbbServerService,
     private readonly serverSelectionService: BbbServerSelectionService,
@@ -137,13 +139,30 @@ export class BbbMeetingService implements OnModuleInit {
 
   // ─── Query ───────────────────────────────────────────────────────────────────
 
+  /**
+   * Normalize a GraphQL-facing id (e.g. "T_1" under the e2e
+   * TestingEntityIdStrategy) to the raw PK form for column comparisons.
+   * Identity under the production AutoIncrementIdStrategy.
+   */
+  private toPk(id: ID): string {
+    const decoded = this.configService.entityIdStrategy.decodeId(String(id));
+    return decoded === -1 ? String(id) : String(decoded);
+  }
+
   async findAll(
     ctx: RequestContext,
     orgId?: ID,
     options?: { skip?: number; take?: number },
+    roomId?: ID,
   ): Promise<{ items: BbbMeeting[]; totalItems: number }> {
+    // Explicit ids are always channel-asserted (the asserts bypass SuperAdmin
+    // internally), so an argument can never widen the read beyond the caller's
+    // own channel.
     if (orgId) {
       await this.channelAccess.assertOrganizationAccess(ctx, orgId);
+    }
+    if (roomId) {
+      await this.channelAccess.assertRoomAccess(ctx, roomId);
     }
     const qb = this.connection
       .getRepository(ctx, BbbMeeting)
@@ -151,7 +170,20 @@ export class BbbMeetingService implements OnModuleInit {
       .leftJoinAndSelect("meeting.organization", "org")
       .orderBy("meeting.createdAt", "DESC");
     if (orgId) {
-      qb.where("org.id = :orgId", { orgId: orgId as string });
+      qb.andWhere("org.id = :orgId", { orgId: this.toPk(orgId) });
+    }
+    if (roomId) {
+      qb.andWhere("meeting.roomId = :roomId", { roomId: this.toPk(roomId) });
+    }
+    if (!orgId && !roomId && !this.channelAccess.isPlatformCaller(ctx)) {
+      // BUG-046 / INV-029: the no-argument path derives the organization set
+      // from ctx.channelId (the same org→channels join bbbOrganizations uses),
+      // so a tenant-scoped list can no longer widen to every tenant's meetings.
+      // The unrestricted listing remains for platform callers only.
+      qb.innerJoin("org.channels", "tenantChannel").andWhere(
+        "tenantChannel.id = :tenantChannelId",
+        { tenantChannelId: ctx.channelId as string },
+      );
     }
     const take = Math.min(Math.max(options?.take ?? 25, 1), 100);
     const skip = Math.max(options?.skip ?? 0, 0);
