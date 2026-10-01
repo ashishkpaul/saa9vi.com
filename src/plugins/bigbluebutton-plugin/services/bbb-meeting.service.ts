@@ -17,7 +17,7 @@ import {
   TransactionalConnection,
 } from "@vendure/core";
 import { BbbRoomAccessService } from "./room-access.service";
-import { BbbProvisioningWorkerService } from "./bbb-provisioning-worker.service";
+import { BbbProvisioningEnqueuer, BBB_PROVISIONING_ENQUEUER } from "./bbb-provisioning-enqueuer";
 import * as crypto from "crypto";
 import { EntityManager } from "typeorm";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
@@ -144,8 +144,8 @@ export class BbbMeetingService implements OnModuleInit {
     private readonly channelAccess: BbbChannelAccessService,
     private readonly meteringService: BbbMeteringService,
     private readonly sessionAttendanceService: SessionAttendanceService,
-    @Inject(forwardRef(() => BbbProvisioningWorkerService))
-    private readonly provisioningWorker: BbbProvisioningWorkerService,
+    @Inject(BBB_PROVISIONING_ENQUEUER)
+    private readonly provisioningEnqueuer: BbbProvisioningEnqueuer,
   ) {}
 
   /**
@@ -299,7 +299,7 @@ export class BbbMeetingService implements OnModuleInit {
     // deferral, the worker races the DB commit and sees "Meeting not found".
     setImmediate(() => {
       // Enqueue via the single provisioning consumer (BbbProvisioningWorkerService).
-      this.provisioningWorker
+      this.provisioningEnqueuer
         .enqueueProvisioning(ctx, saved.id)
         .catch((err: unknown) =>
           Logger.error(
@@ -849,7 +849,7 @@ export class BbbMeetingService implements OnModuleInit {
       // query for the meeting before that transaction commits.
       setImmediate(() => {
         // Enqueue via the single provisioning consumer (BbbProvisioningWorkerService).
-        this.provisioningWorker
+        this.provisioningEnqueuer
           .enqueueProvisioning(ctx, saved.id)
           .catch((err: unknown) =>
             Logger.error(

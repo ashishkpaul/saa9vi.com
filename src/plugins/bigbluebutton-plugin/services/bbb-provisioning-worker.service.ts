@@ -18,6 +18,7 @@ import { BbbEncryptionService } from "./bbb-encryption.service";
 import { BbbServerSelectionService } from "./bbb-server-selection.service";
 import { BbbMetricsService } from "./bbb-metrics.service";
 import { BbbRoomService } from "./bbb-room.service";
+import { BbbProvisioningEnqueuer } from "./bbb-provisioning-enqueuer";
 import {
   MeetingProvisionedEvent,
   MeetingFailedEvent,
@@ -44,7 +45,9 @@ export interface ProvisioningJobData {
 }
 
 @Injectable()
-export class BbbProvisioningWorkerService implements OnModuleInit {
+export class BbbProvisioningWorkerService
+  implements OnModuleInit, BbbProvisioningEnqueuer
+{
   private provisioningQueue: JobQueue<ProvisioningJobData>;
 
   constructor(

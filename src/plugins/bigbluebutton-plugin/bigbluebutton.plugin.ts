@@ -66,6 +66,7 @@ import { AttendanceAnalyticsService } from "./services/attendance-analytics.serv
 import { BbbPlatformCapacityPolicyService } from "./services/bbb-platform-capacity-policy.service";
 import { BbbJoinUrlService } from "./services/bbb-join-url.service";
 import { BbbProvisioningWorkerService } from "./services/bbb-provisioning-worker.service";
+import { BBB_PROVISIONING_ENQUEUER } from "./services/bbb-provisioning-enqueuer";
 import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.listener";
 import { BbbSubscriptionListener } from "./listeners/bbb-subscription.listener";
 import { BbbSessionProvisioningListener } from "./listeners/bbb-session-provisioning.listener";
@@ -167,6 +168,10 @@ import {
     BbbPlatformCapacityPolicyService,
     BbbJoinUrlService,
     BbbProvisioningWorkerService,
+    // S7A (Phase 7.2): enqueue-only port — BbbMeetingService depends on this
+    // token, not on the worker class, which breaks the
+    // meeting → provisioning → room → meeting cycle.
+    { provide: BBB_PROVISIONING_ENQUEUER, useExisting: BbbProvisioningWorkerService },
     CapacityIntelligenceService,
     SessionAttendanceService,
     AttendanceAnalyticsService,
