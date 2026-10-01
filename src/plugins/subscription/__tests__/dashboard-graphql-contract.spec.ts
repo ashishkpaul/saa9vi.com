@@ -55,12 +55,10 @@ const ROOT = path.resolve(__dirname, '../../../..');
 const UNTYPED_DOCUMENT_BASELINE = new Set<string>([
   'src/plugins/bigbluebutton-plugin/dashboard/routes/enrollments/EnrollmentsList.tsx',
   'src/plugins/bigbluebutton-plugin/dashboard/routes/entitlements/EntitlementsList.tsx',
-  'src/plugins/bigbluebutton-plugin/dashboard/routes/meetings/MeetingsList.tsx',
   'src/plugins/bigbluebutton-plugin/dashboard/routes/members/MembersList.tsx',
   'src/plugins/bigbluebutton-plugin/dashboard/routes/memberships/MembershipsList.tsx',
   'src/plugins/bigbluebutton-plugin/dashboard/routes/organizations/OrganizationsList.tsx',
   'src/plugins/bigbluebutton-plugin/dashboard/routes/plans/PlansList.tsx',
-  'src/plugins/bigbluebutton-plugin/dashboard/routes/rooms/RoomsList.tsx',
   'src/plugins/bigbluebutton-plugin/dashboard/routes/servers/ServersList.tsx',
   'src/plugins/bigbluebutton-plugin/dashboard/routes/sessions/SessionDetail.tsx',
   'src/plugins/bigbluebutton-plugin/dashboard/routes/sessions/SessionsList.tsx',
