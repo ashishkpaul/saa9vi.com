@@ -308,6 +308,75 @@ BigBlueButton                       BigBlueButton
 
 ---
 
+### Phase 7 — S7A: Backend architecture refactor (dependency boundaries)
+
+> **Approved scope is S7A only.** The Meeting-service decomposition (S7B) and admin-resolver
+> thinning (S7C) are explicitly **not** approved here and are deferred to their own reviews.
+
+**Problem.** The BBB plugin's service graph contains runtime `forwardRef()` injections that mask
+two real module cycles, and `BbbMeetingService` has grown into a god-service whose constructor
+owns unrelated concerns. Cycles make DI order implicit and let business logic spawn hidden
+recursion paths.
+
+**Dependency census** (authoritative, verified by grep on 2026-10-01):
+
+```text
+6 forwardRef() injection sites:
+  bbb-meeting.service.ts          → BbbRoomService, BbbReconciliationService, BbbProvisioningWorkerService
+  bbb-room.service.ts             → BbbMeetingService
+  bbb-provisioning-worker.service.ts → BbbRoomService
+  bbb-reconciliation.service.ts   → BbbMeetingService
+
+2 real BBB service cycles (madge):
+  #8  meeting → provisioning → room → meeting
+  #9  meeting → reconciliation → meeting
+4 accepted TypeORM entity cycles (entities import entities — normal, keep)
+3 unrelated-plugin cycles (out of scope)
+Evidence: /tmp/s7-madge.log
+```
+
+**S7A work — four commits, in this order:**
+
+1. `docs(s7): Phase 7 scope — backend architecture refactor` — this section + the census. No source change.
+2. `refactor(bbb): extract provisioning enqueue port` — `BBB_PROVISIONING_ENQUEUER` token +
+   enqueue-only interface; `BbbMeetingService` stops importing `BbbProvisioningWorkerService`
+   (kills cycle #8; `enqueue` behavior — fire-and-forget with `setImmediate` deferral + error
+   logging — unchanged).
+3. `refactor(bbb): extract grant consumption boundary` + **lifecycle characterization tests** —
+   `GrantConsumptionService` owns the entire economic grant operation (fair-duration guard,
+   duration/cap math, `GrantReaderService` resolution, idempotent `INSERT … ON CONFLICT DO NOTHING`
+   ledger row, atomic CAS grant update, internal-overhead branch, `GrantConsumedEvent`); consumed
+   by `BbbReconciliationService` (pending-billing recovery) and the lifecycle path (kills cycle #9).
+   **The characterization tests land in this commit, before commit 4 pins** `completeMeetingLifecycle()`
+   behavior: double completion → exactly one billing fact; `MeetingCompletedEvent.organizationId`
+   populated; grant branch and metered branch; completion transaction committed before the event is
+   observable; stale-active recovery resets the room and completes the meeting with intact
+   billing/event semantics.
+4. `refactor(bbb): extract meeting lifecycle service` — `MeetingLifecycleService` receives
+   `completeMeetingLifecycle()` + `lifecyclePrefix()` as a **mechanical relocation**
+   (`FOR UPDATE OF "meeting"`, the transaction boundary, the in-transaction `BbbRoom` reset, and the
+   transaction→billing→`MeetingCompletedEvent` ordering are all preserved verbatim — improvement
+   only via later, separately reviewed change); `BbbRoomService`, `BbbReconciliationService`, and
+   `BbbMeetingService` retarget their completion calls to it; all remaining `forwardRef()` sites
+   are removed once madge proves the graph acyclic. **`MeetingLifecycleService` must never inject
+   `BbbMeetingService`** (its allowed dependencies: `TransactionalConnection`, `BbbMeteringService`,
+   `GrantConsumptionService`, `EventBus`, `BbbMetricsService`, entities).
+
+**Acceptance gate for S7A:** madge 0 BBB service cycles (entity cycles documented); build 0;
+lint 0; typecheck:e2e 0; verify:invariants 6/6; DI boot (application + e2e) succeeds with zero
+`forwardRef` in the plugin; targeted e2e (channel isolation, metering, grant usage) no new
+failures vs baseline; full `test:e2e` no new failures vs the documented 3-failure baseline;
+`verify:bbb-dashboard` 30/30.
+
+**Hard NO in S7A:** schema/GraphQL changes, migrations, billing-model or metering changes,
+permission changes, dashboard changes, join/start rewrite, webhook rewrite, admin-resolver rewrite.
+
+**Deferred:** S7B = `RoomJoinService` (join/start) + webhook decomposition out of
+`BbbMeetingService`. S7C = `BbbAdminResolver` decomposition (own mini-audit + tenant-isolation
+proof first). Both require separate approval.
+
+---
+
 ## 5. Explicitly out of scope (do not build)
 
 - Removing or refactoring `BbbCapacityGrant`, daily allowance, subscription grants, internal-overhead grants.
@@ -316,6 +385,7 @@ BigBlueButton                       BigBlueButton
 - Invoice PDFs, GST, Razorpay collection, wallets/prepaid balances (ADR-038 later job consumes `MeteredUsageRecordedEvent`).
 - Making `BbbScheduledSession.roomId` mandatory / backfilling legacy rows (nullable stays; legacy surfaces on Dashboard).
 - Copying PILOS code, assets, logo, or screenshots (LGPL; IA reference only — D6).
+- **S7B / S7C (future, not approved):** `RoomJoinService` / webhook decomposition out of `BbbMeetingService`, and `BbbAdminResolver` thinning — deferred per Phase 7; S7A is dependency-boundary work only.
 - ~~H2/H3 changes without explicit go-ahead (§3).~~ **Landed 2026-09-30** with the go-ahead (§3 H2/H3, §7): platform-only `createBbbCapacityGrant` / `deleteBbbOrganization`, channel-asserted `bbbCapacityGrants`, platform-only `Capacity Grants` + `Trial Registrations` nav gates. Everything else in §3's H1 (the four billing controls on `updateBbbOrganization`) stays Phase 4.
 
 ## 6. Known trade-offs
