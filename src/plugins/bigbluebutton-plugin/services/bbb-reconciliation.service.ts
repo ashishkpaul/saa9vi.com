@@ -6,18 +6,16 @@ import {
   RequestContextService,
   TransactionalConnection,
 } from "@vendure/core";
-import { EntityManager } from "typeorm";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbUsageLedger } from "../entities/bbb-usage-ledger.entity";
 import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbServerService } from "./bbb-server.service";
 import { BbbApiService } from "./bbb-api.service";
+import { GrantConsumptionService } from "./bbb-grant-consumption.service";
 import { BbbMeetingService } from "./bbb-meeting.service";
 import { BbbMeteringService } from "./bbb-metering.service";
-import { GrantReaderService } from "./grant-reader.service";
 import {
-  GrantConsumedEvent,
   CapacityExhaustedEvent,
   MeetingCompletedEvent,
 } from "../events/bbb-events";
@@ -38,7 +36,7 @@ export class BbbReconciliationService {
     private readonly meetingService: BbbMeetingService,
     private readonly meteringService: BbbMeteringService,
     private readonly eventBus: EventBus,
-    private readonly grantReader: GrantReaderService,
+    private readonly grantConsumption: GrantConsumptionService,
     @Inject(BBB_PLUGIN_OPTIONS)
     private readonly options: BigBlueButtonPluginOptions,
   ) {}
@@ -56,11 +54,6 @@ export class BbbReconciliationService {
   /** Max retries before a stuck meeting is marked Failed instead of retried */
   private get maxProvisioningRetries(): number {
     return 3;
-  }
-
-  /** Minimum meeting duration (ms) before billing is applied */
-  private get fairBillingMinDurationMs(): number {
-    return this.options.fairBillingMinDurationMs ?? 120_000; // 2 min
   }
 
   /** Maximum meeting duration (ms) before billing is capped and meeting force-completed */
@@ -219,168 +212,22 @@ export class BbbReconciliationService {
     return reconciled;
   }
 
-  // ─── 3. Consume Grant Minutes (Transactional) ────────────────────────────────
+  // ─── 3. Consume Grant Minutes (delegated) ─────────────────────────────────
+  // S7A (Phase 7.3): the economic operation now lives in
+  // GrantConsumptionService (fair-duration guard, duration/cap math,
+  // GrantReaderService resolution, idempotent ledger insert — INV-002 —
+  // atomic CAS grant update, internal-overhead branch, GrantConsumedEvent).
+  // This method remains as a thin delegation for the recovery loop below and
+  // existing characterization callers; behavior is unchanged.
 
   async consumeGrantHours(
     ctx: RequestContext,
     meeting: BbbMeeting,
   ): Promise<void> {
-    if (!meeting.provisionedAt) {
-      Logger.warn(
-        `Meeting ${meeting.id} has no provisionedAt — cannot bill consumption`,
-        loggerCtx,
-      );
-      return;
-    }
-
-    if (!meeting.grantId) {
-      Logger.warn(
-        `Meeting ${meeting.id} has no grantId stored — was it provisioned before the grantId column existed?`,
-        loggerCtx,
-      );
-      return;
-    }
-
-    const provisionedAt = meeting.provisionedAt;
-    const endedAt = meeting.completedAt ?? new Date();
-    const durationMs = endedAt.getTime() - provisionedAt.getTime();
-
-    // Fair billing guard: skip billing for micro-sessions under threshold.
-    if (durationMs < this.fairBillingMinDurationMs) {
-      Logger.info(
-        `Meeting ${meeting.id} lasted less than fair billing threshold (${Math.round(durationMs / 1000)}s). Skipping billing.`,
-        loggerCtx,
-      );
-      return;
-    }
-
-    // Billing ceiling: cap duration if the meeting was force-completed.
-    const effectiveDurationMs = meeting.billingCapped
-      ? Math.min(durationMs, this.maxMeetingDurationMs)
-      : durationMs;
-
-    // Round up to nearest minute; minimum 1 minute.
-    const durationMinutes = Math.max(1, Math.ceil(effectiveDurationMs / (1000 * 60)));
-
-    // Resolve grant via GrantReaderService (RFC-001 Q-009 seam)
-    const grantEntity = await this.grantReader.resolveEntityForMeeting(
-      meeting.grantId as string,
-    );
-
-    if (!grantEntity) {
-      Logger.warn(
-        `Meeting ${meeting.id}: stored grantId ${meeting.grantId} not found`,
-        loggerCtx,
-      );
-      return;
-    }
-
-    const sourceType = grantEntity.sourceType;
-
-    // Transactional: ledger + grant update must succeed or fail together.
-    // IDEMPOTENCY (INV-002): the database INSERT itself is the idempotency
-    // decision — INSERT ... ON CONFLICT (meetingId, grantId) DO NOTHING
-    // (via .orIgnore()) + RETURNING tells us whether this worker won the
-    // right to bill. Check-then-insert is prohibited: two concurrent workers
-    // could both pass a findOne() guard and race past it.
-    let billingWon = false;
-    let committed: {
-      consumedMinutes: number;
-      grantedMinutes: number;
-      exhausted: boolean;
-    } | null = null;
-
-    await this.connection.rawConnection.transaction(
-      async (em: EntityManager) => {
-        const insertResult = await em
-          .createQueryBuilder()
-          .insert()
-          .into(BbbUsageLedger)
-          .values({
-            meeting: { id: meeting.id as any },
-            grant: { id: grantEntity.id as any },
-            consumedMinutes: durationMinutes,
-            startedAt: provisionedAt,
-            completedAt: endedAt,
-          })
-          .orIgnore()
-          .returning("id")
-          .execute();
-
-        if (!insertResult.raw?.length) {
-          // Lost the insert race: another worker already billed this
-          // (meeting, grant) pair. No economic side effect is allowed.
-          Logger.warn(
-            `Meeting ${meeting.id}: billing ledger row already exists (insert-on-conflict lost race). Skipping duplicate.`,
-            loggerCtx,
-          );
-          return;
-        }
-        billingWon = true;
-
-        // internal_overhead grants: write ledger row only, skip exhaustion logic
-        if (sourceType === "internal_overhead") {
-          return;
-        }
-
-        // Atomic increment on minutes columns; RETURNING gives the committed
-        // post-increment values so downstream events never see stale data.
-        const updateResult = await em
-          .getRepository(BbbCapacityGrant)
-          .createQueryBuilder()
-          .update()
-          .set({
-            consumedMinutes: () => `"consumedMinutes" + :increment`,
-            exhausted: () =>
-              `CASE WHEN ("consumedMinutes" + :increment) >= "grantedMinutes" THEN TRUE ELSE FALSE END`,
-          })
-          .where("id = :id", { id: grantEntity.id as string })
-          .setParameters({ increment: durationMinutes })
-          .returning(["consumedMinutes", "grantedMinutes", "exhausted"])
-          .execute();
-
-        const row = (updateResult.raw?.[0] ?? {}) as Record<string, any>;
-        committed = {
-          consumedMinutes: Number(row.consumedMinutes ?? 0),
-          grantedMinutes: Number(row.grantedMinutes ?? 0),
-          exhausted: Boolean(row.exhausted),
-        };
-      },
-    );
-
-    if (!billingWon) {
-      return;
-    }
-
-    const committedState = committed as {
-      consumedMinutes: number;
-      grantedMinutes: number;
-      exhausted: boolean;
-    } | null;
-    const committedConsumed =
-      committedState?.consumedMinutes ?? grantEntity.consumedMinutes + durationMinutes;
-    const committedGranted = committedState?.grantedMinutes ?? grantEntity.grantedMinutes;
-    Logger.info(
-      `Billed meeting ${meeting.id}: ${durationMinutes}min consumed${meeting.billingCapped ? " (CAPPED)" : ""} (${committedConsumed}/${committedGranted}min)`,
-      loggerCtx,
-    );
-
-    // internal_overhead grants don't participate in quota alerts
-    if (sourceType === "internal_overhead") {
-      return;
-    }
-
-    const remainingMinutes = committedGranted - committedConsumed;
-    this.eventBus.publish(
-      new GrantConsumedEvent(
-        grantEntity.id as string,
-        meeting.id as string,
-        (grantEntity.organization?.id as string) ?? "",
-        durationMinutes,
-        Math.max(0, remainingMinutes),
-      ),
-    );
+    await this.grantConsumption.consumeGrantHours(ctx, meeting);
   }
+
+
 
   // ─── 4. Reconcile Pending Billing (COMPLETED without ledger row) ────────────
   // Recovery loop: if billing failed after a meeting reached COMPLETED (e.g.

@@ -35,7 +35,7 @@ import { BbbOrganizationService } from "./bbb-organization.service";
 import { BbbMemberService } from "./bbb-member.service";
 import { BbbRoomService } from "./bbb-room.service";
 import { BbbMetricsService } from "./bbb-metrics.service";
-import { BbbReconciliationService } from "./bbb-reconciliation.service";
+import { GrantConsumptionService } from "./bbb-grant-consumption.service";
 import { BbbEntitlementService } from "./bbb-entitlement.service";
 import { BbbChannelAccessService } from "./bbb-channel-access.service";
 import { BbbMeteringService } from "./bbb-metering.service";
@@ -136,8 +136,7 @@ export class BbbMeetingService implements OnModuleInit {
     @Inject(forwardRef(() => BbbRoomService))
     private readonly roomService: BbbRoomService,
     private readonly metrics: BbbMetricsService,
-    @Inject(forwardRef(() => BbbReconciliationService))
-    private readonly reconciliationService: BbbReconciliationService,
+    private readonly grantConsumption: GrantConsumptionService,
     private readonly eventBus: EventBus,
     private readonly entitlementService: BbbEntitlementService,
     private readonly roomAccessService: BbbRoomAccessService,
@@ -436,7 +435,7 @@ export class BbbMeetingService implements OnModuleInit {
       if (isMeteredOrganization(meeting.organization)) {
         await this.meteringService.billMeteredMeeting(ctx, meetingId as string);
       } else {
-        await this.reconciliationService.consumeGrantHours(ctx, meeting);
+        await this.grantConsumption.consumeGrantHours(ctx, meeting);
       }
       this.metrics.recordBillingSuccess();
       // Causal order (documented): the meeting terminal fact is established,
