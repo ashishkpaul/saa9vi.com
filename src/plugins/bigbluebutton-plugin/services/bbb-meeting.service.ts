@@ -6,9 +6,11 @@ import {
 } from "@nestjs/common";
 import { EntityNotFoundError } from "@vendure/core";
 import {
+  Administrator,
   ConfigService,
   Customer,
   EventBus,
+  ForbiddenError,
   ID,
   Logger,
   RequestContext,
@@ -37,7 +39,11 @@ import { BbbReconciliationService } from "./bbb-reconciliation.service";
 import { BbbEntitlementService } from "./bbb-entitlement.service";
 import { BbbChannelAccessService } from "./bbb-channel-access.service";
 import { BbbMeteringService } from "./bbb-metering.service";
-import { isMeteredOrganization } from "./metered-billing.policy";
+import {
+  isMeteredOrganization,
+  monthOf,
+  computeMonthChargePaise,
+} from "./metered-billing.policy";
 import { SessionAttendanceService } from "./session-attendance.service";
 import {
   MeetingProvisionedEvent,
@@ -47,6 +53,9 @@ import {
 import {
   MEETING_STATE,
   MEETING_STATE_TRANSITIONS,
+  START_ROOM_POLL_INTERVAL_MS,
+  START_ROOM_WAIT_MS_DEFAULT,
+  START_ROOM_WAIT_MS_MAX,
 } from "../constants";
 import type { MeetingState } from "../constants";
 
@@ -70,6 +79,40 @@ interface CompleteMeetingLifecycleOptions {
     | "manual";
   entityManager?: EntityManager;
 }
+
+/**
+ * A22 (Phase 5.2) — result of the dashboard's "Start class" action
+ * (`bbbStartRoom`).
+ *
+ * - `active`   → the room is live and `joinUrl` is a **moderator** URL.
+ * - `starting` → provisioning is in flight; the UI calls again (idempotent —
+ *                the lock and debounce in `requestProvisioning` absorb repeats).
+ * - `failed`   → the room is Failed beyond its auto-retry budget and needs a
+ *                reset (`resetBbbRoom`).
+ * - `unavailable` → the org cannot provision right now (suspended or monthly
+ *                spend cap); `message` is a tenant-safe sentence, never the raw
+ *                worker `failureReason` (A22/S4.2).
+ */
+export interface StartRoomResult {
+  status: "active" | "starting" | "failed" | "unavailable";
+  joinUrl?: string;
+  currentMeetingId?: ID;
+  /** The room's state when the call returned — `roomState` drives the badge. */
+  roomState: string;
+  /** Tenant-safe reason when status is 'failed' or 'unavailable'. */
+  message?: string;
+}
+
+/**
+ * Tenant-safe sentence for metered-gate refusals (A22/S4.2).
+ *
+ * The worker stores a detailed `failureReason` for operators; the dashboard
+ * must never see it. Suspended / spend-capped orgs both read as a paused
+ * account.
+ */
+export const START_ROOM_ACCOUNT_PAUSED_MESSAGE =
+  "Your account is paused — contact support";
+
 
 /**
  * Manages BBB meeting lifecycle. Provisioning is always async via job queue.
@@ -971,6 +1014,315 @@ export class BbbMeetingService implements OnModuleInit {
       loggerCtx,
     );
     return { status: result.status };
+  }
+
+  // ─── A22 (Phase 5.2) — admin "Start class" ─────────────────────────────────
+
+  /**
+   * The admin twin of `joinRoom`, behind the `bbbStartRoom` mutation.
+   *
+   * Why it exists (A22): the dashboard is Admin-API only, `bbbModeratorJoinUrl`
+   * needs an ALREADY Active meeting, and the Shop `bbbJoinRoom` is not
+   * reachable with an administrator session — so the tenant Rooms screen had no
+   * way to open a class. This reuses joinRoom's exact pieces rather than
+   * re-implementing them, so the two surfaces cannot drift:
+   *
+   *   `BbbRoomAccessService.evaluate` (INV-027) → `requestProvisioning` (Redis
+   *   lock + debounce + Idle→Provisioning) → `createRoomMeetingAndEnqueue` →
+   *   `getModeratorJoinUrl`.
+   *
+   * Authorization, in this order:
+   *  1. `roomService.findById` asserts room access, so a foreign tenant's room
+   *     is ForbiddenError before anything else (INV-029).
+   *  2. If the administrator has a linked **Customer**, the shared INV-027
+   *     evaluation must return `allowed && isModerator`: a non-member, a buyer
+   *     (entitlement) and an enrolled student are all refused, and a refusal
+   *     happens BEFORE provisioning — so no meeting row is created.
+   *  3. An Administrator with no linked Customer is authorized by the
+   *     channel-scoped permission gate on the mutation (`BbbManageRooms` on the
+   *     tenant's own channel — Channel=Tenant, INV-001).
+   *
+   * Returns `status: 'active'` with a moderator `joinUrl` when the room is live,
+   * `'starting'` while provisioning is in flight (the UI calls again — repeats
+   * are absorbed by the lock/debounce), or `'failed'` when the room is Failed
+   * beyond its auto-retry budget.
+   */
+  async startRoomAsModerator(
+    ctx: RequestContext,
+    roomId: ID,
+    options?: { moderatorName?: string; waitMs?: number },
+  ): Promise<StartRoomResult> {
+    const room = await this.roomService.findById(ctx, roomId);
+    if (!room) throw new EntityNotFoundError("BbbRoom", roomId);
+
+    // ── INV-027: authorize BEFORE provisioning ─────────────────────────────
+    const callerCustomerId = await this.resolveCallerCustomerId(ctx);
+    if (callerCustomerId !== null) {
+      const access = await this.roomAccessService.evaluate(
+        ctx,
+        callerCustomerId,
+        room.organization.id,
+        roomId,
+      );
+      if (!access.allowed || !access.isModerator) {
+        Logger.warn(
+          `[startRoom] access DENIED (INV-027/A22) roomId=${roomId} customerId=${callerCustomerId} allowed=${access.allowed} isModerator=${access.isModerator} source=${access.source ?? "none"}`,
+          loggerCtx,
+        );
+        throw new ForbiddenError();
+      }
+      Logger.info(
+        `[startRoom] access allowed as moderator (source=${access.source}) customerId=${callerCustomerId} roomId=${roomId}`,
+        loggerCtx,
+      );
+    }
+
+    // ── A22/S4.2: synchronous metered-gate check ───────────────────────────
+    // Provisioning itself is async (the worker enforces the same guards inside
+    // its try), so without this the synchronous mutation would answer
+    // 'starting' for a suspended/spend-capped org and only fail minutes later.
+    // This mirrors the worker's `assertMeteredProvisionable` (D2 single money
+    // implementation) and returns a tenant-safe 'unavailable' BEFORE anything
+    // is enqueued. The message is deliberately generic: the worker's detailed
+    // failureReason stays operator-side.
+    const gateRefusal = await this.meteredGateRefusal(ctx, room.organization);
+    if (gateRefusal) {
+      Logger.warn(
+        `[startRoom] metered gate refused room ${roomId}: ${gateRefusal.reason}`,
+        loggerCtx,
+      );
+      return {
+        status: "unavailable",
+        roomState: room.state,
+        message: START_ROOM_ACCOUNT_PAUSED_MESSAGE,
+      };
+    }
+
+    const moderatorName =
+      options?.moderatorName?.trim() ||
+      (await this.resolveCallerDisplayName(ctx)) ||
+      room.name;
+
+    const result = await this.roomService.requestProvisioning(ctx, roomId);
+
+    if (result.status === "active" && result.currentMeetingId) {
+      try {
+        const joinUrl = await this.getModeratorJoinUrl(
+          ctx,
+          result.currentMeetingId,
+          moderatorName,
+        );
+        return {
+          status: "active",
+          joinUrl,
+          currentMeetingId: result.currentMeetingId,
+          roomState: "Active",
+        };
+      } catch (err: any) {
+        if (err?.message?.includes("already ended on the server")) {
+          Logger.warn(
+            `[startRoom] room ${roomId} is Active but meeting ${result.currentMeetingId} is stale on BBB — resetting and provisioning again`,
+            loggerCtx,
+          );
+          try {
+            await this.completeMeetingLifecycle(
+              ctx,
+              result.currentMeetingId,
+              { source: "stale-active-runtime" },
+            );
+          } catch (completeErr) {
+            Logger.warn(
+              `[startRoom] failed to complete stale meeting: ${(completeErr as Error).message}`,
+              loggerCtx,
+            );
+          }
+          await this.createRoomMeetingAndEnqueue(ctx, roomId);
+          return { status: "starting", roomState: "Provisioning" };
+        }
+        // Transient (network/DNS/decrypt): never tear the room down — report
+        // progress and let the next call serve the URL.
+        Logger.warn(
+          `[startRoom] transient join-URL failure for room ${roomId}: ${err?.message}`,
+          loggerCtx,
+        );
+        return {
+          status: "starting",
+          currentMeetingId: result.currentMeetingId,
+          roomState: "Active",
+        };
+      }
+    }
+
+    if (result.shouldEnqueue) {
+      await this.createRoomMeetingAndEnqueue(ctx, roomId);
+    } else {
+      this.metrics.recordProvisioningSuppressed();
+    }
+
+    const settled = await this.waitForRoomSettled(ctx, roomId, options?.waitMs);
+    if (settled.state === "Failed") {
+      const failedMeeting = settled.currentMeetingId
+        ? await this.connection
+            .getRepository(ctx, BbbMeeting)
+            .findOne({ where: { id: settled.currentMeetingId } })
+        : null;
+      return {
+        status: "failed",
+        roomState: settled.state,
+        message: failedMeeting?.failureReason
+          ? this.tenantSafeFailureMessage(failedMeeting.failureReason)
+          : undefined,
+      };
+    }
+    if (settled.state === "Active" && settled.currentMeetingId) {
+      try {
+        const joinUrl = await this.getModeratorJoinUrl(
+          ctx,
+          settled.currentMeetingId,
+          moderatorName,
+        );
+        return {
+          status: "active",
+          joinUrl,
+          currentMeetingId: settled.currentMeetingId,
+          roomState: settled.state,
+        };
+      } catch (err: any) {
+        Logger.warn(
+          `[startRoom] room ${roomId} became Active but the join URL is not ready yet: ${err?.message}`,
+          loggerCtx,
+        );
+        return {
+          status: "starting",
+          currentMeetingId: settled.currentMeetingId,
+          roomState: settled.state,
+        };
+      }
+    }
+
+    return {
+      status: "starting",
+      currentMeetingId: settled.currentMeetingId,
+      roomState: settled.state,
+    };
+  }
+
+  /**
+   * Synchronous mirror of the worker's `assertMeteredProvisionable` (S4.2).
+   *
+   * Grant orgs are always provisionable here (the grant gate runs at worker
+   * time); metered orgs are refused when suspended or at/over their monthly
+   * spend limit (D2 single money implementation). Returns null when the org
+   * may provision.
+   */
+  private async meteredGateRefusal(
+    ctx: RequestContext,
+    organization: BbbOrganization,
+  ): Promise<{ reason: "suspended" | "spend-limit" } | null> {
+    if (!isMeteredOrganization(organization)) return null;
+    if (organization.suspended) return { reason: "suspended" };
+    const limit = organization.monthlySpendLimitPaise;
+    if (limit === null || limit === undefined) return null;
+    const rows = await this.meteringService.monthUsageRows(
+      ctx,
+      String(organization.id),
+      monthOf(new Date()),
+    );
+    return computeMonthChargePaise(rows) >= limit
+      ? { reason: "spend-limit" }
+      : null;
+  }
+
+  /**
+   * Maps a worker `failureReason` to a tenant-safe sentence (S4.2).
+   *
+   * Metered-gate failures (suspended org, monthly spend limit) read as a
+   * paused account; everything else gets a generic provisioning sentence.
+   * Unknown internals (BBB ids, grant vocabulary, paise amounts) never leave
+   * the server — they stay in the worker log + meeting row for operators.
+   */
+  private tenantSafeFailureMessage(failureReason: string): string {
+    const lowered = failureReason.toLowerCase();
+    if (
+      lowered.includes("suspend") ||
+      lowered.includes("spend limit") ||
+      lowered.includes("spend-limit")
+    ) {
+      return START_ROOM_ACCOUNT_PAUSED_MESSAGE;
+    }
+    return "Class could not be started — please try again";
+  }
+
+  /**
+   * Polls the room row while the provisioning worker owns the state machine.
+   *
+   * A plain repository read — channel ownership was already asserted by
+   * `findById` in `startRoomAsModerator`, so this deliberately loads no
+   * relations and takes no locks: it must not hold a transaction open across
+   * the wait.
+   */
+  private async waitForRoomSettled(
+    ctx: RequestContext,
+    roomId: ID,
+    waitMs?: number,
+  ): Promise<{ state: string; currentMeetingId?: string }> {
+    const budget = Math.min(
+      waitMs ?? START_ROOM_WAIT_MS_DEFAULT,
+      START_ROOM_WAIT_MS_MAX,
+    );
+    const deadline = Date.now() + Math.max(budget, 0);
+    for (;;) {
+      const room = await this.connection
+        .getRepository(ctx, BbbRoom)
+        .findOne({ where: { id: roomId as string } });
+      if (!room) throw new EntityNotFoundError("BbbRoom", roomId);
+      if (
+        room.state === "Active" ||
+        room.state === "Failed" ||
+        Date.now() >= deadline
+      ) {
+        return {
+          state: room.state,
+          currentMeetingId: room.currentMeetingId ?? undefined,
+        };
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, START_ROOM_POLL_INTERVAL_MS),
+      );
+    }
+  }
+
+  /**
+   * The Customer behind the active user, when there is one.
+   *
+   * Administrators are not customers, so this is a resolution rather than a
+   * requirement: `null` means "an administrator session" (see the authorization
+   * notes in `startRoomAsModerator`).
+   */
+  private async resolveCallerCustomerId(
+    ctx: RequestContext,
+  ): Promise<ID | null> {
+    if (!ctx.activeUserId) return null;
+    const customer = await this.connection
+      .getRepository(ctx, Customer)
+      .findOne({ where: { user: { id: ctx.activeUserId as string } } });
+    return customer ? customer.id : null;
+  }
+
+  /** Best-effort moderator display name for the join URL (admins only). */
+  private async resolveCallerDisplayName(
+    ctx: RequestContext,
+  ): Promise<string | null> {
+    if (!ctx.activeUserId) return null;
+    const administrator = await this.connection
+      .getRepository(ctx, Administrator)
+      .findOne({ where: { user: { id: ctx.activeUserId as string } } });
+    if (!administrator) return null;
+    const name = [administrator.firstName, administrator.lastName]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    return name.length > 0 ? name : null;
   }
 
   // ─── Update ────────────────────────────────────────────────────────────────────

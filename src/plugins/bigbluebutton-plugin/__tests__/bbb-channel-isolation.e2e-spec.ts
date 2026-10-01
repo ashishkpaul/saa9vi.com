@@ -32,6 +32,11 @@
  *   11. S2 (Phase 4) — billing reads derive the org from the channel (D3),
  *       recordingUrl never crosses tenants, platform billing surfaces are
  *       platform-only, money is half-up via computeMonthChargePaise (D2/Q2).
+ *   12. S4 (Phase 5.2/5.4) — `bbbStartRoom` is tenant-scoped (cross-tenant room
+ *       rejected BEFORE provisioning, INV-027/INV-029); concurrent starts
+ *       converge on one meeting row; suspended/spend-capped orgs get a
+ *       tenant-safe 'unavailable' (never the raw failureReason); `studentCount`
+ *       counts a person once across enrollment + entitlement (batched, no N+1).
  *
  * Run:  npm run test:e2e:bbb-isolation
  *
@@ -55,9 +60,11 @@ import { SchemaPostgresInitializer } from '../../tenant-plugin/e2e/schema-postgr
 import {
   EventBus,
   mergeConfig,
+  Customer,
   RequestContext,
   RequestContextService,
   TransactionalConnection,
+  User,
 } from '@vendure/core';
 import { getSuperadminContext } from '@vendure/testing/lib/utils/get-superadmin-context';
 import {
@@ -79,6 +86,11 @@ import { BbbMeeting } from '../entities/bbb-meeting.entity';
 import { BbbOrganization } from '../entities/bbb-organization.entity';
 import { BbbRoom } from '../entities/bbb-room.entity';
 import { BbbMeteredUsage } from '../entities/bbb-metered-usage.entity';
+import { BbbServer } from '../entities/bbb-server.entity';
+import { BbbEnrollment } from '../entities/bbb-enrollment.entity';
+import { BbbEntitlement } from '../entities/bbb-entitlement.entity';
+import { BbbOrganizationMembership } from '../entities/bbb-organization-membership.entity';
+import { BbbEncryptionService } from '../services/bbb-encryption.service';
 import { MeetingCompletedEvent } from '../events/bbb-events';
 import { BbbMeetingService } from '../services/bbb-meeting.service';
 import { TenantRegisteredEvent } from '../../tenant-plugin/events/tenant-events';
@@ -202,8 +214,66 @@ const BBB_ROOMS = gql`
         id
         name
         organizationId
+        studentCount
       }
       totalItems
+    }
+  }
+`;
+
+const BBB_START_ROOM = gql`
+  mutation BbbStartRoom($roomId: ID!, $moderatorName: String, $waitMs: Int) {
+    bbbStartRoom(roomId: $roomId, moderatorName: $moderatorName, waitMs: $waitMs) {
+      status
+      joinUrl
+      currentMeetingId
+      roomState
+      message
+    }
+  }
+`;
+
+// ─── S4 (Phase 5.2/5.4) documents — startRoom + studentCount ───────────────
+// CREATE/UPDATE_BBB_ROOM are the room R/W guards under test (INV-029 tenant
+// scoping: own-org succeeds, foreign orgId rejected); CREATE_BBB_ENROLLMENT /
+// CREATE_BBB_ORG_MEMBERSHIP seed the two student-count branches (enrollment vs
+// bbb_room entitlement) and the moderator persona; BBB_ROOM_ADMIN_STATE reads
+// back the failing side-effects must-not-happen assertions.
+
+const BBB_ROOM_ADMIN_STATE = gql`
+  query BbbRoomAdminState($id: ID!) {
+    bbbRoom(id: $id) {
+      id
+      name
+      state
+      studentCount
+    }
+  }
+`;
+
+const CREATE_BBB_ENROLLMENT = gql`
+  mutation CreateBbbEnrollment($input: CreateBbbEnrollmentInput!) {
+    createBbbEnrollment(input: $input) {
+      id
+      active
+    }
+  }
+`;
+
+const CREATE_BBB_ORG_MEMBERSHIP = gql`
+  mutation CreateBbbOrgMembership($input: CreateBbbOrgMembershipInput!) {
+    createBbbOrgMembership(input: $input) {
+      id
+      role
+      isActive
+    }
+  }
+`;
+
+const CREATE_BBB_ENTITLEMENT = gql`
+  mutation CreateBbbEntitlement($input: CreateBbbEntitlementInput!) {
+    createBbbEntitlement(input: $input) {
+      id
     }
   }
 `;
@@ -1449,6 +1519,264 @@ describe('BBB Channel Isolation (Phase A)', () => {
       expect(rows[0].chargePaise).toBe(3002);
       expect(rows[1].organizationId).toBe(orgBId);
       expect(rows[1].chargePaise).toBe(1000);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 12. S4 — startRoom + studentCount (Phase 5.2/5.4): tenant-scoped Start,
+  //     INV-027 moderator order, friendly metered-gate refusals, batched counts.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('S4 — bbbStartRoom + studentCount (A22/Phase 5.2/5.4)', () => {
+    let startRoomAEncoded: string;
+    let startRoomBEncoded: string;
+    let startRoomARaw: string;
+    let startRoomBRaw: string;
+
+    beforeAll(async () => {
+      // Rooms created through the tenant-visible mutation (INV-029 scoping:
+      // own-org succeeds — the cross-tenant create is asserted below).
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const roomA: any = await adminClient.query(CREATE_BBB_ROOM, {
+        input: { organizationId: orgAId, name: 'Start Room A' },
+      });
+      startRoomAEncoded = roomA.createBbbRoom.id;
+      startRoomARaw = String(startRoomAEncoded).replace(/^T_/, '');
+
+      await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
+      adminClient.setChannelToken(tenantBChannelToken);
+      const roomB: any = await adminClient.query(CREATE_BBB_ROOM, {
+        input: { organizationId: orgBId, name: 'Start Room B' },
+      });
+      startRoomBEncoded = roomB.createBbbRoom.id;
+      startRoomBRaw = String(startRoomBEncoded).replace(/^T_/, '');
+
+      // Seed the two studentCount branches directly (DB-only, no provisioning):
+      // an active enrollment AND a valid bbb_room entitlement for the SAME
+      // customer — the card must count the person once, not twice.
+      const raw = connection.rawConnection;
+      const custRepo = raw.getRepository('customer');
+      const cust: any = await custRepo.findOne({ where: {} });
+      expect(cust).toBeTruthy();
+      const customerRaw = String(cust.id);
+      await raw.getRepository(BbbEnrollment).save(
+        raw.getRepository(BbbEnrollment).create({
+          roomId: startRoomARaw,
+          customerId: customerRaw,
+          active: true,
+          validUntil: new Date('2031-01-01T00:00:00Z'),
+        }),
+      );
+      await raw.getRepository(BbbEntitlement).save(
+        raw.getRepository(BbbEntitlement).create({
+          customerId: customerRaw,
+          type: 'bbb_room',
+          resourceId: startRoomARaw,
+          source: 'admin',
+          channelId: tenantAChannelId,
+          validUntil: new Date('2031-01-01T00:00:00Z'),
+        }),
+      );
+    });
+
+    it('tenant A start on IDLE returns starting with NO meeting row — the harness queue is offline', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const res: any = await adminClient.query(BBB_START_ROOM, {
+        roomId: startRoomAEncoded,
+        waitMs: 0,
+      });
+      // With waitMs: 0 the deadline is immediate, so even a live worker could
+      // not flip the room in time: 'starting' is deterministic. The async
+      // enqueue is best-effort in this harness (no DefaultJobQueuePlugin, same
+      // condition room-access documents) — the assertion is the synchronous
+      // contract: status + badge state, never a joinUrl yet.
+      expect(res.bbbStartRoom.status).toBe('starting');
+      expect(res.bbbStartRoom.joinUrl).toBeNull();
+      expect(res.bbbStartRoom.roomState).toBe('Provisioning');
+      expect(res.bbbStartRoom.message).toBeNull();
+      const state: any = await adminClient.query(BBB_ROOM_ADMIN_STATE, {
+        id: startRoomAEncoded,
+      });
+      expect(state.bbbRoom.state).toBe('Provisioning');
+    });
+
+    it('concurrent starts converge on ONE meeting row (idempotent lock + debounce)', async () => {
+      // Fresh room: the first S4 case left Start Room A in Provisioning, where
+      // the debounce window may have expired (earlier cases interleave), so a
+      // second burst could legitimately fail at the worker and flip Idle.
+      // A new room isolates the concurrency assertion from that history.
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const fresh: any = await adminClient.query(CREATE_BBB_ROOM, {
+        input: { organizationId: orgAId, name: 'Start Room A (concurrent)' },
+      });
+      const freshEncoded = fresh.createBbbRoom.id as string;
+      const freshRaw = String(freshEncoded).replace(/^T_/, '');
+      const meetingRepo = connection.getRepository(superCtx, BbbMeeting);
+      const before = await meetingRepo.count({
+        where: { roomId: freshRaw },
+      });
+      const calls = Array.from({ length: 5 }, () =>
+        adminClient.query(BBB_START_ROOM, {
+          roomId: freshEncoded,
+          waitMs: 0,
+        }),
+      );
+      const results: any[] = await Promise.all(calls);
+      for (const r of results) {
+        // Contract agreement: all five calls return the same synchronous
+        // answer. Without a distributed Redis in this harness, concurrent
+        // requests serialize on the pessimistic row lock; the FIRST wins the
+        // Idle→Provisioning transition and answers 'starting', while followers
+        // that arrive after the worker failure + Idle reset answer 'failed'
+        // (status paths 'starting'|'failed' are both legitimate post-race).
+        // What must NEVER diverge: no joinUrl without 'active', no raw
+        // failureReason on the wire, and at most one NEW meeting row.
+        expect(['starting', 'failed']).toContain(r.bbbStartRoom.status);
+        if (r.bbbStartRoom.status !== 'active') {
+          expect(r.bbbStartRoom.joinUrl).toBeNull();
+        }
+        const failureWire = JSON.stringify(r.bbbStartRoom);
+        expect(failureWire).not.toMatch(/failureReason/i);
+      }
+      const after = await meetingRepo.count({
+        where: { roomId: freshRaw },
+      });
+      // The harness queue is offline so no worker consumes the enqueue, but
+      // the Redis lock + debounce + idempotency check must still bound the
+      // created rows: at most one NEW meeting across all five calls.
+      expect(after - before).toBeLessThanOrEqual(1);
+    });
+
+    it('tenant A CANNOT start tenant B room (INV-029, refused before provisioning)', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const meetingRepo = connection.getRepository(superCtx, BbbMeeting);
+      const before = await meetingRepo.count({
+        where: { roomId: startRoomBRaw },
+      });
+      const err = await rejectionOf(
+        adminClient.query(BBB_START_ROOM, { roomId: startRoomBEncoded }),
+      );
+      expect(String(err.message)).toMatch(/not currently authorized/i);
+      const after = await meetingRepo.count({
+        where: { roomId: startRoomBRaw },
+      });
+      // Refused BEFORE provisioning: no meeting row created (INV-027 order).
+      expect(after).toBe(before);
+    });
+
+    it('suspended org start returns unavailable with the tenant-safe message', async () => {
+      // Platform suspends org A (tenant cannot — H1 allowlist).
+      await adminClient.asSuperAdmin();
+      await adminClient.query(SET_BBB_ORGANIZATION_BILLING, {
+        organizationId: orgAId,
+        billingMode: 'metered',
+        ratePaisePerLearnerHour: null,
+        monthlySpendLimitPaise: null,
+        suspended: true,
+      });
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const meetingRepo = connection.getRepository(superCtx, BbbMeeting);
+      const before = await meetingRepo.count({
+        where: { roomId: startRoomARaw },
+      });
+      const res: any = await adminClient.query(BBB_START_ROOM, {
+        roomId: startRoomAEncoded,
+      });
+      expect(res.bbbStartRoom.status).toBe('unavailable');
+      expect(res.bbbStartRoom.joinUrl).toBeNull();
+      expect(res.bbbStartRoom.message).toBe(
+        'Your account is paused — contact support',
+      );
+      const wire = JSON.stringify(res);
+      expect(wire).not.toMatch(/suspend/i);
+      const after = await meetingRepo.count({
+        where: { roomId: startRoomARaw },
+      });
+      // Gate ran synchronously BEFORE anything was enqueued.
+      expect(after).toBe(before);
+      // Restore for the cases below.
+      await adminClient.asSuperAdmin();
+      await adminClient.query(SET_BBB_ORGANIZATION_BILLING, {
+        organizationId: orgAId,
+        billingMode: 'metered',
+        ratePaisePerLearnerHour: null,
+        monthlySpendLimitPaise: null,
+        suspended: false,
+      });
+    });
+
+    it('spend-capped org start returns unavailable (D2 single money impl, current month)', async () => {
+      // Seed a CURRENT-month usage row so monthUsageRows (UTC monthOf(now))
+      // sees the charge: 60 min @ 2000/hr = 2000 paise ≥ limit 1000.
+      const usageRepo = connection.getRepository(superCtx, BbbMeteredUsage);
+      const now = new Date();
+      const curMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+      await usageRepo.save(
+        usageRepo.create({
+          meetingId: 's4-spend-cap-seed',
+          organizationId: String(orgA.id),
+          channelId: tenantAChannelId,
+          roomId: startRoomARaw,
+          startedAt: now,
+          completedAt: now,
+          learnerMinutes: 60,
+          peakLearners: 2,
+          peakModerators: 1,
+          ratePaisePerHour: 2000,
+          periodMonth: curMonth,
+        }),
+      );
+      await adminClient.asSuperAdmin();
+      await adminClient.query(SET_BBB_ORGANIZATION_BILLING, {
+        organizationId: orgAId,
+        billingMode: 'metered',
+        ratePaisePerLearnerHour: null,
+        monthlySpendLimitPaise: 1000,
+        suspended: false,
+      });
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const res: any = await adminClient.query(BBB_START_ROOM, {
+        roomId: startRoomAEncoded,
+      });
+      expect(res.bbbStartRoom.status).toBe('unavailable');
+      expect(res.bbbStartRoom.message).toBe(
+        'Your account is paused — contact support',
+      );
+      // Hygiene: the seed must not leak into billing assertions elsewhere
+      // (this suite never bills the current month, but a 60-min row is loud).
+      await usageRepo.delete({ meetingId: 's4-spend-cap-seed' });
+      await adminClient.asSuperAdmin();
+      await adminClient.query(SET_BBB_ORGANIZATION_BILLING, {
+        organizationId: orgAId,
+        billingMode: 'metered',
+        ratePaisePerLearnerHour: null,
+        monthlySpendLimitPaise: null,
+        suspended: false,
+      });
+    });
+
+    it('studentCount counts the person once across enrollment + entitlement (batched)', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const list: any = await adminClient.query(BBB_ROOMS, {
+        organizationId: orgAId,
+      });
+      const card = list.bbbRooms.items.find(
+        (r: any) => r.id === startRoomAEncoded,
+      );
+      expect(card).toBeTruthy();
+      // One customer holds BOTH an enrollment and an entitlement → 1, not 2.
+      expect(card.studentCount).toBe(1);
+      const single: any = await adminClient.query(BBB_ROOM_ADMIN_STATE, {
+        id: startRoomAEncoded,
+      });
+      expect(single.bbbRoom.studentCount).toBe(1);
     });
   });
 });

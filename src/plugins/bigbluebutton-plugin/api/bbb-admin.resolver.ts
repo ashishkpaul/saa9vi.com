@@ -677,6 +677,10 @@ export class BbbAdminResolver {
 
   // ─── Rooms ──────────────────────────────────────────────────────────────────
 
+  /**
+   * Room list for the tenant's organization (Phase 5.4: the read carries the
+   * batched `studentCount` — see `BbbRoomService.findAllCards`).
+   */
   @Query()
   @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   bbbRooms(
@@ -684,13 +688,14 @@ export class BbbAdminResolver {
     @Args("organizationId") orgId: string,
     @Args("options") options?: { skip?: number; take?: number },
   ) {
-    return this.roomService.findAll(ctx, orgId, options);
+    return this.roomService.findAllCards(ctx, orgId, options);
   }
 
+  /** Single room read (Phase 5.4: same batched stats as the list). */
   @Query()
   @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   bbbRoom(@Ctx() ctx: RequestContext, @Args("id") id: string) {
-    return this.roomService.findById(ctx, id);
+    return this.roomService.findCard(ctx, id);
   }
 
   @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
@@ -744,6 +749,31 @@ export class BbbAdminResolver {
   @Mutation()
   resetBbbRoom(@Ctx() ctx: RequestContext, @Args("id") id: string) {
     return this.roomService.resetFailedRoom(ctx, id);
+  }
+
+  /**
+   * A22 (Phase 5.2) — the dashboard's "Start class".
+   *
+   * Deliberately NOT `@Transaction()`: `startRoomAsModerator` runs its own
+   * short transactions and then **waits** for the provisioning worker, so
+   * wrapping the call in one would hold a transaction open across the wait.
+   *
+   * The gate is the tenant's own channel (`BbbManageRooms`); the service adds
+   * the room channel assert (INV-029) and the INV-027 moderator check before
+   * anything is provisioned.
+   */
+  @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
+  @Mutation()
+  bbbStartRoom(
+    @Ctx() ctx: RequestContext,
+    @Args("roomId") roomId: string,
+    @Args("moderatorName") moderatorName?: string,
+    @Args("waitMs") waitMs?: number,
+  ) {
+    return this.meetingService.startRoomAsModerator(ctx, roomId, {
+      moderatorName,
+      waitMs,
+    });
   }
 
   // ─── Product Access ─────────────────────────────────────────────────────────

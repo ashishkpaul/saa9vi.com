@@ -79,6 +79,22 @@ export const DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR = 2000;
  */
 export const DEFAULT_SEEDED_ROOM_NAMES: readonly string[] = ["Main Classroom"];
 
+// ─── A22 "Start class" (dashboard, Phase 5.2) ────────────────────────────────
+
+/**
+ * How long `bbbStartRoom` waits for the provisioning worker to flip the room to
+ * `Active` before answering `status: 'starting'`. The UI then calls again —
+ * repeats are cheap and idempotent (the Redis lock and the debounce inside
+ * `requestProvisioning` absorb them).
+ */
+export const START_ROOM_WAIT_MS_DEFAULT = 6_000;
+
+/** Upper bound applied to the caller-supplied `waitMs` argument. */
+export const START_ROOM_WAIT_MS_MAX = 20_000;
+
+/** Poll interval while waiting for the room state machine. */
+export const START_ROOM_POLL_INTERVAL_MS = 400;
+
 // ─── Organisation Member Roles ───────────────────────────────────────────────
 
 /**

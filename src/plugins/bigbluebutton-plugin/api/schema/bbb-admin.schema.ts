@@ -119,6 +119,14 @@ export const adminApiExtensions = gql`
     currentMeetingId: ID
     retryCount: Int!
     lastProvisionRequestedAt: DateTime
+    """
+    Phase 5.4 — DISTINCT customers with an active enrollment OR a valid
+    bbb_room entitlement for this room. Computed on the room list and
+    single-room reads (batched — no N+1) from the shared INV-027 validity
+    windows; null on results that do not compute it (room mutations, nested
+    relations) rather than a misleading 0.
+    """
+    studentCount: Int
   }
 
   # ─── Product Access (enrollment mapping) ────────────────────────────────────
@@ -271,6 +279,22 @@ export const adminApiExtensions = gql`
     totalItems: Int!
   }
 
+  type BbbRoomStartResult {
+    """'active' | 'starting' | 'failed' | 'unavailable' (see bbbStartRoom)."""
+    status: String!
+    """A **moderator** join URL — present only when status = 'active'."""
+    joinUrl: String
+    currentMeetingId: ID
+    """The room's state when the call returned (drives the card badge)."""
+    roomState: String!
+    """
+    Tenant-safe reason when status = 'failed' or 'unavailable' (A22/S4.2):
+    suspended orgs and spend-cap orgs get "Your account is paused — contact
+    support". Never a raw internal failureReason.
+    """
+    message: String
+  }
+
   type BbbRoomList {
     items: [BbbRoom!]!
     totalItems: Int!
@@ -370,6 +394,25 @@ export const adminApiExtensions = gql`
     updateBbbRoom(id: ID!, input: UpdateBbbRoomInput!): BbbRoom!
     deleteBbbRoom(id: ID!): Boolean!
     resetBbbRoom(id: ID!): BbbRoom!
+    """
+    A22 (Phase 5) — the dashboard's "Start class" action: provisions the room if
+    needed and returns a moderator join URL.
+
+    Authorizes BEFORE provisioning (INV-027): the room must belong to the caller's
+    channel, and a caller whose linked customer is not a moderator-capable member
+    of the owning organization is refused with no meeting created. Status is
+    'active' (joinUrl present), 'starting' (provisioning in flight — call again,
+    idempotent), 'failed' (room Failed beyond its retry budget; reset it) or
+    'unavailable' (org suspended or spend-capped; message is tenant-safe).
+    moderatorName defaults to the caller's administrator name, then the room
+    name. waitMs (max 20000) bounds how long the call waits for the room to go
+    live before answering 'starting'.
+    """
+    bbbStartRoom(
+      roomId: ID!
+      moderatorName: String
+      waitMs: Int
+    ): BbbRoomStartResult!
     createBbbScheduledSession(
       input: CreateBbbScheduledSessionInput!
     ): BbbScheduledSession!

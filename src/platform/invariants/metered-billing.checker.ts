@@ -38,6 +38,13 @@ import { CheckResult, Checker } from './runner';
  * gated by the `TENANT_EDITABLE_ORG_FIELDS` allowlist, and organization creation
  * cannot target a foreign channel.
  *
+ * **S4 startRoom remediation (A22 / Phase 5.2 + 5.4):** the same checker pins the
+ * Start contract — the mutation is INV-027-ordered (room channel assert before
+ * the moderator evaluation before provisioning), `BbbRoomStartResult` carries a
+ * tenant-safe `message` and NEVER the raw worker `failureReason`, and
+ * `studentCount` is computed from the shared INV-027 validity windows (never
+ * persisted, never a `trainerCount` (D5)).
+ *
  * Pure source inspection — no database, consistent with `RoomAccessChecker`.
  */
 export class MeteredBillingChecker implements Checker {
@@ -55,6 +62,7 @@ export class MeteredBillingChecker implements Checker {
       this.phase2BOperationalWiringPresent(),
       this.channelScopedReadsRemediated(),
       this.billingApiChannelScoped(),
+      this.startRoomContractPresent(),
     ];
 
     const results = await Promise.all(checks);
@@ -725,6 +733,155 @@ export class MeteredBillingChecker implements Checker {
       message:
         failures.length === 0
           ? "Phase 4 billing API present: D3 no-org tenant reads, platform-gated billing surfaces, D2 money via policy only, Q2 placeholder wired into write+read"
+          : failures.join("; "),
+    };
+  }
+
+  /**
+   * S4 Start contract (A22 / Phase 5.2 + 5.4): the dashboard's "Start class"
+   * is INV-027-ordered, tenant-safe on failure, and the room cards count
+   * students from the SAME validity windows the room would admit (no N+1, no
+   * persisted count, no trainerCount — D5 keeps trainers org-wide).
+   */
+  private async startRoomContractPresent(): Promise<CheckResult> {
+    const meetingRel =
+      "src/plugins/bigbluebutton-plugin/services/bbb-meeting.service.ts";
+    const roomRel =
+      "src/plugins/bigbluebutton-plugin/services/bbb-room.service.ts";
+    const resolverRel =
+      "src/plugins/bigbluebutton-plugin/api/bbb-admin.resolver.ts";
+    const adminSchemaRel =
+      "src/plugins/bigbluebutton-plugin/api/schema/bbb-admin.schema.ts";
+    const meetingSrc = this.readOrEmpty(meetingRel);
+    const roomSrc = this.readOrEmpty(roomRel);
+    const resolverSrc = this.readOrEmpty(resolverRel);
+    const adminSchemaSrc = this.readOrEmpty(adminSchemaRel);
+    const failures: string[] = [];
+
+    // 1. The mutation exists and is tenant-scoped (never platform-only: the
+    //    tenant dashboard is its caller) — but the room channel assert runs
+    //    inside the service (INV-029) before the moderator evaluation
+    //    (INV-027) before provisioning.
+    const startSig = "startRoomAsModerator(";
+    const startBody = this.serviceBodyFor(meetingSrc, startSig);
+    if (!startBody) {
+      failures.push(`${meetingRel} must declare ${startSig} (S4 Start)`);
+    } else {
+      const roomAssert = startBody.indexOf("roomService.findById(");
+      const modEval = startBody.indexOf("roomAccessService.evaluate(");
+      const provision = startBody.indexOf("roomService.requestProvisioning(");
+      if (roomAssert === -1) {
+        failures.push(
+          `${startSig} must load the room via roomService.findById (channel assert, INV-029)`,
+        );
+      }
+      if (modEval === -1) {
+        failures.push(
+          `${startSig} must evaluate roomAccessService BEFORE provisioning (INV-027)`,
+        );
+      }
+      if (provision === -1) {
+        failures.push(
+          `${startSig} must provision via roomService.requestProvisioning (lock + debounce idempotency)`,
+        );
+      }
+      if (roomAssert !== -1 && modEval !== -1 && roomAssert > modEval) {
+        failures.push(
+          `${startSig} must assert the room BEFORE the moderator evaluation (INV-029 precedes INV-027)`,
+        );
+      }
+      if (modEval !== -1 && provision !== -1 && modEval > provision) {
+        failures.push(
+          `${startSig} must evaluate access BEFORE requestProvisioning (INV-027 ordering)`,
+        );
+      }
+      // 2. The synchronous metered gate mirrors the worker (suspended /
+      //    spend-limit) and the tenant NEVER sees a raw failureReason.
+      if (!startBody.includes("meteredGateRefusal(")) {
+        failures.push(
+          `${startSig} must consult the synchronous metered gate (meteredGateRefusal) before enqueueing`,
+        );
+      }
+      // The Failed branch READS failedMeeting.failureReason only to map it
+      // through tenantSafeFailureMessage — that read is legitimate. What is
+      // forbidden is EMITTING it: a `failureReason:` / `failureReason,` /
+      // `failureReason }` property on (or near) a returned result object.
+      if (/failureReason\s*[:,}]/m.test(startBody)) {
+        failures.push(
+          `${startSig} must never surface the raw worker failureReason — use tenantSafeFailureMessage`,
+        );
+      }
+      if (!startBody.includes("tenantSafeFailureMessage(")) {
+        failures.push(
+          `${startSig} must map worker failures through tenantSafeFailureMessage`,
+        );
+      }
+      // waitMs is caller-bounded so the mutation cannot hold a request open.
+      if (!meetingSrc.includes("START_ROOM_WAIT_MS_MAX")) {
+        failures.push(
+          `${meetingRel} must bound the caller waitMs with START_ROOM_WAIT_MS_MAX`,
+        );
+      }
+    }
+
+    // 3. SDL: the result carries a tenant-safe message, never internal ids.
+    for (const token of [
+      "type BbbRoomStartResult",
+      "status: String!",
+      "joinUrl: String",
+      "roomState: String!",
+      "message: String",
+    ]) {
+      if (!adminSchemaSrc.includes(token)) {
+        failures.push(`${adminSchemaRel} must declare ${token} (S4 Start SDL)`);
+      }
+    }
+
+    // 4. Room cards: studentCount computed from the shared INV-027 windows —
+    //    never persisted on the entity, never N+1, never a trainerCount (D5).
+    //    (The deliberate-NOT docblock in BbbRoomService mentions the word to
+    //    explain its absence — that prose is fine; only an actual computed /
+    //    returned / SDL field is forbidden.)
+    if (!roomSrc.includes("withStudentCounts(")) {
+      failures.push(
+        `${roomRel} must attach studentCount via withStudentCounts (batched, no N+1)`,
+      );
+    }
+    if (
+      !roomSrc.includes("isEnrollmentValid(") ||
+      !roomSrc.includes("isEntitlementValid(")
+    ) {
+      failures.push(
+        `${roomRel} must reuse the shared INV-027 validity windows (isEnrollmentValid + isEntitlementValid)`,
+      );
+    }
+    const codeOnly = (src: string) =>
+      src
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/[^\n]*/g, "")
+        .replace(/"""[\s\S]*?"""/g, "");
+    if (
+      /trainerCount\s*[:=?]/.test(codeOnly(roomSrc)) ||
+      /trainerCount\s*[:=?]/.test(codeOnly(resolverSrc))
+    ) {
+      failures.push(
+        `trainerCount must not exist on the room path — trainers are org-wide (D5)`,
+      );
+    }
+    if (!resolverSrc.includes("findAllCards(") || !resolverSrc.includes("findCard(")) {
+      failures.push(
+        `${resolverRel} must read rooms through findAllCards/findCard (batched counts)`,
+      );
+    }
+
+    return {
+      checker: this.name,
+      name: "start-room-contract",
+      passed: failures.length === 0,
+      severity: failures.length > 0 ? "error" : "info",
+      message:
+        failures.length === 0
+          ? "S4 Start contract present: INV-027-ordered bbbStartRoom, synchronous metered gate, tenant-safe failure messages, batched studentCount from shared validity windows"
           : failures.join("; "),
     };
   }

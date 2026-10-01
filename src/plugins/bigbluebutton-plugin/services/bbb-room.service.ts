@@ -8,6 +8,13 @@ import {
 import { BbbRoom, RoomState } from "../entities/bbb-room.entity";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
+import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
+import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
+import { In } from "typeorm";
+import {
+  isEntitlementValid,
+  isEnrollmentValid,
+} from "./room-access.policy";
 import { MEETING_STATE } from "../constants";
 import { BBB_PLUGIN_OPTIONS } from "../constants";
 import { BbbRoomLockService } from "./bbb-room-lock.service";
@@ -34,6 +41,14 @@ export interface CreateRoomInput {
 }
 
 export type JoinRoomStatus = "active" | "provisioning" | "failed";
+
+/**
+ * A room as the card/detail READ surface returns it (Phase 5.4): the entity plus
+ * the computed, never-persisted `studentCount`. Producer surfaces that cannot
+ * batch a count (mutations, nested relations) leave the field null in the SDL
+ * instead of claiming zero.
+ */
+export type BbbRoomCard = BbbRoom & { studentCount: number };
 
 export interface RequestProvisioningResult {
   status: JoinRoomStatus;
@@ -167,6 +182,97 @@ export class BbbRoomService {
       where: { organization: { id: orgId as string } },
       order: { createdAt: "DESC" },
     });
+  }
+
+  // ─── Room card reads (Phase 5.4) ───────────────────────────────────────────
+  //
+  // The tenant Rooms screen and the room detail read through these two methods
+  // so the card stats arrive with the page: two extra queries for the whole
+  // list, never one per room. `findAll`/`findById` stay untouched — they serve
+  // the provisioning hot paths (joinRoom, the worker) where a count would be
+  // pure overhead.
+
+  /**
+   * Room list + student counts, for `bbbRooms`.
+   */
+  async findAllCards(
+    ctx: RequestContext,
+    orgId: ID,
+    options?: { skip?: number; take?: number },
+  ): Promise<{ items: BbbRoomCard[]; totalItems: number }> {
+    const page = await this.findAll(ctx, orgId, options);
+    return {
+      items: await this.withStudentCounts(ctx, page.items),
+      totalItems: page.totalItems,
+    };
+  }
+
+  /**
+   * Single room + student count, for `bbbRoom`.
+   */
+  async findCard(ctx: RequestContext, id: ID): Promise<BbbRoomCard | null> {
+    const room = await this.findById(ctx, id);
+    if (!room) return null;
+    const [card] = await this.withStudentCounts(ctx, [room]);
+    return card;
+  }
+
+  /**
+   * Phase 5.4 — attach `studentCount` to a page of rooms with **two** queries.
+   *
+   * `studentCount` is the number of DISTINCT customers holding EITHER an active
+   * enrollment for the room OR a valid `bbb_room` entitlement for it, so a
+   * person who has both is counted once (a card counts people, not rows). The
+   * validity windows come from the shared INV-027 helpers
+   * (`isEnrollmentValid` / `isEntitlementValid`) rather than being re-invented
+   * here — the count must agree with what the room would actually admit.
+   *
+   * `trainerCount` is deliberately NOT computed: D5 keeps trainers org-wide (no
+   * trainer-room ACL), so the number is an organization-level fact the People
+   * tab already owns; the card shows it from there.
+   */
+  private async withStudentCounts(
+    ctx: RequestContext,
+    rooms: BbbRoom[],
+  ): Promise<BbbRoomCard[]> {
+    if (rooms.length === 0) return [];
+    const roomIds = rooms.map((room) => String(room.id));
+    const now = new Date();
+
+    const [enrollments, entitlements] = await Promise.all([
+      this.connection.getRepository(ctx, BbbEnrollment).find({
+        where: { roomId: In(roomIds), active: true },
+      }),
+      this.connection.getRepository(ctx, BbbEntitlement).find({
+        where: { type: "bbb_room", resourceId: In(roomIds) },
+      }),
+    ]);
+
+    const studentsByRoom = new Map<string, Set<string>>();
+    const addStudent = (roomId: string, customerId: string) => {
+      let set = studentsByRoom.get(roomId);
+      if (!set) {
+        set = new Set<string>();
+        studentsByRoom.set(roomId, set);
+      }
+      set.add(customerId);
+    };
+    for (const enrollment of enrollments) {
+      if (isEnrollmentValid(enrollment, now)) {
+        addStudent(String(enrollment.roomId), String(enrollment.customerId));
+      }
+    }
+    for (const entitlement of entitlements) {
+      if (isEntitlementValid(entitlement, now)) {
+        addStudent(String(entitlement.resourceId), String(entitlement.customerId));
+      }
+    }
+
+    return rooms.map((room) =>
+      Object.assign(room, {
+        studentCount: studentsByRoom.get(String(room.id))?.size ?? 0,
+      }),
+    );
   }
 
   private lifecyclePrefix(
