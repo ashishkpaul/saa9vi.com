@@ -488,24 +488,31 @@ const TENANT_ORGANIZATION_SCREENS = [
     'src/plugins/bigbluebutton-plugin/dashboard/routes/enrollments/EnrollmentsList.tsx',
 ];
 
-/** Platform tier — cross-tenant browsing is the purpose of these screens. */
+/**
+ * Platform tier — cross-tenant browsing IS the purpose of these screens, so a
+ * picker is a real filter rather than a lie (DL-031):
+ *   - OrganizationsList / ServersList are the platform operator's cross-tenant
+ *     inventories.
+ *   - LiveMeetingsList is the platform "Live meetings" screen: its job is to
+ *     show what is running across every tenant at once, which cannot be derived
+ *     from the caller's own channel.
+ */
 const PLATFORM_TIER_PICKER_SCREENS = new Set<string>([
     'src/plugins/bigbluebutton-plugin/dashboard/routes/organizations/OrganizationsList.tsx',
     'src/plugins/bigbluebutton-plugin/dashboard/routes/servers/ServersList.tsx',
+    'src/plugins/bigbluebutton-plugin/dashboard/routes/meetings/LiveMeetingsList.tsx',
 ]);
 
 /**
  * SHRINK-ONLY deviations (DL-031):
- *   - MeetingsList picks the *creation target* only; its list read is already
- *     channel-scoped and `bbbCreateMeeting` re-checks ownership server-side
- *     (`BbbChannelAccessService.assertOrganizationAccess`), so the picker is UX
- *     noise rather than a cross-tenant leak.
  *   - MembershipsList has no registered route in the BBB dashboard extension
  *     (unrouted legacy component).
+ * MeetingsList used to be the other entry (it picked its *creation target*).
+ * Its picker has since been removed outright, so the entry was deleted here
+ * rather than left as a stale baseline row.
  * Remove an entry here as the screen is migrated or deleted.
  */
 const LEGACY_ORG_PICKER_SCREENS = new Set<string>([
-    'src/plugins/bigbluebutton-plugin/dashboard/routes/meetings/MeetingsList.tsx',
     'src/plugins/bigbluebutton-plugin/dashboard/routes/memberships/MembershipsList.tsx',
 ]);
 

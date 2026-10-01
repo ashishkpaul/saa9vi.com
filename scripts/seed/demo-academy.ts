@@ -173,7 +173,6 @@ async function seedDemoAcademy() {
       console.log('[Seed] Creating BBB Organization for Apex Academy...');
       bbbOrg = await bbbOrgService.create(tenantCtx, {
         channelId: String(channelId),
-        tenantProfileId: String(tenantProfile.id),
         slug: 'apex-academy',
         name: 'Apex Academy Live Classroom',
         concurrentMeetingLimit: 10,

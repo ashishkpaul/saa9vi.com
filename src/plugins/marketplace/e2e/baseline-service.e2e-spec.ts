@@ -1,6 +1,7 @@
 /**
  * Pure unit tests for MarketplaceBaselineService (3D.1b Steps 1–5).
- * (Named *.e2e-spec.ts to match the vitest include pattern; see SponsoredBoostConfigService.)*
+ * (Runs inside `test:e2e` only because it shares the e2e vitest project;
+ * it boots no server/ES/DB — see BUG-054.)
  *
  * No server boot, no ES, no DB — verifies the fail-closed baseline contract
  * and the Step 5 refresh/retry-generation guard with mocked

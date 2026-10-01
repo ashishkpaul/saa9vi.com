@@ -737,7 +737,10 @@ describe('BBB Channel Isolation (Phase A)', () => {
         .publish(
           new TenantRegisteredEvent(
             ctx,
-            String(org!.tenantProfileId),
+            // BUG-053: the listener no longer reads this id — the org is
+            // located by channelId and the replay must not create a second
+            // org regardless of what correlation id is carried here.
+            'legacy-tenant-profile-id',
             tenantAChannelId,
             org!.slug,
             org!.name,

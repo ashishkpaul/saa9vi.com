@@ -18,7 +18,6 @@ import { BbbPlatformCapacityPolicyService } from "./bbb-platform-capacity-policy
 
 export interface CreateBbbOrganizationInput {
   channelId: string;
-  tenantProfileId: string;
   slug: string;
   name: string;
   concurrentMeetingLimit?: number;
@@ -240,7 +239,6 @@ export class BbbOrganizationService {
     }
     const org = new BbbOrganization({
       channelId: this.toInternalId(input.channelId),
-      tenantProfileId: input.tenantProfileId,
       slug: input.slug,
       name: input.name,
       concurrentMeetingLimit: input.concurrentMeetingLimit ?? 5,

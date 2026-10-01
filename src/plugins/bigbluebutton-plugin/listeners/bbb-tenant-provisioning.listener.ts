@@ -100,7 +100,6 @@ export class BbbTenantProvisioningListener implements OnModuleInit {
 
         const org = await this.bbbOrganizationService.create(orgCtx, {
           channelId: event.channelId,
-          tenantProfileId: event.tenantProfileId,
           name: event.businessName,
           slug: event.tenantSlug,
         });

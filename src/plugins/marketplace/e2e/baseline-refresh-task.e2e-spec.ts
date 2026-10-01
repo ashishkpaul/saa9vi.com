@@ -1,6 +1,7 @@
 /**
  * Pure unit tests for the 3D.1b Step 6 Bayesian baseline refresh task wiring.
- * (Named *.e2e-spec.ts to match the vitest include pattern.)
+ * (Runs inside `test:e2e` only because it shares the e2e vitest project;
+ * it boots no server/ES/DB — see BUG-054.)
  *
  * Verifies that the ScheduledTask orchestrates rather than doing heavy work:
  *   1. generates a durable refreshGeneration (UUID) per execution

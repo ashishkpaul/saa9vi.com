@@ -85,7 +85,6 @@ interface UpdateBbbServerInput {
 
 interface AdminCreateBbbOrganizationInput {
   channelId: string;
-  tenantProfileId: string;
   slug: string;
   name: string;
   concurrentMeetingLimit?: number;

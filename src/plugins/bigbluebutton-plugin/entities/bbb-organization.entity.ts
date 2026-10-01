@@ -22,6 +22,11 @@ export class BbbOrganization extends VendureEntity implements ChannelAware {
   @Column()
   channelId: string;
 
+  /**
+   * Legacy column (BUG-053): nullable, never written by any code path — the
+   * tenant link is `channelId` (Channel=Tenant, INV-001). Retained only so no
+   * migration is required; do not read it as a TenantProfile reference.
+   */
   @Column({ nullable: true })
   tenantProfileId: string;
 

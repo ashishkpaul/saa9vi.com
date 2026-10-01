@@ -3,6 +3,7 @@ import { api, Badge, Button, Card, Link, Skeleton } from '@vendure/dashboard';
 import { graphql } from '@/gql';
 import { useState } from 'react';
 import { useCurrentOrganization } from '../../shared/useCurrentOrganization';
+import { resolveListState } from '../../../../../platform/dashboard/query-state';
 
 // ─── S5 (Phase 6 lean) — People (Trainers | Students) ────────────────────────
 // Person-centric, not storage-model: Trainers tab reuses the org staff list
@@ -92,12 +93,25 @@ function TrainersTab({ organizationId }: { organizationId: string }) {
     queryFn: () => api.query(TRAINERS, { organizationId }),
     enabled: !!organizationId,
   });
-  const trainers = (trainersQuery.data as any)?.bbbOrganizationMembers?.items ?? [];
+  // INV-015: a rejected query must never render as "no trainers".
+  // resolveListState is the single normalisation point, so a rejection, an
+  // absent bbbOrganizationMembers field, or a query that never ran reaches
+  // the loading/error/blocked branch instead of the empty state — the inline
+  // fallback this replaces collapsed all three into "no rows".
+  const trainersState = resolveListState(
+    trainersQuery,
+    (data: any) => data?.bbbOrganizationMembers,
+    { expected: 'bbbOrganizationMembers', blocked: !organizationId },
+  );
   return (
     <Card>
-      {trainersQuery.isLoading ? (
+      {trainersState.status === 'blocked' ? (
+        <div className="p-6 text-center text-muted-foreground">No organization is bound to this channel</div>
+      ) : trainersState.status === 'loading' ? (
         <div className="p-4 space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
-      ) : trainers.length === 0 ? (
+      ) : trainersState.status === 'error' ? (
+        <div className="p-6 text-center text-red-500">Failed to load trainers</div>
+      ) : trainersState.status === 'empty' ? (
         <div className="p-6 text-center text-muted-foreground">No trainers yet. Add trainers from the <Link to="/bbb/staff" className="text-blue-500 hover:underline">Staff</Link> screen.</div>
       ) : (
         <div className="overflow-x-auto">
@@ -111,7 +125,7 @@ function TrainersTab({ organizationId }: { organizationId: string }) {
               </tr>
             </thead>
             <tbody>
-              {trainers.map((t: any) => (
+              {trainersState.items.map((t: any) => (
                 <tr key={t.id} className="border-b last:border-0">
                   <td className="px-4 py-3 font-medium">{t.customerName || '\u2014'}</td>
                   <td className="px-4 py-3">{t.customerEmail || '\u2014'}</td>
@@ -134,36 +148,63 @@ function StudentsTab({ organizationId }: { organizationId: string }) {
     queryFn: () => api.query(STUDENT_ROOMS, { organizationId }),
     enabled: !!organizationId,
   });
-  const rooms = (roomsQuery.data as any)?.bbbRooms?.items ?? [];
-  const effectiveRoomId = roomId || rooms[0]?.id || '';
+  // INV-015 — the room list and the student list resolve through
+  // `resolveListState` for the same reason as TrainersTab: a failed query must
+  // surface as an error, not as "this room has no students".
+  const roomsState = resolveListState(
+    roomsQuery,
+    (data: any) => data?.bbbRooms,
+    { expected: 'bbbRooms', blocked: !organizationId },
+  );
+  const rooms = roomsState.status === 'ready' ? roomsState.items : [];
+  const effectiveRoomId =
+    roomId || (rooms[0] as { id?: string } | undefined)?.id || '';
   const studentsQuery = useQuery({
     queryKey: ['bbbPeopleStudents', effectiveRoomId],
     queryFn: () => api.query(STUDENTS_BY_ROOM, { roomId: effectiveRoomId }),
     enabled: !!effectiveRoomId,
   });
-  const students = (studentsQuery.data as any)?.bbbEnrollmentsByRoom?.items ?? [];
+  const studentsState = resolveListState(
+    studentsQuery,
+    (data: any) => data?.bbbEnrollmentsByRoom,
+    { expected: 'bbbEnrollmentsByRoom', blocked: !effectiveRoomId },
+  );
   return (
     <div className="grid gap-4">
       <Card>
-        <div className="p-4 flex items-center gap-4">
-          <label className="text-sm font-medium" htmlFor="people-room">Room</label>
-          <select
-            id="people-room"
-            className="border rounded px-3 py-2 text-sm"
-            value={effectiveRoomId}
-            onChange={(e) => setRoomId(e.target.value)}
-          >
-            {rooms.map((r: any) => (
-              <option key={r.id} value={r.id}>{r.name}</option>
-            ))}
-          </select>
-          <span className="text-sm text-muted-foreground">Grant and revoke access from the <Link to="/bbb/enrollments" className="text-blue-500 hover:underline">Enrollments</Link> screen.</span>
-        </div>
+        {roomsState.status === 'blocked' ? (
+          <div className="p-6 text-center text-muted-foreground">No organization is bound to this channel</div>
+        ) : roomsState.status === 'loading' ? (
+          <div className="p-4"><Skeleton className="h-10 w-full" /></div>
+        ) : roomsState.status === 'error' ? (
+          <div className="p-6 text-center text-red-500">Failed to load rooms</div>
+        ) : roomsState.status === 'empty' ? (
+          <div className="p-6 text-center text-muted-foreground">No rooms yet. Create one from the <Link to="/bbb/rooms" className="text-blue-500 hover:underline">Rooms</Link> screen.</div>
+        ) : (
+          <div className="p-4 flex items-center gap-4">
+            <label className="text-sm font-medium" htmlFor="people-room">Room</label>
+            <select
+              id="people-room"
+              className="border rounded px-3 py-2 text-sm"
+              value={effectiveRoomId}
+              onChange={(e) => setRoomId(e.target.value)}
+            >
+              {roomsState.items.map((r: any) => (
+                <option key={r.id} value={r.id}>{r.name}</option>
+              ))}
+            </select>
+            <span className="text-sm text-muted-foreground">Grant and revoke access from the <Link to="/bbb/enrollments" className="text-blue-500 hover:underline">Enrollments</Link> screen.</span>
+          </div>
+        )}
       </Card>
       <Card>
-        {studentsQuery.isLoading ? (
+        {studentsState.status === 'blocked' ? (
+          <div className="p-6 text-center text-muted-foreground">Pick a room to see its students.</div>
+        ) : studentsState.status === 'loading' ? (
           <div className="p-4 space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
-        ) : students.length === 0 ? (
+        ) : studentsState.status === 'error' ? (
+          <div className="p-6 text-center text-red-500">Failed to load students</div>
+        ) : studentsState.status === 'empty' ? (
           <div className="p-6 text-center text-muted-foreground">No students enrolled in this room yet.</div>
         ) : (
           <div className="overflow-x-auto">
@@ -177,7 +218,7 @@ function StudentsTab({ organizationId }: { organizationId: string }) {
                 </tr>
               </thead>
               <tbody>
-                {students.map((s: any) => (
+                {studentsState.items.map((s: any) => (
                   <tr key={s.id} className="border-b last:border-0">
                     <td className="px-4 py-3 font-medium">{s.customerName || '\u2014'}</td>
                     <td className="px-4 py-3">{s.customerEmail || '\u2014'}</td>

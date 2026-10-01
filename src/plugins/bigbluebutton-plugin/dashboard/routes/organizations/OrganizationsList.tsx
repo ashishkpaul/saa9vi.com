@@ -33,9 +33,9 @@ const GET_CHANNELS = `
   }
 `;
 
-// Note: TenantProfile is resolved per-channel via tenantProfile(channelId: String!)
-// There's no bulk list query, so we keep this as a manual input for now.
-// In a future iteration, this could be replaced with a channel-based auto-lookup.
+// Note: TenantProfile linkage is owned by the internal TenantRegisteredEvent
+// provisioning path (BbbTenantProvisioningListener), not by this dialog —
+// channelId alone scopes the organization to its tenant (Channel=Tenant).
 
 const CREATE_ORGANIZATION = `
   mutation CreateBbbOrganization($input: CreateBbbOrganizationInput!) {
@@ -84,12 +84,6 @@ interface Channel {
   token: string;
 }
 
-interface TenantProfile {
-  id: string;
-  businessName: string;
-  channelId: string;
-}
-
 interface OrgsResponse {
   bbbOrganizations: {
     items: BbbOrganization[];
@@ -107,7 +101,6 @@ export function OrganizationsList() {
 
   // Create form
   const [newChannelId, setNewChannelId] = useState('');
-  const [newTenantProfileId, setNewTenantProfileId] = useState('');
   const [newSlug, setNewSlug] = useState('');
   const [newName, setNewName] = useState('');
   const [newConcurrentLimit, setNewConcurrentLimit] = useState(5);
@@ -221,14 +214,6 @@ export function OrganizationsList() {
                 {newChannelId && channelsQuery.error && <p className="text-xs text-red-500">Channel lookup unavailable</p>}
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="tenantProfileId">Tenant Profile ID</Label>
-                <Input id="tenantProfileId" value={newTenantProfileId} onChange={(e) => setNewTenantProfileId(e.target.value)} placeholder="Enter TenantProfile ID (optional)" />
-                <p className="text-xs text-muted-foreground">
-                  Optional — set up via Academy → Tenant Profile first, then enter the ID here. 
-                  Auto-lookup will be added when a bulk query becomes available.
-                </p>
-              </div>
-              <div className="grid gap-2">
                 <Label htmlFor="slug">Slug</Label>
                 <Input id="slug" value={newSlug} onChange={(e) => setNewSlug(e.target.value)} placeholder="acme-academy" />
               </div>
@@ -249,7 +234,7 @@ export function OrganizationsList() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-              <Button onClick={() => createMutation.mutate({ channelId: newChannelId, tenantProfileId: newTenantProfileId || undefined, slug: newSlug, name: newName, concurrentMeetingLimit: newConcurrentLimit, maxParticipantsPerMeeting: newMaxParticipants })} disabled={!newChannelId || !newSlug || !newName || createMutation.isPending}>
+              <Button onClick={() => createMutation.mutate({ channelId: newChannelId, slug: newSlug, name: newName, concurrentMeetingLimit: newConcurrentLimit, maxParticipantsPerMeeting: newMaxParticipants })} disabled={!newChannelId || !newSlug || !newName || createMutation.isPending}>
                 {createMutation.isPending ? 'Creating...' : 'Create'}
               </Button>
             </DialogFooter>
