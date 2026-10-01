@@ -620,7 +620,7 @@ async function tenantSuite(
   }
   // ─── Start class (real click, real mutation) ──────────────────────────────
   if (START_CLASS) {
-    await check('Start class click-through reaches a tenant-safe outcome', async () => {
+    await check('Start class reaches live or starting (never a refusal)', async () => {
       await openRoute(cdp, base, '/bbb/rooms', 'Rooms');
       const clicked = await cdp.clickText('Start class');
       if (!clicked) return { ok: false, detail: 'no Start class button rendered' };
@@ -634,12 +634,25 @@ async function tenantSuite(
       await cdp.screenshot(path.join(SHOT_DIR, 'tenant-start-class.png'));
       const hit = boundaryHit(text);
       if (hit) return { ok: false, detail: `error text "${hit}"` };
-      const outcome = text.includes('Join class')
-        ? 'live — moderator join URL issued'
-        : text.includes('Starting')
-          ? 'starting (no reachable BBB in this environment)'
-          : 'refused with a tenant-safe message';
-      return { ok: true, detail: outcome };
+      // The fixture org is pinned to `metered` in main() (see
+      // pinOrganizationToMetered), so the legacy grant gate is out of the
+      // picture. Start class must therefore reach 'live' (a real BBB server is
+      // reachable) or 'starting' (no reachable BBB in this environment, so the
+      // provisioning job stays in flight). A refusal is a real failure now:
+      // it means the click never reached the provisioning worker.
+      const live = text.includes('Join class');
+      const starting = !live && /\bStarting\b/.test(text);
+      const refused = !live && !starting && /paused|unavailable|could not be started/i.test(text);
+      return {
+        ok: live || starting,
+        detail: live
+          ? 'live — moderator join URL issued'
+          : starting
+            ? 'starting — provisioning in flight (no reachable BBB in this environment)'
+            : refused
+              ? 'REFUSED — a metered org must not trip the legacy grant gate'
+              : 'no start-class outcome marker rendered',
+      };
     });
   } else {
     warn('Start class click-through', 'skipped (BBB_BROWSER_START_CLASS=0)');
@@ -868,6 +881,101 @@ async function ensureRoom(
   }
   return { id: String(res.data?.createBbbRoom?.id), name, created: true };
 }
+
+/** Meeting ids this persona can see for one organization (snapshot-diff). */
+async function orgMeetingIds(
+  cookie: string,
+  channelToken: string,
+  organizationId: string,
+): Promise<Set<string>> {
+  const res = await gql(
+    'query Probe($org: ID!) { bbbMeetings(organizationId: $org) { items { id } } }',
+    { org: organizationId },
+    cookie,
+    channelToken,
+  );
+  const items: any[] = res.data?.bbbMeetings?.items ?? [];
+  return new Set(items.map((m) => String(m.id)));
+}
+
+/**
+ * Set the validation organization's billing mode through the platform-gated
+ * mutation (ADR-047) and return the mode actually applied.
+ *
+ * The validation database is seeded by fixtures that INSERT the organization
+ * row directly, which bypasses `BbbOrganizationService.create()` and therefore
+ * keeps the DDL default `billingMode = 'grant'`. A grant org with no capacity
+ * grant refuses every Start class at the provisioning grant gate
+ * ("No active capacity grant found for this organization. Please purchase or
+ * renew a plan."), so the harness was validating a refusal path that no
+ * production tenant reaches. The suite pins the org to `metered` — the
+ * ADR-047 / D7 default for new organizations — and restores the original mode
+ * afterwards, so a dev database is left exactly as it was found.
+ */
+async function setOrganizationBilling(
+  cookie: string,
+  channelToken: string,
+  organizationId: string,
+  mode: 'grant' | 'metered',
+): Promise<string> {
+  const res = await gql(
+    `mutation SetBilling($id: ID!, $mode: String!) {
+       setBbbOrganizationBilling(organizationId: $id, billingMode: $mode, suspended: false) {
+         id
+         billingMode
+       }
+     }`,
+    { id: organizationId, mode },
+    cookie,
+    channelToken,
+  );
+  if (res.errors?.length) {
+    throw new Error(`setBbbOrganizationBilling(${mode}) failed: ${res.errors[0].message}`);
+  }
+  const applied = String(res.data?.setBbbOrganizationBilling?.billingMode ?? '');
+  console.log(
+    `  billing mode   ${applied}${mode === 'metered' ? ' (pinned for the run)' : ' (restored)'}`,
+  );
+  return applied;
+}
+
+/**
+ * Best-effort removal of the meetings THIS run created (Start class creates a
+ * real `BbbMeeting` per attempt). Without it the validation room accumulated
+ * terminal rows across runs — three orphaned "S6 Browser Validation Room"
+ * meetings had piled up by 2026-10-01 — which then dominated the tenant
+ * Meetings list on every later run.
+ */
+async function cleanupMeetingsCreatedSince(
+  cookie: string,
+  channelToken: string,
+  organizationId: string,
+  before: Set<string>,
+): Promise<void> {
+  const after = await orgMeetingIds(cookie, channelToken, organizationId).catch(
+    () => new Set<string>(),
+  );
+  const created = [...after].filter((id) => !before.has(id));
+  for (const id of created) {
+    // End first (an ACTIVE meeting is not deletable outright), then delete.
+    await gql(
+      'mutation Cleanup($id: ID!) { endBbbMeeting(id: $id) { id state } }',
+      { id },
+      cookie,
+      channelToken,
+    ).catch(() => undefined);
+    await gql(
+      'mutation Cleanup($id: ID!) { deleteBbbMeeting(id: $id) }',
+      { id },
+      cookie,
+      channelToken,
+    ).catch(() => undefined);
+  }
+  if (created.length) {
+    console.log(`\n  cleaned up ${created.length} meeting(s) created by this run`);
+  }
+}
+
 async function main(): Promise<void> {
   fs.mkdirSync(SHOT_DIR, { recursive: true });
   const base = DASHBOARD_URL.replace(/\/+$/, '');
@@ -878,6 +986,12 @@ async function main(): Promise<void> {
   console.log(`  admin API   ${ADMIN_API}`);
   console.log(`  screenshots ${SHOT_DIR}`);
   console.log(`  chrome      ${chromeBinary()}`);
+  const bbbUrl = process.env.BBB_URL ?? process.env.BBB_SERVER_URL ?? '';
+  console.log(
+    bbbUrl
+      ? `  bbb server  ${bbbUrl}`
+      : '  bbb server  NONE configured — Start class is expected to settle at "starting", never "live"',
+  );
 
   const shell = await fetch(base).then((r) => r.text());
   if (!/dashboard|root|app/i.test(shell)) {
@@ -904,7 +1018,7 @@ async function main(): Promise<void> {
   console.log(`  tenant channel ${tenantChannel.code}`);
 
   const myOrgRes = await gql(
-    'query Probe { bbbMyOrganization { id name channelId } }',
+    'query Probe { bbbMyOrganization { id name channelId billingMode } }',
     {},
     tenantSession,
     tenantChannel.token,
@@ -927,6 +1041,21 @@ async function main(): Promise<void> {
 
   const platformChannel =
     (await channelTokenFor(platformSession).catch(() => null))?.token ?? ownOrg.channelId ?? '';
+
+  // Post-S2 default: new organizations are `metered`, so the grant gate is a
+  // dead path. The seeded fixture org keeps the DDL default (`grant`), so pin
+  // it — otherwise Start class is refused by the grant gate and the harness
+  // validates a refusal no real tenant sees. Restored in the finally block.
+  const originalBillingMode = String(ownOrg.billingMode ?? 'grant');
+  await setOrganizationBilling(platformSession, tenantChannel.token, ownOrgId, 'metered');
+
+  // Snapshot-diff cleanup for the meetings Start class creates (see
+  // cleanupMeetingsCreatedSince).
+  const meetingsBefore = await orgMeetingIds(
+    tenantSession,
+    tenantChannel.token,
+    ownOrgId,
+  );
 
   const room = await ensureRoom(tenantSession, tenantChannel.token, ownOrgId);
   console.log(
@@ -951,6 +1080,21 @@ async function main(): Promise<void> {
   } finally {
     cdp?.close();
     browser.kill('SIGKILL');
+    await cleanupMeetingsCreatedSince(
+      tenantSession,
+      tenantChannel.token,
+      ownOrgId,
+      meetingsBefore,
+    );
+    // Leave the dev database exactly as found.
+    if (originalBillingMode !== 'metered') {
+      await setOrganizationBilling(
+        platformSession,
+        tenantChannel.token,
+        ownOrgId,
+        originalBillingMode as 'grant' | 'metered',
+      ).catch(() => undefined);
+    }
     if (room.created) {
       await gql(
         'mutation Cleanup($id: ID!) { deleteBbbRoom(id: $id) }',

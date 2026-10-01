@@ -2,7 +2,6 @@ import {
   Injectable,
   OnModuleInit,
   Inject,
-  forwardRef,
 } from "@nestjs/common";
 import { EntityNotFoundError } from "@vendure/core";
 import {
@@ -95,8 +94,9 @@ export interface StartRoomResult {
  * Tenant-safe sentence for metered-gate refusals (A22/S4.2).
  *
  * The worker stores a detailed `failureReason` for operators; the dashboard
- * must never see it. Suspended / spend-capped orgs both read as a paused
- * account.
+ * must never see it. A suspended org, an org at its monthly spend cap, and a
+ * legacy grant org with no provisionable grant all read as a paused account —
+ * one sentence, one code path, no pricing or plan wording.
  */
 export const START_ROOM_ACCOUNT_PAUSED_MESSAGE =
   "Your account is paused — contact support";
@@ -121,7 +121,10 @@ export class BbbMeetingService implements OnModuleInit {
     private readonly orgService: BbbOrganizationService,
     private readonly encryptionService: BbbEncryptionService,
     private readonly memberService: BbbMemberService,
-    @Inject(forwardRef(() => BbbRoomService))
+    // S7A: no longer an @Inject-wrapped circular reference. BbbRoomService
+    // injects MeetingLifecycleService (not BbbMeetingService), so this edge is
+    // one-directional and the DI cycle the old forward-ref wrapper papered over
+    // is gone.
     private readonly roomService: BbbRoomService,
     private readonly metrics: BbbMetricsService,
     private readonly grantConsumption: GrantConsumptionService,
@@ -1044,6 +1047,19 @@ export class BbbMeetingService implements OnModuleInit {
       lowered.includes("suspend") ||
       lowered.includes("spend limit") ||
       lowered.includes("spend-limit")
+    ) {
+      return START_ROOM_ACCOUNT_PAUSED_MESSAGE;
+    }
+    // Legacy grant gate (grant-selection.policy.ts PROVISIONING_NO_GRANT_ERROR
+    // and PROVISIONING_ALLOWANCE_EXHAUSTED_ERROR). Both raw strings end
+    // "Please purchase or renew a plan." — correct for the operator log, but a
+    // pricing-message leak on a tenant surface. They also must NOT fall through
+    // to the generic retry: re-clicking cannot create a capacity grant, so
+    // "try again" would be actively wrong. Grant mode is still reachable
+    // (existing rows keep the DDL default), so this is mapped, not dead code.
+    if (
+      lowered.includes("capacity grant") ||
+      lowered.includes("purchase or renew")
     ) {
       return START_ROOM_ACCOUNT_PAUSED_MESSAGE;
     }

@@ -1,4 +1,4 @@
-import { Injectable, Inject, forwardRef, OnModuleInit } from "@nestjs/common";
+import { Injectable, OnModuleInit } from "@nestjs/common";
 import {
   EventBus,
   ID,
@@ -59,7 +59,10 @@ export class BbbProvisioningWorkerService
     private readonly metrics: BbbMetricsService,
     private readonly eventBus: EventBus,
     private readonly meteringService: BbbMeteringService,
-    @Inject(forwardRef(() => BbbRoomService))
+    // S7A: no longer an @Inject-wrapped circular reference. BbbRoomService
+    // reaches the provisioning enqueue port (BbbProvisioningEnqueuer) directly
+    // and injects MeetingLifecycleService rather than this worker, so
+    // worker → room is one-directional.
     private readonly roomService: BbbRoomService,
   ) {}
 

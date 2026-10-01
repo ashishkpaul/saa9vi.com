@@ -401,6 +401,29 @@ const CREATE_BBB_ORGANIZATION = gql`
       channelId
       slug
       name
+      billingMode
+    }
+  }
+`;
+
+/**
+ * Platform-gated billing-mode switch (ADR-047). `createBbbOrganization`
+ * deliberately defaults new orgs to `metered` (D7), so this is the ONLY way to
+ * put the R4 fixture org back on the legacy grant path R4 exists to prove.
+ */
+const SET_BBB_ORGANIZATION_BILLING = gql`
+  mutation SetBbbOrganizationBilling(
+    $organizationId: ID!
+    $billingMode: String!
+    $suspended: Boolean!
+  ) {
+    setBbbOrganizationBilling(
+      organizationId: $organizationId
+      billingMode: $billingMode
+      suspended: $suspended
+    ) {
+      id
+      billingMode
     }
   }
 `;
@@ -671,7 +694,30 @@ async function createOrganization(
     },
   });
   if (!org.createBbbOrganization?.id) fail('createBbbOrganization', org);
-  return { id: decode(org.createBbbOrganization.id), channelId };
+  const organizationId = org.createBbbOrganization.id;
+
+  // R4 IS the legacy grant path evidence: order-grant selection at provisioning
+  // (R4-04), immutable grant linkage on the ledger (R4-08), consumption
+  // accounting + replay idempotency (R4-09), and cross-tenant grant isolation
+  // (R4-10). ADR-047 / D7 makes `createBbbOrganization` return a `metered` org
+  // by design (and `create()` is the single place that does it), so a
+  // freshly-created fixture org has NO capacity grant and R4-04/08/09/10 were
+  // asserting a grant binding against an org the grant path never touches.
+  // Pin the fixture org to `grant` explicitly so the path under test is
+  // actually the one that runs.
+  const billing: any = await adminClient.query(SET_BBB_ORGANIZATION_BILLING, {
+    organizationId,
+    billingMode: 'grant',
+    suspended: false,
+  });
+  // `adminClient.query` resolves to the UNWRAPPED `data` payload (see the
+  // CREATE_BBB_ORGANIZATION call above), not to `{ data, errors }`.
+  const appliedMode = billing?.setBbbOrganizationBilling?.billingMode;
+  if (appliedMode !== 'grant') {
+    fail('setBbbOrganizationBilling(grant)', billing);
+  }
+
+  return { id: decode(organizationId), channelId };
 }
 
 /**
