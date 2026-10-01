@@ -49,8 +49,15 @@ const DASHBOARD_URL = process.env.BBB_DASHBOARD_URL ?? 'http://localhost:3000/da
 const ADMIN_API = process.env.BBB_ADMIN_API ?? 'http://localhost:3000/admin-api';
 const TENANT_USER = process.env.BBB_TENANT_USER ?? process.env.SUPERADMIN_USERNAME ?? 'superadmin';
 const TENANT_PASSWORD = process.env.BBB_TENANT_PASSWORD ?? process.env.SUPERADMIN_PASSWORD ?? 'superadmin';
-const PLATFORM_USER = process.env.BBB_PLATFORM_USER ?? TENANT_USER;
-const PLATFORM_PASSWORD = process.env.BBB_PLATFORM_PASSWORD ?? TENANT_PASSWORD;
+// The platform persona must NOT fall back to TENANT_USER: doing so silently
+// DEMOTED the platform to the tenant admin whenever only BBB_TENANT_* was set
+// (setting the tenant persona is the whole point of the split-persona run).
+// The demoted run then reported `platform orgs 0 total` (the tenant admin is
+// channel-scoped) and died at `setBbbOrganizationBilling — not authorized`
+// (platform-gated), i.e. the split-persona run could never start. Both
+// personas now default to the superadmin credentials independently.
+const PLATFORM_USER = process.env.BBB_PLATFORM_USER ?? process.env.SUPERADMIN_USERNAME ?? 'superadmin';
+const PLATFORM_PASSWORD = process.env.BBB_PLATFORM_PASSWORD ?? process.env.SUPERADMIN_PASSWORD ?? 'superadmin';
 const OTHER_ORG_ID = process.env.BBB_OTHER_ORG_ID ?? '';
 const START_CLASS = process.env.BBB_BROWSER_START_CLASS !== '0';
 const SHOT_DIR = process.env.BBB_BROWSER_SHOTS ?? '/tmp/bbb-s6-browser';

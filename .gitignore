@@ -50,6 +50,11 @@ changes.patch
 # Generated development email mailbox output
 /static/email/test-emails/
 
+# Generated asset pipeline output (source uploads, derived previews, cache).
+# Runtime artifacts of the AssetServerProvider/ImageStrategy, never fixtures —
+# they appear as untracked churn after any local upload or dashboard session.
+/static/assets/**
+
 # Redundant copies of the E2E fixture-layer sources (canonical copies: scripts/e2e/)
 reference/files/
 
