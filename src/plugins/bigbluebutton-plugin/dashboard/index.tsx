@@ -8,9 +8,11 @@ import {
     BuildingIcon,
     ServerIcon,
     ClipboardCheckIcon,
+    LayoutDashboardIcon,
 } from 'lucide-react';
 import { defineDashboardExtension } from '@vendure/dashboard';
 
+import { DashboardOverview } from './routes/dashboard';
 import { ServersList } from './routes/servers';
 import { OrganizationsList } from './routes/organizations';
 import { RoomsList, roomDetail } from './routes/rooms';
@@ -25,13 +27,13 @@ import { TrialRegistrationsList } from './routes/trials/TrialRegistrationsList';
 import { SessionsList } from './routes/sessions/SessionsList';
 import { sessionDetail } from './routes/sessions/SessionDetail';
 
-// ─── S5 (Phase 6 lean) — two-section IA ─────────────────────────────────────
+// ─── S5 (Phase 6 lean) + S6 (UX completion) — two-section IA ────────────────
 //
-// Tenant section (`bbb`) — Rooms, Meetings, People, Billing: what a tenant admin
-// actually uses. Tenant documents carry no plumbing (A11: no grantId, serverId,
-// currentMeetingId, retryCount or provisioning states) and no org picker — the
-// organization is resolved server-side from the active channel (INV-001), so
-// the channel switcher is the only org selector.
+// Tenant section (`bbb`) — Dashboard, Rooms, Meetings, People, Billing: exactly
+// the five items a tenant admin uses. Tenant documents carry no plumbing (A11:
+// no grantId, serverId, currentMeetingId, retryCount or provisioning states) and
+// no org picker — the organization is resolved server-side from the active
+// channel (INV-001), so the channel switcher is the only org selector.
 //
 // Platform section (`bbb-platform`) — Organizations, Servers, Capacity (the old
 // PlansList, renamed: "Capacity Grants" is A11 vocabulary), Live Meetings (the
@@ -66,6 +68,23 @@ export default defineDashboardExtension({
     ],
     routes: [
         // ─── Tenant ──────────────────────────────────────────────────────────
+        {
+            // The 5th locked tenant item (S6): a landing view over the tenant's
+            // own data — live rooms, the month summary and upcoming sessions.
+            // Aggregates existing queries only; legacy null-room sessions
+            // surface here because no room screen can own them.
+            path: '/bbb/dashboard',
+            component: () => <DashboardOverview />,
+            navMenuItem: {
+                sectionId: 'bbb',
+                title: 'Dashboard',
+                icon: LayoutDashboardIcon,
+                id: 'bbb-dashboard',
+                url: '/bbb/dashboard',
+                order: 0,
+                requiresPermission: ['BBBAdmin', 'BBBManageRooms'],
+            },
+        },
         {
             path: '/bbb/rooms',
             component: () => <RoomsList />,

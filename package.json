@@ -42,6 +42,7 @@
     "test:dashboard-contract": "vitest run --config vitest.config.mts src/plugins/subscription/__tests__/dashboard-graphql-contract.spec.ts",
     "test:e2e:fixtures": "ts-node -P tsconfig.e2e.json scripts/e2e/verify.ts",
     "test:e2e:fixtures:seed": "ts-node -P tsconfig.e2e.json scripts/e2e/seed-fixtures.ts",
+    "verify:bbb-dashboard": "ts-node -P tsconfig.e2e.json scripts/e2e/bbb-dashboard-browser.ts",
     "typecheck:e2e": "tsc -p tsconfig.e2e.json --noEmit --strict"
   },
   "dependencies": {
