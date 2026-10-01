@@ -54,7 +54,7 @@ import { BbbCapacityGrant } from '../entities/bbb-capacity-grant.entity';
 import { BbbUsageLedger } from '../entities/bbb-usage-ledger.entity';
 import { BbbScheduledSession } from '../entities/bbb-scheduled-session.entity';
 import { BbbReconciliationService } from '../services/bbb-reconciliation.service';
-import { BbbMeetingService } from '../services/bbb-meeting.service';
+import { MeetingLifecycleService } from '../services/bbb-meeting-lifecycle.service';
 import { MEETING_STATE } from '../constants';
 
 registerInitializer('postgres', new SchemaPostgresInitializer());
@@ -109,7 +109,7 @@ describe('Gate 3 — usage ledger billing invariants', () => {
   let ctx: any;
   let connection: TransactionalConnection;
   let recon: BbbReconciliationService;
-  let meetingService: BbbMeetingService;
+  let lifecycleService: MeetingLifecycleService;
   let org: BbbOrganization;
   let orgB: BbbOrganization;
 
@@ -132,7 +132,7 @@ describe('Gate 3 — usage ledger billing invariants', () => {
       ctx = await getSuperadminContext(server.app);
       connection = server.app.get(TransactionalConnection);
       recon = server.app.get(BbbReconciliationService);
-      meetingService = server.app.get(BbbMeetingService);
+      lifecycleService = server.app.get(MeetingLifecycleService);
 
       const orgRepo = connection.getRepository(ctx, BbbOrganization);
       org = await orgRepo.save(
@@ -307,7 +307,7 @@ describe('Gate 3 — usage ledger billing invariants', () => {
         withSession: true,
       });
 
-      const completed = await meetingService.completeMeetingLifecycle(
+      const completed = await lifecycleService.completeMeetingLifecycle(
         ctx,
         meeting.id as string,
         { source: 'webhook' },
@@ -340,13 +340,13 @@ describe('Gate 3 — usage ledger billing invariants', () => {
       const grant = await freshGrant(org);
       const meeting = await makeActiveMeeting({ grant, minutesAgo: 5, org });
 
-      await meetingService.completeMeetingLifecycle(ctx, meeting.id as string, {
+      await lifecycleService.completeMeetingLifecycle(ctx, meeting.id as string, {
         source: 'webhook',
       });
       const grantAfterFirst = await reloadGrant(grant.id as string);
 
       // Duplicate delivery of the same logical completion.
-      const again = await meetingService.completeMeetingLifecycle(
+      const again = await lifecycleService.completeMeetingLifecycle(
         ctx,
         meeting.id as string,
         { source: 'webhook' },

@@ -1,7 +1,7 @@
 /**
  * S7A (Phase 7.3) — lifecycle characterization tests.
  *
- * Pins the observable behavior of `BbbMeetingService.completeMeetingLifecycle()`
+ * Pins the observable behavior of `MeetingLifecycleService.completeMeetingLifecycle()`
  * BEFORE it is mechanically relocated to `MeetingLifecycleService` (Phase 7
  * commit 4), so the extraction can be proven behavior-preserving:
  *
@@ -55,7 +55,7 @@ import { TenantPlugin } from '../../tenant-plugin/tenant-plugin.plugin';
 import { BigBlueButtonPlugin } from '../bigbluebutton.plugin';
 import { SchemaPostgresInitializer } from '../../tenant-plugin/e2e/schema-postgres-initializer';
 import { BbbApiService } from '../services/bbb-api.service';
-import { BbbMeetingService } from '../services/bbb-meeting.service';
+import { MeetingLifecycleService } from '../services/bbb-meeting-lifecycle.service';
 import { BbbRoomService } from '../services/bbb-room.service';
 import { BbbMeeting } from '../entities/bbb-meeting.entity';
 import { BbbRoom } from '../entities/bbb-room.entity';
@@ -120,7 +120,7 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
   let ctx: any;
   let connection: TransactionalConnection;
   let eventBus: EventBus;
-  let meetingService: BbbMeetingService;
+  let lifecycleService: MeetingLifecycleService;
   let roomService: BbbRoomService;
   let grantOrg: BbbOrganization;
   let meteredOrg: BbbOrganization;
@@ -150,7 +150,7 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
       ctx = await getSuperadminContext(server.app);
       connection = server.app.get(TransactionalConnection);
       eventBus = server.app.get(EventBus);
-      meetingService = server.app.get(BbbMeetingService);
+      lifecycleService = server.app.get(MeetingLifecycleService);
       roomService = server.app.get(BbbRoomService);
 
       subCompleted = eventBus
@@ -351,7 +351,7 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
       });
       const id = String(meeting.id);
 
-      await meetingService.completeMeetingLifecycle(ctx, meeting.id, {
+      await lifecycleService.completeMeetingLifecycle(ctx, meeting.id, {
         source: 'manual',
       });
 
@@ -375,7 +375,7 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
 
       // Second completion — already Completed → no transition, no billing,
       // no event.
-      await meetingService.completeMeetingLifecycle(ctx, meeting.id, {
+      await lifecycleService.completeMeetingLifecycle(ctx, meeting.id, {
         source: 'manual',
       });
 
@@ -396,7 +396,7 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
         grantId: String(grant.id),
       });
 
-      await meetingService.completeMeetingLifecycle(ctx, meeting.id, {
+      await lifecycleService.completeMeetingLifecycle(ctx, meeting.id, {
         source: 'manual',
       });
 
@@ -419,7 +419,7 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
       await addSample(id, new Date(Date.now() - 4 * 60_000), 3);
       await addSample(id, new Date(Date.now() - 3 * 60_000), 3);
 
-      await meetingService.completeMeetingLifecycle(ctx, meeting.id, {
+      await lifecycleService.completeMeetingLifecycle(ctx, meeting.id, {
         source: 'manual',
       });
 
@@ -487,7 +487,7 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
         expect(String(event.organizationId)).toBe(String(grantOrg.id));
       });
 
-      await meetingService.completeMeetingLifecycle(ctx, meeting.id, {
+      await lifecycleService.completeMeetingLifecycle(ctx, meeting.id, {
         source: 'manual',
       });
       await observed;

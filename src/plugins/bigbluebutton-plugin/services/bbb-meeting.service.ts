@@ -9,7 +9,6 @@ import {
   Administrator,
   ConfigService,
   Customer,
-  EventBus,
   ForbiddenError,
   ID,
   Logger,
@@ -19,7 +18,6 @@ import {
 import { BbbRoomAccessService } from "./room-access.service";
 import { BbbProvisioningEnqueuer, BBB_PROVISIONING_ENQUEUER } from "./bbb-provisioning-enqueuer";
 import * as crypto from "crypto";
-import { EntityManager } from "typeorm";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
@@ -36,6 +34,7 @@ import { BbbMemberService } from "./bbb-member.service";
 import { BbbRoomService } from "./bbb-room.service";
 import { BbbMetricsService } from "./bbb-metrics.service";
 import { GrantConsumptionService } from "./bbb-grant-consumption.service";
+import { MeetingLifecycleService } from "./bbb-meeting-lifecycle.service";
 import { BbbEntitlementService } from "./bbb-entitlement.service";
 import { BbbChannelAccessService } from "./bbb-channel-access.service";
 import { BbbMeteringService } from "./bbb-metering.service";
@@ -47,7 +46,6 @@ import {
 import { SessionAttendanceService } from "./session-attendance.service";
 import {
   MeetingProvisionedEvent,
-  MeetingCompletedEvent,
   MeetingFailedEvent,
 } from "../events/bbb-events";
 import {
@@ -68,16 +66,6 @@ export interface CreateMeetingInput {
   maxParticipants?: number;
   welcomeMessage?: string;
   pluginManifests?: Array<{ url: string }>;
-}
-
-interface CompleteMeetingLifecycleOptions {
-  source:
-    | "webhook"
-    | "end-meeting"
-    | "reconciliation"
-    | "stale-active-runtime"
-    | "manual";
-  entityManager?: EntityManager;
 }
 
 /**
@@ -137,7 +125,7 @@ export class BbbMeetingService implements OnModuleInit {
     private readonly roomService: BbbRoomService,
     private readonly metrics: BbbMetricsService,
     private readonly grantConsumption: GrantConsumptionService,
-    private readonly eventBus: EventBus,
+    private readonly lifecycleService: MeetingLifecycleService,
     private readonly entitlementService: BbbEntitlementService,
     private readonly roomAccessService: BbbRoomAccessService,
     private readonly channelAccess: BbbChannelAccessService,
@@ -313,156 +301,6 @@ export class BbbMeetingService implements OnModuleInit {
       loggerCtx,
     );
     return saved;
-  }
-
-  // ─── Shared Lifecycle Completion ─────────────────────────────────────────────
-
-  private lifecyclePrefix(
-    roomId: string | null | undefined,
-    meetingId: ID | string,
-  ) {
-    return `[Room ${roomId ?? "-"}][Meeting ${meetingId}][Lifecycle]`;
-  }
-
-  async completeMeetingLifecycle(
-    ctx: RequestContext,
-    meetingIdOrMeeting: ID | BbbMeeting,
-    options: CompleteMeetingLifecycleOptions,
-  ): Promise<BbbMeeting> {
-    const meetingId =
-      typeof meetingIdOrMeeting === "object"
-        ? (meetingIdOrMeeting.id as string)
-        : (meetingIdOrMeeting as string);
-
-    Logger.info(
-      `[Lifecycle] completing meetingId=${meetingId} source=${options.source} timestamp=${new Date().toISOString()}`,
-      loggerCtx,
-    );
-
-    const run = async (manager: EntityManager) => {
-      // A13 fix: load WITH the organization — the completion event below
-      // previously carried `meeting.organization?.id` from a relation-less
-      // load, which was always `undefined` on this path.
-      //
-      // The pessimistic lock is scoped to `bbb_meeting` (`FOR UPDATE OF
-      // "meeting"`). A relation-less `findOne({ lock })` cannot simply gain
-      // `relations: ["organization"]`: the resulting outer join makes Postgres
-      // reject the lock outright ("FOR UPDATE cannot be applied to the nullable
-      // side of an outer join"). Neither fact is optional — the meeting row is
-      // the transaction's serialization point and the organization's
-      // `billingMode` decides which billing path runs — so the lock names its
-      // table instead of being dropped.
-      const meeting = await manager
-        .getRepository(BbbMeeting)
-        .createQueryBuilder("meeting")
-        .leftJoinAndSelect("meeting.organization", "organization")
-        .where("meeting.id = :meetingId", { meetingId })
-        .setLock("pessimistic_write", undefined, ["meeting"])
-        .getOne();
-
-      if (!meeting) {
-        throw new Error(`Meeting ${meetingId} not found`);
-      }
-
-      const prefix = this.lifecyclePrefix(meeting.roomId, meeting.id);
-
-      if (meeting.state === MEETING_STATE.COMPLETED) {
-        this.metrics.recordDuplicateCompletionPrevented();
-        Logger.debug(
-          `${prefix} completion skipped (${options.source}): already Completed`,
-          loggerCtx,
-        );
-        return { meeting, transitioned: false };
-      }
-
-      if (meeting.state !== MEETING_STATE.ACTIVE) {
-        Logger.debug(
-          `${prefix} completion skipped (${options.source}): current state ${meeting.state}`,
-          loggerCtx,
-        );
-        return { meeting, transitioned: false };
-      }
-
-      const previousState = meeting.state;
-      meeting.state = MEETING_STATE.COMPLETED;
-      meeting.completedAt = meeting.completedAt ?? new Date();
-      const completed = await manager.save(BbbMeeting, meeting);
-
-      if (completed.roomId) {
-        await manager
-          .getRepository(BbbRoom)
-          .update(completed.roomId as string, {
-            state: "Idle",
-            currentMeetingId: null,
-            lastRuntimeValidatedAt: null,
-          });
-      }
-
-      Logger.info(`${prefix} completed via ${options.source}`, loggerCtx);
-
-      // Structured lifecycle log
-      Logger.info(
-        JSON.stringify({
-          event: "meeting-lifecycle-completed",
-          meetingId: completed.id,
-          roomId: completed.roomId,
-          source: options.source,
-          previousState,
-          nextState: MEETING_STATE.COMPLETED,
-          grantId: completed.grantId,
-        }),
-        loggerCtx,
-      );
-
-      return { meeting: completed, transitioned: true };
-    };
-
-    const { meeting, transitioned } = options.entityManager
-      ? await run(options.entityManager)
-      : await this.connection.rawConnection.transaction(run);
-
-    if (!transitioned) {
-      return meeting;
-    }
-
-    if (options.source === "webhook") {
-      this.metrics.recordWebhookCompletion();
-    }
-
-    try {
-      // Metered orgs freeze samples into BbbMeteredUsage; grant orgs keep the
-      // append-only ledger path untouched (INV-028).
-      if (isMeteredOrganization(meeting.organization)) {
-        await this.meteringService.billMeteredMeeting(ctx, meetingId as string);
-      } else {
-        await this.grantConsumption.consumeGrantHours(ctx, meeting);
-      }
-      this.metrics.recordBillingSuccess();
-      // Causal order (documented): the meeting terminal fact is established,
-      // billing is performed synchronously, and MeetingCompletedEvent is
-      // published only after billing succeeds — listeners can assume the
-      // ledger fact exists. If billing fails, reconciliation
-      // (reconcilePendingBilling) replays it; the event is not published for
-      // a failed-billing completion.
-      this.eventBus.publish(
-        new MeetingCompletedEvent(
-          ctx,
-          meeting.id as string,
-          meeting.roomId ?? null,
-          meeting.organization?.id as string,
-          options.source,
-          0,
-        ),
-      );
-    } catch (err) {
-      this.metrics.recordBillingFailed();
-      Logger.error(
-        `${this.lifecyclePrefix(meeting.roomId, meeting.id)} billing failed after ${options.source}: ${(err as Error).message}. Will retry via reconciliation.`,
-        loggerCtx,
-      );
-    }
-
-    return meeting;
   }
 
   // ─── Dynamic Join URL Generation ────────────────────────────────────────────
@@ -707,46 +545,6 @@ export class BbbMeetingService implements OnModuleInit {
 
   // ─── End Meeting (with billing) ─────────────────────────────────────────────
 
-  /**
-   * Transition a meeting to STALE state when it is permanently unreachable on BBB.
-   * STALE is terminal — no further transitions. No BbbUsageLedger row is written.
-   */
-  async markMeetingStale(
-    ctx: RequestContext,
-    meeting: BbbMeeting,
-    reason: string,
-  ): Promise<BbbMeeting> {
-    Logger.warn(
-      `[STALE] Meeting ${meeting.id} marked as Stale: ${reason}`,
-      loggerCtx,
-    );
-
-    this.assertTransitionAllowed(meeting.state, MEETING_STATE.STALE);
-    meeting.state = MEETING_STATE.STALE;
-    meeting.failureReason = reason;
-
-    // Do NOT set provisionedAt / completedAt — those are for real lifecycle transitions
-    const saved = await this.connection
-      .getRepository(ctx, BbbMeeting)
-      .save(meeting);
-
-    // Structured lifecycle log
-    Logger.info(
-      JSON.stringify({
-        event: "meeting-stale-detected",
-        meetingId: meeting.id,
-        roomId: meeting.roomId,
-        organizationId: meeting.organization?.id as string,
-        previousState: meeting.state,
-        reason,
-        grantId: meeting.grantId,
-      }),
-      loggerCtx,
-    );
-
-    return saved;
-  }
-
   async endMeeting(ctx: RequestContext, meetingId: ID): Promise<BbbMeeting> {
     await this.channelAccess.assertMeetingAccess(ctx, meetingId);
     const meeting = await this.findByIdWithSecrets(ctx, meetingId);
@@ -785,7 +583,7 @@ export class BbbMeetingService implements OnModuleInit {
       }
     }
 
-    return this.completeMeetingLifecycle(ctx, meeting, {
+    return this.lifecycleService.completeMeetingLifecycle(ctx, meeting, {
       source: "end-meeting",
     });
   }
@@ -970,7 +768,7 @@ export class BbbMeetingService implements OnModuleInit {
           );
 
           try {
-            await this.completeMeetingLifecycle(ctx, result.currentMeetingId, {
+            await this.lifecycleService.completeMeetingLifecycle(ctx, result.currentMeetingId, {
               source: "stale-active-runtime",
             });
           } catch (completeErr) {
@@ -1124,7 +922,7 @@ export class BbbMeetingService implements OnModuleInit {
             loggerCtx,
           );
           try {
-            await this.completeMeetingLifecycle(
+            await this.lifecycleService.completeMeetingLifecycle(
               ctx,
               result.currentMeetingId,
               { source: "stale-active-runtime" },
@@ -1402,7 +1200,7 @@ export class BbbMeetingService implements OnModuleInit {
 
     switch (eventType) {
       case BbbMeetingService.BBB_EVENTS.MEETING_ENDED:
-        await this.completeMeetingLifecycle(ctx, meeting, {
+        await this.lifecycleService.completeMeetingLifecycle(ctx, meeting, {
           source: "webhook",
         });
         await this.updateTrialAttendanceForMeeting(ctx, meeting, payload);

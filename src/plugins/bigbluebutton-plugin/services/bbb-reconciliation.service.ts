@@ -1,4 +1,4 @@
-import { Inject, Injectable, forwardRef } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import {
   EventBus,
   Logger,
@@ -13,7 +13,7 @@ import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbServerService } from "./bbb-server.service";
 import { BbbApiService } from "./bbb-api.service";
 import { GrantConsumptionService } from "./bbb-grant-consumption.service";
-import { BbbMeetingService } from "./bbb-meeting.service";
+import { MeetingLifecycleService } from "./bbb-meeting-lifecycle.service";
 import { BbbMeteringService } from "./bbb-metering.service";
 import {
   CapacityExhaustedEvent,
@@ -32,8 +32,7 @@ export class BbbReconciliationService {
     private readonly ctxService: RequestContextService,
     private readonly serverService: BbbServerService,
     private readonly bbbApiService: BbbApiService,
-    @Inject(forwardRef(() => BbbMeetingService))
-    private readonly meetingService: BbbMeetingService,
+    private readonly lifecycleService: MeetingLifecycleService,
     private readonly meteringService: BbbMeteringService,
     private readonly eventBus: EventBus,
     private readonly grantConsumption: GrantConsumptionService,
@@ -110,7 +109,7 @@ export class BbbReconciliationService {
             lastReconciledAt: new Date(),
             reconciliationAttemptCount: (meeting.reconciliationAttemptCount ?? 0) + 1,
           });
-        await this.meetingService.completeMeetingLifecycle(ctx, meeting.id, {
+        await this.lifecycleService.completeMeetingLifecycle(ctx, meeting.id, {
           source: "reconciliation",
         });
         reconciled++;
@@ -154,7 +153,7 @@ export class BbbReconciliationService {
       if (info === null) {
         // Meeting is permanently unreachable on BBB — mark as STALE instead
         // of completing, so no BbbUsageLedger is written.
-        await this.meetingService.markMeetingStale(
+        await this.lifecycleService.markMeetingStale(
           ctx,
           meeting,
           "BBB getMeetingInfo returned null — meeting destroyed or expired",

@@ -86,6 +86,7 @@ import { BbbScheduledSession } from '../entities/bbb-scheduled-session.entity';
 import { BbbServer } from '../entities/bbb-server.entity';
 import { BbbProvisioningWorkerService } from '../services/bbb-provisioning-worker.service';
 import { BbbMeetingService } from '../services/bbb-meeting.service';
+import { MeetingLifecycleService } from '../services/bbb-meeting-lifecycle.service';
 import { BbbApiService } from '../services/bbb-api.service';
 import { BbbReconciliationService } from '../services/bbb-reconciliation.service';
 import { BbbEntitlementService } from '../services/bbb-entitlement.service';
@@ -1371,12 +1372,12 @@ describe('Slice 10 — R4 runtime lifecycle evidence', () => {
     // ═══ R4-08 — usage ledger ══════════════════════════════════════════════
     it('R4-08: completion writes exactly ONE immutable usage-ledger fact bound to the "order" grant', async () => {
       const ctx = await getSuperadminContext(server.app);
-      const meetingService = server.app.get(BbbMeetingService);
+      const lifecycleService = server.app.get(MeetingLifecycleService);
 
       // Service-layer fixture (§3.2 carve-out) — see backdateProvisionedAt().
       await backdateProvisionedAt(meetingId, 10);
 
-      const completed = await meetingService.completeMeetingLifecycle(
+      const completed = await lifecycleService.completeMeetingLifecycle(
         ctx,
         meetingId,
         { source: 'manual' },
@@ -1427,14 +1428,14 @@ describe('Slice 10 — R4 runtime lifecycle evidence', () => {
     // ═══ R4-09 — replay / idempotency (mandatory) ══════════════════════════
     it('R4-09: replaying the same (meetingId, grantId) never double-bills', async () => {
       const ctx = await getSuperadminContext(server.app);
-      const meetingService = server.app.get(BbbMeetingService);
+      const lifecycleService = server.app.get(MeetingLifecycleService);
       const recon = server.app.get(BbbReconciliationService);
 
       const before = (await reloadGrant(orderGrantId)).consumedMinutes;
       expect(before).toBeGreaterThan(0);
 
       // (a) SEQUENTIAL replay of the whole completion path.
-      await meetingService.completeMeetingLifecycle(ctx, meetingId, {
+      await lifecycleService.completeMeetingLifecycle(ctx, meetingId, {
         source: 'manual',
       });
       expect(await ledgerRowsFor(meetingId)).toHaveLength(1);

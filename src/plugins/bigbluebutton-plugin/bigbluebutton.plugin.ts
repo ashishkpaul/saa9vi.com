@@ -55,6 +55,7 @@ import { BbbMembershipService } from "./services/bbb-membership.service";
 import { BbbRoomAccessService } from "./services/room-access.service";
 import { GrantReaderService } from "./services/grant-reader.service";
 import { GrantConsumptionService } from "./services/bbb-grant-consumption.service";
+import { MeetingLifecycleService } from "./services/bbb-meeting-lifecycle.service";
 import { BbbDailyAllowanceService } from "./services/bbb-daily-allowance.service";
 import { BbbMeteringService } from "./services/bbb-metering.service";
 import { BbbBillingService } from "./services/bbb-billing.service";
@@ -160,6 +161,11 @@ import {
     // path) and BbbReconciliationService (recovery loop) both depend on this
     // instead of on each other.
     GrantConsumptionService,
+    // S7A (Phase 7.4): the shared meeting lifecycle boundary. BbbRoomService
+    // (runtime staleness) and BbbReconciliationService (force-complete /
+    // stale detection) depend on this instead of on BbbMeetingService, which
+    // removes the meeting <-> room import cycle.
+    MeetingLifecycleService,
     // Slice 6 — the single writer of daily live-allowance grants (ADR-045 /
     // INV-026). Provider-free plans get a 60-minute grant per server day; every
     // consumer of "today's allowance" reads it back from BbbCapacityGrant, so

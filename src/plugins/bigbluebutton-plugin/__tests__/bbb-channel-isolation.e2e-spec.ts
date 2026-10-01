@@ -93,6 +93,7 @@ import { BbbOrganizationMembership } from '../entities/bbb-organization-membersh
 import { BbbEncryptionService } from '../services/bbb-encryption.service';
 import { MeetingCompletedEvent } from '../events/bbb-events';
 import { BbbMeetingService } from '../services/bbb-meeting.service';
+import { MeetingLifecycleService } from '../services/bbb-meeting-lifecycle.service';
 import { TenantRegisteredEvent } from '../../tenant-plugin/events/tenant-events';
 import {
   DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR,
@@ -1114,14 +1115,14 @@ describe('BBB Channel Isolation (Phase A)', () => {
     });
 
     it('A13 regression: MeetingCompletedEvent carries the organization id (BUG-048)', async () => {
-      const meetingService = server.app.get(BbbMeetingService);
+      const lifecycleService = server.app.get(MeetingLifecycleService);
       const events: MeetingCompletedEvent[] = [];
       const sub = server.app
         .get(EventBus)
         .ofType(MeetingCompletedEvent)
         .subscribe(e => events.push(e));
       try {
-        await meetingService.completeMeetingLifecycle(
+        await lifecycleService.completeMeetingLifecycle(
           superCtx,
           meetingA.id as string,
           { source: 'manual' },

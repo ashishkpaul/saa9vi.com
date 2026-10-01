@@ -1,4 +1,4 @@
-import { Inject, Injectable, forwardRef } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import {
   ID,
   Logger,
@@ -23,7 +23,7 @@ import { BbbServerService } from "./bbb-server.service";
 import { BbbApiService } from "./bbb-api.service";
 import { BbbMetricsService } from "./bbb-metrics.service";
 import { BbbChannelAccessService } from "./bbb-channel-access.service";
-import { BbbMeetingService } from "./bbb-meeting.service";
+import { MeetingLifecycleService } from "./bbb-meeting-lifecycle.service";
 import { RoomActivatedEvent } from "../events/bbb-events";
 import { EventBus } from "@vendure/core";
 import type { BigBlueButtonPluginOptions } from "../types";
@@ -67,8 +67,7 @@ export class BbbRoomService {
     private readonly eventBus: EventBus,
     private readonly channelAccess: BbbChannelAccessService,
     private readonly capacityPolicyService: BbbPlatformCapacityPolicyService,
-    @Inject(forwardRef(() => BbbMeetingService))
-    private readonly meetingService: BbbMeetingService,
+    private readonly lifecycleService: MeetingLifecycleService,
     @Inject(BBB_PLUGIN_OPTIONS)
     private readonly options: BigBlueButtonPluginOptions,
   ) {}
@@ -597,7 +596,7 @@ export class BbbRoomService {
       // Wrapping it in another transaction would create a nested transaction
       // anti-pattern that TypeORM handles poorly (the inner transaction gets
       // a separate connection from the pool, breaking isolation).
-      await this.meetingService.completeMeetingLifecycle(
+      await this.lifecycleService.completeMeetingLifecycle(
         ctx,
         existingMeeting.id,
         {
