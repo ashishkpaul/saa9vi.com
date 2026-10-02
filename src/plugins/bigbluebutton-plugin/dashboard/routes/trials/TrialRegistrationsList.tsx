@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, Badge, Button, Card, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
+import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@vendure/dashboard';
 import { toast } from 'sonner';
 import { useState } from 'react';
 import { graphql } from '@/gql';
@@ -29,6 +29,21 @@ const CONVERT_TO_ENROLLMENT = graphql(`
       resourceId
       validFrom
       validUntil
+    }
+  }
+`);
+
+// Rooms of the caller's OWN organization (resolved server-side from the
+// channel), so the conversion dialog offers only ids the server will accept —
+// replacing the old free-text window.prompt() room id (production-readiness
+// item 2, UX half).
+const GET_ROOMS = graphql(`
+  query GetBbbTrialConvertRooms($organizationId: ID!) {
+    bbbRooms(organizationId: $organizationId) {
+      items {
+        id
+        name
+      }
     }
   }
 `);
@@ -79,22 +94,53 @@ export function TrialRegistrationsList() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['trialRegistrations'] });
       toast.success('Trial converted to learner successfully');
+      setConvertTarget(null);
+      setTargetRoomId('');
+      setAccessDaysInput('');
     },
     onError: (err: Error) => toast.error('Conversion failed', { description: err.message }),
   });
 
-  function handleConvert(registrationId: string) {
-    const targetRoomId = window.prompt('Enter the Room ID to enroll this learner into:');
-    if (!targetRoomId) return;
+  // Dialog state replaces the two window.prompt() calls (production-readiness
+  // item 2): a room Select fed by the typed bbbRooms query (only this org's
+  // rooms are offerable) + a validated numeric access-days input.
+  const [convertTarget, setConvertTarget] = useState<string | null>(null);
+  const [targetRoomId, setTargetRoomId] = useState('');
+  const [accessDaysInput, setAccessDaysInput] = useState('');
 
-    const accessDaysInput = window.prompt('Access days (optional, leave blank for unlimited):');
-    const accessDays = accessDaysInput ? Number(accessDaysInput) : undefined;
-    if (accessDaysInput && (!Number.isFinite(accessDays) || accessDays <= 0)) {
+  const roomsQuery = useQuery({
+    queryKey: ['trialConvertRooms', organizationId],
+    queryFn: () => api.query(GET_ROOMS, { organizationId }),
+    enabled: !!organizationId && convertTarget !== null,
+  });
+  const rooms = roomsQuery.data?.bbbRooms.items ?? [];
+
+  const accessDaysValid =
+    accessDaysInput.trim() === '' ||
+    (Number.isFinite(Number(accessDaysInput)) && Number(accessDaysInput) > 0);
+
+  function openConvert(registrationId: string) {
+    setConvertTarget(registrationId);
+    setTargetRoomId('');
+    setAccessDaysInput('');
+  }
+
+  function handleConvertConfirm() {
+    if (!convertTarget) return;
+    if (!targetRoomId) {
+      toast.error('Room required', { description: 'Select a room to enroll this learner into.' });
+      return;
+    }
+    if (!accessDaysValid) {
       toast.error('Invalid access days', { description: 'Please enter a positive number of days, or leave it blank.' });
       return;
     }
-
-    convertMutation.mutate({ registrationId, roomId: targetRoomId, accessDays });
+    const trimmed = accessDaysInput.trim();
+    convertMutation.mutate({
+      registrationId: convertTarget,
+      roomId: targetRoomId,
+      accessDays: trimmed === '' ? undefined : Number(trimmed),
+    });
   }
 
   return (
@@ -109,6 +155,61 @@ export function TrialRegistrationsList() {
           {orgLoading ? 'Loading…' : label || 'No organization is bound to this channel'}
         </p>
       </div>
+
+      <Dialog open={convertTarget !== null} onOpenChange={(open) => { if (!open) setConvertTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Convert to learner</DialogTitle>
+            <DialogDescription>
+              Choose the room this learner should be enrolled into. Only rooms of your
+              organization are listed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="convert-room">Room</Label>
+              <Select value={targetRoomId} onValueChange={setTargetRoomId}>
+                <SelectTrigger id="convert-room">
+                  <SelectValue placeholder={roomsQuery.isLoading ? 'Loading rooms…' : 'Select a room'} />
+                </SelectTrigger>
+                <SelectContent>
+                  {rooms.map((room) => (
+                    <SelectItem key={room.id} value={room.id}>
+                      {room.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {!roomsQuery.isLoading && rooms.length === 0 && (
+                <p className="text-sm text-muted-foreground">No rooms in this organization.</p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="convert-access-days">Access days (optional — blank for unlimited)</Label>
+              <Input
+                id="convert-access-days"
+                type="number"
+                min={1}
+                value={accessDaysInput}
+                onChange={(e) => setAccessDaysInput(e.target.value)}
+                placeholder="e.g. 30"
+              />
+              {!accessDaysValid && (
+                <p className="text-sm text-destructive">Enter a positive number of days.</p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConvertTarget(null)}>Cancel</Button>
+            <Button
+              onClick={handleConvertConfirm}
+              disabled={convertMutation.isPending || !targetRoomId || !accessDaysValid}
+            >
+              {convertMutation.isPending ? 'Converting…' : 'Convert'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Card>
         {registrationsQuery.isLoading ? (
@@ -154,7 +255,7 @@ export function TrialRegistrationsList() {
                           </>
                         )}
                         {reg.status === 'ATTENDED' && (
-                          <Button size="sm" onClick={() => handleConvert(String(reg.id))} disabled={convertMutation.isPending}>
+                          <Button size="sm" onClick={() => openConvert(String(reg.id))} disabled={convertMutation.isPending}>
                             Convert to Learner
                           </Button>
                         )}

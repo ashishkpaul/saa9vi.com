@@ -268,12 +268,32 @@ apiOptions: {
       meetingIdPrefix: "bbb",
       attendeeJoinUrlTtlSeconds: 86400,
 
+      // ─── ADR-047 / Q2 metered rate (production-readiness item 1) ────────
+      // Explicit platform rate in paise per learner-hour for `metered` orgs
+      // that have no per-org rate. UNSET (dev) → the clearly-marked ₹20
+      // PLACEHOLDER still applies; non-dev boot REFUSES to start without it
+      // (assertProductionSecrets), so no production customer can ever be
+      // billed a price nobody approved.
+      defaultRatePaisePerLearnerHour:
+        process.env.BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR != null &&
+        process.env.BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR !== ""
+          ? Number(process.env.BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR)
+          : undefined,
+
       // ─── Scalability tuning from .env ──────────────────────────
       lockTtlSeconds: Number(process.env.BBB_LOCK_TTL_SECONDS ?? 30),
       lockHeartbeatIntervalMs: Number(
         process.env.BBB_LOCK_HEARTBEAT_INTERVAL_MS ?? 10000,
       ),
-      roomLockStrict: process.env.BBB_ROOM_LOCK_STRICT === "true",
+      // Production-readiness item 3: fail-CLOSED locking outside dev. An
+      // explicit BBB_ROOM_LOCK_STRICT value always wins; otherwise a non-dev
+      // deployment defaults to strict so a Redis blip can no longer let two
+      // concurrent `bbbStartRoom` calls double-provision the same room.
+      // E2E/dev never route through this file's plugin init without APP_ENV=dev.
+      roomLockStrict:
+        process.env.BBB_ROOM_LOCK_STRICT != null
+          ? process.env.BBB_ROOM_LOCK_STRICT === "true"
+          : !IS_DEV,
       provisionDebounceMs: Number(
         process.env.BBB_PROVISION_DEBOUNCE_MS ?? 15000,
       ),

@@ -54,9 +54,17 @@ export class BbbEntitlementService {
   ): Promise<BbbEntitlement> {
     // Enforce channel isolation: a non-SuperAdmin may only create an
     // entitlement for the channel they are operating under.
+    //
+    // Compare as strings: `ctx.channelId` arrives as a number under the
+    // increment id strategy (the default), while `input.channelId` comes from
+    // a varchar column (`BbbScheduledSession.channelId`, `BbbRoom`'s org) and
+    // is therefore a string. A strict `!==` compared "2" against 2 and refused
+    // every legitimate tenant-admin creation — e.g. convertTrialToEnrollment,
+    // whose only ForbiddenError source is this check. Mirrors the
+    // `String(a) !== String(b)` coercion in BbbChannelAccessService.
     if (!ctx.userHasPermissions([Permission.SuperAdmin])) {
       const channelId = ctx.channelId as string;
-      if (input.channelId && input.channelId !== channelId) {
+      if (input.channelId && String(input.channelId) !== String(channelId)) {
         throw new ForbiddenError();
       }
     }

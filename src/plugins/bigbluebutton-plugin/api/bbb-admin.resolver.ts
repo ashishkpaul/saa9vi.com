@@ -966,6 +966,12 @@ export class BbbAdminResolver {
     @Ctx() ctx: RequestContext,
     @Args("sessionId") sessionId: string,
   ): Promise<BbbTrialRegistration[]> {
+    // Channel assert (production-readiness item 2, read side): the by-org
+    // variant above derives sessions through findByOrganization (which
+    // asserts), but this variant trusts the raw sessionId — a cross-tenant
+    // registration read. assertSessionAccess throws ForbiddenError for
+    // another channel's session.
+    await this.channelAccess.assertSessionAccess(ctx, sessionId);
     const result = await this.trialRegistrationService.findAllBySession(ctx, sessionId);
     return result.items;
   }

@@ -159,7 +159,14 @@ Payments:
 
 **Rule:** The `CapacityIntelligenceService` warns operators when forecast load approaches pool capacity. It does not block meeting provisioning. Capacity is a signal for operators, not a gate for students.
 
-**Rejection criterion:** Any code path that throws an error or returns an access-denied response solely because pool capacity is high is rejected.
+**Delivery (amended 2026-10-02, production-readiness review item 6):** an `urgency: 'immediate'`
+warning must reach a channel an operator sees during an incident — not only the
+`BbbCapacityAlertLog` row. `CapacityAlertEvent` therefore requires at least one registered
+subscriber that emits the ops-alert channel (`BbbCapacityAlertListener` →
+`BbbOpsAlertService`, log + optional `OPS_ALERT_WEBHOOK_URL`), enforced structurally by
+`AdrChecker.capacityAlertHasSubscriber()` in `npm run verify:invariants`.
+
+**Rejection criterion:** Any code path that throws an error or returns an access-denied response solely because pool capacity is high is rejected. Removal or unregistration of the `CapacityAlertEvent` subscriber (reducing immediate alerts back to table-only) is also rejected.
 
 ---
 

@@ -1,9 +1,18 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { RequestContext, TransactionalConnection } from "@vendure/core";
+import {
+  ConfigService,
+  EntityNotFoundError,
+  ForbiddenError,
+  ID,
+  RequestContext,
+  TransactionalConnection,
+} from "@vendure/core";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
+import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbEntitlementService } from "./bbb-entitlement.service";
+import { BbbChannelAccessService } from "./bbb-channel-access.service";
 
 const loggerCtx = "TrialRegistrationService";
 
@@ -12,7 +21,57 @@ export class TrialRegistrationService {
   constructor(
     private readonly connection: TransactionalConnection,
     private readonly entitlementService: BbbEntitlementService,
+    private readonly channelAccess: BbbChannelAccessService,
+    private readonly configService: ConfigService,
   ) {}
+
+  /**
+   * Normalize a GraphQL-facing id (e.g. "T_7" under the e2e
+   * TestingEntityIdStrategy) to the raw PK form used by the integer id
+   * columns here (`scheduledSessionId`, `customerId`, room/registration PKs).
+   * Identity under the production AutoIncrementIdStrategy.
+   *
+   * This service used to pass GraphQL ids straight into repository lookups.
+   * That happens to work only when encoded === raw (auto-increment), so under
+   * any non-identity strategy (`TestingEntityIdStrategy`, UUID) every
+   * registration mutation missed its row. Mirrors `BbbMeetingService.toPk`
+   * and `BbbOrganizationService.toInternalId` so the three cannot drift.
+   */
+  private toPk(id: ID): string {
+    const decoded = this.configService.entityIdStrategy.decodeId(String(id));
+    return decoded === -1 ? String(id) : String(decoded);
+  }
+
+  /**
+   * Resolve the registration's owning session and assert the caller may act
+   * on it (production-readiness item 2).
+   *
+   * `BbbTrialRegistration` carries no channel column, so tenant scope is
+   * established the same way the list read already does it — through the
+   * session's organization (`BbbScheduledSessionService.findByOrganization`
+   * asserts this before any registration is ever shown). Until now only the
+   * READ path asserted; `updateStatus` and `convertToEnrollment` trusted the
+   * raw id, which made them cross-tenant writes. Fail closed when the session
+   * is missing rather than proceeding without a tenant scope.
+   */
+  private async assertRegistrationAccess(
+    ctx: RequestContext,
+    registration: BbbTrialRegistration,
+  ): Promise<BbbScheduledSession> {
+    const session = await this.connection
+      .getRepository(ctx, BbbScheduledSession)
+      .findOne({ where: { id: registration.scheduledSessionId } });
+    if (!session) {
+      // Unreachable in practice (FK is ON DELETE CASCADE), but a registration
+      // without a session has no derivable tenant — never continue blind.
+      throw new ForbiddenError();
+    }
+    await this.channelAccess.assertOrganizationAccess(
+      ctx,
+      session.organizationId,
+    );
+    return session;
+  }
 
   async findAllBySession(
     ctx: RequestContext,
@@ -21,7 +80,7 @@ export class TrialRegistrationService {
     const [items, totalItems] = await this.connection
       .getRepository(ctx, BbbTrialRegistration)
       .findAndCount({
-        where: { scheduledSessionId: sessionId },
+        where: { scheduledSessionId: this.toPk(sessionId) },
         order: { registeredAt: "DESC" },
       });
     return { items, totalItems };
@@ -35,7 +94,7 @@ export class TrialRegistrationService {
     return this.connection
       .getRepository(ctx, BbbTrialRegistration)
       .findOne({
-        where: { scheduledSessionId: sessionId, customerId },
+        where: { scheduledSessionId: this.toPk(sessionId), customerId },
       });
   }
 
@@ -56,10 +115,14 @@ export class TrialRegistrationService {
       return existing;
     }
 
+    // Normalize the GraphQL id once: the raw PK goes into the integer FK
+    // column and every repository lookup below (see `toPk`).
+    const rawSessionId = this.toPk(sessionId);
+
     // Validate the session exists and is a trial-eligible session
     const session = await this.connection
       .getRepository(ctx, BbbScheduledSession)
-      .findOne({ where: { id: sessionId } });
+      .findOne({ where: { id: rawSessionId } });
 
     if (!session) {
       throw new Error(`Scheduled session ${sessionId} not found`);
@@ -87,7 +150,7 @@ export class TrialRegistrationService {
     if (session.maxAttendees != null && session.maxAttendees > 0) {
       const registrationRepo = this.connection.getRepository(ctx, BbbTrialRegistration);
       const registrationCount = await registrationRepo.count({
-        where: { scheduledSessionId: sessionId },
+        where: { scheduledSessionId: rawSessionId },
       });
       if (registrationCount >= session.maxAttendees) {
         throw new Error(
@@ -98,7 +161,7 @@ export class TrialRegistrationService {
 
     const now = new Date();
     const registration = new BbbTrialRegistration({
-      scheduledSessionId: sessionId,
+      scheduledSessionId: rawSessionId,
       customerId,
       status: "REGISTERED",
       registeredAt: now,
@@ -114,7 +177,7 @@ export class TrialRegistrationService {
     try {
       await this.entitlementService.create(ctx, {
         type: "bbb_session",
-        resourceId: sessionId,
+        resourceId: rawSessionId,
         customerId,
         source: "trial",
         validFrom: now,
@@ -141,8 +204,11 @@ export class TrialRegistrationService {
     const registration = await this.connection.getEntityOrThrow(
       ctx,
       BbbTrialRegistration,
-      id,
+      this.toPk(id),
     );
+    // Cross-tenant write guard (production-readiness item 2): the raw id is
+    // never trusted — the caller's channel must own the registration's org.
+    await this.assertRegistrationAccess(ctx, registration);
     registration.status = status;
     if (status === "ATTENDED") {
       registration.attendedAt = new Date();
@@ -159,26 +225,44 @@ export class TrialRegistrationService {
     const registration = await this.connection.getEntityOrThrow(
       ctx,
       BbbTrialRegistration,
-      registrationId,
+      this.toPk(registrationId),
     );
+
+    // Channel assert BEFORE any mutation (production-readiness item 2): a
+    // tenant must not convert another tenant's registration, and the target
+    // room must belong to the SAME organization the registration's session
+    // owns — otherwise this mutation is a cross-tenant entitlement write.
+    // Mirrors BbbScheduledSessionService.resolveRoomIdForOrganization (D5).
+    const session = await this.assertRegistrationAccess(ctx, registration);
 
     if (registration.status !== "ATTENDED") {
       throw new Error("Only attendees can be converted to enrolled learners.");
+    }
+
+    const room = await this.connection
+      .getRepository(ctx, BbbRoom)
+      .findOne({
+        where: {
+          id: this.toPk(roomId),
+          organization: { id: session.organizationId },
+        },
+      });
+    if (!room) {
+      // EntityNotFoundError (not ForbiddenError): whether the id names another
+      // tenant's room or no room at all, the answer is "not a room of this
+      // organization" — same contract as resolveRoomIdForOrganization.
+      throw new EntityNotFoundError("BbbRoom", roomId);
     }
 
     const expiresAt = accessDays != null
       ? new Date(Date.now() + accessDays * 24 * 60 * 60 * 1000)
       : null;
 
-    const session = await this.connection
-      .getRepository(ctx, BbbScheduledSession)
-      .findOne({ where: { id: registration.scheduledSessionId } });
-
-    const channelId = (session as any)?.channelId ?? null;
+    const channelId = session.channelId ?? null;
 
     return this.entitlementService.create(ctx, {
       type: "bbb_room",
-      resourceId: roomId,
+      resourceId: String(room.id),
       customerId: registration.customerId,
       source: "trial_conversion",
       validFrom: new Date(),

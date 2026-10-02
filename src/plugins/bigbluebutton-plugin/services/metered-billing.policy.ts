@@ -148,6 +148,31 @@ function normaliseRate(rate: number | null | undefined): number | undefined {
   return rate;
 }
 
+/**
+ * Soft-ceiling approach threshold (ADR-047 decision 12): month-to-date charge
+ * at or past this fraction of `monthlySpendLimitPaise` — but still under it —
+ * triggers the operator "spend limit approaching" alert.
+ *
+ * The cap itself stays an unlocked read (decision 12: SOFT ceiling); this is
+ * the compensating control that makes the approach visible before it is hit.
+ * Integer arithmetic (`charge × 100 ≥ limit × ratioPct`) keeps the comparison
+ * exact — no float money maths.
+ */
+export const SPEND_LIMIT_APPROACH_PCT = 90;
+
+/** True when the month charge has reached `SPEND_LIMIT_APPROACH_PCT` of the
+ *  limit without yet hitting it (hitting it is the refusal path, not this). */
+export function isApproachingSpendLimit(
+  chargePaise: number,
+  limitPaise: number | null | undefined,
+): boolean {
+  if (limitPaise === null || limitPaise === undefined) return false;
+  if (!Number.isInteger(chargePaise) || chargePaise < 0) return false;
+  if (!Number.isInteger(limitPaise) || limitPaise <= 0) return false;
+  if (chargePaise >= limitPaise) return false; // at/over the limit is the gate, not the approach
+  return chargePaise * 100 >= limitPaise * SPEND_LIMIT_APPROACH_PCT;
+}
+
 /** Whole, non-negative observation counts only; anything else means "no data". */
 function normaliseCount(value: number | null | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return 0;

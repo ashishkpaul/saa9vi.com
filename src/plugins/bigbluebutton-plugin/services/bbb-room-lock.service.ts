@@ -67,8 +67,17 @@ export class BbbRoomLockService implements OnModuleInit, OnModuleDestroy {
   ) {
     this.lockTtlSeconds = options.lockTtlSeconds ?? 30;
     this.lockHeartbeatIntervalMs = options.lockHeartbeatIntervalMs ?? 10_000;
+    // Production-readiness item 3: an explicit option or BBB_ROOM_LOCK_STRICT
+    // value always wins; with neither set, strictness follows APP_ENV — a
+    // non-dev deployment fails CLOSED (a Redis blip must not let two
+    // concurrent bbbStartRoom calls double-provision a room), while dev/e2e
+    // keep the historical fail-open behaviour.
+    const envStrict = process.env.BBB_ROOM_LOCK_STRICT;
     this.strictMode =
-      options.roomLockStrict ?? process.env.BBB_ROOM_LOCK_STRICT === "true";
+      options.roomLockStrict ??
+      (envStrict != null
+        ? envStrict === "true"
+        : process.env.APP_ENV !== "dev");
 
     const host = options.redisHost ?? process.env.REDIS_HOST;
     if (!host) {

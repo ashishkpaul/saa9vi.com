@@ -23,11 +23,13 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR } from "../constants";
 import {
   computeMonthChargePaise,
+  isApproachingSpendLimit,
   isMeteredOrganization,
   learnerCountFrom,
   monthOf,
   platformDefaultRatePaisePerHour,
   resolveRatePaisePerLearnerHour,
+  SPEND_LIMIT_APPROACH_PCT,
 } from "../services/metered-billing.policy";
 
 describe("resolveRatePaisePerLearnerHour", () => {
@@ -259,5 +261,54 @@ describe("platformDefaultRatePaisePerHour (Q2 placeholder)", () => {
     expect(
       platformDefaultRatePaisePerHour({ defaultRatePaisePerLearnerHour: 12.5 }),
     ).toBe(DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR);
+  });
+});
+
+/**
+ * ADR-047 decision 12 (production-readiness item 4) — the compensating control
+ * for a SOFT monthly spend ceiling. The cap itself stays an unlocked read; this
+ * predicate decides when the compensating operator alert fires. It must be
+ * exactly the "approaching but not yet at" band, because at/over the limit is
+ * the refusal path (a different signal), and a threshold that fires at 100%
+ * would alert only at the moment provisioning is already being refused.
+ */
+describe("isApproachingSpendLimit (soft ceiling compensating control, D12)", () => {
+  it("pins the threshold at 90%", () => {
+    expect(SPEND_LIMIT_APPROACH_PCT).toBe(90);
+  });
+
+  it("is false below the threshold and true at or above it", () => {
+    expect(isApproachingSpendLimit(89_999, 100_000)).toBe(false);
+    expect(isApproachingSpendLimit(90_000, 100_000)).toBe(true); // exactly 90%
+    expect(isApproachingSpendLimit(90_001, 100_000)).toBe(true);
+  });
+
+  it("is false once the limit is reached — at/over is the refusal gate, not the approach", () => {
+    expect(isApproachingSpendLimit(100_000, 100_000)).toBe(false);
+    expect(isApproachingSpendLimit(150_000, 100_000)).toBe(false);
+  });
+
+  it("is false when no limit is configured (unmetered/uncapped)", () => {
+    expect(isApproachingSpendLimit(90_000, null)).toBe(false);
+    expect(isApproachingSpendLimit(90_000, undefined)).toBe(false);
+  });
+
+  it("is false for malformed or nonsensical inputs (never alert on bad math)", () => {
+    expect(isApproachingSpendLimit(90_000, 0)).toBe(false);
+    expect(isApproachingSpendLimit(90_000, -100_000)).toBe(false);
+    expect(isApproachingSpendLimit(90_000, 12.5)).toBe(false);
+    expect(isApproachingSpendLimit(-1, 100_000)).toBe(false);
+    expect(isApproachingSpendLimit(Number.NaN, 100_000)).toBe(false);
+    expect(isApproachingSpendLimit(90_000.5, 100_000)).toBe(false);
+  });
+
+  it("uses integer cross-multiplication — no float drift at the boundary", () => {
+    // charge × 100 vs limit × 90: with a limit of 3 paise, 3 × 90 = 270, so a
+    // charge of 3 is *at* the limit (gate) and 2 (200 < 270) is not "approaching".
+    // A naive `charge / limit >= 0.9` float compare would be the only other
+    // implementation; this pins the exact-integer semantics.
+    expect(isApproachingSpendLimit(2, 3)).toBe(false);
+    expect(isApproachingSpendLimit(10, 10)).toBe(false);
+    expect(isApproachingSpendLimit(9, 10)).toBe(true);
   });
 });

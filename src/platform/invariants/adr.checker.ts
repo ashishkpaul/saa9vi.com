@@ -15,6 +15,7 @@ export class AdrChecker implements Checker {
       this.tenantThemeInvariants(),
       this.marketplaceEntitlementInvariants(),
       this.dailyAllowanceInvariants(),
+      this.capacityAlertHasSubscriber(),
     ];
 
     const results = await Promise.all(checks);
@@ -562,6 +563,92 @@ export class AdrChecker implements Checker {
           : failures.join('; '),
       details:
         'INV-026: one writer + plural triggers, server-day disjoint window, per-key advisory lock, provider-free-only grants, unchanged read model, no pre-enqueue probe',
+    };
+  }
+
+  /**
+   * INV-012 delivery amendment (production-readiness review, critical item 6):
+   * `CapacityAlertEvent` must have a registered subscriber that reaches an
+   * operator channel — before this check existed the event was published by
+   * the 15-minute capacity task and consumed by *nobody*, so an "immediate"
+   * alert lived only in the `BbbCapacityAlertLog` table. Structural only:
+   * the listener file subscribes with `ofType(CapacityAlertEvent)`, and the
+   * plugin registers both the listener and the ops-alert service it delegates
+   * to. Runtime delivery is log-verifiable; this pins the wiring.
+   */
+  private async capacityAlertHasSubscriber(): Promise<CheckResult> {
+    const srcDir = path.join(__dirname, '../../..');
+    const failures: string[] = [];
+
+    const readOrEmpty = (relPath: string): string => {
+      try {
+        return readFileContent(path.join(srcDir, relPath));
+      } catch {
+        return '';
+      }
+    };
+
+    const listenerPath =
+      'src/plugins/bigbluebutton-plugin/listeners/bbb-capacity-alert.listener.ts';
+    const listener = readOrEmpty(listenerPath);
+    if (!listener) {
+      failures.push(`Missing capacity alert listener (${listenerPath})`);
+    } else if (!/ofType\(\s*CapacityAlertEvent\s*\)/.test(listener)) {
+      failures.push(
+        'BbbCapacityAlertListener must subscribe with ofType(CapacityAlertEvent) (INV-012 delivery)',
+      );
+    }
+
+    const plugin = readOrEmpty(
+      'src/plugins/bigbluebutton-plugin/bigbluebutton.plugin.ts',
+    );
+    if (!/BbbCapacityAlertListener/.test(plugin)) {
+      failures.push(
+        'BbbCapacityAlertListener must be registered in the plugin providers (an unregistered subscriber never runs)',
+      );
+    }
+    if (!/BbbOpsAlertService/.test(plugin)) {
+      failures.push(
+        'BbbOpsAlertService must be registered in the plugin providers (the operator alert channel)',
+      );
+    }
+
+    // The immediate path must actually notify — not just log inside the task.
+    // (The task constructs `new CapacityAlertEvent(...)` then publishes the
+    // variable, so the check looks for construction + a publish call.)
+    const task = readOrEmpty(
+      'src/plugins/bigbluebutton-plugin/jobs/bbb-capacity-alert.task.ts',
+    );
+    if (task) {
+      const constructsEvent = /new CapacityAlertEvent\s*\(/.test(task);
+      const publishesEvent =
+        /eventBus\.publish\(\s*new CapacityAlertEvent/.test(task) ||
+        (/\.publish\(\s*\w*[Aa]lert\w*\s*\)/.test(task) && constructsEvent);
+      if (!constructsEvent || !publishesEvent) {
+        failures.push(
+          'bbbCapacityAlertTask must publish CapacityAlertEvent so subscribers can deliver it',
+        );
+      }
+    }
+
+    const invariantsDoc = readOrEmpty('docs/architecture/invariants.md');
+    if (!/INV-012[\s\S]{0,600}CapacityAlertEvent/.test(invariantsDoc)) {
+      failures.push(
+        'INV-012 delivery amendment (CapacityAlertEvent subscriber) must be documented in docs/architecture/invariants.md',
+      );
+    }
+
+    return {
+      checker: this.name,
+      name: 'capacity-alert-has-subscriber',
+      passed: failures.length === 0,
+      severity: 'error',
+      message:
+        failures.length === 0
+          ? 'CapacityAlertEvent has a registered subscriber reaching the ops-alert channel (INV-012 delivery)'
+          : failures.join('; '),
+      details:
+        'INV-012 delivery: immediate capacity warnings must leave Postgres — listener subscribed, providers registered, event published, amendment documented',
     };
   }
 

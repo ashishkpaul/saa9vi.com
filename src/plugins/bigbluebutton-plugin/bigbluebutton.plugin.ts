@@ -59,6 +59,7 @@ import { MeetingLifecycleService } from "./services/bbb-meeting-lifecycle.servic
 import { BbbDailyAllowanceService } from "./services/bbb-daily-allowance.service";
 import { BbbMeteringService } from "./services/bbb-metering.service";
 import { BbbBillingService } from "./services/bbb-billing.service";
+import { BbbOpsAlertService } from "./services/bbb-ops-alert.service";
 import { bbbDailyAllowanceTask } from "./jobs/bbb-daily-allowance.task";
 import { bbbMeteringTask } from "./jobs/bbb-metering.task";
 import { bbbMeteringPruneTask } from "./jobs/bbb-metering-prune.task";
@@ -73,6 +74,7 @@ import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.liste
 import { BbbSubscriptionListener } from "./listeners/bbb-subscription.listener";
 import { BbbSessionProvisioningListener } from "./listeners/bbb-session-provisioning.listener";
 import { BbbTenantProvisioningListener } from "./listeners/bbb-tenant-provisioning.listener";
+import { BbbCapacityAlertListener } from "./listeners/bbb-capacity-alert.listener";
 import { BbbPlanCapacityReconciliationBootstrap } from "./listeners/bbb-plan-capacity-reconciliation.bootstrap";
 
 import { PlatformTracingModule } from "../../platform/tracing/platform-tracing.module";
@@ -190,6 +192,11 @@ import {
     BbbSubscriptionListener,
     BbbSessionProvisioningListener,
     BbbTenantProvisioningListener,
+    // Production-readiness items 4 + 6: the operator alert channel (log +
+    // OPS_ALERT_WEBHOOK_URL) and its CapacityAlertEvent consumer — before
+    // this, immediate capacity alerts reached only the Postgres audit table.
+    BbbOpsAlertService,
+    BbbCapacityAlertListener,
     // ADR-031 amendment (Decision 5): the third convergence trigger — repairs
     // any organisation whose plan-derived concurrentMeetingLimit cache missed an
     // event or predates plan-derived capacity.

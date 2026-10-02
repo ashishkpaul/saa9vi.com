@@ -113,6 +113,20 @@ The commercial matrix is unchanged: this ADR adds a **billing mode**, not a new 
 11. **`BbbScheduledSession` gains a nullable `roomId`** so a session can name the room it will
     teach in. Existing rows stay NULL (no backfill, no mandatory-ness in v1); session-started
     meetings propagate `roomId` to the meeting so room state, attendance and recordings joins work.
+12. **`monthlySpendLimitPaise` is a SOFT ceiling (production-readiness review, item 4 —
+    decision recorded 2026-10-02).** The limit is enforced by two unlocked reads: the
+    synchronous `meteredGateRefusage` fast path in `BbbMeetingService.startRoom` and the
+    authoritative re-check in `BbbProvisioningWorkerService.assertMeteredProvisionable`, both
+    comparing `computeMonthChargePaise(monthUsageRows(...))` against the limit. Metering
+    writes are per-minute and `BbbMeteredUsage` freezes only at meeting completion, so a burst
+    of simultaneous starts can overshoot the cap by the in-flight usage of that burst; the
+    worker re-check guarantees no *unbounded* provisioning. A hard ceiling would require a
+    synchronous reservation counter (Redis INCRBY or a pessimistic org-row lock around a
+    reservation ledger) — deliberately NOT built at launch; if a tenant's overshoot tolerance
+    changes, that is the escalation path. Compensating control (same decision): when
+    month-to-date charge crosses **90%** of the limit, an operator alert is emitted through
+    the ops-alert channel (P1-3) in addition to the `Logger.warn`, so the approach of the cap
+    is visible before it is hit.
 
 ## Consequences
 

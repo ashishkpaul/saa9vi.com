@@ -940,6 +940,8 @@ The `CapacityIntelligenceService` warns operators when forecast load approaches 
 
 **Rejection criterion:** Any code path that throws an error or returns an access-denied response solely because pool capacity is high is rejected. Capacity is a signal for operators, not a gate for students.
 
+**Delivery amendment (2026-10-02, production-readiness review item 6, P1-3):** an `urgency: 'immediate'` warning must reach a channel an operator actually sees during an incident — not only the `BbbCapacityAlertLog` row. `CapacityAlertEvent` therefore requires at least one registered subscriber that emits the ops-alert channel (`BbbCapacityAlertListener` → `BbbOpsAlertService`: `Logger.warn` always, plus an optional `OPS_ALERT_WEBHOOK_URL` POST). Until this amendment the 15-minute `bbbCapacityAlertTask` published the event and *nobody consumed it*, so an immediate alert lived only in Postgres. The wiring is enforced structurally by `AdrChecker.capacityAlertHasSubscriber()` in `npm run verify:invariants`; the canonical text lives in `docs/architecture/invariants.md` (INV-012). Removing/unregistering that subscriber (reducing immediate alerts back to table-only) is now part of the rejected set.
+
 ---
 
 ### DL-025 (Decision Log detail): Proactive Capacity Intelligence Over Reactive Throttling

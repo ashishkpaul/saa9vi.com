@@ -725,6 +725,26 @@ export class MeteredBillingChecker implements Checker {
       );
     }
 
+    // Production-readiness item 1: the placeholder must be unreachable in
+    // production — the boot guard requires the explicit rate, and
+    // vendure-config actually wires the plugin option from it. Without both,
+    // a non-dev deployment bills every metered org the unapproved ₹20
+    // placeholder (TODO(PRICE)).
+    const guardRel = "src/platform/security/require-production-secrets.ts";
+    const guardSrc = this.readOrEmpty(guardRel);
+    if (!guardSrc.includes("BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR")) {
+      failures.push(
+        `${guardRel} must require BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR in non-dev (placeholder rate must be unreachable in production)`,
+      );
+    }
+    const configRel = "src/vendure-config.ts";
+    const configSrc = this.readOrEmpty(configRel);
+    if (!/defaultRatePaisePerLearnerHour\s*:/.test(configSrc)) {
+      failures.push(
+        `${configRel} must pass defaultRatePaisePerLearnerHour into BigBlueButtonPlugin.init()`,
+      );
+    }
+
     return {
       checker: this.name,
       name: "billing-api-channel-scoped",

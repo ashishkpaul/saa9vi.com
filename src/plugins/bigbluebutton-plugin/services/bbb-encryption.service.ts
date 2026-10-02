@@ -21,18 +21,34 @@ export class BbbEncryptionService implements OnModuleInit {
 
   onModuleInit() {
     const hex = process.env.BBB_ENCRYPTION_KEY;
-    if (!hex || hex.length !== 64) {
-      Logger.warn(
-        "[BigBlueButtonPlugin] BBB_ENCRYPTION_KEY not set or invalid. " +
-          "Encryption will be unavailable until set. " +
-          "Generate with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
-        loggerCtx,
-      );
+    const valid = !!hex && hex.length === 64 && /^[0-9a-fA-F]+$/.test(hex);
+    if (valid) {
+      this.key = Buffer.from(hex!, "hex");
+      this.initialized = true;
+      Logger.info("Encryption key loaded successfully", loggerCtx);
       return;
     }
-    this.key = Buffer.from(hex, "hex");
-    this.initialized = true;
-    Logger.info("Encryption key loaded successfully", loggerCtx);
+    if (process.env.APP_ENV !== "dev") {
+      // Fail FAST in non-dev. A lazy failure is worse than no boot: the
+      // provisioning worker calls bbbApiService.createMeeting() BEFORE
+      // encrypt(), so a missing key creates the BBB-side meeting and then
+      // throws at the password encryption step — an orphaned live meeting on
+      // the BBB server plus a FAILED row locally. assertProductionSecrets()
+      // checks the same shape at the entrypoints; this is defence in depth
+      // for any other bootstrap path (and for a key rotated to garbage).
+      throw new Error(
+        "[BigBlueButtonPlugin] BBB_ENCRYPTION_KEY is missing or invalid " +
+          "(APP_ENV is not \"dev\"). Refusing to start: provisioning would " +
+          "create BBB meetings that can never be stored. Generate with: " +
+          "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
+      );
+    }
+    Logger.warn(
+      "[BigBlueButtonPlugin] BBB_ENCRYPTION_KEY not set or invalid. " +
+        "Encryption will be unavailable until set. " +
+        "Generate with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
+      loggerCtx,
+    );
   }
 
   private ensureInitialized(): void {

@@ -41,7 +41,9 @@ import {
   isMeteredOrganization,
   monthOf,
   computeMonthChargePaise,
+  isApproachingSpendLimit,
 } from "./metered-billing.policy";
+import { BbbOpsAlertService } from "./bbb-ops-alert.service";
 import { SessionAttendanceService } from "./session-attendance.service";
 import {
   MeetingProvisionedEvent,
@@ -134,6 +136,7 @@ export class BbbMeetingService implements OnModuleInit {
     private readonly channelAccess: BbbChannelAccessService,
     private readonly meteringService: BbbMeteringService,
     private readonly sessionAttendanceService: SessionAttendanceService,
+    private readonly opsAlert: BbbOpsAlertService,
     @Inject(BBB_PROVISIONING_ENQUEUER)
     private readonly provisioningEnqueuer: BbbProvisioningEnqueuer,
   ) {}
@@ -1028,9 +1031,28 @@ export class BbbMeetingService implements OnModuleInit {
       String(organization.id),
       monthOf(new Date()),
     );
-    return computeMonthChargePaise(rows) >= limit
-      ? { reason: "spend-limit" }
-      : null;
+    const monthCharge = computeMonthChargePaise(rows);
+    // Soft ceiling (ADR-047 decision 12): the cap itself stays an unlocked
+    // read; the compensating control is visibility — once month-to-date
+    // reaches 90% of the limit, an operator alert fires (deduped hourly) so
+    // the approach is seen before the refusal is hit.
+    if (isApproachingSpendLimit(monthCharge, limit)) {
+      this.opsAlert.notify(
+        "spend-limit-approach",
+        String(organization.id),
+        `Org ${String(organization.id)} is at ${monthCharge}/${limit} paise (${Math.floor(
+          (monthCharge * 100) / limit,
+        )}% of monthly spend limit)`,
+        {
+          organizationId: String(organization.id),
+          channelId: String(organization.channelId ?? ""),
+          monthChargePaise: monthCharge,
+          limitPaise: limit,
+          month: monthOf(new Date()),
+        },
+      );
+    }
+    return monthCharge >= limit ? { reason: "spend-limit" } : null;
   }
 
   /**

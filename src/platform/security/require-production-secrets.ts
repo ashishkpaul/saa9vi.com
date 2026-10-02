@@ -8,6 +8,23 @@
  * SuperAdmin password is public knowledge and session cookies are forgeable —
  * a total authentication compromise.
  *
+ * Production-readiness review extensions (critical items 1 + 5):
+ *  - `BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR` — without it every `metered`
+ *    organization bills at the clearly-marked ₹20/learner-hour PLACEHOLDER
+ *    (`constants.ts` TODO(PRICE)), i.e. a price nobody approved. A valid
+ *    non-negative integer is required; `0` is a legitimate "bill nothing"
+ *    configuration and is accepted (mirrors `normaliseRate` in
+ *    `services/metered-billing.policy.ts`).
+ *  - `BBB_ENCRYPTION_KEY` — AES-256-GCM key for BBB passwords/API secrets.
+ *    Checked for shape here (64 hex chars) because the runtime service can
+ *    only fail lazily: the provisioning worker calls `createMeeting()` BEFORE
+ *    `encrypt()`, so a missing key orphans a live meeting on the BBB server.
+ *  - Razorpay key/secret + webhook secret — an unset webhook secret fails
+ *    closed (rejects all provider traffic = silent dunning outage); unset API
+ *    keys fail at first checkout.
+ *  - `DB_PASSWORD` / `REDIS_PASSWORD` — vendure-config falls back to the
+ *    published literal `postgres` for the database password.
+ *
  * Deliberately dependency-free (reads `process.env` only) and called from the
  * bootstrap entrypoints `src/index.ts` / `src/index-worker.ts`, NOT from
  * `vendure-config.ts`, so that config-only consumers keep working without
@@ -18,13 +35,25 @@
  *
  * `APP_ENV=dev` keeps the fallbacks (local development).
  */
+
+/** Required in every non-dev deployment; presence-only checks. */
+const REQUIRED_SECRETS = [
+  'SUPERADMIN_PASSWORD',
+  'COOKIE_SECRET',
+  'RAZORPAY_KEY_ID',
+  'RAZORPAY_KEY_SECRET',
+  'RAZORPAY_WEBHOOK_SECRET',
+  'REDIS_PASSWORD',
+  'DB_PASSWORD',
+  'BBB_ENCRYPTION_KEY',
+  'BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR',
+] as const;
+
 export function assertProductionSecrets(env: NodeJS.ProcessEnv = process.env): void {
   if (env.APP_ENV === 'dev') {
     return;
   }
-  const missingSecrets = ['SUPERADMIN_PASSWORD', 'COOKIE_SECRET'].filter(
-    (key) => !env[key],
-  );
+  const missingSecrets = REQUIRED_SECRETS.filter((key) => !env[key]);
   if (missingSecrets.length > 0) {
     throw new Error(
       `Refusing to start: APP_ENV is "${env.APP_ENV ?? 'unset'}" (not "dev") ` +
@@ -33,6 +62,37 @@ export function assertProductionSecrets(env: NodeJS.ProcessEnv = process.env): v
         `the SuperAdmin password public and session cookies forgeable. ` +
         `Set them in the environment (see .env.example) and rotate any deployment ` +
         `that ever ran with the defaults.`,
+    );
+  }
+
+  // Format checks — presence alone is not enough for values whose failure mode
+  // is silent corruption rather than an auth bypass.
+  const formatFailures: string[] = [];
+
+  // Metered rate: a valid non-negative integer in paise (0 = "bill nothing").
+  // Anything else would silently resolve to the unapproved placeholder rate.
+  const rate = env.BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR!.trim();
+  if (!/^\d+$/.test(rate)) {
+    formatFailures.push(
+      `BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR must be a non-negative integer ` +
+        `(paise per learner-hour; got "${env.BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR}")`,
+    );
+  }
+
+  // AES-256-GCM key: exactly 32 bytes as 64 hex characters. The runtime
+  // service validates the same shape, but only lazily at first use.
+  const encKey = env.BBB_ENCRYPTION_KEY!.trim();
+  if (!/^[0-9a-fA-F]{64}$/.test(encKey)) {
+    formatFailures.push(
+      `BBB_ENCRYPTION_KEY must be a 64-character hex string (32 bytes); ` +
+        `generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`,
+    );
+  }
+
+  if (formatFailures.length > 0) {
+    throw new Error(
+      `Refusing to start: APP_ENV is "${env.APP_ENV ?? 'unset'}" (not "dev") ` +
+        `but these secrets have an invalid format:\n  - ${formatFailures.join('\n  - ')}`,
     );
   }
 }

@@ -37,6 +37,11 @@
  *       converge on one meeting row; suspended/spend-capped orgs get a
  *       tenant-safe 'unavailable' (never the raw failureReason); `studentCount`
  *       counts a person once across enrollment + entitlement (batched, no N+1).
+ *   13. S5 (production-readiness item 2) — trial registrations are tenant-scoped:
+ *       a foreign `sessionId`/`organizationId` read and any write to a foreign
+ *       registration are refused, and a `convertTrialToEnrollment` may only
+ *       target a room of the registration's OWN organization (never a foreign
+ *       room).
  *
  * Run:  npm run test:e2e:bbb-isolation
  *
@@ -90,6 +95,7 @@ import { BbbServer } from '../entities/bbb-server.entity';
 import { BbbEnrollment } from '../entities/bbb-enrollment.entity';
 import { BbbEntitlement } from '../entities/bbb-entitlement.entity';
 import { BbbOrganizationMembership } from '../entities/bbb-organization-membership.entity';
+import { BbbTrialRegistration } from '../entities/trial-registration.entity';
 import { BbbEncryptionService } from '../services/bbb-encryption.service';
 import { MeetingCompletedEvent } from '../events/bbb-events';
 import { BbbMeetingService } from '../services/bbb-meeting.service';
@@ -408,6 +414,101 @@ const BBB_CAPACITY_GRANTS = gql`
         sourceType
       }
       totalItems
+    }
+  }
+`;
+
+// ─── S5 (production-readiness item 2) documents — trial-registration scope ──
+// The trial-registration admin surface: a session-scoped read, an org-scoped
+// read, a status write and the attendee→learner conversion. Every one of these
+// used to trust a raw id; the documents below drive the same foreign-id
+// attempts the fixed resolvers/service must now refuse.
+const CREATE_CUSTOMER = gql`
+  mutation CreateCustomer($input: CreateCustomerInput!) {
+    createCustomer(input: $input) {
+      ... on Customer {
+        id
+      }
+      ... on ErrorResult {
+        errorCode
+        message
+      }
+    }
+  }
+`;
+
+const ADD_BBB_MEMBER = gql`
+  mutation AddBbbMember($input: AddBbbMemberInput!) {
+    addBbbMember(input: $input) {
+      id
+      customerId
+      role
+    }
+  }
+`;
+
+const CREATE_TRIAL_SESSION = gql`
+  mutation CreateTrialSession($input: CreateBbbScheduledSessionInput!) {
+    createBbbScheduledSession(input: $input) {
+      id
+      status
+      isTrial
+      roomId
+    }
+  }
+`;
+
+const PUBLISH_TRIAL_SESSION = gql`
+  mutation PublishTrialSession($id: ID!) {
+    publishBbbScheduledSession(id: $id) {
+      id
+      status
+    }
+  }
+`;
+
+const TRIAL_REGS_BY_SESSION = gql`
+  query TrialRegsBySession($sessionId: ID!) {
+    bbbTrialRegistrationsBySession(sessionId: $sessionId) {
+      id
+      scheduledSessionId
+      customerId
+      status
+    }
+  }
+`;
+
+const TRIAL_REGS_BY_ORG = gql`
+  query TrialRegsByOrg($organizationId: ID!) {
+    bbbTrialRegistrationsByOrganization(organizationId: $organizationId) {
+      id
+      scheduledSessionId
+    }
+  }
+`;
+
+const UPDATE_TRIAL_STATUS = gql`
+  mutation UpdateTrialStatus($id: ID!, $status: String!) {
+    updateBbbTrialRegistrationStatus(id: $id, status: $status) {
+      id
+      status
+      attendedAt
+    }
+  }
+`;
+
+const CONVERT_TRIAL = gql`
+  mutation ConvertTrial($registrationId: ID!, $roomId: ID!, $accessDays: Int) {
+    convertTrialToEnrollment(
+      registrationId: $registrationId
+      roomId: $roomId
+      accessDays: $accessDays
+    ) {
+      id
+      type
+      resourceId
+      customerId
+      source
     }
   }
 `;
@@ -1781,6 +1882,259 @@ describe('BBB Channel Isolation (Phase A)', () => {
         id: startRoomAEncoded,
       });
       expect(single.bbbRoom.studentCount).toBe(1);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 13. S5 — trial-registration tenant scope (production-readiness item 2):
+  //     the trial-registration admin surface used to trust the raw id on
+  //     write and the raw sessionId on read — both cross-tenant. This block
+  //     pins the fixed contracts: a foreign session/org read and a foreign
+  //     registration write are refused, and a conversion may only target a
+  //     room of the registration's OWN organization (never a foreign room).
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('S5 — trial-registration tenant scope (production-readiness item 2)', () => {
+    let roomAEncoded: string;
+    let roomBEncoded: string;
+    let sessionAEncoded: string;
+    let sessionBEncoded: string;
+    let regAEncoded: string;
+    let regBEncoded: string;
+    let customerAEncoded: string;
+    let customerARaw: string;
+    let customerBRaw: string;
+
+    /** Re-encode a raw DB id for the GraphQL surface (TestingEntityIdStrategy). */
+    const encode = (id: unknown): string => `T_${String(id).replace(/^T_/, '')}`;
+    /** Raw PK form as stored in the integer/varchar id columns. */
+    const decode = (id: unknown): string => String(id).replace(/^T_/, '');
+
+    beforeAll(async () => {
+      // ── Org A: registrant/trainer member, room, published trial session ───
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+
+      const customerA: any = await adminClient.query(CREATE_CUSTOMER, {
+        input: {
+          firstName: 'Trial',
+          lastName: 'Registrant',
+          emailAddress: `trial-registrant-a-${Date.now()}@example.com`,
+        },
+      });
+      customerAEncoded = customerA.createCustomer.id;
+      customerARaw = decode(customerAEncoded);
+
+      const memberA: any = await adminClient.query(ADD_BBB_MEMBER, {
+        input: {
+          organizationId: orgAId,
+          customerId: customerAEncoded,
+          role: 'org-admin',
+        },
+      });
+
+      const roomA: any = await adminClient.query(CREATE_BBB_ROOM, {
+        input: { organizationId: orgAId, name: 'Trial Room A' },
+      });
+      roomAEncoded = roomA.createBbbRoom.id;
+
+      const sessionA: any = await adminClient.query(CREATE_TRIAL_SESSION, {
+        input: {
+          organizationId: orgAId,
+          title: 'Trial Session A',
+          startTime: new Date(Date.now() + 3_600_000).toISOString(),
+          endTime: new Date(Date.now() + 7_200_000).toISOString(),
+          trainerId: memberA.addBbbMember.customerId,
+          isTrial: true,
+          roomId: roomAEncoded,
+        },
+      });
+      sessionAEncoded = sessionA.createBbbScheduledSession.id;
+      // Published so the fixture is a real, learner-visible trial session.
+      await adminClient.query(PUBLISH_TRIAL_SESSION, { id: sessionAEncoded });
+      // ── Org B: the foreign side of every assertion (room + trial session) ──
+      await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
+      adminClient.setChannelToken(tenantBChannelToken);
+
+      const customerB: any = await adminClient.query(CREATE_CUSTOMER, {
+        input: {
+          firstName: 'Trial',
+          lastName: 'Foreign',
+          emailAddress: `trial-registrant-b-${Date.now()}@example.com`,
+        },
+      });
+      customerBRaw = decode(customerB.createCustomer.id);
+
+      const memberB: any = await adminClient.query(ADD_BBB_MEMBER, {
+        input: {
+          organizationId: orgBId,
+          customerId: customerB.createCustomer.id,
+          role: 'org-admin',
+        },
+      });
+
+      const roomB: any = await adminClient.query(CREATE_BBB_ROOM, {
+        input: { organizationId: orgBId, name: 'Trial Room B' },
+      });
+      roomBEncoded = roomB.createBbbRoom.id;
+
+      const sessionB: any = await adminClient.query(CREATE_TRIAL_SESSION, {
+        input: {
+          organizationId: orgBId,
+          title: 'Trial Session B',
+          startTime: new Date(Date.now() + 3_600_000).toISOString(),
+          endTime: new Date(Date.now() + 7_200_000).toISOString(),
+          trainerId: memberB.addBbbMember.customerId,
+          isTrial: true,
+          roomId: roomBEncoded,
+        },
+      });
+      sessionBEncoded = sessionB.createBbbScheduledSession.id;
+
+      // ── Registrations (DB-only seeds) ─────────────────────────────────────
+      // The shop `registerForTrial` path needs a shop-authenticated customer,
+      // which is orthogonal to the ADMIN surface under test. Seeding the two
+      // rows directly (same technique as the S4 studentCount fixtures) keeps
+      // this block focused on the tenant guards. Reg B is seeded ATTENDED so a
+      // tenant-A conversion attempt can only ever be refused by the CHANNEL
+      // guard — never by the "only attendees can be converted" status check —
+      // leaving no ambiguity about WHICH guard fired.
+      const regRepo = connection.rawConnection.getRepository(
+        BbbTrialRegistration,
+      );
+      const now = new Date();
+      const regA = await regRepo.save(
+        regRepo.create({
+          scheduledSessionId: decode(sessionAEncoded),
+          customerId: customerARaw,
+          status: 'REGISTERED',
+          registeredAt: now,
+          attendedAt: null,
+        }),
+      );
+      regAEncoded = encode(regA.id);
+      const regB = await regRepo.save(
+        regRepo.create({
+          scheduledSessionId: decode(sessionBEncoded),
+          customerId: customerBRaw,
+          status: 'ATTENDED',
+          registeredAt: now,
+          attendedAt: now,
+        }),
+      );
+      regBEncoded = encode(regB.id);
+    }, 90_000);
+    it('tenant A reads its own session registrations', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const res: any = await adminClient.query(TRIAL_REGS_BY_SESSION, {
+        sessionId: sessionAEncoded,
+      });
+      expect(res.bbbTrialRegistrationsBySession).toHaveLength(1);
+      // ID-typed output fields are encoded by the IdCodec plugin.
+      expect(res.bbbTrialRegistrationsBySession[0].id).toBe(regAEncoded);
+      expect(res.bbbTrialRegistrationsBySession[0].scheduledSessionId).toBe(
+        sessionAEncoded,
+      );
+      expect(res.bbbTrialRegistrationsBySession[0].customerId).toBe(
+        customerAEncoded,
+      );
+    });
+
+    it('tenant A CANNOT read tenant B registrations via a foreign sessionId', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const err = await rejectionOf(
+        adminClient.query(TRIAL_REGS_BY_SESSION, { sessionId: sessionBEncoded }),
+      );
+      expect(String(err.message)).toMatch(/not currently authorized/i);
+    });
+
+    it('tenant A CANNOT read tenant B registrations via a foreign organizationId', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const err = await rejectionOf(
+        adminClient.query(TRIAL_REGS_BY_ORG, { organizationId: orgBId }),
+      );
+      expect(String(err.message)).toMatch(/not currently authorized/i);
+    });
+
+    it('tenant A drives its own registration REGISTERED → ATTENDED', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const res: any = await adminClient.query(UPDATE_TRIAL_STATUS, {
+        id: regAEncoded,
+        status: 'ATTENDED',
+      });
+      expect(res.updateBbbTrialRegistrationStatus.status).toBe('ATTENDED');
+      expect(res.updateBbbTrialRegistrationStatus.attendedAt).not.toBeNull();
+    });
+    it('tenant A CANNOT update tenant B registration status (write guard)', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const err = await rejectionOf(
+        adminClient.query(UPDATE_TRIAL_STATUS, {
+          id: regBEncoded,
+          status: 'CANCELLED',
+        }),
+      );
+      expect(String(err.message)).toMatch(/not currently authorized/i);
+
+      // The guard ran BEFORE the save: tenant B's row is untouched.
+      const row = await connection
+        .getRepository(superCtx, BbbTrialRegistration)
+        .findOne({ where: { id: decode(regBEncoded) } });
+      expect(row?.status).toBe('ATTENDED');
+    });
+
+    it('tenant A CANNOT convert tenant B registration (channel assert, no entitlement written)', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const entRepo = connection.getRepository(superCtx, BbbEntitlement);
+      const before = await entRepo.count({ where: { customerId: customerBRaw } });
+      const err = await rejectionOf(
+        adminClient.query(CONVERT_TRIAL, {
+          registrationId: regBEncoded,
+          roomId: roomAEncoded,
+          accessDays: 30,
+        }),
+      );
+      expect(String(err.message)).toMatch(/not currently authorized/i);
+      const after = await entRepo.count({ where: { customerId: customerBRaw } });
+      expect(after).toBe(before);
+    });
+
+    it('tenant A CANNOT convert into a room of another organization (D5 mirror)', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const err = await rejectionOf(
+        adminClient.query(CONVERT_TRIAL, {
+          registrationId: regAEncoded,
+          roomId: roomBEncoded,
+          accessDays: 30,
+        }),
+      );
+      // EntityNotFoundError, not ForbiddenError — the answer to "another
+      // tenant's room OR no room at all" is the same "not a room of this
+      // organization" (mirrors resolveRoomIdForOrganization).
+      expect(String(err.message)).toMatch(/No BbbRoom with the id/i);
+    });
+
+    it('tenant A converts its own attended registration into its own room', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const res: any = await adminClient.query(CONVERT_TRIAL, {
+        registrationId: regAEncoded,
+        roomId: roomAEncoded,
+        accessDays: 30,
+      });
+      const ent = res.convertTrialToEnrollment;
+      expect(ent.type).toBe('bbb_room');
+      expect(ent.source).toBe('trial_conversion');
+      // Both are ID-typed outputs → encoded form of the raw column values.
+      expect(ent.resourceId).toBe(roomAEncoded);
+      expect(ent.customerId).toBe(customerAEncoded);
+      expect(ent.validUntil).not.toBeNull();
     });
   });
 });
