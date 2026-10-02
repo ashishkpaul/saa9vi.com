@@ -513,6 +513,82 @@ const CONVERT_TRIAL = gql`
   }
 `;
 
+// ─── S6 documents — the channel-ownership read sweep ────────────────────────
+// Six admin READ surfaces that used to trust a caller-supplied room/org/id (or
+// list every tenant's rows). `BbbEntitlement` deliberately exposes no channelId
+// field, so that surface is asserted through `customerId` visibility instead.
+const BBB_ENROLLMENTS_BY_ROOM = gql`
+  query BbbEnrollmentsByRoom($roomId: ID!) {
+    bbbEnrollmentsByRoom(roomId: $roomId) {
+      items {
+        id
+        customerId
+        customerName
+        customerEmail
+        active
+      }
+      totalItems
+    }
+  }
+`;
+
+const BBB_ORG_MEMBERS = gql`
+  query BbbOrganizationMembers($organizationId: ID!) {
+    bbbOrganizationMembers(organizationId: $organizationId) {
+      items {
+        id
+        customerId
+        customerName
+        customerEmail
+        role
+      }
+      totalItems
+    }
+  }
+`;
+
+const BBB_ORG_MEMBER = gql`
+  query BbbOrganizationMember($id: ID!) {
+    bbbOrganizationMember(id: $id) {
+      id
+      customerId
+      customerName
+      customerEmail
+    }
+  }
+`;
+
+const BBB_ORG_MEMBERSHIPS = gql`
+  query BbbOrgMemberships($organizationId: ID!) {
+    bbbOrgMemberships(organizationId: $organizationId) {
+      id
+      customerId
+      role
+      isActive
+    }
+  }
+`;
+
+const BBB_ENTITLEMENTS = gql`
+  query BbbEntitlements {
+    bbbEntitlements {
+      items {
+        id
+        customerId
+        type
+        resourceId
+      }
+      totalItems
+    }
+  }
+`;
+
+const BBB_MODERATOR_JOIN_URL = gql`
+  query BbbModeratorJoinUrl($meetingId: ID!, $moderatorName: String!) {
+    bbbModeratorJoinUrl(meetingId: $meetingId, moderatorName: $moderatorName)
+  }
+`;
+
 /**
  * Awaits a rejection and returns the error itself, so a denial can be asserted
  * for its *reason* (`not currently authorized` = permission layer, `Forbidden` =
@@ -2135,6 +2211,298 @@ describe('BBB Channel Isolation (Phase A)', () => {
       expect(ent.resourceId).toBe(roomAEncoded);
       expect(ent.customerId).toBe(customerAEncoded);
       expect(ent.validUntil).not.toBeNull();
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 14. S6 — the admin READ surfaces are channel-asserted (channel-ownership
+  //     sweep). `bbbEnrollmentsByRoom`, `bbbModeratorJoinUrl`,
+  //     `bbbEntitlements`, `bbbOrganizationMembers`, `bbbOrganizationMember`
+  //     and `bbbOrgMemberships` used to trust a caller-supplied room/org/id —
+  //     or list EVERY tenant's rows. Every case is an ELEVATED probe: the
+  //     attacker holds the very BbbManage* permission the field requires and is
+  //     refused only by BbbChannelAccessService, so a green test cannot be
+  //     explained away by the permission gate. Each denial is paired with the
+  //     same-tenant positive case.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('S6 — admin reads are channel-asserted (channel-ownership sweep)', () => {
+    let roomAEncoded: string;
+    let roomBEncoded: string;
+    let customerAEncoded: string;
+    let customerBEncoded: string;
+    let memberAEncoded: string;
+    let meetingAEncoded: string;
+
+    beforeAll(async () => {
+      // ── Org A (owner side) ───────────────────────────────────────────────
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+
+      const customerA: any = await adminClient.query(CREATE_CUSTOMER, {
+        input: {
+          firstName: 'Read',
+          lastName: 'Owner',
+          emailAddress: `read-owner-a-${Date.now()}@example.com`,
+        },
+      });
+      customerAEncoded = customerA.createCustomer.id;
+
+      const memberA: any = await adminClient.query(ADD_BBB_MEMBER, {
+        input: {
+          organizationId: orgAId,
+          customerId: customerAEncoded,
+          role: 'org-admin',
+        },
+      });
+      memberAEncoded = memberA.addBbbMember.id;
+
+      const roomA: any = await adminClient.query(CREATE_BBB_ROOM, {
+        input: { organizationId: orgAId, name: 'Read Room A' },
+      });
+      roomAEncoded = roomA.createBbbRoom.id;
+
+      // The row that must (a) now resolve a customer NAME — the id-space fix —
+      // and (b) never be reachable through another tenant's channel.
+      await adminClient.query(CREATE_BBB_ENROLLMENT, {
+        input: {
+          roomId: roomAEncoded,
+          customerId: customerAEncoded,
+          accessDays: 30,
+          reason: 'e2e',
+        },
+      });
+
+      await adminClient.query(CREATE_BBB_ENTITLEMENT, {
+        input: {
+          customerId: customerAEncoded,
+          type: 'bbb_room',
+          resourceId: roomAEncoded,
+          source: 'admin',
+        },
+      });
+
+      await adminClient.query(CREATE_BBB_ORG_MEMBERSHIP, {
+        input: {
+          organizationId: orgAId,
+          customerId: customerAEncoded,
+          channelId: tenantAChannelIdEncoded,
+          role: 'moderator',
+        },
+      });
+
+      // Seeded directly: bbbModeratorJoinUrl's assert runs BEFORE any BBB
+      // round-trip or secret read, so a PENDING (never-provisioned) meeting is
+      // enough to prove where the guard sits in the call order.
+      const meetingRepo = connection.getRepository(superCtx, BbbMeeting);
+      const meetingA = await meetingRepo.save(
+        meetingRepo.create({
+          organization: orgA,
+          title: 'Read Meeting A',
+          state: MEETING_STATE.PENDING,
+        }),
+      );
+      meetingAEncoded = `T_${meetingA.id}`;
+
+      // ── Org B (attacker side) — real rows so a "filtered" list is provably
+      // non-empty rather than trivially empty (a weak negative assertion). ──
+      await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
+      adminClient.setChannelToken(tenantBChannelToken);
+
+      const customerB: any = await adminClient.query(CREATE_CUSTOMER, {
+        input: {
+          firstName: 'Read',
+          lastName: 'Foreign',
+          emailAddress: `read-foreign-b-${Date.now()}@example.com`,
+        },
+      });
+      customerBEncoded = customerB.createCustomer.id;
+
+      const roomB: any = await adminClient.query(CREATE_BBB_ROOM, {
+        input: { organizationId: orgBId, name: 'Read Room B' },
+      });
+      roomBEncoded = roomB.createBbbRoom.id;
+
+      await adminClient.query(CREATE_BBB_ENROLLMENT, {
+        input: {
+          roomId: roomBEncoded,
+          customerId: customerBEncoded,
+          accessDays: 30,
+          reason: 'e2e',
+        },
+      });
+
+      await adminClient.query(CREATE_BBB_ENTITLEMENT, {
+        input: {
+          customerId: customerBEncoded,
+          type: 'bbb_room',
+          resourceId: roomBEncoded,
+          source: 'admin',
+        },
+      });
+    }, 90_000);
+
+    // ── bbbEnrollmentsByRoom ────────────────────────────────────────────────
+
+    it('tenant A reads its own room enrollments — and the customer is NAMED', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const res: any = await adminClient.query(BBB_ENROLLMENTS_BY_ROOM, {
+        roomId: roomAEncoded,
+      });
+      const row = res.bbbEnrollmentsByRoom.items.find(
+        (e: any) => e.customerId === customerAEncoded,
+      );
+      expect(row).toBeTruthy();
+      // Defect #2 regression: the map used to be keyed by the numeric PK while
+      // the varchar column held the string form, so every row rendered as an
+      // "anonymous student".
+      expect(row.customerName).toBe('Read Owner');
+      expect(row.customerEmail).toMatch(/^read-owner-a-/);
+    });
+
+    it('tenant B CANNOT read tenant A enrollments through a foreign roomId', async () => {
+      await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
+      adminClient.setChannelToken(tenantBChannelToken);
+      const err = await rejectionOf(
+        adminClient.query(BBB_ENROLLMENTS_BY_ROOM, { roomId: roomAEncoded }),
+      );
+      expect(err).toBeTruthy();
+      // Passes the permission layer (tenant B holds BbbManageRooms) and is
+      // refused by the channel assert — i.e. the fix is the assert.
+      expect(String(err.message)).toMatch(/not currently authorized/i);
+    });
+
+    // ── bbbModeratorJoinUrl ────────────────────────────────────────────────
+
+    it('tenant B CANNOT mint a moderator URL for tenant A meeting (secret withheld)', async () => {
+      await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
+      adminClient.setChannelToken(tenantBChannelToken);
+      const err = await rejectionOf(
+        adminClient.query(BBB_MODERATOR_JOIN_URL, {
+          meetingId: meetingAEncoded,
+          moderatorName: 'intruder',
+        }),
+      );
+      expect(err).toBeTruthy();
+      expect(String(err.message)).toMatch(/not currently authorized/i);
+    });
+
+    it('tenant A passes the channel guard and stops at the state guard', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const err = await rejectionOf(
+        adminClient.query(BBB_MODERATOR_JOIN_URL, {
+          meetingId: meetingAEncoded,
+          moderatorName: 'owner',
+        }),
+      );
+      // Distinguishes the two layers: a channel denial reads "not currently
+      // authorized", whereas reaching the business guard reads "not active".
+      expect(String(err.message)).toMatch(/not active/i);
+      expect(String(err.message)).not.toMatch(/not currently authorized/i);
+    });
+
+    // ── bbbEntitlements ────────────────────────────────────────────────────
+
+    it('tenant B bbbEntitlements excludes tenant A entitlements', async () => {
+      await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
+      adminClient.setChannelToken(tenantBChannelToken);
+      const res: any = await adminClient.query(BBB_ENTITLEMENTS);
+      const items = res.bbbEntitlements.items;
+      // Provably non-empty (own rows visible) yet strictly channel-scoped.
+      expect(items.some((e: any) => e.customerId === customerBEncoded)).toBe(
+        true,
+      );
+      expect(items.some((e: any) => e.customerId === customerAEncoded)).toBe(
+        false,
+      );
+    });
+
+    it('tenant A bbbEntitlements includes its own entitlements', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const res: any = await adminClient.query(BBB_ENTITLEMENTS);
+      expect(
+        res.bbbEntitlements.items.some(
+          (e: any) => e.customerId === customerAEncoded,
+        ),
+      ).toBe(true);
+    });
+
+    // ── bbbOrganizationMembers ─────────────────────────────────────────────
+
+    it('tenant B CANNOT list tenant A organization members', async () => {
+      await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
+      adminClient.setChannelToken(tenantBChannelToken);
+      const err = await rejectionOf(
+        adminClient.query(BBB_ORG_MEMBERS, { organizationId: orgAId }),
+      );
+      expect(err).toBeTruthy();
+      expect(String(err.message)).toMatch(/not currently authorized/i);
+    });
+
+    it('tenant A lists its own members — with a NAMED customer', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const res: any = await adminClient.query(BBB_ORG_MEMBERS, {
+        organizationId: orgAId,
+      });
+      const row = res.bbbOrganizationMembers.items.find(
+        (m: any) => m.customerId === customerAEncoded,
+      );
+      expect(row).toBeTruthy();
+      expect(row.customerName).toBe('Read Owner');
+      expect(row.customerEmail).toMatch(/^read-owner-a-/);
+    });
+
+    // ── bbbOrganizationMember (single) ─────────────────────────────────────
+
+    it('tenant B CANNOT read tenant A member by id', async () => {
+      await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
+      adminClient.setChannelToken(tenantBChannelToken);
+      const err = await rejectionOf(
+        adminClient.query(BBB_ORG_MEMBER, { id: memberAEncoded }),
+      );
+      expect(err).toBeTruthy();
+      // Ownership is derived from the LOADED row's organization, which the
+      // caller never supplies — so a foreign id cannot authorize itself.
+      expect(String(err.message)).toMatch(/not currently authorized/i);
+    });
+
+    it('tenant A reads its own member by id', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const res: any = await adminClient.query(BBB_ORG_MEMBER, {
+        id: memberAEncoded,
+      });
+      expect(res.bbbOrganizationMember.id).toBe(memberAEncoded);
+      expect(res.bbbOrganizationMember.customerName).toBe('Read Owner');
+    });
+
+    // ── bbbOrgMemberships ──────────────────────────────────────────────────
+
+    it('tenant B CANNOT list tenant A memberships', async () => {
+      await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
+      adminClient.setChannelToken(tenantBChannelToken);
+      const err = await rejectionOf(
+        adminClient.query(BBB_ORG_MEMBERSHIPS, { organizationId: orgAId }),
+      );
+      expect(err).toBeTruthy();
+      expect(String(err.message)).toMatch(/not currently authorized/i);
+    });
+
+    it('tenant A lists its own memberships', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const res: any = await adminClient.query(BBB_ORG_MEMBERSHIPS, {
+        organizationId: orgAId,
+      });
+      expect(
+        res.bbbOrgMemberships.some(
+          (m: any) => m.customerId === customerAEncoded,
+        ),
+      ).toBe(true);
     });
   });
 });

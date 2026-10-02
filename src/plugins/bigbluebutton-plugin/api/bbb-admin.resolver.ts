@@ -308,6 +308,14 @@ export class BbbAdminResolver {
     @Args("organizationId") organizationId: string,
     @Args("options") options?: { skip?: number; take?: number },
   ): Promise<{ items: MemberWithCustomer[]; totalItems: number }> {
+    // Channel ownership FIRST (INV: Channel=Tenant). `organizationId` is a
+    // caller-supplied GraphQL argument and BbbOrganizationMember rows are
+    // returned with their customers' PII (customerName/customerEmail), so
+    // without this assert the list is an unauthenticated cross-tenant read
+    // handle. DefaultEntityAccessControlStrategy implements canAccess() only —
+    // there is no row-level channel scoping to fall back on.
+    await this.channelAccess.assertOrganizationAccess(ctx, organizationId);
+
     const result = await this.memberService.findByOrganization(
       ctx,
       organizationId,
@@ -353,7 +361,19 @@ export class BbbAdminResolver {
       .getRepository(ctx, BbbOrganizationMember)
       .findOne({
         where: { id },
+        relations: ["organization"],
       });
+    // Channel ownership derived from the LOADED row: BbbOrganizationMember has
+    // no scalar channelId and no denormalized organizationId, so the caller
+    // cannot supply the tenant — the member's own organization is the only
+    // authority. A missing row still returns null (nothing to disclose); a row
+    // belonging to a foreign tenant is refused.
+    if (member) {
+      await this.channelAccess.assertOrganizationAccess(
+        ctx,
+        member.organization.id,
+      );
+    }
     if (!member || !member.customerId) return member;
 
     const customer = await this.connection
@@ -403,6 +423,11 @@ export class BbbAdminResolver {
     @Ctx() ctx: RequestContext,
     @Args("organizationId") organizationId: string,
   ): Promise<BbbOrganizationMembership[]> {
+    // Channel ownership FIRST — same untrusted-argument shape as
+    // bbbOrganizationMembers: memberships carry customerId + role, so an
+    // asserted organization is what makes the list tenant-safe.
+    await this.channelAccess.assertOrganizationAccess(ctx, organizationId);
+
     return this.membershipService.listByOrganization(ctx, organizationId);
   }
 
@@ -827,6 +852,13 @@ export class BbbAdminResolver {
     @Args("roomId") roomId: string,
     @Args("options") options?: { skip?: number; take?: number },
   ): Promise<{ items: object[]; totalItems: number }> {
+    // Channel ownership FIRST (INV: Channel=Tenant). `roomId` is a
+    // caller-supplied argument and the rows below are joined to Customer PII
+    // (customerName/customerEmail). Fixing the id-space bug underneath WITHOUT
+    // this assert would have ESCALATED a missing-names bug into a cross-tenant
+    // PII leak, so the two changes land together.
+    await this.channelAccess.assertRoomAccess(ctx, roomId);
+
     const take = Math.min(Math.max(options?.take ?? 25, 1), 100);
     const skip = Math.max(options?.skip ?? 0, 0);
     const [enrollments, totalItems] = await this.connection
@@ -838,16 +870,30 @@ export class BbbAdminResolver {
         take,
       });
 
-    const customerIds = [...new Set(enrollments.map((e) => e.customerId))];
+    const customerIds = [
+      ...new Set(enrollments.map((e) => e.customerId).filter(Boolean)),
+    ];
     const customers = customerIds.length
       ? await this.connection
           .getRepository(ctx, Customer)
           .findBy({ id: In(customerIds) as any })
       : [];
-    const customerMap = new Map(customers.map((c) => [c.id, c]));
+    // `customer.id` is an integer PK while the denormalized
+    // `bbb_enrollment.customerId` varchar column stores the decoded id as a
+    // string (both `roomId`/`customerId` are `ID!` inputs, so the IdCodec
+    // decodes them at the API boundary before persistence). Keying this map on
+    // the raw value (number) and looking up with the column value (string) never
+    // matched, so every enrollment rendered as an "anonymous student"
+    // (production-readiness defect #2). Compare in a single id space, exactly as
+    // bbbOrganizationMembers already does.
+    const customerMap = new Map<string, Customer>(
+      customers.map((c) => [String(c.id), c]),
+    );
 
     const items = enrollments.map((e) => {
-      const c = customerMap.get(e.customerId);
+      const c = e.customerId
+        ? customerMap.get(String(e.customerId))
+        : undefined;
       return {
         ...e,
         customerName: c
@@ -1035,6 +1081,16 @@ export class BbbAdminResolver {
     const [items, totalItems] = await this.connection
       .getRepository(ctx, BbbEntitlement)
       .findAndCount({
+        // Invariant "Channel=Tenant". BbbEntitlement carries a denormalized
+        // scalar channelId and no row-level access strategy is registered for
+        // it, so this filter is the only thing between a tenant admin and every
+        // other tenant's entitlement rows (each carrying a customerId).
+        // Platform callers keep the unrestricted list, matching the same
+        // platform-vs-tenant split already made by bbbMeetings/bbbOrganizations
+        // (`isPlatformCaller` — tenant roles never hold BBBAdmin, ADR-033).
+        where: this.channelAccess.isPlatformCaller(ctx)
+          ? {}
+          : { channelId: String(ctx.channelId) },
         order: { createdAt: "DESC" },
         skip,
         take,

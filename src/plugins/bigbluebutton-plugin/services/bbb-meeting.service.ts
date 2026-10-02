@@ -424,6 +424,15 @@ export class BbbMeetingService implements OnModuleInit {
     meetingId: ID,
     moderatorName: string,
   ): Promise<string> {
+    // Channel ownership BEFORE the secret-bearing read. findByIdWithSecrets
+    // returns `encryptedModeratorPassword`, so an unscoped meetingId here would
+    // be a cross-tenant moderator-credential disclosure — and this is reached
+    // from the admin surface (bbbModeratorJoinUrl). The attendee path
+    // (getAttendeeJoinUrl) is deliberately NOT gated by a channel assert: it has
+    // its own entitlement/enrollment check and must stay reachable by learners
+    // who hold no admin channel at all.
+    await this.channelAccess.assertMeetingAccess(ctx, meetingId);
+
     const meeting = await this.findByIdWithSecrets(ctx, meetingId);
     if (!meeting) throw new Error("Meeting not found");
     if (meeting.state !== MEETING_STATE.ACTIVE) {

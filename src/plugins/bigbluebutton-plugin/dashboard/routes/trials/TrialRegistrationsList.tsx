@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { useState } from 'react';
 import { graphql } from '@/gql';
 import { useCurrentOrganization } from '../../shared/useCurrentOrganization';
+import { resolveListState } from '../../../../../platform/dashboard/query-state';
 
 const GET_TRIAL_REGISTRATIONS = graphql(`
   query GetBbbTrialRegistrations($organizationId: ID!) {
@@ -65,6 +66,8 @@ type TrialRegistrationRow = {
   createdAt: string;
 };
 
+type TrialConvertRoom = { id: string; name: string };
+
 export function TrialRegistrationsList() {
   const qc = useQueryClient();
   // Channel = Tenant (INV-001): the organization is resolved server-side from
@@ -76,7 +79,20 @@ export function TrialRegistrationsList() {
     queryFn: () => api.query(GET_TRIAL_REGISTRATIONS, { organizationId }),
     enabled: !!organizationId,
   });
-  const registrations = registrationsQuery.data?.bbbTrialRegistrationsByOrganization ?? [];
+  // INV-015: a rejected query must never render as "no registrations".
+  // `resolveListState` is the single normalisation point, so a rejection, an
+  // absent `bbbTrialRegistrationsByOrganization` field, or a query that never
+  // ran reaches the loading/error/blocked branch instead of the empty state —
+  // the inline `?? []` fallback this replaces collapsed all three into "no rows"
+  // (same migration as PeopleList's TrainersTab/StudentsTab).
+  const registrationsState = resolveListState(
+    registrationsQuery,
+    (data: any): TrialRegistrationRow[] | null | undefined =>
+      data?.bbbTrialRegistrationsByOrganization,
+    { expected: 'bbbTrialRegistrationsByOrganization', blocked: !organizationId },
+  );
+  const registrations =
+    registrationsState.status === 'ready' ? registrationsState.items : [];
 
   const updateStatusMutation = useMutation({
     mutationFn: ({ id, status }: { id: string; status: string }) =>
@@ -113,7 +129,14 @@ export function TrialRegistrationsList() {
     queryFn: () => api.query(GET_ROOMS, { organizationId }),
     enabled: !!organizationId && convertTarget !== null,
   });
-  const rooms = roomsQuery.data?.bbbRooms.items ?? [];
+  // Same INV-015 treatment for the dialog's room picker: a failed query must not
+  // read as "this organization has no rooms".
+  const roomsState = resolveListState(
+    roomsQuery,
+    (data: any): TrialConvertRoom[] | null | undefined => data?.bbbRooms?.items,
+    { expected: 'bbbRooms', blocked: convertTarget === null },
+  );
+  const rooms = roomsState.status === 'ready' ? roomsState.items : [];
 
   const accessDaysValid =
     accessDaysInput.trim() === '' ||
@@ -170,7 +193,7 @@ export function TrialRegistrationsList() {
               <Label htmlFor="convert-room">Room</Label>
               <Select value={targetRoomId} onValueChange={setTargetRoomId}>
                 <SelectTrigger id="convert-room">
-                  <SelectValue placeholder={roomsQuery.isLoading ? 'Loading rooms…' : 'Select a room'} />
+                  <SelectValue placeholder={roomsState.status === 'loading' ? 'Loading rooms…' : 'Select a room'} />
                 </SelectTrigger>
                 <SelectContent>
                   {rooms.map((room) => (
@@ -180,9 +203,11 @@ export function TrialRegistrationsList() {
                   ))}
                 </SelectContent>
               </Select>
-              {!roomsQuery.isLoading && rooms.length === 0 && (
+              {roomsState.status === 'error' ? (
+                <p className="text-sm text-destructive">Failed to load rooms.</p>
+              ) : roomsState.status === 'empty' ? (
                 <p className="text-sm text-muted-foreground">No rooms in this organization.</p>
-              )}
+              ) : null}
             </div>
             <div className="space-y-2">
               <Label htmlFor="convert-access-days">Access days (optional — blank for unlimited)</Label>
@@ -212,11 +237,13 @@ export function TrialRegistrationsList() {
       </Dialog>
 
       <Card>
-        {registrationsQuery.isLoading ? (
+        {registrationsState.status === 'loading' ? (
           <div className="p-4 space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
-        ) : !organizationId ? (
+        ) : registrationsState.status === 'blocked' ? (
           <div className="p-6 text-center text-muted-foreground">No organization is bound to this channel</div>
-        ) : registrations.length === 0 ? (
+        ) : registrationsState.status === 'error' ? (
+          <div className="p-6 text-center text-red-500">Failed to load trial registrations</div>
+        ) : registrationsState.status === 'empty' ? (
           <div className="p-6 text-center">
             <p className="text-muted-foreground">No trial registrations found for this organization.</p>
           </div>
