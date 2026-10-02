@@ -796,7 +796,7 @@ export function RoomDetailPage({ route }: { route: AnyRoute }) {
               >
                 <option value="">Select a trainer</option>
                 {trainers.map((t) => (
-                  <option key={t.id} value={t.customerId ?? t.id}>
+                  <option key={t.id} value={t.id}>
                     {t.customerName || t.customerEmail || t.id}
                   </option>
                 ))}

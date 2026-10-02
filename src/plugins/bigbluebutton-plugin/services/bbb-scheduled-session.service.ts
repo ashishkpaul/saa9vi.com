@@ -174,19 +174,27 @@ export class BbbScheduledSessionService {
       }
     }
 
-    let trainer = await this.connection
+    // Trainer resolution happens in exactly ONE id space: BbbOrganizationMember.id,
+    // scoped to this session's organization and required to be active — the same
+    // contract createTemplate/createSessionsFromTemplate already use.
+    //
+    // This previously tried `{ id }` FIRST and UNSCOPED, then fell back to
+    // `{ customerId, organization }`. Two consequences: (a) a caller could pass
+    // ANOTHER tenant's member id and get a session created against a foreign
+    // tenant's trainer (the id branch was never org-scoped), and (b) the same
+    // creation path resolved differently depending on which id form the caller
+    // happened to send, so a member id and a customer id could name different
+    // people. One id space, one scope, one answer — an unknown or foreign id is
+    // now a hard EntityNotFoundError instead of silently resolving elsewhere.
+    const trainer = await this.connection
       .getRepository(ctx, BbbOrganizationMember)
-      .findOne({ where: { id: input.trainerId as string } });
-    if (!trainer) {
-      trainer = await this.connection
-        .getRepository(ctx, BbbOrganizationMember)
-        .findOne({
-          where: {
-            customerId: input.trainerId as string,
-            organization: { id: input.organizationId as string },
-          },
-        });
-    }
+      .findOne({
+        where: {
+          id: String(input.trainerId),
+          organization: { id: String(input.organizationId) },
+          active: true,
+        },
+      });
     if (!trainer) {
       throw new EntityNotFoundError("BbbOrganizationMember", input.trainerId);
     }

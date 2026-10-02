@@ -410,7 +410,7 @@ async function ensureMembership(
   admin: FixtureGraphQLClient,
   organizationId: string,
   customerId: string,
-): Promise<void> {
+): Promise<string> {
   const listed = await admin.adminQuery<{
     bbbOrganizationMembers: { items: Array<{ id: string; customerId: string }> };
   }>(
@@ -420,15 +420,18 @@ async function ensureMembership(
     }`,
     { orgId: organizationId },
   );
-  const already = listed.bbbOrganizationMembers.items.some(
+  const existing = listed.bbbOrganizationMembers.items.find(
     member => String(member.customerId) === String(customerId),
   );
-  if (already) return;
-  await admin.adminMutation(
+  // Return the BbbOrganizationMember id — the ONE id space session creation
+  // resolves trainers in. The customer id is a different id space entirely.
+  if (existing) return String(existing.id);
+  const created = await admin.adminMutation<{ addBbbMember: { id: string } }>(
     'AddBbbMember',
     `mutation($input: AddBbbMemberInput!) { addBbbMember(input: $input) { id customerId } }`,
     { input: { organizationId, customerId, role: 'org-admin' } },
   );
+  return String(created.addBbbMember.id);
 }
 
 interface SessionRow {
@@ -440,7 +443,8 @@ interface SessionRow {
 async function ensureSession(
   admin: FixtureGraphQLClient,
   organizationId: string,
-  trainerCustomerId: string,
+  /** BbbOrganizationMember id — the single id space `trainerId` resolves in. */
+  trainerMemberId: string,
   spec: E2ETenantSpec,
 ): Promise<SessionRow> {
   const listed = await admin.adminQuery<{ bbbScheduledSessions: SessionRow[] }>(
@@ -467,7 +471,7 @@ async function ensureSession(
         title: spec.session.title,
         startTime: start.toISOString(),
         endTime: end.toISOString(),
-        trainerId: trainerCustomerId,
+        trainerId: trainerMemberId,
         subjectTags: spec.session.subjectTags,
         visibility: 'PUBLIC',
         isTrial: false,
@@ -560,8 +564,8 @@ async function seedTenant(
   const profileId = await ensureInstructorProfile(admin, instructorCustomerId, spec.instructor);
   const studentCustomerId = await ensureCustomer(admin, spec.student, spec.student.password);
   const organizationId = await ensureOrganization(admin, channel.id, spec);
-  await ensureMembership(admin, organizationId, instructorCustomerId);
-  const session = await ensureSession(admin, organizationId, instructorCustomerId, spec);
+  const trainerMemberId = await ensureMembership(admin, organizationId, instructorCustomerId);
+  const session = await ensureSession(admin, organizationId, trainerMemberId, spec);
   const sessionStatus = await ensurePublishState(admin, session, spec.expected.bbb);
 
   console.log(

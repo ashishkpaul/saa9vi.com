@@ -465,8 +465,10 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
     await adminClient.asUserWithCredentials(emailA, 'StrongP@ss1');
     orgAId = await ensureOrg(tenantA.channelId, 'e2e-academy-a', 'E2E Academy A Org');
 
-    // Sessions require a trainer: create a customer + org membership, then
-    // pass the customerId as trainerId (the service resolves either).
+    // Sessions require a trainer: create a customer + org membership, then pass
+    // the MEMBER id as trainerId. The service resolves trainer identity in
+    // exactly one id space (BbbOrganizationMember.id, org-scoped + active) — the
+    // customer id would no longer resolve.
     const trainerA = await adminClient.query(CREATE_CUSTOMER, {
       input: { firstName: 'Ada', lastName: 'Trainer', emailAddress: `trainer-a-${Date.now()}@example.com` },
     });
@@ -480,7 +482,7 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
         title: 'E2E Python Bootcamp A1',
         startTime: new Date(Date.now() + 86400_000).toISOString(),
         endTime: new Date(Date.now() + 90000_000).toISOString(),
-        trainerId: memberA.addBbbMember.customerId,
+        trainerId: memberA.addBbbMember.id,
         subjectTags: ['python'],
       },
     });
@@ -492,7 +494,7 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
         title: 'E2E NEET Crash Course A2',
         startTime: new Date(Date.now() + 86400_000).toISOString(),
         endTime: new Date(Date.now() + 90000_000).toISOString(),
-        trainerId: memberA.addBbbMember.customerId,
+        trainerId: memberA.addBbbMember.id,
         subjectTags: ['neet'],
       },
     });
@@ -516,7 +518,7 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
         title: 'E2E JEE Physics B1',
         startTime: new Date(Date.now() + 86400_000).toISOString(),
         endTime: new Date(Date.now() + 90000_000).toISOString(),
-        trainerId: memberB.addBbbMember.customerId,
+        trainerId: memberB.addBbbMember.id,
         subjectTags: ['jee'],
       },
     });

@@ -182,10 +182,12 @@ describe('BbbScheduledSession room linkage (ADR-047 / D5)', () => {
   let tokenB = '';
   let orgB = '';
 
-  /** Tenant A rooms + the member customer id used as `trainerId`. */
+  /** Tenant A rooms + the member id used as `trainerId`. */
   let roomA1 = '';
   let roomA2 = '';
-  let trainerACustomerId = '';
+  let trainerAMemberId = '';
+  /** Tenant B's member id — must never be acceptable as tenant A's trainer. */
+  let trainerBMemberId = '';
   /** Tenant B's room: must never be linkable from tenant A. */
   let roomB1 = '';
 
@@ -268,13 +270,15 @@ describe('BbbScheduledSession room linkage (ADR-047 / D5)', () => {
   async function createSession(
     organizationId: string,
     roomId?: string | null,
+    /** `trainerId` in the one id space the service accepts: a member id. */
+    trainerId: string = trainerAMemberId,
   ): Promise<any> {
     const input: Record<string, unknown> = {
       organizationId,
       title: `Room Link Session ${Date.now()}`,
       startTime: new Date(Date.now() + 86_400_000).toISOString(),
       endTime: new Date(Date.now() + 90_000_000).toISOString(),
-      trainerId: trainerACustomerId,
+      trainerId,
     };
     if (roomId !== undefined) input.roomId = roomId;
     const res: any = await adminClient.query(CREATE_SESSION, { input });
@@ -386,11 +390,31 @@ describe('BbbScheduledSession room linkage (ADR-047 / D5)', () => {
         role: 'org-admin',
       },
     });
-    if (!member.addBbbMember?.customerId) fail('addBbbMember', member);
-    trainerACustomerId = member.addBbbMember.customerId;
+    if (!member.addBbbMember?.id) fail('addBbbMember', member);
+    trainerAMemberId = member.addBbbMember.id;
 
     await loginTenantAdmin(emailB, tokenB, 'StrongP@ss2');
     roomB1 = await createRoom(orgB, 'Room B1');
+
+    // Tenant B's own trainer member: the negative fixture proving that a
+    // BbbOrganizationMember id is only valid inside ITS OWN organization.
+    const customerB: any = await adminClient.query(CREATE_CUSTOMER, {
+      input: {
+        firstName: 'Bob',
+        lastName: 'Trainer',
+        emailAddress: `room-link-trainer-b-${Date.now()}@example.com`,
+      },
+    });
+    if (!customerB.createCustomer?.id) fail('createCustomer B', customerB);
+    const memberB: any = await adminClient.query(ADD_BBB_MEMBER, {
+      input: {
+        organizationId: orgB,
+        customerId: customerB.createCustomer.id,
+        role: 'org-admin',
+      },
+    });
+    if (!memberB.addBbbMember?.id) fail('addBbbMember B', memberB);
+    trainerBMemberId = memberB.addBbbMember.id;
 
     expect(roomA1).not.toEqual(roomA2);
     expect(roomB1).not.toEqual(roomA1);
@@ -426,6 +450,28 @@ describe('BbbScheduledSession room linkage (ADR-047 / D5)', () => {
     expect(err).not.toBeNull();
     expect(String(err?.message ?? err)).toMatch(/BbbRoom/);
     expect(await sessionCountForOrg(orgA)).toBe(before);
+  }, 60_000);
+
+  it("refuses another tenant's member id as the trainer, then accepts its own", async () => {
+    await loginTenantAdmin(emailA, tokenA, 'StrongP@ss1');
+    const before = await sessionCountForOrg(orgA);
+
+    const err = await captureError(createSession(orgA, null, trainerBMemberId));
+
+    // Trainer identity resolves in exactly ONE id space:
+    // BbbOrganizationMember.id scoped to the session's OWN organization and
+    // required to be active. Tenant B's member is simply not in that set, so a
+    // foreign id is a hard not-found — never a silently-resolved foreign
+    // trainer, and no session row is written.
+    expect(err).not.toBeNull();
+    expect(String(err?.message ?? err)).toMatch(/BbbOrganizationMember/);
+    expect(await sessionCountForOrg(orgA)).toBe(before);
+
+    // Positive control: the identical id space accepts tenant A's own member,
+    // so the rejection above is about ownership — not a broken id form.
+    const accepted = await createSession(orgA, undefined, trainerAMemberId);
+    expect(accepted.id).toBeTruthy();
+    expect(await sessionCountForOrg(orgA)).toBe(before + 1);
   }, 60_000);
 
   it('re-links to another room of the same org, then detaches with roomId: null', async () => {

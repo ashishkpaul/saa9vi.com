@@ -369,7 +369,7 @@ describe('Marketplace convergence / recovery (3D.1b Step 9)', () => {
         role: 'org-admin',
       },
     });
-    const trainerId = member.addBbbMember.customerId;
+    const trainerId = member.addBbbMember.id;
 
     const sessionIds: string[] = [];
     for (let i = 1; i <= 4; i++) {
