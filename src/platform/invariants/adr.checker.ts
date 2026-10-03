@@ -16,6 +16,7 @@ export class AdrChecker implements Checker {
       this.marketplaceEntitlementInvariants(),
       this.dailyAllowanceInvariants(),
       this.capacityAlertHasSubscriber(),
+      this.assertionCoverage(),
     ];
 
     const results = await Promise.all(checks);
@@ -705,4 +706,306 @@ export class AdrChecker implements Checker {
         : 'WARNING: Explicit enrollment checks bypass EntitlementService. These should use entitlementService.hasAccess()',
     };
   }
+
+  // ─── ADR-048: mutation-ownership assertion coverage (shrink-only ratchet) ──
+
+  /**
+   * ADR-048's two-clause source-shape ratchet (see the ADR for the exact
+   * contract and the documented exemptions):
+   *
+   * 1. No dead guards — every `assert*Access` declared by
+   *    `BbbChannelAccessService` has ≥1 production call site.
+   * 2. No unasserted tenant mutation — every tenant-reachable `@Mutation` of
+   *    `BbbAdminResolver` that takes a caller-supplied resource reference has
+   *    a `channelAccess.assert*` call in its body, or is a named, re-verified
+   *    entry in SERVICE_GUARD_ALLOWLIST.
+   *
+   * Both clauses deliberately over-approximate with regexes over
+   * comment-stripped source; the trade (a future exotic formatting could
+   * weaken detection) is accepted because the floors below fail loudly if the
+   * parsing ever stops finding the shapes it depends on.
+   */
+  private async assertionCoverage(): Promise<CheckResult> {
+    const srcDir = path.join(__dirname, '../../..');
+    const serviceRel =
+      'src/plugins/bigbluebutton-plugin/services/bbb-channel-access.service.ts';
+    const resolverRel =
+      'src/plugins/bigbluebutton-plugin/api/bbb-admin.resolver.ts';
+    const failures: string[] = [];
+
+    const readOrNull = (rel: string): string | null => {
+      try {
+        return readFileContent(path.join(srcDir, rel));
+      } catch {
+        return null;
+      }
+    };
+
+    const serviceRaw = readOrNull(serviceRel);
+    const resolverRaw = readOrNull(resolverRel);
+    if (!serviceRaw) failures.push(`${serviceRel} must exist (it declares the guards)`);
+    if (!resolverRaw) failures.push(`${resolverRel} must exist (it carries the mutations)`);
+
+    let guardCount = 0;
+    let mutationCount = 0;
+    let assertedCount = 0;
+    let allowlistedCount = 0;
+
+    // ── Clause 1: every declared guard has ≥1 production call site ──────────
+    if (serviceRaw && resolverRaw) {
+      const serviceSrc = this.stripComments(serviceRaw);
+      const guardNames = new Set<string>();
+      const guardRe = /async\s+(assert\w+)\s*\(/g;
+      let g: RegExpExecArray | null;
+      while ((g = guardRe.exec(serviceSrc)) !== null) guardNames.add(g[1]);
+      guardCount = guardNames.size;
+      if (guardCount < 10) {
+        // BbbChannelAccessService declares ten guards since ADR-048 deleted the
+        // dead assertCapacityGrantAccess. Fewer means the extraction broke and
+        // clause 1 would pass vacuously.
+        failures.push(
+          `clause 1 scan found only ${guardCount} guard(s) in ${serviceRel} (expected ≥10) — extraction regex broken?`,
+        );
+      }
+
+      const productionFiles = findFiles(['src/**/*.ts'], srcDir).filter(file => {
+        const rel = path.relative(srcDir, file).split(path.sep).join('/');
+        if (rel === serviceRel) return false;
+        // Invariant checkers mention guard names inside regex literals — they
+        // are not callers, and counting them would mask a dead guard.
+        if (rel.startsWith('src/platform/')) return false;
+        if (rel.includes('/__tests__/')) return false;
+        if (rel.endsWith('.spec.ts') || rel.endsWith('.e2e-spec.ts')) return false;
+        return true;
+      });
+
+      for (const name of guardNames) {
+        const callRe = new RegExp(`\\b${name}\\s*\\(`);
+        const callers = productionFiles.filter(file =>
+          callRe.test(this.stripComments(readFileContent(file))),
+        );
+        if (callers.length === 0) {
+          failures.push(
+            `clause 1 (no dead guards): ${name} has ZERO production call sites — wire it to its surface or delete it`,
+          );
+        }
+      }
+      // ── Clause 2: every tenant mutation with a resource reference is
+      //    asserted in its body or is a verified allowlist entry ─────────────
+      const resolverSrc = this.stripComments(resolverRaw);
+      const markerRe = /@Mutation\(\)/g;
+      const markerPositions: number[] = [];
+      let mk: RegExpExecArray | null;
+      while ((mk = markerRe.exec(resolverSrc)) !== null) markerPositions.push(mk.index);
+      mutationCount = markerPositions.length;
+      if (mutationCount < 40) {
+        // BbbAdminResolver declares 41 @Mutation methods. Fewer means the scan
+        // broke and clause 2 would pass vacuously — fail loudly instead.
+        failures.push(
+          `clause 2 scan found only ${mutationCount} @Mutation marker(s) (expected ≥40) — extraction regex broken?`,
+        );
+      } else {
+        const usedAllowlist = new Set<string>();
+
+        for (const pos of markerPositions) {
+          const decorators = this.decoratorSlice(resolverSrc, pos);
+          if (!decorators) {
+            failures.push(
+              `clause 2: @Mutation at offset ${pos} has no @Allow decorator — parsing assumption broken`,
+            );
+            continue;
+          }
+          // Documented exemption (ADR-048): platform-tier acts are gated by
+          // the permission itself (ADR-033).
+          if (/BbbPlatformInfrastructurePermission\.Permission/.test(decorators)) {
+            continue;
+          }
+
+          const sig = this.signatureAt(resolverSrc, pos);
+          if (!sig) {
+            failures.push(
+              `clause 2: could not extract the method signature after @Mutation at offset ${pos}`,
+            );
+            continue;
+          }
+          const body = this.bodyFrom(resolverSrc, sig.start);
+          if (!REF_ARG.test(body)) continue; // no caller-supplied resource reference
+
+          if (/channelAccess\.assert\w*\s*\(/.test(body)) {
+            assertedCount++;
+            continue;
+          }
+
+          const entry = SERVICE_GUARD_ALLOWLIST[sig.name];
+          if (!entry) {
+            failures.push(
+              `clause 2 (no unasserted tenant mutation): ${sig.name} takes a caller-supplied resource reference but has no channelAccess.assert in its body and no SERVICE_GUARD_ALLOWLIST entry`,
+            );
+            continue;
+          }
+          usedAllowlist.add(sig.name);
+          const svcRaw = readOrNull(entry.service);
+          if (!svcRaw) {
+            failures.push(
+              `clause 2: allowlist entry ${sig.name} → ${entry.service} no longer exists`,
+            );
+            continue;
+          }
+          const svcSrc = this.stripComments(svcRaw);
+          const at = svcSrc.indexOf(entry.method);
+          if (at === -1) {
+            failures.push(
+              `clause 2: allowlist entry ${sig.name} → ${entry.method} not found in ${entry.service} — method renamed?`,
+            );
+            continue;
+          }
+          const svcBody = this.methodBodyAt(svcSrc, at + entry.method.indexOf('('));
+          if (!entry.guard.test(svcBody)) {
+            failures.push(
+              `clause 2: allowlist entry ${sig.name} — ${entry.service} ${entry.method} no longer matches ${entry.guard} — the service-level ownership gate was removed`,
+            );
+            continue;
+          }
+          allowlistedCount++;
+        }
+
+        // Stale entries block the shrink-only direction: an allowlist entry no
+        // flagged mutation uses must be deleted (the baseline shrinks), not
+        // left behind as future false coverage.
+        for (const name of Object.keys(SERVICE_GUARD_ALLOWLIST)) {
+          if (!usedAllowlist.has(name)) {
+            failures.push(
+              `clause 2: stale SERVICE_GUARD_ALLOWLIST entry "${name}" is not used by any flagged mutation — delete it (shrink-only)`,
+            );
+          }
+        }
+        if (Object.keys(SERVICE_GUARD_ALLOWLIST).length > ALLOWLIST_MAX) {
+          failures.push(
+            `clause 2: SERVICE_GUARD_ALLOWLIST has ${Object.keys(SERVICE_GUARD_ALLOWLIST).length} entries > ALLOWLIST_MAX=${ALLOWLIST_MAX} — the allowlist can only shrink`,
+          );
+        }
+      }
+    }
+
+    const passed = failures.length === 0;
+    return {
+      checker: this.name,
+      name: 'assertion-coverage',
+      passed,
+      severity: passed ? 'info' : 'error',
+      message: passed
+        ? `ADR-048 ratchet: ${guardCount} guards all called; ${assertedCount} tenant mutations assert in-resolver, ${allowlistedCount} allowlisted (max ${ALLOWLIST_MAX}); ${mutationCount} total @Mutation`
+        : failures.join('; '),
+      details: passed
+        ? 'Clause 1: no dead guards. Clause 2: no unasserted tenant mutation. Platform-gated mutations exempt per ADR-048 (permission is the tenancy boundary).'
+        : failures.map(f => `  - ${f}`).join('\n'),
+    };
+  }
+
+  /** Remove block and line comments so prose cannot fake a call site or a guard. */
+  private stripComments(src: string): string {
+    return src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '');
+  }
+
+  /** Nearest preceding `@Allow(` … marker slice (the method's decorator block). */
+  private decoratorSlice(source: string, markerPos: number): string {
+    const before = source.slice(0, markerPos);
+    const allowAt = before.lastIndexOf('@Allow(');
+    return allowAt === -1 ? '' : before.slice(allowAt, markerPos);
+  }
+
+  /** Method name + start offset of the declaration following an @Mutation() marker. */
+  private signatureAt(source: string, markerPos: number): { name: string; start: number } | null {
+    const after = source.slice(markerPos);
+    const m = after.match(/^ {2}(?:async\s+)?([A-Za-z0-9_]+)\s*\(/m);
+    if (!m || m.index === undefined) return null;
+    return { name: m[1], start: markerPos + m.index + m[0].indexOf(m[1]) };
+  }
+
+  /**
+   * Resolver method body: from its declaration to the next sibling decorator
+   * (`@Allow`/`@Query`/`@Mutation` at class-member indentation). Comments are
+   * already stripped by the caller.
+   */
+  private bodyFrom(source: string, start: number): string {
+    const rest = source.slice(start + 1);
+    const next = rest.search(/^ {2}@(Allow|Query|Mutation)\(/m);
+    return next === -1 ? source.slice(start) : source.slice(start, start + 1 + next);
+  }
+
+  /**
+   * Service method body: from `sigStart` (an offset inside the method's
+   * declaration) to the next class-member declaration at 2-space indentation.
+   * Services carry no `@Allow` decorators, so the resolver cut does not apply —
+   * and cutting at the next method keeps a later method's assert from
+   * falsely satisfying this method's allowlist guard pattern.
+   */
+  private methodBodyAt(source: string, sigStart: number): string {
+    const rest = source.slice(sigStart + 1);
+    const next = rest.search(
+      /^ {2}(?:private |public |protected |static |readonly |async )*[A-Za-z0-9_]+\s*\(/m,
+    );
+    return next === -1 ? source.slice(sigStart) : source.slice(sigStart, sigStart + 1 + next);
+  }
 }
+
+/** Caller-supplied resource references that must be ownership-asserted (ADR-048). */
+const REF_ARG =
+  /@Args\(\s*"(?:id|roomId|sessionId|organizationId|registrationId|templateId|failedMeetingId|meetingId|productId|entitlementId)"|@Args\(\s*"input"|input\.(?:organizationId|roomId|resourceId|sessionId|channelId)/;
+
+/**
+ * Shrink-only allowlist: mutations whose ownership guard is load-bearing in
+ * the delegated service and cannot be asserted before delegation without
+ * loading the target row first (ADR-048). Each entry re-verifies the service
+ * guard on every run; stale entries fail the run (shrink-only); size is capped
+ * by ALLOWLIST_MAX. `guard` is tested against the comment-stripped body of the
+ * mapped service method.
+ */
+const ALLOWLIST_MAX = 8;
+const SERVICE_GUARD_ALLOWLIST: Record<
+  string,
+  { service: string; method: string; guard: RegExp }
+> = {
+  createBbbOrganization: {
+    service: 'src/plugins/bigbluebutton-plugin/services/bbb-organization.service.ts',
+    method: 'async create(',
+    guard: /isPlatformCaller/, // BUG-050: channel-targeting check
+  },
+  createBbbScheduledSession: {
+    service: 'src/plugins/bigbluebutton-plugin/services/bbb-scheduled-session.service.ts',
+    method: 'async create(',
+    guard: /channelAccess\.assert/,
+  },
+  updateBbbScheduledSession: {
+    service: 'src/plugins/bigbluebutton-plugin/services/bbb-scheduled-session.service.ts',
+    method: 'async update(',
+    guard: /channelAccess\.assert/,
+  },
+  cancelBbbScheduledSession: {
+    service: 'src/plugins/bigbluebutton-plugin/services/bbb-scheduled-session.service.ts',
+    method: 'async cancel(',
+    guard: /channelAccess\.assert/,
+  },
+  publishBbbScheduledSession: {
+    service: 'src/plugins/bigbluebutton-plugin/services/bbb-scheduled-session.service.ts',
+    method: 'async publish(',
+    guard: /channelAccess\.assert/,
+  },
+  createBbbSessionTemplate: {
+    service: 'src/plugins/bigbluebutton-plugin/services/bbb-scheduled-session.service.ts',
+    method: 'async createTemplate(',
+    guard: /channelAccess\.assert/,
+  },
+  deleteBbbSessionTemplate: {
+    service: 'src/plugins/bigbluebutton-plugin/services/bbb-scheduled-session.service.ts',
+    method: 'async deleteTemplate(',
+    guard: /channelAccess\.assert/,
+  },
+  createSessionsFromTemplate: {
+    service: 'src/plugins/bigbluebutton-plugin/services/bbb-scheduled-session.service.ts',
+    method: 'async createSessionsFromTemplate(',
+    guard: /channelAccess\.assert/,
+  },
+};

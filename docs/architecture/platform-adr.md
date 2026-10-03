@@ -1032,19 +1032,92 @@ For `deleteBbbRoom`, `assertRoomAccess` is called before the `delete` call.
 
 **Shrink-only ratchet (invariant checker):**
 
-A new `assertionCoverage` invariant check is added to `adr.checker.ts`:
+Implemented as `assertionCoverage()` in `src/platform/invariants/adr.checker.ts`
+(registered via `AdrChecker.check()`; `AdrChecker` is already wired into
+`src/platform/invariants/cli.ts`). Two clauses:
 
 ```
-∀ assert*Access function in BbbChannelAccessService
-  ⇒ ∃ ≥1 call site in bbb-admin.resolver.ts or bbb-shop.resolver.ts
+Clause 1 (no dead guards):
+  ∀ assert*Access function declared in bbb-channel-access.service.ts
+    ⇒ ∃ ≥1 production call site (comment-stripped `name(` occurrence) in
+      src/**, excluding tests, the defining service, and src/platform/**
+      (invariant checkers mention the names in regexes — they are not callers).
 
-∀ @Mutation in BbbAdminResolver that has an id/org argument
-  ⇒ ∃ ≥1 channelAccess.assert* call in its method body
+Clause 2 (no unasserted tenant mutation):
+  ∀ @Mutation in bbb-admin.resolver.ts whose @Allow does NOT include
+    BbbPlatformInfrastructurePermission.Permission
+    and whose body references a caller-supplied resource id
+    (@Args id/roomId/sessionId/organizationId/registrationId/templateId/
+     failedMeetingId/meetingId, or input.organizationId/roomId/resourceId/
+     channelId/sessionId)
+    ⇒ body contains `channelAccess.assert…(`, OR the method is a named,
+      verified entry in SERVICE_GUARD_ALLOWLIST.
 ```
+
+**Allowlist (shrink-only; each entry verified on every run):** eight mutations
+whose ownership guard is load-bearing in the delegated service and cannot be
+asserted in the resolver *before* the delegation without loading the target row
+first — `createBbbScheduledSession`, `updateBbbScheduledSession`,
+`cancelBbbScheduledSession`, `publishBbbScheduledSession`,
+`createBbbSessionTemplate`, `deleteBbbSessionTemplate`,
+`createSessionsFromTemplate` (all guarded in `bbb-scheduled-session.service.ts`,
+e2e-covered by S5/S7) and `createBbbOrganization` (BUG-050's channel-targeting
+guard in `BbbOrganizationService.create`). The checker re-reads the mapped
+service method on every run and fails if the guard pattern is gone, fails on
+stale allowlist entries no flagged mutation uses, and fails if the list grows
+past `ALLOWLIST_MAX = 8` — so the list can only shrink, and a service-guard
+deletion turns the run red immediately.
+
+**Exemptions (documented, not silent):** platform-gated mutations
+(`@Allow(…, BBBPlatformInfrastructurePermission.Permission)` — servers,
+platform capacity policies, `setBbbOrganizationBilling`) are acts of the
+platform tier; their tenancy boundary is the permission itself (ADR-033), and
+the two channel-scoped platform mutations (`createBbbCapacityGrant`,
+`deleteBbbOrganization`) still carry explicit asserts as defence in depth.
+
+**Amendments recorded with the implementation (2026-10-03):**
+
+1. Clause 1 as originally drafted ("call site in `bbb-admin.resolver.ts` or
+   `bbb-shop.resolver.ts`") was too narrow: `assertSessionAccess` and friends
+   are deliberately called from *services* (e.g. `bbb-scheduled-session.service.ts`),
+   and the trial-registration guard is service-level by design. The clause now
+   reads "≥1 production call site anywhere outside tests" — the property that
+   matters is *a dead guard cannot exist*, not *where the caller lives*.
+2. `assertCapacityGrantAccess` was **deleted**: no query or mutation accepts a
+   grant id (`bbbCapacityGrants` reads by `organizationId` and asserts
+   `assertOrganizationAccess`; minting is platform-gated), so the guard had
+   zero call sites and zero surfaces to protect. A guard for a surface that
+   does not exist is exactly the false-coverage smell clause 1 exists to catch.
+   If a by-id grant surface is ever added, the guard (and its call site) must
+   return together — clause 1 fails the moment a new `assert*Access` appears
+   uncalled.
+3. `assertTrialRegistrationAccess` gained its call sites in this change:
+   `updateBbbTrialRegistrationStatus` and `convertTrialToEnrollment` assert in
+   the resolver before delegating (the service-level
+   `TrialRegistrationService.assertRegistrationAccess` remains as defence in
+   depth).
+4. Nine bare-id tenant mutations gained resolver-body asserts so clause 2 holds
+   without growing the allowlist: `retryBbbMeeting`, `updateBbbMeeting`,
+   `deleteBbbMeeting`, `endBbbMeeting`, `resetBbbRoom`, `bbbStartRoom`,
+   `updateBbbOrganization`, `updateBbbTrialRegistrationStatus`,
+   `convertTrialToEnrollment` (SOURCE registration only — see below). Each is
+   a redundant second gate — the service it delegates to already asserts —
+   which is the intent: the resolver boundary is where a future refactor
+   cannot silently drop the check without this invariant noticing. A tenth
+   surface, the `bbbProductAccessByRoom` read, gained `assertRoomAccess` for
+   INV-029 read parity (clause 2 covers `@Mutation` only, but the audit that
+   built the clause found it unguarded).
+5. `convertTrialToEnrollment` deliberately asserts ONLY the source
+   registration in the resolver. Asserting the target room up-front would
+   convert the service's EntityNotFoundError contract ("another tenant's room
+   OR no room at all → not a room of this organization", S5-pinned) into
+   ForbiddenError and leak room existence across tenants. The target-room org
+   check stays load-bearing in `TrialRegistrationService.convertToEnrollment`
+   (verified by the S5 D5-mirror negative test, not by this ratchet).
 
 This ratchet can only shrink (number of asserted mutations can only grow or stay equal on each
-commit). Removing an assert without replacing it with a stronger mechanism fails the invariant.
-The checker is run as part of the standard gate sequence before push.
+commit; the allowlist can only shrink or stay equal). Removing an assert without replacing it with a stronger mechanism fails the invariant.
+The checker is run as part of the standard gate sequence before push (`npm run verify:invariants`).
 
 **Consequences:**
 

@@ -2885,11 +2885,39 @@ describe('BBB Channel Isolation (Phase A)', () => {
       );
       expect(err).toBeTruthy();
       expect(String(err.message)).toMatch(/not currently authorized/i);
-      // Confirm the row still exists (not deleted).
+      // Confirm the row is still ACTIVE (removeMember soft-deletes via
+      // active=false, so the denial check is "still active", not "still
+      // exists" — a deleted-then-rejected row would still be found).
       const memberRepo = connection.getRepository(superCtx, BbbOrganizationMember);
       const rawId = memberAId.replace(/^T_/, '');
       const still = await memberRepo.findOne({ where: { id: rawId as any } });
       expect(still).toBeTruthy();
+      expect(still?.active).toBe(true);
+    });
+
+    it('removeBbbMember: tenant A CAN remove a member from its own organization', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      // Create a fresh member so the shared memberAId fixture survives.
+      const freshCustomer: any = await adminClient.query(CREATE_CUSTOMER, {
+        input: {
+          firstName: 'S7',
+          lastName: 'RemovableMember',
+          emailAddress: `s7-removable-member-${Date.now()}@example.com`,
+        },
+      });
+      const fresh: any = await adminClient.query(ADD_BBB_MEMBER, {
+        input: { organizationId: orgAId, customerId: freshCustomer.createCustomer.id, role: 'trainer' },
+      });
+      const res: any = await adminClient.query(REMOVE_BBB_MEMBER, { id: fresh.addBbbMember.id });
+      expect(res.removeBbbMember.id).toBeTruthy();
+      // removeMember is a soft-delete (active=false) — the row survives but
+      // is deactivated, same contract as deactivateBbbEnrollment.
+      const memberRepo = connection.getRepository(superCtx, BbbOrganizationMember);
+      const deactivated = await memberRepo.findOne({
+        where: { id: String(fresh.addBbbMember.id).replace(/^T_/, '') as any },
+      });
+      expect(deactivated?.active).toBe(false);
     });
 
     // ── createBbbOrgMembership ──────────────────────────────────────────────
@@ -2973,6 +3001,36 @@ describe('BBB Channel Isolation (Phase A)', () => {
       const row = await connection.getRepository(superCtx, BbbOrganizationMembership)
         .findOne({ where: { id: membershipAId.replace(/^T_/, '') as any } });
       expect(row).toBeTruthy();
+    });
+
+    it('removeBbbOrgMembership: tenant A CAN remove a membership from its own org', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      // Create a fresh membership so the shared membershipAId fixture survives.
+      const freshCustomer: any = await adminClient.query(CREATE_CUSTOMER, {
+        input: {
+          firstName: 'S7',
+          lastName: 'RemovableMembership',
+          emailAddress: `s7-removable-membership-${Date.now()}@example.com`,
+        },
+      });
+      const fresh: any = await adminClient.query(CREATE_BBB_ORG_MEMBERSHIP, {
+        input: {
+          organizationId: orgAId,
+          customerId: freshCustomer.createCustomer.id,
+          channelId: tenantAChannelIdEncoded,
+          role: 'staff',
+        },
+      });
+      const res: any = await adminClient.query(REMOVE_BBB_ORG_MEMBERSHIP, {
+        id: fresh.createBbbOrgMembership.id,
+      });
+      expect(res.removeBbbOrgMembership).toBe(true);
+      const gone = await connection.getRepository(superCtx, BbbOrganizationMembership)
+        .findOne({
+          where: { id: String(fresh.createBbbOrgMembership.id).replace(/^T_/, '') as any },
+        });
+      expect(gone).toBeNull();
     });
 
     // ── createBbbMeeting ────────────────────────────────────────────────────
@@ -3094,6 +3152,24 @@ describe('BBB Channel Isolation (Phase A)', () => {
       expect(row).toBeTruthy();
     });
 
+    it('deleteBbbRoom: tenant A CAN delete a room in its own org', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      // Create a fresh room so the shared roomAId fixture survives.
+      const fresh: any = await adminClient.query(CREATE_BBB_ROOM, {
+        input: { organizationId: orgAId, name: 'S7 Deletable Room' },
+      });
+      const res: any = await adminClient.query(DELETE_BBB_ROOM, {
+        id: fresh.createBbbRoom.id,
+      });
+      expect(res.deleteBbbRoom).toBe(true);
+      const gone = await connection.getRepository(superCtx, BbbRoom)
+        .findOne({
+          where: { id: String(fresh.createBbbRoom.id).replace(/^T_/, '') as any },
+        });
+      expect(gone).toBeNull();
+    });
+
     // ── createBbbProductAccess ───────────────────────────────────────────────
 
     it('createBbbProductAccess: tenant B CANNOT create product access on tenant A room', async () => {
@@ -3137,6 +3213,28 @@ describe('BBB Channel Isolation (Phase A)', () => {
       );
       expect(err).toBeTruthy();
       expect(String(err.message)).toMatch(/not currently authorized/i);
+    });
+
+    it('deleteBbbProductAccess: tenant A CAN delete product access on its own room', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      // Delete the row the positive create test minted (unique productVariantId
+      // means a second create would violate the unique index — so this positive
+      // consumes that fixture instead of creating a fresh one).
+      const productAccessRepo = connection.getRepository(superCtx, BbbProductAccess);
+      const rowA = await productAccessRepo.findOne({
+        where: { room: { id: roomAId.replace(/^T_/, '') as any } as any },
+        relations: ['room'],
+      });
+      expect(rowA).toBeTruthy();
+      const res: any = await adminClient.query(DELETE_BBB_PRODUCT_ACCESS, {
+        id: enc(rowA!.id),
+      });
+      expect(res.deleteBbbProductAccess).toBe(true);
+      const gone = await productAccessRepo.findOne({
+        where: { id: rowA!.id as any },
+      });
+      expect(gone).toBeNull();
     });
 
     // ── createBbbEnrollment ──────────────────────────────────────────────────

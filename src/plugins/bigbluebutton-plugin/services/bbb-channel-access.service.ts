@@ -13,7 +13,6 @@ import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
-import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbOrganizationMember } from "../entities/bbb-organization-member.entity";
 import { BbbOrganizationMembership } from "../entities/bbb-organization-membership.entity";
@@ -285,46 +284,6 @@ export class BbbChannelAccessService {
     }
 
     return entitlement;
-  }
-
-  /**
-   * Assert that the active user can access the given capacity grant.
-   * BbbCapacityGrant is organization-owned — resolve through organization.
-   */
-  async assertCapacityGrantAccess(
-    ctx: RequestContext,
-    grantId: ID,
-  ): Promise<BbbCapacityGrant | undefined> {
-    if (this.isSuperAdmin(ctx)) return undefined;
-
-    const channelId = ctx.channelId as string;
-    const grant = await this.connection
-      .getRepository(ctx, BbbCapacityGrant)
-      .findOne({
-        where: { id: grantId as string },
-        relations: ["organization"],
-      });
-
-    if (!grant) {
-      throw new ForbiddenError();
-    }
-
-    if (grant.organization) {
-      if (String(grant.organization.channelId) !== String(channelId)) {
-        throw new ForbiddenError();
-      }
-    } else {
-      const org = await this.connection
-        .getRepository(ctx, BbbOrganization)
-        .findOne({
-          where: { id: (grant as any).organizationId as string },
-        });
-      if (!org || String(org.channelId) !== String(channelId)) {
-        throw new ForbiddenError();
-      }
-    }
-
-    return grant;
   }
 
   /**

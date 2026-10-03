@@ -291,11 +291,15 @@ export class BbbAdminResolver {
   @Allow(BbbAdminPermission.Permission, BbbManageOrganizationsPermission.Permission)
   @Transaction()
   @Mutation()
-  updateBbbOrganization(
+  async updateBbbOrganization(
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
     @Args("input") input: UpdateBbbOrganizationInput,
   ) {
+    // ADR-048: assert the caller owns the organization before the allowlisted
+    // write. The service asserts too — this is the resolver-boundary gate the
+    // assertionCoverage ratchet pins.
+    await this.channelAccess.assertOrganizationAccess(ctx, id);
     return this.orgService.update(ctx, id, input);
   }
 
@@ -502,6 +506,9 @@ export class BbbAdminResolver {
     @Ctx() ctx: RequestContext,
     @Args("failedMeetingId") failedMeetingId: string,
   ): Promise<BbbMeeting> {
+    // ADR-048: assert ownership of the failed meeting before reading it —
+    // findById asserts too, but the resolver boundary must not depend on that.
+    await this.channelAccess.assertMeetingAccess(ctx, failedMeetingId);
     const failed = await this.meetingService.findById(ctx, failedMeetingId);
     if (!failed) {
       throw new EntityNotFoundError("BbbMeeting", failedMeetingId);
@@ -565,11 +572,14 @@ export class BbbAdminResolver {
   @Allow(BbbAdminPermission.Permission, BbbManageMeetingsPermission.Permission)
   @Transaction()
   @Mutation()
-  updateBbbMeeting(
+  async updateBbbMeeting(
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
     @Args("input") input: UpdateBbbMeetingInput,
   ) {
+    // ADR-048: assert before delegating (meetingService.update also asserts
+    // via findById — double gate, resolver boundary pinned by the ratchet).
+    await this.channelAccess.assertMeetingAccess(ctx, id);
     return this.meetingService.update(ctx, id, input);
   }
 
@@ -580,6 +590,8 @@ export class BbbAdminResolver {
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
   ): Promise<boolean> {
+    // ADR-048: assert before deleting.
+    await this.channelAccess.assertMeetingAccess(ctx, id);
     await this.meetingService.delete(ctx, id);
     return true;
   }
@@ -587,7 +599,9 @@ export class BbbAdminResolver {
   @Allow(BbbAdminPermission.Permission, BbbManageMeetingsPermission.Permission)
   @Transaction()
   @Mutation()
-  endBbbMeeting(@Ctx() ctx: RequestContext, @Args("id") id: string) {
+  async endBbbMeeting(@Ctx() ctx: RequestContext, @Args("id") id: string) {
+    // ADR-048: assert before transitioning the meeting's state.
+    await this.channelAccess.assertMeetingAccess(ctx, id);
     return this.meetingService.endMeeting(ctx, id);
   }
 
@@ -800,7 +814,9 @@ export class BbbAdminResolver {
   @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   @Transaction()
   @Mutation()
-  resetBbbRoom(@Ctx() ctx: RequestContext, @Args("id") id: string) {
+  async resetBbbRoom(@Ctx() ctx: RequestContext, @Args("id") id: string) {
+    // ADR-048: assert before resetting the room FSM (service asserts too).
+    await this.channelAccess.assertRoomAccess(ctx, id);
     return this.roomService.resetFailedRoom(ctx, id);
   }
 
@@ -817,12 +833,15 @@ export class BbbAdminResolver {
    */
   @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   @Mutation()
-  bbbStartRoom(
+  async bbbStartRoom(
     @Ctx() ctx: RequestContext,
     @Args("roomId") roomId: string,
     @Args("moderatorName") moderatorName?: string,
     @Args("waitMs") waitMs?: number,
   ) {
+    // ADR-048: assert at the resolver boundary before any provisioning work
+    // starts — the service's room assert remains as defence in depth.
+    await this.channelAccess.assertRoomAccess(ctx, roomId);
     return this.meetingService.startRoomAsModerator(ctx, roomId, {
       moderatorName,
       waitMs,
@@ -833,10 +852,16 @@ export class BbbAdminResolver {
 
   @Query()
   @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
-  bbbProductAccessByRoom(
+  async bbbProductAccessByRoom(
     @Ctx() ctx: RequestContext,
     @Args("roomId") roomId: string,
   ): Promise<BbbProductAccess[]> {
+    // INV-029 read parity: this read took an arbitrary roomId with no channel
+    // filter (found while auditing resolver bodies for ADR-048 clause 2 — the
+    // clause itself only covers @Mutation). Cross-tenant row metadata
+    // (variant id, access window) is withheld the same way the other six
+    // admin reads withhold it.
+    await this.channelAccess.assertRoomAccess(ctx, roomId);
     return this.connection
       .getRepository(ctx, BbbProductAccess)
       .find({ where: { room: { id: roomId } }, relations: ["room"] });
@@ -1085,6 +1110,10 @@ export class BbbAdminResolver {
     @Args("id") id: string,
     @Args("status") status: "REGISTERED" | "ATTENDED" | "CANCELLED" | "NO_SHOW",
   ): Promise<BbbTrialRegistration> {
+    // ADR-048: assert the caller owns the registration's session's org before
+    // the write. This is assertTrialRegistrationAccess's resolver call site —
+    // the service-level assertRegistrationAccess stays as defence in depth.
+    await this.channelAccess.assertTrialRegistrationAccess(ctx, id);
     return this.trialRegistrationService.updateStatus(ctx, String(id), status);
   }
 
@@ -1097,6 +1126,13 @@ export class BbbAdminResolver {
     @Args("roomId") roomId: string,
     @Args("accessDays") accessDays?: number,
   ): Promise<BbbEntitlement> {
+    // ADR-048: assert the SOURCE registration the mutation crosses
+    // (session → org). The TARGET-room org check stays load-bearing in
+    // TrialRegistrationService.convertToEnrollment, which must resolve the
+    // room against the registration's org to preserve the EntityNotFoundError
+    // contract — asserting the room up-front here would convert a "not a room
+    // of this org" answer into ForbiddenError (and leak room existence).
+    await this.channelAccess.assertTrialRegistrationAccess(ctx, registrationId);
     return this.trialRegistrationService.convertToEnrollment(
       ctx,
       registrationId,
