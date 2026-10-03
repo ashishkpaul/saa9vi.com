@@ -142,7 +142,7 @@ export class MarketplaceEventListener implements OnApplicationBootstrap {
 
     const instructors = await this.connection.rawConnection
       .getRepository(InstructorProfile)
-      .find({ where: { channelId }, select: ['id'] });
+      .find({ where: { channelId: Number(channelId) }, select: ['id'] });
     for (const instructor of instructors) {
       await this.indexQueue.addIndexInstructorJob(String(instructor.id));
     }

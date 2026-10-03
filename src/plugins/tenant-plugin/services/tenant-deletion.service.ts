@@ -30,7 +30,7 @@ export class TenantDeletionService {
 
     const profiles = await this.connection
       .getRepository(ctx, InstructorProfile)
-      .find({ where: { customerId: String(customerId), channelId } });
+      .find({ where: { customerId: String(customerId), channelId: Number(channelId) } });
 
     for (const profile of profiles) {
       profile.fullName = "[deleted]";

@@ -280,7 +280,7 @@ describe('CustomerDeletion (INV-013)', () => {
     await instructorRepo.save(
       new InstructorProfile({
         customerId,
-        channelId: tenantChannelId,
+        channelId: Number(tenantChannelId),
         slug: 'john-doe',
         fullName: 'John Doe',
         bio: 'Math teacher',
@@ -499,7 +499,7 @@ describe('CustomerDeletion (INV-013)', () => {
       await connection.getRepository(undefined, InstructorProfile).save(
         new InstructorProfile({
           customerId: leaveCustomerId,
-          channelId: tenantChannelId,
+          channelId: Number(tenantChannelId),
           slug: 'leave-me',
           fullName: 'Leave Me',
           bio: 'Physics teacher',
@@ -532,7 +532,7 @@ describe('CustomerDeletion (INV-013)', () => {
       const connection = server.app.get(TransactionalConnection);
       const profiles = await connection
         .getRepository(undefined, InstructorProfile)
-        .find({ where: { customerId: leaveCustomerId, channelId: tenantChannelId } });
+        .find({ where: { customerId: leaveCustomerId, channelId: Number(tenantChannelId) } });
 
       for (const p of profiles) {
         expect(p.fullName).toBe('[deleted]');

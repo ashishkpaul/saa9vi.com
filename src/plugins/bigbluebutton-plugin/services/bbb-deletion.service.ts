@@ -94,7 +94,7 @@ export class BbbDeletionService {
     // 5. Delete instructor assignments (resolved via InstructorProfile)
     const instructorProfiles = await this.connection
       .getRepository(ctx, InstructorProfile)
-      .find({ where: { customerId: String(customerId), channelId } });
+      .find({ where: { customerId: String(customerId), channelId: Number(channelId) } });
 
     for (const profile of instructorProfiles) {
       await this.connection.getRepository(ctx, BbbInstructorAssignment).delete({
