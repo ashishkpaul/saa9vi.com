@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { Link } from '@vendure/dashboard';
 import { useCurrentOrganization } from '../../shared/useCurrentOrganization';
 import { formatPaiseInr } from '../../../shared/format';
+import { resolveListState } from '../../../../../platform/dashboard/query-state';
 
 // ─── S6 (Phase 6 UX completion) — Room detail ───────────────────────────────
 // Room is the primary user-facing resource, so its detail screen carries the
@@ -17,7 +18,10 @@ import { formatPaiseInr } from '../../../shared/format';
 // Everything here reads through existing Admin API documents (no backend
 // change):
 //   · Overview     — counts, rate, this month's usage/charge for this room,
-//                    today's student-minutes, Start class (A22).
+//                    today's student-minutes, Start class (A22). The header
+//                    count is ENROLLED learners (access rights), never live or
+//                    past attendance — the label must say so, else it
+//                    disagrees with the BBB analytics every session.
 //   · People       — Trainers (org-wide, READ-ONLY: all academy trainers can
 //                    teach in any room — D5, no per-room ACL) + Students
 //                    (enrollments for this room, with access-until).
@@ -275,9 +279,17 @@ export function RoomDetailPage({ route }: { route: AnyRoute }) {
     queryFn: () => api.query(ROOM_METERED, { month, take: 200 }),
     enabled: !!id && (tab === 'overview' || tab === 'recordings'),
   });
-  const roomMetered = ((meteredQuery.data as any)?.bbbMeteredMeetings?.items ?? []).filter(
-    (m: any) => m.roomId === id,
+  // INV-015: resolveListState prevents a rejected or disabled query from
+  // rendering as "no metered meetings". The raw filter below is safe only
+  // once status === 'ready'.
+  const meteredState = resolveListState(
+    meteredQuery,
+    (data: any) => data?.bbbMeteredMeetings,
+    { expected: 'bbbMeteredMeetings', blocked: !id },
   );
+  const roomMetered: any[] = meteredState.status === 'ready'
+    ? (meteredState.items as any[]).filter((m: any) => m.roomId === id)
+    : [];
   const todayMinutes = roomMetered
     .filter((m: any) => isToday(m.startedAt))
     .reduce((sum: number, m: any) => sum + (m.learnerMinutes ?? 0), 0);
@@ -287,9 +299,18 @@ export function RoomDetailPage({ route }: { route: AnyRoute }) {
     queryFn: () => api.query(ROOM_SESSIONS, { organizationId }),
     enabled: !!organizationId && (tab === 'sessions' || tab === 'attendance'),
   });
-  const roomSessions: any[] = ((sessionsQuery.data as any)?.bbbScheduledSessions ?? [])
-    .filter((s: any) => s.roomId === id)
-    .sort((a: any, b: any) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
+  // INV-015: bbbScheduledSessions returns a flat array (no items wrapper).
+  // resolveListState accepts bare arrays as well as paginated list payloads.
+  const sessionsState = resolveListState(
+    sessionsQuery,
+    (data: any) => data?.bbbScheduledSessions,
+    { expected: 'bbbScheduledSessions', blocked: !organizationId },
+  );
+  const roomSessions: any[] = sessionsState.status === 'ready'
+    ? [...sessionsState.items]
+        .filter((s: any) => s.roomId === id)
+        .sort((a: any, b: any) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())
+    : [];
 
   // Phase 5.6 — attendance for this room = the existing per-session summary over
   // the sessions linked to it (there is no room-scoped attendance read). One
@@ -312,14 +333,28 @@ export function RoomDetailPage({ route }: { route: AnyRoute }) {
     queryFn: () => api.query(ROOM_TRAINERS, { organizationId }),
     enabled: !!organizationId && (tab === 'people' || tab === 'sessions'),
   });
-  const trainers: any[] = (trainersQuery.data as any)?.bbbOrganizationMembers?.items ?? [];
+  // INV-015: prevents a permission error or missing field from rendering as
+  // "no trainers" — which could hide an authorization bug or API regression.
+  const trainersState = resolveListState(
+    trainersQuery,
+    (data: any) => data?.bbbOrganizationMembers,
+    { expected: 'bbbOrganizationMembers', blocked: !organizationId },
+  );
+  const trainers: any[] = trainersState.status === 'ready' ? [...trainersState.items] : [];
 
   const studentsQuery = useQuery({
     queryKey: ['bbbRoomStudents', id],
     queryFn: () => api.query(ROOM_STUDENTS, { roomId: id }),
     enabled: !!id && tab === 'people',
   });
-  const students: any[] = (studentsQuery.data as any)?.bbbEnrollmentsByRoom?.items ?? [];
+  // INV-015: same rationale — a rejected query must not silently become
+  // "no students enrolled".
+  const studentsState = resolveListState(
+    studentsQuery,
+    (data: any) => data?.bbbEnrollmentsByRoom,
+    { expected: 'bbbEnrollmentsByRoom', blocked: !id },
+  );
+  const students: any[] = studentsState.status === 'ready' ? [...studentsState.items] : [];
   const updateMutation = useMutation({
     mutationFn: (input: any) => api.mutate(UPDATE_ROOM, { id, input }),
     onSuccess: () => {
@@ -437,10 +472,13 @@ export function RoomDetailPage({ route }: { route: AnyRoute }) {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Card>
             <div className="p-6">
-              <div className="text-sm text-muted-foreground">Students</div>
+              <div className="text-sm text-muted-foreground">Enrolled</div>
               <div className="text-2xl font-bold">{room.studentCount ?? 0}</div>
               <div className="mt-1 text-sm text-muted-foreground">
                 {room.maxParticipants ? `Capacity ${room.maxParticipants}` : 'No capacity set'}
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Learners with access — not attendance. See Meetings for who joined.
               </div>
             </div>
           </Card>
@@ -483,8 +521,12 @@ export function RoomDetailPage({ route }: { route: AnyRoute }) {
                 Every academy trainer can teach in any room
               </div>
             </div>
-            {trainersQuery.isLoading ? (
+            {trainersState.status === 'blocked' ? (
+              <div className="p-6 text-center text-muted-foreground">No organization is bound to this channel</div>
+            ) : trainersState.status === 'loading' ? (
               <div className="p-4 space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
+            ) : trainersState.status === 'error' ? (
+              <div className="p-6 text-center text-red-500">Failed to load trainers</div>
             ) : trainers.length === 0 ? (
               <div className="p-6 text-center text-muted-foreground">
                 No trainers yet. Add trainers from <Link to="/bbb/people" className="text-blue-500 hover:underline">People</Link>.
@@ -519,14 +561,16 @@ export function RoomDetailPage({ route }: { route: AnyRoute }) {
 
           <Card>
             <div className="flex items-center justify-between border-b px-4 py-3">
-              <div className="font-medium">Students</div>
+              <div className="font-medium">Enrolled learners</div>
               <Link to="/bbb/enrollments" className="text-sm text-blue-500 hover:underline">Manage access</Link>
             </div>
-            {studentsQuery.isLoading ? (
+            {studentsState.status === 'loading' ? (
               <div className="p-4 space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
+            ) : studentsState.status === 'error' ? (
+              <div className="p-6 text-center text-red-500">Failed to load enrolled learners</div>
             ) : students.length === 0 ? (
               <div className="p-6 text-center text-muted-foreground">
-                No students have access to this room yet. Grant access from{' '}
+                No learners enrolled in this room yet. Grant access from{' '}
                 <Link to="/bbb/enrollments" className="text-blue-500 hover:underline">Enrollments</Link>.
               </div>
             ) : (
@@ -573,9 +617,9 @@ export function RoomDetailPage({ route }: { route: AnyRoute }) {
                 Schedule a class
               </Button>
             </div>
-            {sessionsQuery.isLoading ? (
+            {sessionsState.status === 'loading' ? (
               <div className="p-4 space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
-            ) : sessionsQuery.isError ? (
+            ) : sessionsState.status === 'error' ? (
               <div className="p-6 text-center text-red-500">Failed to load sessions</div>
             ) : roomSessions.length === 0 ? (
               <div className="p-6 text-center text-muted-foreground">
@@ -618,7 +662,7 @@ export function RoomDetailPage({ route }: { route: AnyRoute }) {
       {tab === 'attendance' && (
         <Card>
           <div className="border-b px-4 py-3 font-medium">Attendance by class</div>
-          {sessionsQuery.isLoading || attendanceQuery.isLoading ? (
+          {sessionsState.status === 'loading' || attendanceQuery.isLoading ? (
             <div className="p-4 space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
           ) : roomSessions.length === 0 ? (
             <div className="p-6 text-center text-muted-foreground">
@@ -675,9 +719,11 @@ export function RoomDetailPage({ route }: { route: AnyRoute }) {
               />
             </div>
           </div>
-          {meteredQuery.isLoading ? (
-            <div className="p-4 space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
-          ) : roomMetered.length === 0 ? (
+          {meteredState.status === 'loading' ? (
+              <div className="p-4 space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
+            ) : meteredState.status === 'error' ? (
+              <div className="p-6 text-center text-red-500">Failed to load recordings</div>
+            ) : roomMetered.length === 0 ? (
             <div className="p-6 text-center text-muted-foreground">
               No classes recorded in this room in {month}.
             </div>

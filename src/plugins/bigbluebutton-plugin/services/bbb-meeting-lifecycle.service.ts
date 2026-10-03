@@ -232,6 +232,10 @@ export class MeetingLifecycleService {
       loggerCtx,
     );
 
+    // Capture before the assignment below — meeting.state is overwritten
+    // in place, so reading it in the structured log afterwards would report
+    // the NEW state as previousState (observed as previousState:"Stale").
+    const previousState = meeting.state;
     this.assertTransitionAllowed(meeting.state, MEETING_STATE.STALE);
     meeting.state = MEETING_STATE.STALE;
     meeting.failureReason = reason;
@@ -248,7 +252,7 @@ export class MeetingLifecycleService {
         meetingId: meeting.id,
         roomId: meeting.roomId,
         organizationId: meeting.organization?.id as string,
-        previousState: meeting.state,
+        previousState,
         reason,
         grantId: meeting.grantId,
       }),

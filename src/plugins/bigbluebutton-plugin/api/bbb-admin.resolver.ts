@@ -8,6 +8,7 @@ import { Args, Mutation, Query, Resolver } from "@nestjs/graphql";
 import {
   Allow,
   Ctx,
+  Permission,
   RequestContext,
   Transaction,
   TransactionalConnection,
@@ -23,6 +24,7 @@ import { BbbMeetingService } from "../services/bbb-meeting.service";
 import { BbbMemberService } from "../services/bbb-member.service";
 import { BbbScheduledSessionService } from "../services/bbb-scheduled-session.service";
 import { BbbRoomService } from "../services/bbb-room.service";
+import { BbbReconciliationService } from "../services/bbb-reconciliation.service";
 import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
@@ -124,6 +126,15 @@ interface UpdateBbbMeetingInput {
   recordingEnabled?: boolean;
 }
 
+/** Per-pass counts returned by runBbbReconciliation (mirrors the scheduled task result). */
+interface BbbReconciliationResult {
+  provisioningFixed: number;
+  activeReconciled: number;
+  roomsReconciled: number;
+  billingRecovered: number;
+  meteredRecovered: number;
+}
+
 interface CreateBbbRoomInput {
   organizationId: string;
   name: string;
@@ -193,6 +204,7 @@ export class BbbAdminResolver {
     private readonly connection: TransactionalConnection,
     private readonly attendanceAnalytics: AttendanceAnalyticsService,
     private readonly billingService: BbbBillingService,
+    private readonly reconciliationService: BbbReconciliationService,
   ) {}
 
   // ─── Capacity Intelligence Dashboard (ADR v1.7 §6A CI-003) ────────────────
@@ -603,6 +615,46 @@ export class BbbAdminResolver {
     // ADR-048: assert before transitioning the meeting's state.
     await this.channelAccess.assertMeetingAccess(ctx, id);
     return this.meetingService.endMeeting(ctx, id);
+  }
+
+  /**
+   * On-demand BBB reconciliation (SuperAdmin only).
+   *
+   * Runs the same five passes as the scheduled `bbb-reconciliation` task
+   * (stuck provisioning, active-meeting drift, room drift, grant billing
+   * recovery, metered billing recovery) and returns the per-pass counts, so
+   * future drift can be repaired through the app instead of raw SQL.
+   *
+   * Deliberately NOT @Transaction()'d and does NOT touch BbbMetricsService:
+   * each reconcile pass manages its own writes (some call out to the BBB
+   * API), and a manual trigger must not reset the scheduled task's current
+   * metrics window. The mutation takes no caller-supplied resource reference,
+   * so there is nothing to channel-assert — Permission.SuperAdmin itself is
+   * the tenancy boundary (same shape as marketplaceRefreshBaseline).
+   */
+  @Allow(Permission.SuperAdmin)
+  @Mutation()
+  async runBbbReconciliation(): Promise<BbbReconciliationResult> {
+    const [
+      provisioningFixed,
+      activeReconciled,
+      roomsReconciled,
+      billingRecovered,
+      meteredRecovered,
+    ] = await Promise.all([
+      this.reconciliationService.reconcileProvisioning(),
+      this.reconciliationService.reconcileActiveMeetings(),
+      this.reconciliationService.reconcileRooms(),
+      this.reconciliationService.reconcilePendingBilling(),
+      this.reconciliationService.reconcilePendingMeteredBilling(),
+    ]);
+    return {
+      provisioningFixed,
+      activeReconciled,
+      roomsReconciled,
+      billingRecovered,
+      meteredRecovered,
+    };
   }
 
   @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)

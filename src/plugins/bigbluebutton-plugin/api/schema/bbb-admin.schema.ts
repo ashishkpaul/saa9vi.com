@@ -305,6 +305,14 @@ export const adminApiExtensions = gql`
     totalItems: Int!
   }
 
+  type BbbReconciliationResult {
+    provisioningFixed: Int!
+    activeReconciled: Int!
+    roomsReconciled: Int!
+    billingRecovered: Int!
+    meteredRecovered: Int!
+  }
+
   # ─── Queries ─────────────────────────────────────────────────────────────────
 
   extend type Query {
@@ -385,6 +393,14 @@ export const adminApiExtensions = gql`
     updateBbbMeeting(id: ID!, input: UpdateBbbMeetingInput!): BbbMeeting!
     deleteBbbMeeting(id: ID!): Boolean!
     endBbbMeeting(id: ID!): BbbMeeting!
+    """
+    On-demand BBB reconciliation (SuperAdmin only). Runs the same five passes
+    as the scheduled bbb-reconciliation task (stuck provisioning, active
+    meetings, rooms, grant billing, metered billing) and returns per-pass
+    counts. Use instead of raw SQL when meetings/rooms drift from the BBB
+    server.
+    """
+    runBbbReconciliation: BbbReconciliationResult!
     deleteBbbServer(id: ID!): Boolean!
     deleteBbbOrganization(id: ID!): Boolean!
     createBbbCapacityGrant(

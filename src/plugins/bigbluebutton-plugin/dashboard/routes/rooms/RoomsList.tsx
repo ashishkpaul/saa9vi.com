@@ -7,10 +7,12 @@ import { useState } from 'react';
 import { Link } from '@vendure/dashboard';
 
 // ─── S5 (Phase 6 lean) + S6 (UX completion) — tenant Rooms cards ─────────────
-// Room cards: name, N students (batched studentCount, S4), Ready/Live badge,
+// Room cards: name, N enrolled (batched studentCount, S4), Ready/Live badge,
 // [Start]/[Join] (bbbStartRoom, polls while starting) + [Manage] (room
-// detail). No plumbing in the tenant document (A11): no currentMeetingId,
-// retryCount, slug, or lastProvisionRequestedAt. Typed graphql() (A24).
+// detail). The card count is enrolled learners (access rights), never live or
+// past attendance — the label must say so. No plumbing in the tenant document
+// (A11): no currentMeetingId, retryCount, slug, or lastProvisionRequestedAt.
+// Typed graphql() (A24).
 //
 // Drift note (S6): Phase 6 §3.2 asks for `students · trainers` on the card.
 // Item 4's `trainerCount` is deferred by the Phase-5 scope decision (only
@@ -241,7 +243,7 @@ export function RoomsList() {
                 <div>
                   <div className="text-lg font-semibold">{room.name}</div>
                   <div className="text-sm text-muted-foreground">
-                    {room.studentCount ?? 0} students
+                    {room.studentCount ?? 0} enrolled
                   </div>
                 </div>
                 <div>
