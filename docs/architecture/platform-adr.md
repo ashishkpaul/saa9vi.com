@@ -991,3 +991,76 @@ H1 (the four billing controls on `updateBbbOrganization`, including `suspended`)
 
 **Plan of record:** `docs/implementation/bbb-attendee-hour-billing-plan.md` (Phases 0–6).
 
+
+---
+
+## ADR-048: Mutation Ownership Assertion Is Non-Optional for All BBB Mutations
+
+**Status:** Accepted (2026-10-03)
+
+**Context:** ADR-032 established `BbbChannelAccessService` and wired the guard into every read
+surface (six admin `@Query` handlers — `bbbOrganizationMembers`, `bbbOrganizationMember`,
+`bbbOrgMemberships`, `bbbEnrollmentsByRoom`, `bbbTrialRegistrationsBySession`,
+`bbbCapacityGrants`). However, the corresponding mutation surfaces (`addBbbMember`,
+`updateBbbMember`, `removeBbbMember`, `createBbbOrgMembership`, `updateBbbOrgMembership`,
+`removeBbbOrgMembership`, `createBbbProductAccess`, `deleteBbbProductAccess`,
+`createBbbEnrollment`, `deactivateBbbEnrollment`, `createBbbEntitlement`, `deleteBbbEntitlement`,
+`createBbbCapacityGrant`, `deleteBbbRoom`, `createBbbMeeting`, `updateBbbRoom`) delegated to
+service methods without first asserting channel ownership in the resolver. A tenant admin who
+knew a foreign-channel resource ID could therefore mutate that resource. This is an
+authorization gap, not a defense-in-depth advisory.
+
+**Decision:** Every BBB `@Mutation` resolver method that accepts a resource ID as a caller-supplied
+GraphQL argument, or that creates a resource owned by a caller-supplied organization, **must** call
+the appropriate `BbbChannelAccessService.assert*Access` (or `assertOrganizationAccess`) guard
+**before** delegating to the service. The guard must come first — before any write is attempted —
+so that the authorization failure is a clean `ForbiddenError` rather than a partially-written row.
+
+For `updateBbbRoom`, the channel assert moves **above** the `maxParticipants` clamp and the
+`getRepository.update` call, eliminating the read-then-write window where a foreign-channel room
+could be loaded and mutated.
+
+For `createBbbMeeting`, the guard runs against the input `organizationId` so a tenant cannot mint
+a meeting into a foreign channel's organization.
+
+For `createBbbEntitlement`, the `channelId` is stamped from `ctx.channelId` at write time — a
+channel check is already implicit. The guard is documented as redundant-but-present for auditability.
+
+For `deleteBbbEntitlement`, `assertEntitlementAccess` is called before the `delete` call.
+
+For `deleteBbbRoom`, `assertRoomAccess` is called before the `delete` call.
+
+**Shrink-only ratchet (invariant checker):**
+
+A new `assertionCoverage` invariant check is added to `adr.checker.ts`:
+
+```
+∀ assert*Access function in BbbChannelAccessService
+  ⇒ ∃ ≥1 call site in bbb-admin.resolver.ts or bbb-shop.resolver.ts
+
+∀ @Mutation in BbbAdminResolver that has an id/org argument
+  ⇒ ∃ ≥1 channelAccess.assert* call in its method body
+```
+
+This ratchet can only shrink (number of asserted mutations can only grow or stay equal on each
+commit). Removing an assert without replacing it with a stronger mechanism fails the invariant.
+The checker is run as part of the standard gate sequence before push.
+
+**Consequences:**
+
+- All 16 mutation gaps identified in the Phase 4 task list are closed.
+- `updateBbbRoom` is the only mutation where the assert **must** precede an existing read — the
+  `room` object loaded for `maxParticipants` clamping was the source of the assert order risk.
+- The `adr.checker.ts` ratchet means the coverage cannot regress silently on future mutations.
+- No schema change, no migration.
+- See INV-029 in `docs/architecture/invariants.md`.
+
+**Alternatives Rejected:**
+
+- Relying on service-layer guards alone (services are not consistently gated — they were designed
+  for internal worker/webhook use too, where the context is not a tenant admin).
+- Adding a NestJS guard decorator (would require a custom decorator factory and still not cover
+  worker paths that bypass the resolver, adding complexity without coverage).
+- Trusting `@Allow` permission checks as the ownership gate (permission checks verify role, not
+  tenancy; a tenant admin with `BBBManageRooms` can hold the permission while operating on a
+  foreign channel's room).

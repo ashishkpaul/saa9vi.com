@@ -1,5 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { ID, RequestContext, TransactionalConnection } from "@vendure/core";
+import { ConfigService, ID, RequestContext, TransactionalConnection } from "@vendure/core";
 import { InstructorProfile } from "../entities/instructor-profile.entity";
 
 const loggerCtx = "TenantDeletionService";
@@ -13,7 +13,16 @@ const loggerCtx = "TenantDeletionService";
  */
 @Injectable()
 export class TenantDeletionService {
-  constructor(private readonly connection: TransactionalConnection) {}
+  constructor(
+    private readonly connection: TransactionalConnection,
+    private readonly configService: ConfigService,
+  ) {}
+
+  /** Decode GraphQL-encoded id to the raw PK string stored in varchar columns. */
+  private rawId(id: ID): string {
+    const decoded = this.configService.entityIdStrategy.decodeId(String(id));
+    return decoded === -1 ? String(id) : String(decoded);
+  }
 
   /**
    * Anonymize instructor profiles for this customer in a single channel.
@@ -30,7 +39,7 @@ export class TenantDeletionService {
 
     const profiles = await this.connection
       .getRepository(ctx, InstructorProfile)
-      .find({ where: { customerId: String(customerId), channelId: Number(channelId) } });
+      .find({ where: { customerId: this.rawId(customerId), channelId: Number(channelId) } });
 
     for (const profile of profiles) {
       profile.fullName = "[deleted]";
@@ -55,7 +64,7 @@ export class TenantDeletionService {
 
     const profiles = await this.connection
       .getRepository(ctx, InstructorProfile)
-      .find({ where: { customerId: String(customerId) } });
+      .find({ where: { customerId: this.rawId(customerId) } });
 
     for (const profile of profiles) {
       profile.fullName = "[deleted]";

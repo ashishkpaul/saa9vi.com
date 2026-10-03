@@ -1,5 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { ID, RequestContext, TransactionalConnection } from "@vendure/core";
+import { ConfigService, ID, RequestContext, TransactionalConnection } from "@vendure/core";
 import { In } from "typeorm";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
@@ -23,7 +23,24 @@ const loggerCtx = "BbbDeletionService";
  */
 @Injectable()
 export class BbbDeletionService {
-  constructor(private readonly connection: TransactionalConnection) {}
+  constructor(
+    private readonly connection: TransactionalConnection,
+    private readonly configService: ConfigService,
+  ) {}
+
+  /**
+   * Decode a GraphQL-facing id to the raw PK string stored in varchar columns.
+   *
+   * In production (AutoIncrementIdStrategy) encodeId/decodeId are identity
+   * functions, so this.rawId(customerId) = the stored value. In the e2e test
+   * environment (TestingEntityIdStrategy) ctx.customerId arrives as "T_3"
+   * while all BBB columns store the decoded form "3" — the decode call
+   * normalises both environments to the same stored value.
+   */
+  private rawId(id: ID): string {
+    const decoded = this.configService.entityIdStrategy.decodeId(String(id));
+    return decoded === -1 ? String(id) : String(decoded);
+  }
 
   // ─── Flow A: Channel-scoped ───────────────────────────────────────────────
 
@@ -42,7 +59,7 @@ export class BbbDeletionService {
 
     // 1. Deactivate entitlements in this channel
     await this.connection.getRepository(ctx, BbbEntitlement).update(
-      { customerId: String(customerId), channelId },
+      { customerId: this.rawId(customerId), channelId },
       { validUntil: new Date() },
     );
 
@@ -59,7 +76,7 @@ export class BbbDeletionService {
       if (rooms.length > 0) {
         const roomIds = rooms.map((r) => r.id as string);
         await this.connection.getRepository(ctx, BbbEnrollment).update(
-          { customerId: String(customerId), roomId: In(roomIds) },
+          { customerId: this.rawId(customerId), roomId: In(roomIds) },
           { active: false },
         );
       }
@@ -73,7 +90,7 @@ export class BbbDeletionService {
     if (sessions.length > 0) {
       const sessionIds = sessions.map((s) => s.id as string);
       await this.connection.getRepository(ctx, BbbTrialRegistration).update(
-        { customerId: String(customerId), scheduledSessionId: In(sessionIds) },
+        { customerId: this.rawId(customerId), scheduledSessionId: In(sessionIds) },
         { status: "CANCELLED" as any },
       );
     }
@@ -81,12 +98,12 @@ export class BbbDeletionService {
     // 4. Deactivate org memberships in this channel
     for (const org of orgs) {
       await this.connection.getRepository(ctx, BbbOrganizationMember).update(
-        { customerId: String(customerId), organization: { id: org.id as string } },
+        { customerId: this.rawId(customerId), organization: { id: org.id as string } },
         { active: false },
       );
 
       await this.connection.getRepository(ctx, BbbOrganizationMembership).update(
-        { customerId: String(customerId), organizationId: org.id as string },
+        { customerId: this.rawId(customerId), organizationId: org.id as string },
         { isActive: false },
       );
     }
@@ -94,7 +111,7 @@ export class BbbDeletionService {
     // 5. Delete instructor assignments (resolved via InstructorProfile)
     const instructorProfiles = await this.connection
       .getRepository(ctx, InstructorProfile)
-      .find({ where: { customerId: String(customerId), channelId: Number(channelId) } });
+      .find({ where: { customerId: this.rawId(customerId), channelId: Number(channelId) } });
 
     for (const profile of instructorProfiles) {
       await this.connection.getRepository(ctx, BbbInstructorAssignment).delete({
@@ -119,37 +136,37 @@ export class BbbDeletionService {
 
     // 1. Deactivate all entitlements
     await this.connection.getRepository(ctx, BbbEntitlement).update(
-      { customerId: String(customerId) },
+      { customerId: this.rawId(customerId) },
       { validUntil: new Date() },
     );
 
     // 2. Deactivate all enrollments
     await this.connection.getRepository(ctx, BbbEnrollment).update(
-      { customerId: String(customerId) },
+      { customerId: this.rawId(customerId) },
       { active: false },
     );
 
     // 3. Cancel all trial registrations
     await this.connection.getRepository(ctx, BbbTrialRegistration).update(
-      { customerId: String(customerId) },
+      { customerId: this.rawId(customerId) },
       { status: "CANCELLED" as any },
     );
 
     // 4. Deactivate all org memberships
     await this.connection.getRepository(ctx, BbbOrganizationMember).update(
-      { customerId: String(customerId) },
+      { customerId: this.rawId(customerId) },
       { active: false },
     );
 
     await this.connection.getRepository(ctx, BbbOrganizationMembership).update(
-      { customerId: String(customerId) },
+      { customerId: this.rawId(customerId) },
       { isActive: false },
     );
 
     // 5. Delete instructor assignments across all channels
     const instructorProfiles = await this.connection
       .getRepository(ctx, InstructorProfile)
-      .find({ where: { customerId: String(customerId) } });
+      .find({ where: { customerId: this.rawId(customerId) } });
 
     for (const profile of instructorProfiles) {
       await this.connection.getRepository(ctx, BbbInstructorAssignment).delete({

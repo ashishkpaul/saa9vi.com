@@ -61,6 +61,9 @@ import { E2E_INITIAL_DATA } from '../../plugins/tenant-plugin/e2e/fixtures/e2e-i
 import { CustomerDeletionLog } from './entities/customer-deletion-log.entity';
 import { BbbEntitlement } from '../../plugins/bigbluebutton-plugin/entities/bbb-entitlement.entity';
 import { BbbEnrollment } from '../../plugins/bigbluebutton-plugin/entities/bbb-enrollment.entity';
+import { BbbOrganization } from '../../plugins/bigbluebutton-plugin/entities/bbb-organization.entity';
+import { BbbRoom } from '../../plugins/bigbluebutton-plugin/entities/bbb-room.entity';
+import { BbbScheduledSession } from '../../plugins/bigbluebutton-plugin/entities/bbb-scheduled-session.entity';
 import { BbbTrialRegistration } from '../../plugins/bigbluebutton-plugin/entities/trial-registration.entity';
 import { BbbOrganizationMembership } from '../../plugins/bigbluebutton-plugin/entities/bbb-organization-membership.entity';
 import { InstructorProfile } from '../../plugins/tenant-plugin/entities/instructor-profile.entity';
@@ -199,6 +202,9 @@ describe('CustomerDeletion (INV-013)', () => {
       }),
     );
 
+    // Return the raw PK string. The deletion service now calls this.rawId()
+    // which decodes ctx.customerId (encoded in tests, identity in production)
+    // to the same raw form stored in all BBB varchar columns.
     return { customerId: customer.id as string, email, password };
   }
 
@@ -226,12 +232,53 @@ describe('CustomerDeletion (INV-013)', () => {
     customerEmail = customer.email;
     customerPassword = customer.password;
 
-    // 3. BBB: create an entitlement, enrollment, trial registration, membership
+    // 3. BBB: create an entitlement, enrollment, trial registration, membership.
+    //
+    //    Several FK columns became integer-typed in Commit 3.  We must use real
+    //    DB-allocated PKs, not string sentinels like 'room-1' or 'session-1'.
+    //    BbbTenantProvisioningListener auto-seeds a "Main Classroom" room on
+    //    TenantRegisteredEvent — poll until the org + room appear (async listener).
+    const orgRepo      = connection.getRepository(undefined, BbbOrganization);
+    const roomRepo     = connection.getRepository(undefined, BbbRoom);
+    const sessionRepo  = connection.getRepository(undefined, BbbScheduledSession);
+
+    let seedOrg: BbbOrganization | null = null;
+    let seedRoom: BbbRoom | null = null;
+    const deadline = Date.now() + 20_000;
+    while ((!seedOrg || !seedRoom) && Date.now() < deadline) {
+      seedOrg = await orgRepo.findOne({ where: { channelId: tenantChannelId } });
+      if (seedOrg) {
+        seedRoom = await roomRepo.findOne({
+          where: { organization: { id: seedOrg.id as string } as any },
+        });
+      }
+      if (!seedOrg || !seedRoom) await new Promise(r => setTimeout(r, 300));
+    }
+    if (!seedOrg)  throw new Error(`No BBB org provisioned for channel ${tenantChannelId} within 20s`);
+    if (!seedRoom) throw new Error(`No BBB room provisioned for channel ${tenantChannelId} within 20s`);
+
+    // Create a scheduled session so BbbTrialRegistration has a valid FK.
+    const now = new Date();
+    const seedSession = await sessionRepo.save(
+      sessionRepo.create({
+        title: 'Deletion Test Session',
+        startTime: now,
+        endTime:   new Date(now.getTime() + 60 * 60 * 1000),
+        status:    'DRAFT',
+        organization: seedOrg,
+        organizationId: String(seedOrg.id),
+        channelId: tenantChannelId,
+        slug: `deletion-test-${Date.now()}`,
+        visibility: 'public',
+        isTrial: true,
+      }),
+    );
+
     const entitlementRepo = connection.getRepository(undefined, BbbEntitlement);
     await entitlementRepo.save(
       new BbbEntitlement({
         type: 'bbb_room',
-        resourceId: 'room-1',
+        resourceId: String(seedRoom.id),
         customerId,
         source: 'purchase',
         channelId: tenantChannelId,
@@ -243,8 +290,9 @@ describe('CustomerDeletion (INV-013)', () => {
     const enrollmentRepo = connection.getRepository(undefined, BbbEnrollment);
     await enrollmentRepo.save(
       new BbbEnrollment({
+        room: seedRoom,
+        roomId: String(seedRoom.id),
         customerId,
-        roomId: 'room-1',
         active: true,
         validFrom: new Date(),
         validUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
@@ -254,20 +302,18 @@ describe('CustomerDeletion (INV-013)', () => {
     const trialRepo = connection.getRepository(undefined, BbbTrialRegistration);
     await trialRepo.save(
       new BbbTrialRegistration({
+        scheduledSession: seedSession,
+        scheduledSessionId: String(seedSession.id),
         customerId,
-        scheduledSessionId: 'session-1',
         status: 'REGISTERED',
         registeredAt: new Date(),
       }),
     );
 
-    const membershipRepo = connection.getRepository(
-      undefined,
-      BbbOrganizationMembership,
-    );
+    const membershipRepo = connection.getRepository(undefined, BbbOrganizationMembership);
     await membershipRepo.save(
       new BbbOrganizationMembership({
-        organizationId: 'org-1',
+        organizationId: String(seedOrg.id),
         customerId,
         channelId: tenantChannelId,
         role: 'staff',
@@ -352,9 +398,14 @@ describe('CustomerDeletion (INV-013)', () => {
         .getRepository(undefined, BbbEntitlement)
         .find({ where: { customerId } });
 
+      // The deletion service sets validUntil = new Date() at write time.
+      // Allow a 10-second window for test execution latency.
+      const tenSecondsFromNow = Date.now() + 10_000;
+      const twentyDaysFromNow = Date.now() + 20 * 24 * 60 * 60 * 1000;
       for (const e of entitlements) {
         expect(e.validUntil).toBeInstanceOf(Date);
-        expect(e.validUntil!.getTime()).toBeLessThanOrEqual(Date.now() + 1000);
+        expect(e.validUntil!.getTime()).toBeLessThan(twentyDaysFromNow);
+        expect(e.validUntil!.getTime()).toBeLessThanOrEqual(tenSecondsFromNow);
       }
     });
 
@@ -523,8 +574,18 @@ describe('CustomerDeletion (INV-013)', () => {
         .getRepository(undefined, BbbEntitlement)
         .find({ where: { customerId: leaveCustomerId, channelId: tenantChannelId } });
 
+      // The deletion service sets validUntil = new Date() at write time.
+      // Allow a 10-second window for test execution latency. The seeded value
+      // is now + 30 days, so any successfully deactivated row will be well
+      // within the past..now+10s range.
+      const tenSecondsFromNow = Date.now() + 10_000;
+      const twentyDaysFromNow = Date.now() + 20 * 24 * 60 * 60 * 1000;
       for (const e of entitlements) {
-        expect(e.validUntil!.getTime()).toBeLessThanOrEqual(Date.now() + 1000);
+        expect(e.validUntil).toBeInstanceOf(Date);
+        // Was deactivated (not still the seeded 30-day future value):
+        expect(e.validUntil!.getTime()).toBeLessThan(twentyDaysFromNow);
+        // Was set to approximately now (not some arbitrary past/future):
+        expect(e.validUntil!.getTime()).toBeLessThanOrEqual(tenSecondsFromNow);
       }
     });
 

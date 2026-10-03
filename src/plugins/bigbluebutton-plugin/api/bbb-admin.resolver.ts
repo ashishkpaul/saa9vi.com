@@ -393,25 +393,31 @@ export class BbbAdminResolver {
   @Allow(BbbAdminPermission.Permission, BbbManageMembersPermission.Permission)
   @Transaction()
   @Mutation()
-  addBbbMember(@Ctx() ctx: RequestContext, @Args("input") input: AddBbbMemberInput) {
+  async addBbbMember(@Ctx() ctx: RequestContext, @Args("input") input: AddBbbMemberInput) {
+    // ADR-048: assert the caller owns the target organization before writing.
+    await this.channelAccess.assertOrganizationAccess(ctx, input.organizationId);
     return this.memberService.addMember(ctx, input);
   }
 
   @Allow(BbbAdminPermission.Permission, BbbManageMembersPermission.Permission)
   @Transaction()
   @Mutation()
-  updateBbbMember(
+  async updateBbbMember(
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
     @Args("input") input: UpdateBbbMemberInput,
   ) {
+    // ADR-048: assert the caller owns the member's organization before writing.
+    await this.channelAccess.assertMemberAccess(ctx, id);
     return this.memberService.updateMember(ctx, id, input);
   }
 
   @Allow(BbbAdminPermission.Permission, BbbManageMembersPermission.Permission)
   @Transaction()
   @Mutation()
-  removeBbbMember(@Ctx() ctx: RequestContext, @Args("id") id: string) {
+  async removeBbbMember(@Ctx() ctx: RequestContext, @Args("id") id: string) {
+    // ADR-048: assert the caller owns the member's organization before deleting.
+    await this.channelAccess.assertMemberAccess(ctx, id);
     return this.memberService.removeMember(ctx, id);
   }
 
@@ -444,6 +450,8 @@ export class BbbAdminResolver {
       role: string;
     },
   ): Promise<BbbOrganizationMembership> {
+    // ADR-048: assert the caller owns the target organization before writing.
+    await this.channelAccess.assertOrganizationAccess(ctx, input.organizationId);
     return this.membershipService.create(ctx, {
       organizationId: input.organizationId,
       customerId: input.customerId,
@@ -464,6 +472,8 @@ export class BbbAdminResolver {
       isActive?: boolean;
     },
   ): Promise<BbbOrganizationMembership> {
+    // ADR-048: assert the caller owns the membership's channel before writing.
+    await this.channelAccess.assertMembershipAccess(ctx, id);
     return this.membershipService.update(ctx, id, {
       role: input.role as "org_admin" | "moderator" | "staff" | undefined,
       isActive: input.isActive,
@@ -477,6 +487,8 @@ export class BbbAdminResolver {
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
   ): Promise<boolean> {
+    // ADR-048: assert the caller owns the membership's channel before deleting.
+    await this.channelAccess.assertMembershipAccess(ctx, id);
     await this.membershipService.remove(ctx, id);
     return true;
   }
@@ -542,7 +554,11 @@ export class BbbAdminResolver {
   @Allow(BbbAdminPermission.Permission, BbbManageMeetingsPermission.Permission)
   @Transaction()
   @Mutation()
-  createBbbMeeting(@Ctx() ctx: RequestContext, @Args("input") input: CreateBbbMeetingInput) {
+  async createBbbMeeting(@Ctx() ctx: RequestContext, @Args("input") input: CreateBbbMeetingInput) {
+    // ADR-048: assert the caller owns the target organization before minting a
+    // meeting. Without this a tenant admin with the right permission could
+    // create a meeting that consumes a foreign channel's provisioning capacity.
+    await this.channelAccess.assertOrganizationAccess(ctx, input.organizationId);
     return this.meetingService.createAndEnqueue(ctx, input);
   }
 
@@ -678,6 +694,11 @@ export class BbbAdminResolver {
       validUntil?: string;
     },
   ): Promise<BbbCapacityGrant> {
+    // ADR-048: assert before minting. BBBPlatformInfrastructure callers
+    // (SuperAdmin/Portal Admin) still run through assertOrganizationAccess —
+    // SuperAdmin short-circuits immediately, Portal Admin operates on the
+    // default channel which resolves org via the channels join table.
+    await this.channelAccess.assertOrganizationAccess(ctx, input.organizationId);
     const org = await this.connection.getEntityOrThrow(
       ctx,
       BbbOrganization,
@@ -725,7 +746,9 @@ export class BbbAdminResolver {
   @Allow(BbbAdminPermission.Permission, BbbManageRoomsPermission.Permission)
   @Transaction()
   @Mutation()
-  createBbbRoom(@Ctx() ctx: RequestContext, @Args("input") input: CreateBbbRoomInput) {
+  async createBbbRoom(@Ctx() ctx: RequestContext, @Args("input") input: CreateBbbRoomInput) {
+    // ADR-048: assert the caller owns the target organization before creating a room.
+    await this.channelAccess.assertOrganizationAccess(ctx, input.organizationId);
     return this.roomService.create(ctx, {
       ...input,
       createdByCustomerId: undefined,
@@ -740,6 +763,10 @@ export class BbbAdminResolver {
     @Args("id") id: string,
     @Args("input") input: UpdateBbbRoomInput,
   ) {
+    // ADR-048: assert BEFORE the entity read so a ForbiddenError is raised
+    // before any foreign-channel room is loaded or mutated. Moving the assert
+    // above the findOne eliminates the read-then-write authorization window.
+    await this.channelAccess.assertRoomAccess(ctx, id);
     // INV-014: clamp maxParticipants to the owning org's ceiling.
     const room = await this.connection.getRepository(ctx, BbbRoom).findOne({
       where: { id },
@@ -764,6 +791,8 @@ export class BbbAdminResolver {
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
   ): Promise<boolean> {
+    // ADR-048: assert the caller owns the room's organization before deleting.
+    await this.channelAccess.assertRoomAccess(ctx, id);
     await this.connection.getRepository(ctx, BbbRoom).delete(id);
     return true;
   }
@@ -821,6 +850,8 @@ export class BbbAdminResolver {
     @Args("input")
     input: { roomId: string; productVariantId: string; accessDays?: number },
   ): Promise<BbbProductAccess> {
+    // ADR-048: assert the caller owns the room's organization before writing.
+    await this.channelAccess.assertRoomAccess(ctx, input.roomId);
     const room = await this.connection.getEntityOrThrow(
       ctx,
       BbbRoom,
@@ -841,6 +872,8 @@ export class BbbAdminResolver {
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
   ): Promise<boolean> {
+    // ADR-048: assert the caller owns the product-access record's room/org before deleting.
+    await this.channelAccess.assertProductAccessAccess(ctx, id);
     await this.connection.getRepository(ctx, BbbProductAccess).delete(id);
     return true;
   }
@@ -912,6 +945,8 @@ export class BbbAdminResolver {
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
   ): Promise<BbbEnrollment> {
+    // ADR-048: assert the caller owns the enrollment's room/org before writing.
+    await this.channelAccess.assertEnrollmentAccess(ctx, id);
     const enrollment = await this.connection.getEntityOrThrow(
       ctx,
       BbbEnrollment,
@@ -934,6 +969,8 @@ export class BbbAdminResolver {
       reason?: string;
     },
   ): Promise<BbbEnrollment> {
+    // ADR-048: assert the caller owns the target room's organization before writing.
+    await this.channelAccess.assertRoomAccess(ctx, input.roomId);
     const room = await this.connection.getEntityOrThrow(
       ctx,
       BbbRoom,
@@ -1113,6 +1150,20 @@ export class BbbAdminResolver {
       validUntil?: string;
     },
   ): Promise<BbbEntitlement> {
+    // ADR-048: channelId is stamped from ctx.channelId below so a cross-tenant
+    // write is already structurally impossible. The resource-org check is
+    // present here for auditability (INV-029) and to surface a clean
+    // ForbiddenError if a future caller supplies a resourceId that resolves to
+    // a foreign channel's session or room.
+    //
+    // For bbb_session resources, assert session channel. For bbb_room resources,
+    // assert room channel. Skip for non-resource types (purchase/import paths
+    // that carry no resolvable resourceId — the channelId stamp is sufficient).
+    if (input.type === "bbb_session") {
+      await this.channelAccess.assertSessionAccess(ctx, input.resourceId);
+    } else if (input.type === "bbb_room") {
+      await this.channelAccess.assertRoomAccess(ctx, input.resourceId);
+    }
     const entitlement = new BbbEntitlement({
       customerId: input.customerId,
       type: input.type,
@@ -1134,6 +1185,8 @@ export class BbbAdminResolver {
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
   ): Promise<boolean> {
+    // ADR-048: assert the caller owns the entitlement's channel before deleting.
+    await this.channelAccess.assertEntitlementAccess(ctx, id);
     await this.connection.getRepository(ctx, BbbEntitlement).delete(id);
     return true;
   }

@@ -293,7 +293,11 @@ import {
   compatibility: ">=3.0.0",
 })
 export class BigBlueButtonPlugin implements OnApplicationBootstrap {
-  private static initialized = false;
+  // Instance-level flag so each NestJS app (e.g. separate e2e test environments
+  // in the same process) initializes its own handlers independently.
+  // A static flag would persist across test suites and silently skip
+  // handler registration for the second and subsequent test servers.
+  private initialized = false;
   static options: BigBlueButtonPluginOptions = {};
 
   static init(
@@ -314,8 +318,8 @@ export class BigBlueButtonPlugin implements OnApplicationBootstrap {
   async onApplicationBootstrap() {
     // Guard: prevent double-initialization when both server and worker
     // share the same plugin instance and onApplicationBootstrap fires twice.
-    if (BigBlueButtonPlugin.initialized) return;
-    BigBlueButtonPlugin.initialized = true;
+    if (this.initialized) return;
+    this.initialized = true;
 
     // Initialize job queues
     await this.meetingService.init();

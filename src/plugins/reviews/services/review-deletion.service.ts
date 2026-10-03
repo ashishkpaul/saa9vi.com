@@ -1,5 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { ID, RequestContext, TransactionalConnection } from "@vendure/core";
+import { ConfigService, ID, RequestContext, TransactionalConnection } from "@vendure/core";
 import { In } from "typeorm";
 import { ProductReview } from "../entities/product-review.entity";
 import { ReviewRequest } from "../entities/review-request.entity";
@@ -22,7 +22,16 @@ const loggerCtx = "ReviewDeletionService";
  */
 @Injectable()
 export class ReviewDeletionService {
-  constructor(private readonly connection: TransactionalConnection) {}
+  constructor(
+    private readonly connection: TransactionalConnection,
+    private readonly configService: ConfigService,
+  ) {}
+
+  /** Decode GraphQL-encoded id to the raw PK string stored in columns. */
+  private rawId(id: ID): string {
+    const decoded = this.configService.entityIdStrategy.decodeId(String(id));
+    return decoded === -1 ? String(id) : String(decoded);
+  }
 
   // ─── Flow A: Channel-scoped ───────────────────────────────────────────────
 
@@ -52,7 +61,7 @@ export class ReviewDeletionService {
         channelId,
       })
       .where("review.author = :customerId", {
-        customerId: String(customerId),
+        customerId: this.rawId(customerId),
       })
       .getMany();
 
@@ -63,7 +72,7 @@ export class ReviewDeletionService {
 
     // 2. Cancel ReviewRequests in this channel (has scalar channelId)
     await this.connection.getRepository(ctx, ReviewRequest).update(
-      { customer: { id: customerId as string } as any, channelId },
+      { customer: { id: this.rawId(customerId) as any } as any, channelId },
       { status: "expired" as any },
     );
 
@@ -77,7 +86,7 @@ export class ReviewDeletionService {
         channelId,
       })
       .where("vote.customer = :customerId", {
-        customerId: String(customerId),
+        customerId: this.rawId(customerId),
       })
       .getMany();
 
@@ -105,7 +114,7 @@ export class ReviewDeletionService {
     // 1. Anonymize all ProductReview.authorName for this customer
     const reviews = await this.connection
       .getRepository(ctx, ProductReview)
-      .find({ where: { author: { id: customerId as string } as any } });
+      .find({ where: { author: { id: this.rawId(customerId) as any } as any } });
 
     for (const review of reviews) {
       review.authorName = "[deleted]";
@@ -114,14 +123,14 @@ export class ReviewDeletionService {
 
     // 2. Cancel all ReviewRequests for this customer
     await this.connection.getRepository(ctx, ReviewRequest).update(
-      { customer: { id: customerId as string } as any },
+      { customer: { id: this.rawId(customerId) as any } as any },
       { status: "expired" as any },
     );
 
     // 3. Delete all ReviewVotes by this customer
     const votes = await this.connection
       .getRepository(ctx, ReviewVote)
-      .find({ where: { customer: { id: customerId as string } as any } });
+      .find({ where: { customer: { id: this.rawId(customerId) as any } as any } });
 
     if (votes.length > 0) {
       await this.connection
