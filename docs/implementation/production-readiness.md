@@ -416,6 +416,39 @@ environment sets both variables (without recording secret values here)
 rather than a silent compromise, but the deployed env itself still
 needs its one-time check.
 
+### Review conclusion — 2026-10-05 (W5 follow-up): NO FINDINGS
+
+Code review of `src/platform/security/require-production-secrets.ts` and
+`src/plugins/payments/constants.ts`:
+
+- The guard requires **10** variables, not only SuperAdmin/Cookie:
+  `SUPERADMIN_PASSWORD`, `COOKIE_SECRET`, `RAZORPAY_KEY_ID`,
+  `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `REDIS_PASSWORD`,
+  `DB_PASSWORD`, `BBB_ENCRYPTION_KEY`, `BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR`,
+  `BBB_PUBLIC_BASE_URL`. Presence is tested as `!env[key]`, so an empty
+  string counts as unset (`KEY=` cannot slip past the guard).
+- Format checks cover the three values whose failure mode is silent
+  corruption rather than an auth bypass: the metered rate must be a
+  non-negative integer (blocks the ₹20/learner-hour placeholder),
+  `BBB_ENCRYPTION_KEY` must be 64 hex chars (AES-256-GCM 32 bytes), and
+  `BBB_PUBLIC_BASE_URL` must be absolute http(s) (BBB signs the
+  *registered* URL, so a relative base makes every webhook fail checksum).
+- Both entrypoints call the guard before Vendure bootstraps
+  (`src/index.ts:15`, `src/index-worker.ts:12`); `APP_ENV=dev` keeps the
+  documented dev fallbacks. Tests: `require-production-secrets.spec.ts`.
+- `payments/constants.ts` contains no secret literals:
+  `razorpayKeyId()` / `razorpayKeySecret()` / `razorpayPaymentsWebhookSecret()`
+  read `process.env` only and default to `''` (fail closed —
+  `razorpay-orders.client.ts` rejects calls without credentials); the
+  payments webhook secret falls back to the subscription webhook secret so
+  one Razorpay account drives both endpoints. Literal constants that exist
+  (`RAZORPAY_API_BASE_URL`, handler code, webhook path) are public by
+  design. Secrets are never handler config args (they would persist in the
+  DB and be Admin-API-readable) — see the file header.
+- Accepted-by-design notes (not findings): requiring Razorpay vars is
+  unconditional even for deployments that disable payments; a rate of `0`
+  is a legitimate "bill nothing" configuration.
+
 ------------------------------------------------------------------------
 
 ## P0-F --- CORS and GraphiQL
