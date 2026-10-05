@@ -88,8 +88,12 @@ Three structural facts constrain the answer:
    allowance. This reuses the advisory-lock-over-allocation pattern INV-025 established for
    `TenantTheme`, chosen over new DDL precisely because the schema is frozen.
 
-5. **D-7 — schedule, timezone, catch-up.** Hourly; **Saa9vi server clock** (ADR-042's rule
-   for the marketplace grace deadline, reused verbatim — there is no per-tenant timezone);
+5. **D-7 — schedule, timezone, catch-up.** Hourly; **IST (Asia/Kolkata)**
+   via the shared `src/platform/timezone.ts` helper (`IST_OFFSET_MS`), shared
+   with the billing month (`monthOf`) so the day a grant counts against and
+   the month a meeting books to can never disagree. No per-tenant timezone is
+   consulted (ADR-042's clock rule, reused verbatim — there is no per-tenant
+   timezone);
    **no backfill**. The hourly cadence bounds *how late today's grant can be*, not
    correctness — the write is idempotent, so an extra run is free and an exact-midnight cron
    buys nothing. Catch-up is a property of the write rather than a separate mechanism: the

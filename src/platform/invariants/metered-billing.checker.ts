@@ -303,8 +303,13 @@ export class MeteredBillingChecker implements Checker {
         }
       }
       // `BillingMode` is a *type-only* import of a string union: it carries no
-      // runtime and cannot reach a database, so it is the one allowed import
-      // beyond the module's own siblings.
+      // runtime and cannot reach a database, so it is one allowed import
+      // beyond the module's own siblings. `src/platform/timezone.ts` is the
+      // other: it is fixed-offset arithmetic over `Date` (IST has no DST) with
+      // no ORM/connection/HTTP/config dependency, and importing it is what
+      // keeps `monthOf` and the daily-allowance window on ONE boundary
+      // definition — inlining the offset here would create the second
+      // implementation D2 exists to prevent.
       const runtimeImports = source
         .split("\n")
         .filter(
@@ -312,7 +317,9 @@ export class MeteredBillingChecker implements Checker {
             /^import\s/.test(line.trim()) && !/import\s+type\b/.test(line),
         );
       const nonConstantRuntime = runtimeImports.filter(
-        line => !/from\s+["']\.\.\/constants["']/.test(line),
+        line =>
+          !/from\s+["']\.\.\/constants["']/.test(line) &&
+          !/from\s+["'][^"']*\/platform\/timezone["']/.test(line),
       );
       if (nonConstantRuntime.length > 0) {
         failures.push(

@@ -116,21 +116,33 @@ describe("learnerCountFrom", () => {
 });
 
 describe("monthOf", () => {
-  it("snapshots the UTC month as YYYY-MM with zero padding", () => {
+  it("snapshots the IST month as YYYY-MM with zero padding", () => {
     expect(monthOf(new Date(Date.UTC(2026, 8, 30, 12, 0, 0)))).toBe("2026-09");
     expect(monthOf(new Date(Date.UTC(2026, 0, 1, 0, 0, 0)))).toBe("2026-01");
   });
 
-  it("uses UTC — the same instant never lands in two months", () => {
-    // 2026-09-30T19:00:00-04:00 == 2026-09-30T23:00:00Z → still September in UTC.
-    expect(monthOf(new Date("2026-09-30T19:00:00-04:00"))).toBe("2026-09");
-    // 2026-10-01T00:30:00+05:30 == 2026-09-30T19:00:00Z → September in UTC.
-    expect(monthOf(new Date("2026-10-01T00:30:00+05:30"))).toBe("2026-09");
+  it("books 18:30 UTC to the NEXT IST day (00:00 IST is the boundary)", () => {
+    // 2026-09-30T18:30:00Z == 2026-10-01T00:00:00+05:30 → October in IST.
+    expect(monthOf(new Date("2026-09-30T18:30:00.000Z"))).toBe("2026-10");
   });
 
-  it("pins periodMonth boundaries (D4)", () => {
-    expect(monthOf(new Date(Date.UTC(2026, 8, 30, 23, 59, 59)))).toBe("2026-09");
-    expect(monthOf(new Date(Date.UTC(2026, 9, 1, 0, 0, 0)))).toBe("2026-10");
+  it("books 18:29 UTC to the SAME IST day (one minute before midnight IST)", () => {
+    // 2026-09-30T18:29:00Z == 2026-09-30T23:59:00+05:30 → September in IST.
+    expect(monthOf(new Date("2026-09-30T18:29:00.000Z"))).toBe("2026-09");
+  });
+
+  it("uses IST — the same instant never lands in two months", () => {
+    // 2026-09-30T19:00:00-04:00 == 2026-10-01T00:30:00+05:30 → October in IST.
+    expect(monthOf(new Date("2026-09-30T19:00:00-04:00"))).toBe("2026-10");
+    // 2026-10-01T00:30:00+05:30 == 2026-09-30T19:00:00Z → October in IST.
+    expect(monthOf(new Date("2026-10-01T00:30:00+05:30"))).toBe("2026-10");
+  });
+
+  it("pins periodMonth boundaries (D4) in IST", () => {
+    // 2026-09-30T18:29:59Z == 23:59:59 IST Sep 30 → September.
+    expect(monthOf(new Date(Date.UTC(2026, 8, 30, 18, 29, 59)))).toBe("2026-09");
+    // 2026-09-30T18:30:00Z == 00:00:00 IST Oct 1 → October.
+    expect(monthOf(new Date(Date.UTC(2026, 8, 30, 18, 30, 0)))).toBe("2026-10");
   });
 
   it("throws on an invalid date instead of inventing a month key", () => {

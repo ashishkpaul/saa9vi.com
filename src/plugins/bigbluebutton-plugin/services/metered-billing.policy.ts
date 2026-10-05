@@ -1,5 +1,6 @@
 import { BILLING_MODE, DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR } from "../constants";
 import type { BillingMode } from "../constants";
+import { istDateParts } from "../../../platform/timezone";
 
 /** Month key used by `BbbMeteredUsage.periodMonth` — `YYYY-MM` (D4). */
 export type PeriodMonth = string;
@@ -55,12 +56,15 @@ export function learnerCountFrom(
 }
 
 /**
- * `YYYY-MM` month key for a completion instant, in UTC (D4).
+ * `YYYY-MM` month key for a completion instant, in IST (Asia/Kolkata).
  *
  * The key is snapshotted onto `BbbMeteredUsage.periodMonth` at write time so
- * monthly queries need no timezone arithmetic. UTC is the single reference —
- * callers must not substitute a local zone, otherwise the same instant lands in
- * two different months depending on where the server runs.
+ * monthly queries need no timezone arithmetic. IST is the single reference —
+ * it shares `istDateParts` with the daily-allowance window, so the month a
+ * meeting books to and the day it counts against can never disagree.
+ *
+ * New rows only: rows written before the IST change keep their UTC keys
+ * (no backfill — re-pricing history is out of scope).
  *
  * Throws on an invalid date rather than inventing a month key: a malformed
  * key would scatter one meeting's minutes across the wrong invoice.
@@ -69,9 +73,8 @@ export function monthOf(date: Date): PeriodMonth {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
     throw new Error("monthOf requires a valid Date");
   }
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-  return `${year}-${month}`;
+  const { year, month } = istDateParts(date);
+  return `${year}-${String(month).padStart(2, "0")}`;
 }
 
 /**

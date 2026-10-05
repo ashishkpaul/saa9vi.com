@@ -51,6 +51,21 @@ describe('Slice 6 daily-allowance policy', () => {
   });
 
   describe('server-clock day window (D-7)', () => {
+    it('starts at IST midnight, not server-local midnight', () => {
+      // 2026-09-30T19:00:00Z == 2026-10-01T00:30:00+05:30 → the IST day is Oct 1.
+      const start = startOfServerDay(new Date('2026-09-30T19:00:00.000Z'));
+      // 2026-09-30T18:30:00Z in IST wall time.
+      expect(start.toISOString()).toBe('2026-09-30T18:30:00.000Z');
+    });
+
+    it('places 18:29 and 18:30 UTC on different IST days', () => {
+      const before = dailyAllowanceWindowFor(new Date('2026-09-30T18:29:00.000Z'));
+      const after = dailyAllowanceWindowFor(new Date('2026-09-30T18:30:00.000Z'));
+      expect(after.start.getTime()).toBeGreaterThan(before.start.getTime());
+      expect(isWithinAllowanceWindow(before, new Date('2026-09-30T18:30:00.000Z'))).toBe(false);
+      expect(isWithinAllowanceWindow(after, new Date('2026-09-30T18:30:00.000Z'))).toBe(true);
+    });
+
     it('starts at local midnight with no sub-day residue', () => {
       const start = startOfServerDay(new Date(2026, 8, 25, 13, 47, 12, 913));
       expect(start.getHours()).toBe(0);

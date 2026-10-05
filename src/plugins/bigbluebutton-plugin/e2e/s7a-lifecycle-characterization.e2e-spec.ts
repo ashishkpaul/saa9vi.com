@@ -48,11 +48,11 @@
  *   W5-8 missing moderator password on the meeting row → per-meeting skip
  *         (API never called, server stays healthy, no config alert)
  *   W5-9 month boundary — completedAt month wins over reconcile-time month
- *         (fake clock: a Jan 31 end books to '2026-01' while the pass runs
- *         on Feb 1)
+ *         (fake clock: a Jan 31 IST end books to '2026-01' while the pass runs
+ *         at 00:30 IST on Feb 1)
  *   W5-10 billing ceiling books to provisionedAt + maxMeetingDurationMs,
- *         not the pass clock (fake clock: a Jan 30→31 capped meeting books
- *         to '2026-01' while the ceiling pass runs on Feb 1)
+ *         not the pass clock (fake clock: a Jan 30→31 IST capped meeting books
+ *         to '2026-01' while the ceiling pass runs at 00:30 IST on Feb 1)
  *
  * The only replaced component is the outbound BBB HTTP hop (property
  * replacement on the injected BbbApiService, the in-repo precedent from
@@ -1087,27 +1087,29 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
     });
 
     it('W5-9: month boundary — completedAt month wins over reconcile-time month', async () => {
-      // Freeze the wall clock so "now" is February 1st 00:30 while the
-      // meeting, its samples and BBB's endTime all sit on January 31st.
+      // Freeze the wall clock so "now" is 00:30 IST on February 1st while the
+      // meeting, its samples and BBB's endTime all sit on January 31st IST.
       // (A real-clock version only works within 24 h of a month boundary —
       // and a >24 h-old meeting would hit the billing ceiling instead.)
-      vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-02-01T00:30:00.000Z') });
+      // IST day boundary: 2026-01-31T18:30:00Z == 2026-02-01T00:00:00+05:30,
+      // so every instant below must precede 18:30Z to stay in January IST.
+      vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-01-31T19:00:00.000Z') });
       try {
         const endTimeSec = Math.floor(
-          new Date('2026-01-31T23:55:00.000Z').getTime() / 1000,
+          new Date('2026-01-31T18:20:00.000Z').getTime() / 1000,
         );
         setReconcileApi(apiWithEndTime(endTimeSec));
         opsNotifySpy.mockClear();
 
         const meeting = await makeActiveMeeting({
           org: meteredOrg,
-          minutesAgo: 40, // provisionedAt = 2026-01-31T23:50Z (frozen clock)
+          minutesAgo: 60, // provisionedAt = 2026-01-31T18:00Z (frozen clock)
           grantId: null,
           observable: true,
         });
         const id = String(meeting.id);
-        await addSample(id, new Date('2026-01-31T23:52:00.000Z'), 5);
-        await addSample(id, new Date('2026-01-31T23:53:00.000Z'), 5);
+        await addSample(id, new Date('2026-01-31T18:10:00.000Z'), 5);
+        await addSample(id, new Date('2026-01-31T18:15:00.000Z'), 5);
 
         expect(await reconciliationService.reconcileActiveMeetings()).toBe(1);
 
@@ -1117,12 +1119,13 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
 
         const usage = await usageRows(id);
         expect(usage).toHaveLength(1);
-        // Booked to JANUARY — deriving periodMonth from reconcile-time
-        // (new Date()) would produce '2026-02'.
+        // Booked to JANUARY IST (18:20Z == 23:50 IST Jan 31) — deriving
+        // periodMonth from reconcile-time (19:00Z == 00:30 IST Feb 1) would
+        // produce '2026-02'.
         expect(usage[0].periodMonth).toBe('2026-01');
         expect(usage[0].periodMonth).toBe(monthOf(done.completedAt!));
         expect(usage[0].periodMonth).not.toBe(
-          monthOf(new Date('2026-02-01T00:30:00.000Z')),
+          monthOf(new Date('2026-01-31T19:00:00.000Z')),
         );
       } finally {
         vi.useRealTimers();
@@ -1130,30 +1133,31 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
     });
 
     it('W5-10: billing ceiling books usage to provisionedAt + maxMeetingDuration, not the pass clock', async () => {
-      // Frozen clock: now = February 1st 00:30. The meeting was provisioned
-      // January 30th 12:00 → 36.5 h old → the 24 h ceiling fires, so for
-      // billing the meeting ENDED on January 31st 12:00. Taking completedAt
-      // from the pass clock instead (pre-W5-10 behaviour) would book
-      // '2026-02' — one day late, wrong month.
-      vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-02-01T00:30:00.000Z') });
+      // Frozen clock: now = 00:30 IST on February 1st. The meeting was
+      // provisioned January 30th 06:30Z (12:00 IST) → 36.5 h old → the 24 h
+      // ceiling fires, so for billing the meeting ENDED on January 31st
+      // 06:30Z (12:00 IST). Taking completedAt from the pass clock instead
+      // (pre-W5-10 behaviour) would book '2026-02' — one day late, wrong month.
+      // IST day boundary: 2026-01-31T18:30:00Z == 2026-02-01T00:00:00+05:30.
+      vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-01-31T19:00:00.000Z') });
       try {
         // If the ceiling branch ever lost to the remote-gone branch, this
-        // stub would book the pass clock (Feb) and fail the month assertions.
+        // stub would book the pass clock (Feb IST) and fail the month assertions.
         setReconcileApi(
           apiWithEndTime(
-            Math.floor(new Date('2026-02-01T00:30:00.000Z').getTime() / 1000),
+            Math.floor(new Date('2026-01-31T19:00:00.000Z').getTime() / 1000),
           ),
         );
 
         const meeting = await makeActiveMeeting({
           org: meteredOrg,
-          minutesAgo: 36 * 60 + 30, // provisionedAt = 2026-01-30T12:00Z (frozen clock)
+          minutesAgo: 36 * 60 + 30, // provisionedAt = 2026-01-30T06:30Z = 12:00 IST (frozen clock)
           grantId: null,
           observable: true,
         });
         const id = String(meeting.id);
-        await addSample(id, new Date('2026-01-30T13:00:00.000Z'), 5);
-        await addSample(id, new Date('2026-01-30T14:00:00.000Z'), 5);
+        await addSample(id, new Date('2026-01-30T07:30:00.000Z'), 5);
+        await addSample(id, new Date('2026-01-30T08:30:00.000Z'), 5);
 
         expect(await reconciliationService.reconcileActiveMeetings()).toBe(1);
 
@@ -1161,18 +1165,19 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
         expect(done.state).toBe(MEETING_STATE.COMPLETED);
         expect(done.billingCapped).toBe(true);
         // provisionedAt + maxMeetingDurationMs (24 h) — NOT the reconcile clock.
-        expect(done.completedAt!.toISOString()).toBe('2026-01-31T12:00:00.000Z');
+        // 2026-01-30T06:30Z + 24 h = 2026-01-31T06:30Z == 12:00 IST Jan 31.
+        expect(done.completedAt!.toISOString()).toBe('2026-01-31T06:30:00.000Z');
 
         const usage = await usageRows(id);
         expect(usage).toHaveLength(1);
         expect(usage[0].billingCapped).toBe(true);
-        // Booked to JANUARY — a clock-derived completedAt gives '2026-02'.
+        // Booked to JANUARY IST — a clock-derived completedAt gives '2026-02'.
         expect(usage[0].periodMonth).toBe('2026-01');
         expect(usage[0].periodMonth).toBe(monthOf(done.completedAt!));
         expect(usage[0].periodMonth).not.toBe(
-          monthOf(new Date('2026-02-01T00:30:00.000Z')),
+          monthOf(new Date('2026-01-31T19:00:00.000Z')),
         );
-        // Both samples sit inside the cap window (before Jan 31 12:00).
+        // Both samples sit inside the cap window (before Jan 31 06:30Z).
         expect(usage[0].learnerMinutes).toBe(10);
       } finally {
         vi.useRealTimers();
