@@ -65,6 +65,7 @@ export class MeetingCompletedEvent extends VendureEvent {
       | "end-meeting"
       | "reconciliation"
       | "stale-active-runtime"
+      | "reconcile-remote-gone"
       | "manual",
     public readonly consumedHours: number,
   ) {

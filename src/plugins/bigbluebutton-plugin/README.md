@@ -1356,7 +1356,7 @@ new ScheduledTask({
 | Job | What it fixes |
 |-----|---------------|
 | `reconcileProvisioning()` | Meeting stuck in `Provisioning` > 5 min → retry (max 3), then → `Failed` |
-| `reconcileActiveMeetings()` | Meeting is `Active` in DB but gone from BBB → mark `Completed` + bill; meetings still `Active` past `maxMeetingDurationMs` (24 h) → force-complete and bill at the cap |
+| `reconcileActiveMeetings()` | Meeting is `Active` in DB but confirmed gone on BBB (`notFound`, or `getMeetingInfo` success with `endTime > 0`): metered orgs with samples → `Completed` + bill via `source: "reconcile-remote-gone"` (`completedAt` from BBB `endTime`, else last sample + 1 min, clamped), metered orgs with zero samples → `Stale` + `bbb-metering-zero-samples` alert, grant orgs → `Stale`; meetings missing their moderator password → per-meeting skip (server health untouched); meetings still `Active` past `maxMeetingDurationMs` (24 h) → force-complete and bill at the cap |
 | `reconcileRooms()` | Room/meeting state drift (4 cases below) |
 | `reconcilePendingBilling()` | Meeting already `Completed` but with no ledger entry → write the missing `BbbMeetingUsageLedger` row and consume the grant |
 

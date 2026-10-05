@@ -35,6 +35,7 @@ export class BbbMetricsService {
   private reconciliationProvisioningFixed = 0;
   private reconciliationActiveReconciled = 0;
   private reconciliationRoomsReconciled = 0;
+  private reconciliationRemoteGoneCompletions = 0;
 
   // ─── Lifecycle Metrics ────────────────────────────────────────────────────
 
@@ -114,6 +115,16 @@ export class BbbMetricsService {
 
   recordReconciliationRoomsReconciled(): void {
     this.reconciliationRoomsReconciled++;
+  }
+
+  /**
+   * W5: one meeting completed by reconciliation from a CONFIRMED remote end
+   * (notFound or endTime > 0) that no webhook delivered. Each increment is a
+   * missed BBB webhook — paired with the de-duplicated `bbb-webhook-missed`
+   * ops alert.
+   */
+  recordReconcileRemoteGoneCompletion(): void {
+    this.reconciliationRemoteGoneCompletions++;
   }
 
   // ─── Lifecycle Metrics ────────────────────────────────────────────────────
@@ -214,6 +225,7 @@ export class BbbMetricsService {
         provisioningFixed: this.reconciliationProvisioningFixed,
         activeReconciled: this.reconciliationActiveReconciled,
         roomsReconciled: this.reconciliationRoomsReconciled,
+        remoteGoneCompletions: this.reconciliationRemoteGoneCompletions,
       },
       lifecycle: {
         staleActiveDetected: this.staleActiveDetected,
@@ -246,7 +258,7 @@ export class BbbMetricsService {
       `[BBB Metrics] ` +
         `Lock{acquired=${s.lock.acquired} contention=${s.lock.contention} redisFail=${s.lock.redisFailure} hbExt=${s.lock.heartbeatExtended} hbFail=${s.lock.heartbeatFailed}} ` +
         `Provisioning{enqueued=${s.provisioning.enqueued} suppressed=${s.provisioning.suppressed} ok=${s.provisioning.succeeded} fail=${s.provisioning.failed} avgLat=${s.provisioning.avgLatencyMs}ms} ` +
-        `Reconciliation{provFixed=${s.reconciliation.provisioningFixed} active=${s.reconciliation.activeReconciled} rooms=${s.reconciliation.roomsReconciled}} ` +
+        `Reconciliation{provFixed=${s.reconciliation.provisioningFixed} active=${s.reconciliation.activeReconciled} rooms=${s.reconciliation.roomsReconciled} remoteGone=${s.reconciliation.remoteGoneCompletions}} ` +
         `Lifecycle{staleDetected=${s.lifecycle.staleActiveDetected} staleRecovered=${s.lifecycle.staleActiveRecovered} reprovision=${s.lifecycle.reprovisionTriggered} runtimeFail=${s.lifecycle.runtimeValidationFailed} webhookDone=${s.lifecycle.webhookCompletionCount} webhookParseFail=${s.lifecycle.webhookParseFailures} duplicateBlocked=${s.lifecycle.duplicateCompletionPrevented} billingOk=${s.lifecycle.billingSuccess} billingFail=${s.lifecycle.billingFailed}} ` +
         `BBB API{createOk=${s.bbbApi.createMeetingSuccess} createFail=${s.bbbApi.createMeetingFailed} endOk=${s.bbbApi.endMeetingSuccess} endFail=${s.bbbApi.endMeetingFailed} isRunningOk=${s.bbbApi.isMeetingRunningSuccess} isRunningFail=${s.bbbApi.isMeetingRunningFailed}}`,
     );
@@ -270,6 +282,7 @@ export class BbbMetricsService {
     this.reconciliationProvisioningFixed = 0;
     this.reconciliationActiveReconciled = 0;
     this.reconciliationRoomsReconciled = 0;
+    this.reconciliationRemoteGoneCompletions = 0;
     this.staleActiveDetected = 0;
     this.staleActiveRecovered = 0;
     this.reprovisionTriggered = 0;
@@ -307,6 +320,7 @@ export interface BbbMetricsSnapshot {
     provisioningFixed: number;
     activeReconciled: number;
     roomsReconciled: number;
+    remoteGoneCompletions: number;
   };
   lifecycle: {
     staleActiveDetected: number;

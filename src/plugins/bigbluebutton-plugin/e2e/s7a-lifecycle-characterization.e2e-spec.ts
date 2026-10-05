@@ -28,6 +28,26 @@
  *   W1-B outage → room runtime validation assumes valid: no completion
  *   W1-C notFound → reconciliation stales: terminal, still no billing
  *
+ * W5 cases (reconcile-remote-gone billing decision — a missed BBB end event
+ * must not leave a metered meeting ACTIVE until BBB purges it):
+ *
+ *   W5-1 confirmed notFound + samples → COMPLETED via
+ *         source 'reconcile-remote-gone': one usage row whose periodMonth
+ *         derives from completedAt (last sample + 1 min, clamped), room
+ *         reset, exactly one MeetingCompletedEvent, webhook-missed alert,
+ *         metric counter bumped
+ *   W5-2 confirmed notFound + 0 samples → STALE, zero usage rows, ops alert
+ *         (zero samples may mean broken metering, not an empty room)
+ *   W5-3 getMeetingInfo success with endTime > 0 → same confirmed end
+ *   W5-4 outage / misconfigured / rejected → meetings untouched (never act)
+ *   W5-5 double reconcile + late webhook + billing replay → exactly one
+ *         usage row and one event
+ *   W5-6 grant-mode confirmed gone → STALE, zero billing (unchanged; W1-C)
+ *   W5-7 billing ceiling with null grantId → completes capped without
+ *         publishing CapacityExhaustedEvent / touching any grant row
+ *   W5-8 missing moderator password on the meeting row → per-meeting skip
+ *         (API never called, server stays healthy, no config alert)
+ *
  * The only replaced component is the outbound BBB HTTP hop (property
  * replacement on the injected BbbApiService, the in-repo precedent from
  * r4-runtime-lifecycle.e2e-spec.ts). Fixtures go through Vendure
@@ -54,7 +74,7 @@ import {
   mergeConfig,
   TransactionalConnection,
 } from '@vendure/core';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { getSuperadminContext } from '@vendure/testing/lib/utils/get-superadmin-context';
 import { filter, firstValueFrom, take } from 'rxjs';
 
@@ -63,12 +83,19 @@ import { BigBlueButtonPlugin } from '../bigbluebutton.plugin';
 import { SchemaPostgresInitializer } from '../../tenant-plugin/e2e/schema-postgres-initializer';
 import {
   BbbApiService,
+  BbbMisconfiguredError,
   BbbNotFoundError,
+  BbbRejectedError,
   BbbUnavailableError,
 } from '../services/bbb-api.service';
 import { MeetingLifecycleService } from '../services/bbb-meeting-lifecycle.service';
 import { BbbReconciliationService } from '../services/bbb-reconciliation.service';
 import { BbbRoomService } from '../services/bbb-room.service';
+import { BbbMeteringService } from '../services/bbb-metering.service';
+import { BbbMetricsService } from '../services/bbb-metrics.service';
+import { BbbEncryptionService } from '../services/bbb-encryption.service';
+import { BbbOpsAlertService } from '../services/bbb-ops-alert.service';
+import { monthOf } from '../services/metered-billing.policy';
 import { BbbMeeting } from '../entities/bbb-meeting.entity';
 import { BbbRoom } from '../entities/bbb-room.entity';
 import { BbbOrganization } from '../entities/bbb-organization.entity';
@@ -77,7 +104,11 @@ import { BbbCapacityGrant } from '../entities/bbb-capacity-grant.entity';
 import { BbbUsageLedger } from '../entities/bbb-usage-ledger.entity';
 import { BbbMeetingSample } from '../entities/bbb-meeting-sample.entity';
 import { BbbMeteredUsage } from '../entities/bbb-metered-usage.entity';
-import { GrantConsumedEvent, MeetingCompletedEvent } from '../events/bbb-events';
+import {
+  CapacityExhaustedEvent,
+  GrantConsumedEvent,
+  MeetingCompletedEvent,
+} from '../events/bbb-events';
 import { BILLING_MODE, MEETING_STATE } from '../constants';
 
 registerInitializer('postgres', new SchemaPostgresInitializer());
@@ -143,6 +174,13 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
   const grantEvents: GrantConsumedEvent[] = [];
   let subCompleted: { unsubscribe(): void } | undefined;
   let subGrant: { unsubscribe(): void } | undefined;
+  let subCapacity: { unsubscribe(): void } | undefined;
+  let capacityEvents: CapacityExhaustedEvent[] = [];
+  /** Real encryption service — W5 fixtures store REAL encrypted passwords. */
+  let encryptionService: BbbEncryptionService;
+  let metrics: BbbMetricsService;
+  /** Spy on the real ops-alert channel (calls through; records every call). */
+  let opsNotifySpy: any;
 
   d('pinning the lifecycle contract', () => {
     beforeAll(async () => {
@@ -166,6 +204,9 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
       lifecycleService = server.app.get(MeetingLifecycleService);
       roomService = server.app.get(BbbRoomService);
       reconciliationService = server.app.get(BbbReconciliationService);
+      encryptionService = server.app.get(BbbEncryptionService);
+      metrics = server.app.get(BbbMetricsService);
+      opsNotifySpy = vi.spyOn(server.app.get(BbbOpsAlertService), 'notify');
 
       subCompleted = eventBus
         .ofType(MeetingCompletedEvent)
@@ -173,6 +214,9 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
       subGrant = eventBus
         .ofType(GrantConsumedEvent)
         .subscribe((e) => grantEvents.push(e));
+      subCapacity = eventBus
+        .ofType(CapacityExhaustedEvent)
+        .subscribe((e) => capacityEvents.push(e));
 
       const stamp = Date.now();
       const channelService = server.app.get(ChannelService);
@@ -232,6 +276,7 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
     afterAll(async () => {
       subCompleted?.unsubscribe();
       subGrant?.unsubscribe();
+      subCapacity?.unsubscribe();
       await server.destroy();
     });
 
@@ -262,8 +307,19 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
       grantId?: string | null;
       /** true → carry bbbMeetingId + serverId (BBB-runtime-visible). */
       observable?: boolean;
+      /**
+       * Plaintext moderator password for the reconcile side-load (W5). An
+       * observable meeting defaults to 'e2e-mod-pw', encrypted with the REAL
+       * key so the production decrypt path runs. Pass `null` to store
+       * NOTHING — the W5-8 per-meeting-skip fixture.
+       */
+      moderatorPassword?: string | null;
     }): Promise<BbbMeeting> {
       const repo = connection.getRepository(ctx, BbbMeeting);
+      const encryptedModeratorPassword =
+        opts.observable && opts.moderatorPassword !== null
+          ? encryptionService.encrypt(opts.moderatorPassword ?? 'e2e-mod-pw')
+          : undefined;
       return repo.save(
         repo.create({
           title: `S7A meeting ${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -273,6 +329,7 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
           grantId: opts.grantId ?? null,
           bbbMeetingId: opts.observable ? `s7a-${Date.now()}` : undefined,
           serverId: opts.observable ? String(serverRow.id) : undefined,
+          encryptedModeratorPassword,
         }),
       );
     }
@@ -353,6 +410,47 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
       completedEvents.filter((e) => String(e.meetingId) === meetingId);
     const grantEventsFor = (meetingId: string) =>
       grantEvents.filter((e) => String(e.meetingId) === meetingId);
+
+    // ─── W5 helpers (reconcile-remote-gone) ─────────────────────────────────
+
+    /** Property-replaced API stub whose getMeetingInfo throws `err`. */
+    const apiThrowing = (err: unknown): any => {
+      const stub: any = Object.create(server.app.get(BbbApiService));
+      stub.getMeetingInfo = async () => {
+        throw err;
+      };
+      return stub;
+    };
+
+    /**
+     * Property-replaced API stub whose getMeetingInfo SUCCEEDS — the W5 "BBB
+     * still answers for an ended meeting" case. `endTime` is epoch seconds,
+     * exactly as BBB returns it.
+     */
+    const apiWithEndTime = (endTimeSec: number): any => {
+      const stub: any = Object.create(server.app.get(BbbApiService));
+      stub.getMeetingInfo = async () => ({
+        meetingID: 'stub',
+        internalMeetingID: 'stub',
+        running: false,
+        participantCount: 0,
+        moderatorCount: 0,
+        recording: false,
+        startTime: 0,
+        endTime: endTimeSec,
+      });
+      return stub;
+    };
+
+    const setReconcileApi = (api: any): void => {
+      (reconciliationService as any).bbbApiService = api;
+    };
+
+    const alertsOfKind = (kind: string): any[][] =>
+      (opsNotifySpy?.mock?.calls ?? []).filter((c: any[]) => c[0] === kind);
+
+    const remoteGoneCompletions = (): number =>
+      metrics.snapshot().reconciliation.remoteGoneCompletions;
 
     // ─── C1 + C3 ──────────────────────────────────────────────────────────────
 
@@ -648,6 +746,376 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
       // STALE is terminal but never billed (markMeetingStale writes no ledger).
       expect(await ledgerCount(id)).toBe(0);
       expect(completedFor(id)).toHaveLength(0);
+    });
+
+    // ─── W5 regression cases (reconcile-remote-gone billing decision) ─────────
+    //
+    // Only the outbound BBB HTTP hop is property-replaced (same precedent as
+    // C6/W1). Real reconcile loop, grace period, metered/grant branching,
+    // lifecycle transaction, billing and alerting all run.
+
+    it('W5-1: confirmed notFound with samples completes the metered meeting and bills one usage row', async () => {
+      setReconcileApi(apiThrowing(new BbbNotFoundError('w5-1-gone')));
+      opsNotifySpy.mockClear();
+      const metricBefore = remoteGoneCompletions();
+
+      const meeting = await makeActiveMeeting({
+        org: meteredOrg,
+        minutesAgo: 10,
+        grantId: null,
+        observable: true,
+      });
+      const id = String(meeting.id);
+      const room = await makeLiveRoom(meteredOrg, meeting);
+      const bucket1 = new Date(Date.now() - 5 * 60_000);
+      const bucket2 = new Date(Date.now() - 4 * 60_000);
+      await addSample(id, bucket1, 3);
+      await addSample(id, bucket2, 3);
+
+      const reconciled = await reconciliationService.reconcileActiveMeetings();
+
+      expect(reconciled).toBe(1);
+      const done = await reloadMeeting(id);
+      expect(done.state).toBe(MEETING_STATE.COMPLETED);
+      // completedAt = last sample + 1 minute (notFound carries no endTime),
+      // clamped to >= provisionedAt. The month derivation of a wrong
+      // fallback (new Date()) is pinned by W5-9 below.
+      expect(done.completedAt).toBeTruthy();
+      expect(
+        Math.abs(done.completedAt!.getTime() - (bucket2.getTime() + 60_000)),
+      ).toBeLessThan(1000);
+      expect(done.completedAt!.getTime()).toBeGreaterThanOrEqual(
+        meeting.provisionedAt!.getTime(),
+      );
+
+      // Room reset happens inside the same completion transaction.
+      const roomAfter = await reloadRoom(String(room.id));
+      expect(roomAfter.state).toBe('Idle');
+      expect(roomAfter.currentMeetingId).toBeNull();
+
+      const usage = await usageRows(id);
+      expect(usage).toHaveLength(1);
+      expect(usage[0].learnerMinutes).toBe(6);
+      expect(usage[0].periodMonth).toBe(monthOf(done.completedAt!));
+      expect(await ledgerCount(id)).toBe(0);
+
+      const events = completedFor(id);
+      expect(events).toHaveLength(1);
+      expect(events[0].source).toBe('reconcile-remote-gone');
+
+      expect(remoteGoneCompletions()).toBe(metricBefore + 1);
+      const missed = alertsOfKind('bbb-webhook-missed');
+      expect(missed).toHaveLength(1);
+      expect(String(missed[0][1])).toBe(`server-${meeting.serverId}`);
+    });
+
+    it('W5-2: confirmed notFound with zero samples stales and raises a metering-gap alert', async () => {
+      setReconcileApi(apiThrowing(new BbbNotFoundError('w5-2-gone')));
+      opsNotifySpy.mockClear();
+      const metricBefore = remoteGoneCompletions();
+
+      const meeting = await makeActiveMeeting({
+        org: meteredOrg,
+        minutesAgo: 10,
+        grantId: null,
+        observable: true,
+      });
+      const id = String(meeting.id);
+
+      const reconciled = await reconciliationService.reconcileActiveMeetings();
+
+      expect(reconciled).toBe(1);
+      expect((await reloadMeeting(id)).state).toBe(MEETING_STATE.STALE);
+      expect(await usageRows(id)).toHaveLength(0);
+      expect(await ledgerCount(id)).toBe(0);
+      expect(completedFor(id)).toHaveLength(0);
+      // Zero samples may mean broken metering — never a silent stale.
+      expect(remoteGoneCompletions()).toBe(metricBefore);
+      const gapAlerts = alertsOfKind('bbb-metering-zero-samples');
+      expect(gapAlerts).toHaveLength(1);
+      expect(String(gapAlerts[0][1])).toBe(`meeting-${id}`);
+    });
+
+    it('W5-3: getMeetingInfo success with endTime > 0 behaves like a confirmed end', async () => {
+      const endTimeSec = Math.floor((Date.now() - 3 * 60_000) / 1000);
+      setReconcileApi(apiWithEndTime(endTimeSec));
+      opsNotifySpy.mockClear();
+
+      const meeting = await makeActiveMeeting({
+        org: meteredOrg,
+        minutesAgo: 10,
+        grantId: null,
+        observable: true,
+      });
+      const id = String(meeting.id);
+      await addSample(id, new Date(Date.now() - 6 * 60_000), 2);
+      await addSample(id, new Date(Date.now() - 5 * 60_000), 2);
+
+      const reconciled = await reconciliationService.reconcileActiveMeetings();
+
+      expect(reconciled).toBe(1);
+      const done = await reloadMeeting(id);
+      expect(done.state).toBe(MEETING_STATE.COMPLETED);
+      // BBB's own endTime (within [provisionedAt, now]) is the completedAt.
+      expect(done.completedAt!.getTime()).toBe(endTimeSec * 1000);
+      const usage = await usageRows(id);
+      expect(usage).toHaveLength(1);
+      expect(usage[0].periodMonth).toBe(monthOf(done.completedAt!));
+      const events = completedFor(id);
+      expect(events).toHaveLength(1);
+      expect(events[0].source).toBe('reconcile-remote-gone');
+    });
+
+    it('W5-4: outage, misconfigured and rejected never touch the meeting', async () => {
+      opsNotifySpy.mockClear();
+      const metricBefore = remoteGoneCompletions();
+      const meetingRepo = connection.getRepository(ctx, BbbMeeting);
+      const serverRepo = connection.getRepository(ctx, BbbServer);
+      const ids: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        const m = await makeActiveMeeting({
+          org: meteredOrg,
+          minutesAgo: 10,
+          grantId: null,
+          observable: true,
+        });
+        await addSample(String(m.id), new Date(Date.now() - 4 * 60_000), 2);
+        ids.push(String(m.id));
+      }
+      const expectUntouched = async (): Promise<void> => {
+        for (const id of ids) {
+          expect((await reloadMeeting(id)).state).toBe(MEETING_STATE.ACTIVE);
+        }
+      };
+
+      // Outage: cannot prove gone → skip, no flag, nothing staled.
+      setReconcileApi(apiThrowing(new BbbUnavailableError('getMeetingInfo', 'w5-4 outage')));
+      expect(await reconciliationService.reconcileActiveMeetings()).toBe(0);
+      await expectUntouched();
+
+      // Misconfigured: skip + the SERVER is flagged (config problem), meeting untouched.
+      setReconcileApi(apiThrowing(new BbbMisconfiguredError('w5-4 missing secret')));
+      expect(await reconciliationService.reconcileActiveMeetings()).toBe(0);
+      await expectUntouched();
+      expect(
+        (await serverRepo.findOneOrFail({ where: { id: serverRow.id } })).healthy,
+      ).toBe(false);
+      await serverRepo.update(serverRow.id, { healthy: true });
+
+      // Rejected (bad checksum): same — server flagged, meeting untouched.
+      setReconcileApi(
+        apiThrowing(new BbbRejectedError('getMeetingInfo', 'checksumError', 'w5-4 rejected')),
+      );
+      expect(await reconciliationService.reconcileActiveMeetings()).toBe(0);
+      await expectUntouched();
+      expect(
+        (await serverRepo.findOneOrFail({ where: { id: serverRow.id } })).healthy,
+      ).toBe(false);
+      await serverRepo.update(serverRow.id, { healthy: true });
+
+      for (const id of ids) {
+        expect(await usageRows(id)).toHaveLength(0);
+        expect(completedFor(id)).toHaveLength(0);
+      }
+      expect(remoteGoneCompletions()).toBe(metricBefore);
+      expect(alertsOfKind('bbb-webhook-missed')).toHaveLength(0);
+
+      // Hygiene: terminalize so later W5 passes see only their own meetings.
+      for (const id of ids) {
+        await meetingRepo.update(id, { state: MEETING_STATE.STALE });
+      }
+    });
+
+    it('W5-5: double reconcile, a late webhook and a billing replay yield exactly one usage row', async () => {
+      setReconcileApi(apiThrowing(new BbbNotFoundError('w5-5-gone')));
+
+      const meeting = await makeActiveMeeting({
+        org: meteredOrg,
+        minutesAgo: 10,
+        grantId: null,
+        observable: true,
+      });
+      const id = String(meeting.id);
+      await addSample(id, new Date(Date.now() - 5 * 60_000), 4);
+      await addSample(id, new Date(Date.now() - 4 * 60_000), 4);
+
+      expect(await reconciliationService.reconcileActiveMeetings()).toBe(1);
+      expect(await usageRows(id)).toHaveLength(1);
+      const eventsAfterFirst = completedFor(id).length;
+      expect(eventsAfterFirst).toBe(1);
+
+      // Second pass: the meeting is no longer ACTIVE → untouched.
+      expect(await reconciliationService.reconcileActiveMeetings()).toBe(0);
+      expect(await usageRows(id)).toHaveLength(1);
+      expect(completedFor(id)).toHaveLength(eventsAfterFirst);
+
+      // Late webhook replay: already Completed → no transition, no billing.
+      await lifecycleService.completeMeetingLifecycle(ctx, meeting.id, {
+        source: 'webhook',
+      });
+      // Metered recovery replay: INSERT … ON CONFLICT (meetingId) DO NOTHING.
+      const metering = server.app.get(BbbMeteringService);
+      await metering.billMeteredMeeting(ctx, id);
+
+      expect(await usageRows(id)).toHaveLength(1);
+      expect(completedFor(id)).toHaveLength(eventsAfterFirst);
+    });
+
+    it('W5-6: grant-mode confirmed notFound stays STALE with zero billing (unchanged)', async () => {
+      setReconcileApi(apiThrowing(new BbbNotFoundError('w5-6-gone')));
+      opsNotifySpy.mockClear();
+
+      const grant = await freshGrant(grantOrg, 600);
+      const meeting = await makeActiveMeeting({
+        org: grantOrg,
+        minutesAgo: 10,
+        grantId: String(grant.id),
+        observable: true,
+      });
+      const id = String(meeting.id);
+      // Samples must never drive grant-mode billing — grant mode is STALE.
+      await addSample(id, new Date(Date.now() - 4 * 60_000), 5);
+
+      const reconciled = await reconciliationService.reconcileActiveMeetings();
+
+      expect(reconciled).toBe(1);
+      expect((await reloadMeeting(id)).state).toBe(MEETING_STATE.STALE);
+      expect(await ledgerCount(id)).toBe(0);
+      expect(await usageRows(id)).toHaveLength(0);
+      expect((await reloadGrant(String(grant.id))).consumedMinutes).toBe(0);
+      expect(completedFor(id)).toHaveLength(0);
+      expect(grantEventsFor(id)).toHaveLength(0);
+      // The webhook-missed completion alert belongs to metered completions only.
+      const missed = alertsOfKind('bbb-webhook-missed');
+      expect(
+        missed.filter((c: any[]) => String((c[3] ?? {}).meetingId) === id),
+      ).toHaveLength(0);
+    });
+
+    it('W5-7: billing ceiling with null grantId completes capped, no grant event published', async () => {
+      opsNotifySpy.mockClear();
+      const controlGrant = await freshGrant(grantOrg, 600);
+      const capacityBefore = capacityEvents.length;
+
+      // 25 h old → past maxMeetingDurationMs (default 24 h) → ceiling branch.
+      const meeting = await makeActiveMeeting({
+        org: meteredOrg,
+        minutesAgo: 25 * 60,
+        grantId: null,
+        observable: true,
+      });
+      const id = String(meeting.id);
+      await addSample(id, new Date(Date.now() - 10 * 60_000), 7);
+      await addSample(id, new Date(Date.now() - 9 * 60_000), 7);
+
+      const reconciled = await reconciliationService.reconcileActiveMeetings();
+
+      expect(reconciled).toBe(1);
+      const done = await reloadMeeting(id);
+      expect(done.state).toBe(MEETING_STATE.COMPLETED);
+      expect(done.billingCapped).toBe(true);
+      expect(done.billingCapReason).toContain('maxMeetingDurationMs');
+
+      const usage = await usageRows(id);
+      expect(usage).toHaveLength(1);
+      expect(usage[0].billingCapped).toBe(true);
+
+      // grantId is null → the grant lookup is skipped entirely: no
+      // CapacityExhaustedEvent and no arbitrary grant row touched.
+      expect(capacityEvents.length).toBe(capacityBefore);
+      expect(
+        capacityEvents.filter(
+          (e) => String(e.organization?.id) === String(meteredOrg.id),
+        ),
+      ).toHaveLength(0);
+      expect((await reloadGrant(String(controlGrant.id))).consumedMinutes).toBe(0);
+      expect(await ledgerCount(id)).toBe(0);
+    });
+
+    it('W5-8: missing moderator password skips the meeting without flagging the server', async () => {
+      const stub: any = Object.create(server.app.get(BbbApiService));
+      const getMeetingInfo = vi.fn(async () => ({
+        meetingID: 'never-called',
+        internalMeetingID: 'never-called',
+        running: false,
+        participantCount: 0,
+        moderatorCount: 0,
+        recording: false,
+        startTime: 0,
+        endTime: 0,
+      }));
+      stub.getMeetingInfo = getMeetingInfo;
+      setReconcileApi(stub);
+      opsNotifySpy.mockClear();
+
+      const meeting = await makeActiveMeeting({
+        org: meteredOrg,
+        minutesAgo: 10,
+        grantId: null,
+        observable: true,
+        moderatorPassword: null,
+      });
+      const id = String(meeting.id);
+
+      const reconciled = await reconciliationService.reconcileActiveMeetings();
+
+      expect(reconciled).toBe(0);
+      // Per-meeting data problem: the API is never called — an
+      // unauthenticated getMeetingInfo would be rejected and would flag the
+      // whole server because of ONE bad meeting row.
+      expect(getMeetingInfo).not.toHaveBeenCalled();
+      const reloaded = await reloadMeeting(id);
+      expect(reloaded.state).toBe(MEETING_STATE.ACTIVE);
+      // The audit write proves the loop processed (and skipped) this meeting.
+      expect(reloaded.lastReconciledAt).not.toBeNull();
+      const serverRepo = connection.getRepository(ctx, BbbServer);
+      expect(
+        (await serverRepo.findOneOrFail({ where: { id: serverRow.id } })).healthy,
+      ).toBe(true);
+      expect(alertsOfKind('bbb-server-config')).toHaveLength(0);
+    });
+
+    it('W5-9: month boundary — completedAt month wins over reconcile-time month', async () => {
+      // Freeze the wall clock so "now" is February 1st 00:30 while the
+      // meeting, its samples and BBB's endTime all sit on January 31st.
+      // (A real-clock version only works within 24 h of a month boundary —
+      // and a >24 h-old meeting would hit the billing ceiling instead.)
+      vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-02-01T00:30:00.000Z') });
+      try {
+        const endTimeSec = Math.floor(
+          new Date('2026-01-31T23:55:00.000Z').getTime() / 1000,
+        );
+        setReconcileApi(apiWithEndTime(endTimeSec));
+        opsNotifySpy.mockClear();
+
+        const meeting = await makeActiveMeeting({
+          org: meteredOrg,
+          minutesAgo: 40, // provisionedAt = 2026-01-31T23:50Z (frozen clock)
+          grantId: null,
+          observable: true,
+        });
+        const id = String(meeting.id);
+        await addSample(id, new Date('2026-01-31T23:52:00.000Z'), 5);
+        await addSample(id, new Date('2026-01-31T23:53:00.000Z'), 5);
+
+        expect(await reconciliationService.reconcileActiveMeetings()).toBe(1);
+
+        const done = await reloadMeeting(id);
+        expect(done.state).toBe(MEETING_STATE.COMPLETED);
+        expect(done.completedAt!.getTime()).toBe(endTimeSec * 1000);
+
+        const usage = await usageRows(id);
+        expect(usage).toHaveLength(1);
+        // Booked to JANUARY — deriving periodMonth from reconcile-time
+        // (new Date()) would produce '2026-02'.
+        expect(usage[0].periodMonth).toBe('2026-01');
+        expect(usage[0].periodMonth).toBe(monthOf(done.completedAt!));
+        expect(usage[0].periodMonth).not.toBe(
+          monthOf(new Date('2026-02-01T00:30:00.000Z')),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

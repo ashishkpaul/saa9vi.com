@@ -41,8 +41,19 @@ export interface CompleteMeetingLifecycleOptions {
     | "end-meeting"
     | "reconciliation"
     | "stale-active-runtime"
+    | "reconcile-remote-gone"
     | "manual";
   entityManager?: EntityManager;
+  /**
+   * W5 — authoritative completion time supplied by the caller: BBB's own
+   * `endTime`, or the last metering sample + 1 minute, when reconciliation
+   * discovers a remote end hours/days after it happened. Applied only when
+   * the row has no completedAt yet (`meeting.completedAt ?? options.completedAt
+   * ?? new Date()`). billMeteredMeeting() derives `periodMonth` from the
+   * PERSISTED completedAt, so without this a late completion would book the
+   * usage — and the fair-billing duration — into the wrong month.
+   */
+  completedAt?: Date;
 }
 
 /**
@@ -138,7 +149,10 @@ export class MeetingLifecycleService {
 
       const previousState = meeting.state;
       meeting.state = MEETING_STATE.COMPLETED;
-      meeting.completedAt = meeting.completedAt ?? new Date();
+      // W5: options.completedAt carries the authoritative remote end (BBB
+      // endTime / last sample + 1 min) so reconciliation completions book
+      // into the correct billing month.
+      meeting.completedAt = meeting.completedAt ?? options.completedAt ?? new Date();
       const completed = await manager.save(BbbMeeting, meeting);
 
       if (completed.roomId) {

@@ -146,6 +146,7 @@ function buildReconciliation(meetings: any[], servers: Record<string, any>) {
     {} as never, // grantConsumption (unused on this path)
     { decrypt: () => "mod-pw" } as never, // BbbEncryptionService
     opsAlert as never,
+    { recordReconcileRemoteGoneCompletion: vi.fn() } as never, // BbbMetricsService
     {} as never, // plugin options (defaults apply)
   );
   return { svc, updates, serverService, lifecycle, opsAlert };

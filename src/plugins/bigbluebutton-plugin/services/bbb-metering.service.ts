@@ -157,6 +157,13 @@ export class BbbMeteringService {
       // notFound (meeting ended without a webhook) is also a skip here: the
       // meeting-ended path / reconciliation owns the terminal transition, not
       // the sampler.
+      // W6 note (from W5): BBB 2.x `getMeetingInfo` requires the moderator
+      // password (API-Mate capture) — reconciliation now supplies it on every
+      // pass. This probe stays password-less BY DESIGN until W0 verifies the
+      // deployment (`bbb-conf --version`, `supportedChecksumAlgorithms`): if
+      // the server rejects the password-less call, every skip is already a
+      // visible gap + de-duplicated config alert, and the fix is to side-load
+      // the meeting secret here — no schema change either way.
       let info: Awaited<ReturnType<BbbApiService["getMeetingInfo"]>>;
       try {
         info = await this.bbbApiService.getMeetingInfo(bbbServer, meeting.bbbMeetingId);
