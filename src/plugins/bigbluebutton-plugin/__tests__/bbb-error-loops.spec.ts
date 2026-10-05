@@ -22,6 +22,10 @@
  *      caller must NOT complete); notFound → false (stale-active recovery).
  *  (d) join/end failures carry no URL or secret; signed join URL never
  *      contains the raw API secret.
+ *  (e) metering tick: a meeting with no decryptable moderator password is
+ *      skipped as a COUNTED GAP without flagging the server (the W5-8
+ *      reconcile rule applied to the per-minute loop), and the authenticated
+ *      call carries the side-loaded password.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -81,16 +85,22 @@ const CTX = { apiType: "admin" } as never;
 /** Fluent TypeORM QB stub: chainable, resolves from fixtures. */
 function fakeQb(opts: {
   getMany?: () => Promise<unknown[]>;
-  getOne?: () => Promise<unknown>;
+  /** Receives the params of the LAST `where(...)` call (side-load key). */
+  getOne?: (whereParams?: { id?: unknown }) => Promise<unknown>;
 }): any {
   const q: any = {
     leftJoinAndSelect: () => q,
-    where: () => q,
+    where: (_clause: string, params?: { id?: unknown }) => {
+      q.whereParams = params;
+      return q;
+    },
     andWhere: () => q,
     addSelect: () => q,
     orderBy: () => q,
     getMany: opts.getMany ?? (async () => []),
-    getOne: opts.getOne ?? (async () => null),
+    getOne: opts.getOne
+      ? async () => opts.getOne!(q.whereParams)
+      : async () => null,
   };
   return q;
 }
@@ -153,11 +163,31 @@ function buildReconciliation(meetings: any[], servers: Record<string, any>) {
 }
 
 /** Real metering + real adapter over fake repos/fetch. */
-function buildMetering(meetings: any[], servers: Record<string, any>) {
+function buildMetering(
+  meetings: any[],
+  servers: Record<string, any>,
+  opts?: {
+    /**
+     * Per-meeting password side-load fixture: return null (or a bad
+     * ciphertext) for a meeting with NO decryptable moderator password.
+     */
+    passwordRowFor?: (meetingId: string) => unknown;
+  },
+) {
   const rawQuery = vi.fn(async (..._args: any[]) => []);
   const connection = {
     getRepository: () => ({
-      createQueryBuilder: () => fakeQb({ getMany: async () => meetings }),
+      createQueryBuilder: () =>
+        fakeQb({
+          getMany: async () => meetings,
+          // moderator-password side-load (metering decrypts it, like reconcile)
+          getOne: async (whereParams?: { id?: unknown }) => {
+            if (opts?.passwordRowFor) {
+              return opts.passwordRowFor(String(whereParams?.id ?? ""));
+            }
+            return { encryptedModeratorPassword: "enc-mpw" };
+          },
+        }),
     }),
     rawConnection: { options: {}, query: rawQuery },
   };
@@ -172,8 +202,14 @@ function buildMetering(meetings: any[], servers: Record<string, any>) {
     realApi(),
     serverService as never,
     { publish: vi.fn() } as never,
+    {
+      decrypt: (enc: string) => {
+        if (enc !== "enc-mpw") throw new Error("bad ciphertext");
+        return "mod-pw";
+      },
+    } as never, // BbbEncryptionService
     opsAlert as never,
-    {} as never,
+    {} as never, // plugin options (defaults apply)
   );
   return { svc, rawQuery, serverService, opsAlert };
 }
@@ -247,13 +283,58 @@ describe("Gate-2 loops (real services + real adapter, faked fetch)", () => {
     // Only the healthy+reachable meeting inserted a sample row.
     expect(rawQuery).toHaveBeenCalledTimes(1);
     expect(String(rawQuery.mock.calls[0][1]?.[0])).toBe("m-ok");
+    // The tick is AUTHENTICATED now: every getMeetingInfo issued by the
+    // sampler carries the moderator password side-loaded from the row.
+    for (const call of vi.mocked(fetch).mock.calls) {
+      expect(String(call[0])).toContain("password=mod-pw");
+    }
     // Outage alone must NOT flag the server; the config problem must.
     expect(serverService.markHealthy).toHaveBeenCalledTimes(1);
     expect(serverService.markHealthy.mock.calls[0][1]).toBe("s-mis");
     expect(opsAlert.notify).toHaveBeenCalledTimes(1);
   });
 
+  it("(e) metering: missing moderator password skips as a gap, server untouched", async () => {
+    vi.mocked(fetch).mockResolvedValue(xmlResp(SUCCESS_INFO_XML));
+    const meetings = [
+      activeMeeting("m-ok", "s-ok"),
+      activeMeeting("m-nopw", "s-ok"),
+    ];
+    const { svc, rawQuery, serverService, opsAlert } = buildMetering(
+      meetings,
+      { "s-ok": SERVER_OK },
+      {
+        // m-nopw has NO decryptable password on its row — the W5-8 fixture,
+        // now applied to the per-minute sampling loop.
+        passwordRowFor: (id) =>
+          id === "m-nopw" ? null : { encryptedModeratorPassword: "enc-mpw" },
+      },
+    );
 
+    const result = await svc.sampleActiveMeetings();
+
+    expect(result).toEqual({
+      scanned: 2,
+      sampled: 1,
+      skipped: 1,
+      failed: 0,
+      gapCount: 1,
+    });
+    // The passwordless meeting never reached the network: an unauthenticated
+    // call would be rejected (BbbRejectedError) and — the actual hazard —
+    // flagServerConfigProblem() would mark the whole SERVER unhealthy because
+    // of ONE bad meeting row.
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+    const calledUrl = String(vi.mocked(fetch).mock.calls[0][0]);
+    expect(calledUrl).toContain("meetingID=bbb-m-ok");
+    expect(calledUrl).not.toContain("bbb-m-nopw");
+    expect(calledUrl).toContain("password=mod-pw");
+    expect(serverService.markHealthy).not.toHaveBeenCalled();
+    expect(opsAlert.notify).not.toHaveBeenCalled();
+    // Counted as a gap (visible under-billing) — only m-ok inserted a sample.
+    expect(rawQuery).toHaveBeenCalledTimes(1);
+    expect(String(rawQuery.mock.calls[0][1]?.[0])).toBe("m-ok");
+  });
 
   it("(c) room runtime validation: no completion on outage/misconfig; invalidate on notFound", async () => {
     const buildRoomSvc = () => {

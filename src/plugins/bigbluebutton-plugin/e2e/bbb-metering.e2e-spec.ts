@@ -66,6 +66,7 @@ import { BbbMeteredUsage } from '../entities/bbb-metered-usage.entity';
 import { BbbOrganization } from '../entities/bbb-organization.entity';
 import { BbbServer } from '../entities/bbb-server.entity';
 import { BbbMeteringService } from '../services/bbb-metering.service';
+import { BbbEncryptionService } from '../services/bbb-encryption.service';
 import { BbbReconciliationService } from '../services/bbb-reconciliation.service';
 import { BILLING_MODE, MEETING_STATE } from '../constants';
 import { monthOf } from '../services/metered-billing.policy';
@@ -124,6 +125,7 @@ describe('Phase 2B — metered attendee-hour billing', () => {
   let connection: TransactionalConnection;
   let metering: BbbMeteringService;
   let recon: BbbReconciliationService;
+  let encryption: BbbEncryptionService;
   let meteredOrg: BbbOrganization;
   let defaultRateOrg: BbbOrganization;
   let grantOrg: BbbOrganization;
@@ -153,6 +155,7 @@ describe('Phase 2B — metered attendee-hour billing', () => {
       connection = server.app.get(TransactionalConnection);
       metering = server.app.get(BbbMeteringService);
       recon = server.app.get(BbbReconciliationService);
+      encryption = server.app.get(BbbEncryptionService);
 
       const channelService = server.app.get(ChannelService);
       const orgRepo = connection.getRepository(ctx, BbbOrganization);
@@ -277,6 +280,12 @@ describe('Phase 2B — metered attendee-hour billing', () => {
           grantId: opts.grantId ?? null,
           bbbMeetingId: opts.observable ? `meter-${Date.now()}` : undefined,
           serverId: opts.observable ? bbbServerId : undefined,
+          // Observable meetings carry an encrypted moderator password — the
+          // provisioning path always stores one, and the sampler skips a
+          // meeting without it as a counted gap (the W5-8 reconcile rule).
+          encryptedModeratorPassword: opts.observable
+            ? encryption.encrypt('meter-e2e-mod-pw')
+            : undefined,
         }),
       );
     }

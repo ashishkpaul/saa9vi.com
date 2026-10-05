@@ -16,6 +16,7 @@ import {
 import { BbbApiService, BbbMisconfiguredError, BbbNotFoundError, BbbRejectedError } from "./bbb-api.service";
 import { BbbServerService } from "./bbb-server.service";
 import { BbbOpsAlertService } from "./bbb-ops-alert.service";
+import { BbbEncryptionService } from "./bbb-encryption.service";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbMeetingSample } from "../entities/bbb-meeting-sample.entity";
 import { BbbMeteredUsage } from "../entities/bbb-metered-usage.entity";
@@ -46,8 +47,11 @@ export interface MeteringSampleResult {
   /**
    * Gate-2: per-meeting gap counter. Every `skipped` caused by a BBB error
    * (notFound/outage/reject/misconfigured — NOT a meeting missing its ids or
-   * server row) increments this alongside `skipped`. Surfaced in the tick log
-   * so downtime under-billing stays visible (customer-favourable, §6).
+   * server row) increments this alongside `skipped`, as does a meeting with
+   * no decryptable moderator password (per-meeting data problem: a counted
+   * gap beats an unauthenticated probe that would flag the whole server).
+   * Surfaced in the tick log so downtime under-billing stays visible
+   * (customer-favourable, §6).
    */
   gapCount: number;
 }
@@ -60,6 +64,7 @@ export class BbbMeteringService {
     private readonly bbbApiService: BbbApiService,
     private readonly serverService: BbbServerService,
     private readonly eventBus: EventBus,
+    private readonly encryptionService: BbbEncryptionService,
     private readonly opsAlert: BbbOpsAlertService,
     @Inject(BBB_PLUGIN_OPTIONS)
     private readonly options: BigBlueButtonPluginOptions,
@@ -157,16 +162,44 @@ export class BbbMeteringService {
       // notFound (meeting ended without a webhook) is also a skip here: the
       // meeting-ended path / reconciliation owns the terminal transition, not
       // the sampler.
-      // W6 note (from W5): BBB 2.x `getMeetingInfo` requires the moderator
-      // password (API-Mate capture) — reconciliation now supplies it on every
-      // pass. This probe stays password-less BY DESIGN until W0 verifies the
-      // deployment (`bbb-conf --version`, `supportedChecksumAlgorithms`): if
-      // the server rejects the password-less call, every skip is already a
-      // visible gap + de-duplicated config alert, and the fix is to side-load
-      // the meeting secret here — no schema change either way.
+      // Follow-up to W5 (the reconcile W5-8 rule, now enforced here too): BBB
+      // requires the moderator password on getMeetingInfo (API-Mate capture),
+      // so the old password-less probe would be rejected (BbbRejectedError)
+      // and flagServerConfigProblem() would mark the whole SERVER unhealthy
+      // because of ONE bad meeting row. Side-load + decrypt the meeting
+      // password exactly as reconciliation does; a missing/undecryptable
+      // password skips THIS meeting as a counted gap — warn only, no API
+      // call, server health untouched.
+      let moderatorPW: string | undefined;
+      try {
+        const withSecrets = await this.connection
+          .getRepository(ctx, BbbMeeting)
+          .createQueryBuilder("meeting")
+          .addSelect("meeting.encryptedModeratorPassword")
+          .where("meeting.id = :id", { id: meeting.id as string })
+          .getOne();
+        if (withSecrets?.encryptedModeratorPassword) {
+          moderatorPW = this.encryptionService.decrypt(
+            withSecrets.encryptedModeratorPassword,
+          );
+        }
+      } catch {
+        moderatorPW = undefined;
+      }
+      if (!moderatorPW) {
+        Logger.warn(
+          `Metering skipped for meeting ${meeting.id}: no decryptable moderator password on the meeting row (per-meeting data problem)`,
+          loggerCtx,
+        );
+        return "gap";
+      }
       let info: Awaited<ReturnType<BbbApiService["getMeetingInfo"]>>;
       try {
-        info = await this.bbbApiService.getMeetingInfo(bbbServer, meeting.bbbMeetingId);
+        info = await this.bbbApiService.getMeetingInfo(
+          bbbServer,
+          meeting.bbbMeetingId,
+          moderatorPW,
+        );
       } catch (err) {
         if (err instanceof BbbNotFoundError) {
           Logger.info(`Metering sample skipped for meeting ${meeting.id}: meeting ended on BBB`, loggerCtx);

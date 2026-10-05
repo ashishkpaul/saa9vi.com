@@ -549,6 +549,9 @@ interface BigBlueButtonPluginOptions {
   videoWeight?: number;                // default: 3 — PILOS virtual-load weight per video stream
   micWeight?: number;                  // default: 2 — weight per mic stream
   listenerWeight?: number;             // default: 1 — weight per listen-only attendee
+
+  // BBB protocol (W7)
+  checksumAlgorithm?: "sha256" | "sha1"; // default: 'sha256' — set from the deployed server's supportedChecksumAlgorithms
 }
 ```
 
@@ -1356,7 +1359,7 @@ new ScheduledTask({
 | Job | What it fixes |
 |-----|---------------|
 | `reconcileProvisioning()` | Meeting stuck in `Provisioning` > 5 min → retry (max 3), then → `Failed` |
-| `reconcileActiveMeetings()` | Meeting is `Active` in DB but confirmed gone on BBB (`notFound`, or `getMeetingInfo` success with `endTime > 0`): metered orgs with samples → `Completed` + bill via `source: "reconcile-remote-gone"` (`completedAt` from BBB `endTime`, else last sample + 1 min, clamped), metered orgs with zero samples → `Stale` + `bbb-metering-zero-samples` alert, grant orgs → `Stale`; meetings missing their moderator password → per-meeting skip (server health untouched); meetings still `Active` past `maxMeetingDurationMs` (24 h) → force-complete and bill at the cap |
+| `reconcileActiveMeetings()` | Meeting is `Active` in DB but confirmed gone on BBB (`notFound`, or `getMeetingInfo` success with `endTime > 0`): metered orgs with samples → `Completed` + bill via `source: "reconcile-remote-gone"` (`completedAt` from BBB `endTime`, else last sample + 1 min, clamped), metered orgs with zero samples → `Stale` + `bbb-metering-zero-samples` alert, grant orgs → `Stale`; meetings missing their moderator password → per-meeting skip (server health untouched); meetings still `Active` past `maxMeetingDurationMs` (24 h) → force-complete and bill at the cap (`completedAt` pinned to `provisionedAt + maxMeetingDurationMs` so usage books to the month the meeting ended in) |
 | `reconcileRooms()` | Room/meeting state drift (4 cases below) |
 | `reconcilePendingBilling()` | Meeting already `Completed` but with no ledger entry → write the missing `BbbMeetingUsageLedger` row and consume the grant |
 
@@ -1814,7 +1817,7 @@ src/plugins/bigbluebutton-plugin/
 │
 ├── services/                                  # 29 modules (services + 2 pure policies)
 │   ├── bbb-encryption.service.ts              # AES-256-GCM encrypt/decrypt
-│   ├── bbb-api.service.ts                     # BBB REST adapter (SHA-256 checksum, OTEL spans)
+│   ├── bbb-api.service.ts                     # BBB REST adapter (checksumAlgorithm option, default SHA-256, OTEL spans)
 │   ├── bbb-server.service.ts                  # Server CRUD
 │   ├── bbb-server-selection.service.ts        # Least-loaded healthy server selection
 │   ├── bbb-channel-access.service.ts          # Channel-scoped org resolution + isolation enforcement

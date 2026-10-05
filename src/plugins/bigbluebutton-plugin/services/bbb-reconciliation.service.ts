@@ -132,8 +132,18 @@ export class BbbReconciliationService {
             lastReconciledAt: new Date(),
             reconciliationAttemptCount: (meeting.reconciliationAttemptCount ?? 0) + 1,
           });
+        // Follow-up: the meeting ENDED (for billing) at the ceiling —
+        // provisionedAt + maxMeetingDurationMs — not when this pass happened
+        // to run. Passing that as completedAt makes usage book to the month
+        // the meeting actually ended in (same rule as reconcile-remote-gone,
+        // W5-9/W5-10); the branch condition (age > ceiling) guarantees it is
+        // ≤ now.
         await this.lifecycleService.completeMeetingLifecycle(ctx, meeting.id, {
           source: "reconciliation",
+          completedAt: new Date(
+            (meeting.provisionedAt ?? meeting.createdAt).getTime() +
+              this.maxMeetingDurationMs,
+          ),
         });
         reconciled++;
         Logger.warn(

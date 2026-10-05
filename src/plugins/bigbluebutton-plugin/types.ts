@@ -146,6 +146,21 @@ export interface BigBlueButtonPluginOptions {
    */
   defaultRatePaisePerLearnerHour?: number;
 
+  // ─── BBB protocol (W7) ──────────────────────────────────────────────────
+
+  /**
+   * Checksum algorithm the adapter signs BBB API requests with:
+   * `checksum = hex( <algorithm>(methodName + queryString + apiSecret) )`.
+   *
+   * BBB servers advertise the set they accept via `supportedChecksumAlgorithms`
+   * (W0: `bbb-conf --version` on the deployed server). Default `sha256`;
+   * `sha1` is the legacy algorithm BBB's own API docs still show in the
+   * canonical example. Unknown values fall back to `sha256`.
+   *
+   * @default 'sha256'
+   */
+  checksumAlgorithm?: "sha256" | "sha1";
+
   // ─── Tenant provisioning (ADR-047 Phase 3) ──────────────────────────────
 
   /**

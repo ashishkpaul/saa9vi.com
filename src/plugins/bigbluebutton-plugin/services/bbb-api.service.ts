@@ -1,10 +1,12 @@
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable, Optional } from "@nestjs/common";
 import { Logger } from "@vendure/core";
 import * as crypto from "crypto";
 import { trace, SpanStatusCode } from "@opentelemetry/api";
 import { parseStringPromise } from "xml2js";
 import { BbbEncryptionService } from "./bbb-encryption.service";
 import { BbbServer } from "../entities/bbb-server.entity";
+import { BBB_PLUGIN_OPTIONS } from "../constants";
+import type { BigBlueButtonPluginOptions } from "../types";
 
 /**
  * Typed BBB API errors (W1).
@@ -135,23 +137,37 @@ export interface BbbRecording {
 /**
  * Thin adapter for the BigBlueButton API.
  *
- * Checksum contract:
- *   checksum = SHA256(methodName + queryString + apiSecret)
+ * Checksum contract (W7):
+ *   checksum = hex( <algorithm>(methodName + queryString + apiSecret) )
  *
- * Algorithm note: this adapter signs with **SHA-256**, so the connected BBB
- * server must have SHA-256 enabled in its accepted checksum algorithms — treat
- * that as a deployment requirement of this integration, not as a property of
- * BBB in general. BBB's accepted algorithm set is a server-side configuration
- * (its published API documentation still uses SHA-1 in the canonical example),
- * so do not read "BBB uses SHA-256" into this code: verify against the actually
- * deployed BBB version before declaring provider compatibility complete — see
- * `docs/implementation/production-readiness.md` §11.
+ * Algorithm note: the algorithm is the `checksumAlgorithm` plugin option —
+ * default **SHA-256**, `sha1` for legacy servers. BBB's accepted set is a
+ * server-side configuration advertised via `supportedChecksumAlgorithms`
+ * (W0: `bbb-conf --version` on the deployed server); BBB's published API
+ * documentation still uses SHA-1 in the canonical example, so do not read
+ * "BBB uses SHA-256" into this code: set the option from the DEPLOYED
+ * server's answer before declaring provider compatibility complete — see
+ * `docs/implementation/production-readiness.md` §11. Unknown values fall
+ * back to SHA-256 (a signature BBB can never verify is never a surprise).
  *
  * Reference: https://docs.bigbluebutton.org/development/api
  */
 @Injectable()
 export class BbbApiService {
-  constructor(private readonly encryptionService: BbbEncryptionService) {}
+  private readonly checksumAlgorithm: "sha1" | "sha256";
+
+  constructor(
+    private readonly encryptionService: BbbEncryptionService,
+    @Optional()
+    @Inject(BBB_PLUGIN_OPTIONS)
+    options?: BigBlueButtonPluginOptions,
+  ) {
+    // W7: allow-list only — anything unknown (a typo'd config value) falls
+    // back to the frozen default rather than producing a signature BBB can
+    // never verify.
+    this.checksumAlgorithm =
+      options?.checksumAlgorithm === "sha1" ? "sha1" : "sha256";
+  }
 
   // ─── Checksum ────────────────────────────────────────────────────────────────
 
@@ -162,7 +178,7 @@ export class BbbApiService {
   ): string {
     const queryString = new URLSearchParams(params).toString();
     return crypto
-      .createHash("sha256")
+      .createHash(this.checksumAlgorithm)
       .update(methodName + queryString + apiSecret)
       .digest("hex");
   }
@@ -365,13 +381,9 @@ export class BbbApiService {
    * `.../getMeetingInfo?meetingID=...&password=mp&checksum=...` — and the old
    * password-less call never matched a real server request. Every caller that
    * can load the meeting secret supplies it (reconciliation, room runtime,
-   * both join validators). Metering is the deliberate exception: it lists
-   * meetings via a secret-less query, so it probes without the password —
-   * whether the server REQUIRES it (checksumError → skip + alert) or treats
-   * it as optional (success → sample) is observable per deployment, and the
-   * skip path is safe either way. This feeds W6: if live verification shows
-   * password-less metering works, keep it; if the server rejects it, the
-   * metering caller can load the secret too (no schema change either way).
+   * both join validators, and — since the W5 follow-up — metering, which
+   * side-decrypts the meeting password and skips the meeting as a counted
+   * gap when the row has none, instead of probing unauthenticated).
    */
   async getMeetingInfo(
     server: BbbServer,
