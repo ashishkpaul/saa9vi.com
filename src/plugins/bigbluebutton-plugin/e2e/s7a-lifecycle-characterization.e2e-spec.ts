@@ -21,6 +21,13 @@
  *                             'stale-active-runtime'): meeting Completed,
  *                             room reset, billing/event semantics intact
  *
+ * W1 regression cases (typed-error hardening — outages must never forfeit
+ * a live meeting; only a PROVEN notFound may end one):
+ *
+ *   W1-A outage → reconciliation skips: meeting stays ACTIVE, no billing
+ *   W1-B outage → room runtime validation assumes valid: no completion
+ *   W1-C notFound → reconciliation stales: terminal, still no billing
+ *
  * The only replaced component is the outbound BBB HTTP hop (property
  * replacement on the injected BbbApiService, the in-repo precedent from
  * r4-runtime-lifecycle.e2e-spec.ts). Fixtures go through Vendure
@@ -54,8 +61,13 @@ import { filter, firstValueFrom, take } from 'rxjs';
 import { TenantPlugin } from '../../tenant-plugin/tenant-plugin.plugin';
 import { BigBlueButtonPlugin } from '../bigbluebutton.plugin';
 import { SchemaPostgresInitializer } from '../../tenant-plugin/e2e/schema-postgres-initializer';
-import { BbbApiService } from '../services/bbb-api.service';
+import {
+  BbbApiService,
+  BbbNotFoundError,
+  BbbUnavailableError,
+} from '../services/bbb-api.service';
 import { MeetingLifecycleService } from '../services/bbb-meeting-lifecycle.service';
+import { BbbReconciliationService } from '../services/bbb-reconciliation.service';
 import { BbbRoomService } from '../services/bbb-room.service';
 import { BbbMeeting } from '../entities/bbb-meeting.entity';
 import { BbbRoom } from '../entities/bbb-room.entity';
@@ -122,6 +134,7 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
   let eventBus: EventBus;
   let lifecycleService: MeetingLifecycleService;
   let roomService: BbbRoomService;
+  let reconciliationService: BbbReconciliationService;
   let grantOrg: BbbOrganization;
   let meteredOrg: BbbOrganization;
   let serverRow: BbbServer;
@@ -152,6 +165,7 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
       eventBus = server.app.get(EventBus);
       lifecycleService = server.app.get(MeetingLifecycleService);
       roomService = server.app.get(BbbRoomService);
+      reconciliationService = server.app.get(BbbReconciliationService);
 
       subCompleted = eventBus
         .ofType(MeetingCompletedEvent)
@@ -503,10 +517,13 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
 
     it('C6: stale-active recovery completes the meeting, resets the room, keeps billing/event semantics', async () => {
       // Only the outbound BBB HTTP hop is replaced (in-repo precedent:
-      // r4-runtime-lifecycle.e2e-spec.ts property replacement).
+      // r4-runtime-lifecycle.e2e-spec.ts property replacement). W1: the
+      // runtime check is now getMeetingInfo (throws); notFound = proven gone.
       const realApi: any = server.app.get(BbbApiService);
       const stubApi: any = Object.create(realApi);
-      stubApi.isMeetingRunning = async () => false;
+      stubApi.getMeetingInfo = async () => {
+        throw new BbbNotFoundError("s7a-c6-stub");
+      };
       (roomService as any).bbbApiService = stubApi;
 
       const grant = await freshGrant(grantOrg, 600);
@@ -537,6 +554,100 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
       expect(events[0].source).toBe('stale-active-runtime');
       expect(String(events[0].organizationId)).toBe(String(grantOrg.id));
       expect(String(events[0].roomId)).toBe(String(room.id));
+    });
+
+    // ─── W1 regression cases ───────────────────────────────────────────────────
+    //
+    // The outage→stale bug at e2e level: only the outbound BBB HTTP hop is
+    // property-replaced (same precedent as C6). The real reconciliation /
+    // room services, typed errors, grace periods and billing rules all run.
+
+    it('W1-A: outage during reconciliation never stales a live meeting', async () => {
+      const realApi: any = server.app.get(BbbApiService);
+      const stubApi: any = Object.create(realApi);
+      stubApi.getMeetingInfo = async () => {
+        throw new BbbUnavailableError('getMeetingInfo', 'e2e outage stub');
+      };
+      (reconciliationService as any).bbbApiService = stubApi;
+
+      const grant = await freshGrant(grantOrg, 600);
+      const meeting = await makeActiveMeeting({
+        org: grantOrg,
+        minutesAgo: 10,
+        grantId: String(grant.id),
+        observable: true,
+      });
+      const id = String(meeting.id);
+
+      const reconciled = await reconciliationService.reconcileActiveMeetings();
+
+      // Unavailable ≠ proven gone → nothing was staled this pass.
+      expect(reconciled).toBe(0);
+      const reloaded = await reloadMeeting(id);
+      expect(reloaded.state).toBe(MEETING_STATE.ACTIVE);
+      // The audit write proves the loop really processed this meeting.
+      expect(reloaded.lastReconciledAt).not.toBeNull();
+      expect(await ledgerCount(id)).toBe(0);
+      expect(completedFor(id)).toHaveLength(0);
+    });
+
+    it('W1-B: outage during room runtime validation never completes the meeting', async () => {
+      const realApi: any = server.app.get(BbbApiService);
+      const stubApi: any = Object.create(realApi);
+      stubApi.getMeetingInfo = async () => {
+        throw new BbbUnavailableError('getMeetingInfo', 'e2e outage stub');
+      };
+      (roomService as any).bbbApiService = stubApi;
+
+      const grant = await freshGrant(grantOrg, 600);
+      const meeting = await makeActiveMeeting({
+        org: grantOrg,
+        minutesAgo: 10,
+        grantId: String(grant.id),
+        observable: true,
+      });
+      const id = String(meeting.id);
+      const room = await makeLiveRoom(grantOrg, meeting);
+
+      const res = await roomService.requestProvisioning(ctx, room.id);
+
+      // Cannot prove the meeting is gone → still reported live: the meeting
+      // must NOT complete (that would stop metering for a live class).
+      expect(res.status).toBe('active');
+      expect(res.shouldEnqueue).toBe(false);
+      expect((await reloadMeeting(id)).state).toBe(MEETING_STATE.ACTIVE);
+      expect((await reloadRoom(String(room.id))).state).toBe('Active');
+      expect(await ledgerCount(id)).toBe(0);
+      expect(completedFor(id)).toHaveLength(0);
+    });
+
+    it('W1-C: confirmed notFound during reconciliation stales the meeting without billing', async () => {
+      const realApi: any = server.app.get(BbbApiService);
+      const stubApi: any = Object.create(realApi);
+      stubApi.getMeetingInfo = async () => {
+        throw new BbbNotFoundError('e2e notFound stub');
+      };
+      (reconciliationService as any).bbbApiService = stubApi;
+
+      const grant = await freshGrant(grantOrg, 600);
+      const meeting = await makeActiveMeeting({
+        org: grantOrg,
+        minutesAgo: 10,
+        grantId: String(grant.id),
+        observable: true,
+      });
+      const id = String(meeting.id);
+
+      const reconciled = await reconciliationService.reconcileActiveMeetings();
+
+      // Stales W1-C's meeting — and the still-ACTIVE leftovers of W1-A/W1-B,
+      // because the stub now proves EVERY meeting gone. Per-meeting verdicts,
+      // not pass-aborts.
+      expect(reconciled).toBeGreaterThanOrEqual(1);
+      expect((await reloadMeeting(id)).state).toBe(MEETING_STATE.STALE);
+      // STALE is terminal but never billed (markMeetingStale writes no ledger).
+      expect(await ledgerCount(id)).toBe(0);
+      expect(completedFor(id)).toHaveLength(0);
     });
   });
 });

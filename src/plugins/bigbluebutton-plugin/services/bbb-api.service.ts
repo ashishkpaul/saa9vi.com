@@ -52,6 +52,20 @@ export class BbbRejectedError extends Error {
 }
 
 /**
+ * Server record loaded without its secret (`encryptedApiSecret` is
+ * `select:false`) or secret undecryptable (wrong `BBB_ENCRYPTION_KEY`).
+ * A per-meeting config error — callers in per-meeting loops MUST catch it and
+ * skip that meeting, never stale/complete it and never kill the pass.
+ */
+export class BbbMisconfiguredError extends Error {
+  readonly messageKey = "misconfigured";
+  constructor(reason: string) {
+    super(`BBB misconfigured: ${reason}`);
+    this.name = "BbbMisconfiguredError";
+  }
+}
+
+/**
  * Build a sanitized `BbbRejectedError` from a BBB FAILED response — carries
  * only method + messageKey + truncated message, never the signed URL.
  */
@@ -225,7 +239,22 @@ export class BbbApiService {
     }
   }
   private decryptSecret(server: BbbServer): string {
-    return this.encryptionService.decrypt(server.encryptedApiSecret);
+    // Gate-2 audit: a server loaded via `findById` (no `.addSelect`) carries
+    // `encryptedApiSecret === undefined` (select:false). Previously `decrypt`
+    // threw a raw TypeError deep in the checksum step; now it is a typed
+    // config error the per-meeting loops catch and skip on.
+    if (!server?.encryptedApiSecret) {
+      throw new BbbMisconfiguredError(
+        `server ${server?.id ?? "?"} loaded without encryptedApiSecret (use findByIdWithSecret/selectServer)`,
+      );
+    }
+    try {
+      return this.encryptionService.decrypt(server.encryptedApiSecret);
+    } catch (err) {
+      throw new BbbMisconfiguredError(
+        `server ${server?.id ?? "?"} secret undecryptable: ${(err as Error).message}`.substring(0, 200),
+      );
+    }
   }
 
   private serverHost(server: BbbServer): string {
@@ -331,8 +360,18 @@ export class BbbApiService {
    * false until the first participant joins, so it caused split-class
    * re-provisioning on API blips.
    *
-   * Per the API-Mate capture you provided, `getMeetingInfo` requires the
-   * moderator password: `.../getMeetingInfo?meetingID=...&password=mp&checksum=...`.
+   * Why the third parameter: the API-Mate capture you provided shows
+   * `getMeetingInfo` WITH the moderator password —
+   * `.../getMeetingInfo?meetingID=...&password=mp&checksum=...` — and the old
+   * password-less call never matched a real server request. Every caller that
+   * can load the meeting secret supplies it (reconciliation, room runtime,
+   * both join validators). Metering is the deliberate exception: it lists
+   * meetings via a secret-less query, so it probes without the password —
+   * whether the server REQUIRES it (checksumError → skip + alert) or treats
+   * it as optional (success → sample) is observable per deployment, and the
+   * skip path is safe either way. This feeds W6: if live verification shows
+   * password-less metering works, keep it; if the server rejects it, the
+   * metering caller can load the secret too (no schema change either way).
    */
   async getMeetingInfo(
     server: BbbServer,

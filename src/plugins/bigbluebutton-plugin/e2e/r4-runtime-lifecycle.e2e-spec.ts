@@ -936,8 +936,10 @@ async function installStubbedBbbTransport(): Promise<void> {
     meetingID: `r4-${Date.now()}`,
   });
   // validateMeetingExistsOnBbb() treats a truthy info as "still exists".
-  // The real getMeetingInfo() returns null on ANY error, which blocks join-URL
-  // generation entirely with no BBB container present (bbb-api.service.ts:246-252).
+  // The real getMeetingInfo() THROWS typed errors (W1: BbbNotFoundError =
+  // proven gone, BbbUnavailableError/BbbRejectedError/BbbMisconfiguredError =
+  // skip) on failure, which blocks join-URL generation entirely with no BBB
+  // container present — hence the truthy stub below.
   stubbed.getMeetingInfo = async () => ({
     meetingID: 'r4-meeting',
     internalMeetingID: 'r4-internal-meeting',

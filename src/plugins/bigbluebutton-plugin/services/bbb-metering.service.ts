@@ -13,8 +13,9 @@ import {
   RequestContextService,
   TransactionalConnection,
 } from "@vendure/core";
-import { BbbApiService, BbbNotFoundError } from "./bbb-api.service";
+import { BbbApiService, BbbMisconfiguredError, BbbNotFoundError, BbbRejectedError } from "./bbb-api.service";
 import { BbbServerService } from "./bbb-server.service";
+import { BbbOpsAlertService } from "./bbb-ops-alert.service";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbMeetingSample } from "../entities/bbb-meeting-sample.entity";
 import { BbbMeteredUsage } from "../entities/bbb-metered-usage.entity";
@@ -42,6 +43,13 @@ export interface MeteringSampleResult {
   sampled: number;
   skipped: number;
   failed: number;
+  /**
+   * Gate-2: per-meeting gap counter. Every `skipped` caused by a BBB error
+   * (notFound/outage/reject/misconfigured — NOT a meeting missing its ids or
+   * server row) increments this alongside `skipped`. Surfaced in the tick log
+   * so downtime under-billing stays visible (customer-favourable, §6).
+   */
+  gapCount: number;
 }
 
 @Injectable()
@@ -52,6 +60,7 @@ export class BbbMeteringService {
     private readonly bbbApiService: BbbApiService,
     private readonly serverService: BbbServerService,
     private readonly eventBus: EventBus,
+    private readonly opsAlert: BbbOpsAlertService,
     @Inject(BBB_PLUGIN_OPTIONS)
     private readonly options: BigBlueButtonPluginOptions,
   ) {}
@@ -102,7 +111,7 @@ export class BbbMeteringService {
 
   async sampleActiveMeetings(now = new Date()): Promise<MeteringSampleResult> {
     const ctx = await this.ctxService.create({ apiType: "admin" });
-    const result: MeteringSampleResult = { scanned: 0, sampled: 0, skipped: 0, failed: 0 };
+    const result: MeteringSampleResult = { scanned: 0, sampled: 0, skipped: 0, failed: 0, gapCount: 0 };
     const meetings = await this.connection
       .getRepository(ctx, BbbMeeting)
       .createQueryBuilder("meeting")
@@ -116,12 +125,14 @@ export class BbbMeteringService {
     const bucketMinute = truncateToMinute(now);
     for (const batch of chunk<BbbMeeting>(meetings, 10)) {
       await Promise.all(
-        batch.map((m: BbbMeeting) => this.sampleOneMeeting(ctx, m, bucketMinute).then((o: "sampled" | "skipped" | "failed") => { result[o]++; })),
+        batch.map((m: BbbMeeting) => this.sampleOneMeeting(ctx, m, bucketMinute).then((o: "sampled" | "skipped" | "failed" | "gap") => {
+          if (o === "gap") { result.skipped++; result.gapCount++; } else result[o]++;
+        })),
       );
     }
-    if (result.failed > 0 || result.sampled > 0) {
+    if (result.failed > 0 || result.sampled > 0 || result.gapCount > 0) {
       Logger.info(
-        `Metering tick: scanned=${result.scanned} sampled=${result.sampled} skipped=${result.skipped} failed=${result.failed}`,
+        `Metering tick: scanned=${result.scanned} sampled=${result.sampled} skipped=${result.skipped} failed=${result.failed} gaps=${result.gapCount}`,
         loggerCtx,
       );
     }
@@ -132,7 +143,7 @@ export class BbbMeteringService {
     ctx: RequestContext,
     meeting: BbbMeeting,
     bucketMinute: Date,
-  ): Promise<"sampled" | "skipped" | "failed"> {
+  ): Promise<"sampled" | "skipped" | "failed" | "gap"> {
     try {
       const serverId = meeting.serverId;
       if (!meeting.bbbMeetingId || !serverId) return "skipped";
@@ -155,7 +166,12 @@ export class BbbMeteringService {
         } else {
           Logger.warn(`Metering sample skipped for meeting ${meeting.id}: ${(err as Error).message}`, loggerCtx);
         }
-        return "skipped";
+        // Gate-2: config problems flag the server + de-duplicated alert, and
+        // every BBB-error skip counts as a visible gap.
+        if (err instanceof BbbMisconfiguredError || err instanceof BbbRejectedError) {
+          await this.flagServerConfigProblem(ctx, bbbServer, err);
+        }
+        return "gap";
       }
       const learnerCount = learnerCountFrom(info.participantCount, info.moderatorCount);
       const moderatorCount = normaliseCount(info.moderatorCount);
@@ -168,6 +184,30 @@ export class BbbMeteringService {
       Logger.warn(`Metering sample failed for meeting ${meeting?.id}: ${(err as Error).message}`, loggerCtx);
       return "failed";
     }
+  }
+
+  /**
+   * Gate-2: same per-server config handling as reconciliation — mark the
+   * server unhealthy (selection excludes it) + de-duplicated ops alert.
+   * Best-effort: never breaks the sampling tick.
+   */
+  private async flagServerConfigProblem(
+    ctx: RequestContext,
+    server: { id?: unknown; name?: string },
+    err: BbbMisconfiguredError | BbbRejectedError,
+  ): Promise<void> {
+    const serverId = String((server as { id?: unknown })?.id ?? "unknown");
+    try {
+      await this.serverService.markHealthy(ctx, serverId as never, false);
+    } catch {
+      // Advisory only — the skip above already protected this tick.
+    }
+    this.opsAlert.notify(
+      "bbb-server-config",
+      `server-${serverId}`,
+      `BBB server "${(server as { name?: string })?.name ?? serverId}" misconfigured: ${err.message}`.substring(0, 300),
+      { serverId, messageKey: (err as { messageKey?: string }).messageKey ?? "unknown" },
+    );
   }
 
   async billMeteredMeeting(ctx: RequestContext, meetingId: string): Promise<string | null> {

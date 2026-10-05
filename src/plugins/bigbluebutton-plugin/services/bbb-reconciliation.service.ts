@@ -11,8 +11,14 @@ import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbUsageLedger } from "../entities/bbb-usage-ledger.entity";
 import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbServerService } from "./bbb-server.service";
-import { BbbApiService, BbbNotFoundError } from "./bbb-api.service";
+import {
+  BbbApiService,
+  BbbMisconfiguredError,
+  BbbNotFoundError,
+  BbbRejectedError,
+} from "./bbb-api.service";
 import { BbbEncryptionService } from "./bbb-encryption.service";
+import { BbbOpsAlertService } from "./bbb-ops-alert.service";
 import { GrantConsumptionService } from "./bbb-grant-consumption.service";
 import { MeetingLifecycleService } from "./bbb-meeting-lifecycle.service";
 import { BbbMeteringService } from "./bbb-metering.service";
@@ -38,6 +44,7 @@ export class BbbReconciliationService {
     private readonly eventBus: EventBus,
     private readonly grantConsumption: GrantConsumptionService,
     private readonly encryptionService: BbbEncryptionService,
+    private readonly opsAlert: BbbOpsAlertService,
     @Inject(BBB_PLUGIN_OPTIONS)
     private readonly options: BigBlueButtonPluginOptions,
   ) {}
@@ -185,6 +192,15 @@ export class BbbReconciliationService {
           );
         } else {
           // Transient outage or config rejection — skip this pass.
+          // Misconfigured/Rejected also flags the server unhealthy + a
+          // de-duplicated ops alert (spend-alert style): a bad checksum or a
+          // missing secret will otherwise fail every meeting, every pass.
+          if (
+            err instanceof BbbMisconfiguredError ||
+            err instanceof BbbRejectedError
+          ) {
+            await this.flagServerConfigProblem(ctx, server, err);
+          }
           Logger.warn(
             `Reconcile skipped for meeting ${meeting.id}: ${(err as Error).message}`,
             loggerCtx,
@@ -193,6 +209,34 @@ export class BbbReconciliationService {
       }
     }
     return reconciled;
+  }
+
+  /**
+   * Gate-2: a checksum/auth rejection or a missing/undecryptable secret is a
+   * per-server config problem, not a per-meeting verdict. Mark the server
+   * unhealthy (selection excludes it) and raise a de-duplicated ops alert —
+   * `BbbOpsAlertService.notify` dedupes per (kind, key) for one hour, so one
+   * bad server cannot spam once per meeting per pass. Best-effort: alerting
+   * must never break the reconciliation pass.
+   */
+  private async flagServerConfigProblem(
+    ctx: RequestContext,
+    server: { id?: unknown; name?: string },
+    err: BbbMisconfiguredError | BbbRejectedError,
+  ): Promise<void> {
+    const serverId = String(server?.id ?? "unknown");
+    try {
+      await this.serverService.markHealthy(ctx, serverId as never, false);
+    } catch {
+      // Selection exclusion is advisory — the skip above already protected
+      // this pass. Never let the health write kill reconciliation.
+    }
+    this.opsAlert.notify(
+      "bbb-server-config",
+      `server-${serverId}`,
+      `BBB server "${server?.name ?? serverId}" misconfigured: ${err.message}`.substring(0, 300),
+      { serverId, messageKey: (err as { messageKey?: string }).messageKey ?? "unknown" },
+    );
   }
 
   // ─── 2. Reconcile Stuck Provisioning ─────────────────────────────────────────

@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BbbApiService,
+  BbbMisconfiguredError,
   BbbNotFoundError,
   BbbRejectedError,
   BbbUnavailableError,
@@ -152,5 +153,35 @@ describe("BbbApiService typed errors (W1) + sanitization (W2)", () => {
     expect(r).toBeInstanceOf(BbbRejectedError);
     expect((r as BbbRejectedError).messageKey).toBe("checksumError");
     expectSanitized(r);
+  });
+
+  // Gate-2: the missing-secret class of bug. `encryptedApiSecret` is
+  // select:false — a server loaded WITHOUT it must fail as a typed
+  // BbbMisconfiguredError (catchable per-meeting), never a raw TypeError,
+  // and never leaking the URL. Uses the REAL BbbApiService with a faked
+  // fetch (not a stubbed API) so this class of bug cannot hide.
+  it("server without encryptedApiSecret throws BbbMisconfiguredError", async () => {
+    const bare = { apiUrl: HOST } as unknown as BbbServer;
+    const err = await api()
+      .getMeetingInfo(bare, "m1", "mod-pw")
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(BbbMisconfiguredError);
+    expectSanitized(err);
+    // The request must never have left the process.
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it("undecryptable secret throws BbbMisconfiguredError", async () => {
+    const badKey = new BbbApiService({
+      decrypt: () => {
+        throw new Error("bad key");
+      },
+    } as never);
+    const err = await badKey
+      .getMeetingInfo(server(), "m1", "mod-pw")
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(BbbMisconfiguredError);
+    expectSanitized(err);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 });
