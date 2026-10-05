@@ -41,6 +41,25 @@ Neither `tsc` nor `npm run build` reported anything: the value arrived as a Grap
 
 **Fix plan.** (1) Rename both to `*.spec.ts` — the include pattern already accepts them — so the e2e count means "runs against real infrastructure"; (2) optionally migrate `SponsoredBoostConfigService` to inject `ConfigService`/`Injector` with a stub in the spec (the fail-closed boot-abort contract is unchanged: non-numeric, `MIN < 1`, inverted window); (3) audit for the same anti-pattern before Phase 6.
 
+> **Status:** FIXED 2026-10-05 (this commit). All three pure-unit suites
+> (`sponsored-boost-config`, `baseline-service`, `baseline-refresh-task`)
+> moved `e2e/` → `__tests__/` with untouched assertions (6 + 13 + 5 = 24,
+> all green in the new location). No caller referenced the old paths
+> (verified by repo-wide grep). Headers now record the relocation.
+> The optional `ConfigService` injection (step 2) remains open as tech
+> debt — it changes the service's construction contract, so it stays out
+> of this rename.
+
+**Marketplace stale-token flake (logged 2026-10-05, no code change).**
+`marketplace.e2e-spec.ts:319-333` pre-cleans `e2e_marketplace_*` indices in
+`beforeAll` because the e2e Postgres schema is recreated per run (session
+PKs restart at 1) while ES indices were only cleaned best-effort in
+`afterAll`. Without the pre-clean, a stale session doc from a previous run
+with a recycled PK satisfies `waitFor()` immediately and carries that run's
+`channelToken` — an order/state-dependent false failure, not a product bug.
+The guard is in place and documented in the spec; this entry exists so the
+flake is not re-investigated.
+
 ---
 
 **BUG-055 — `dashboard-query-state.spec.ts`'s two shrink-only ratchets were RED on HEAD: the S5 dashboard-IA commit `06b20c8` added `PeopleList.tsx` (unguarded `items ?? []`, INV-015) and `LiveMeetingsList.tsx` (unrecorded `bbbOrganizations` picker, DL-031) and stripped `MeetingsList.tsx`'s picker, without updating either baseline — **NOT** an S7A regression; **FIXED 2026-10-01 (no spec weakening)**.**

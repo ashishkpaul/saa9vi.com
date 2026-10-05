@@ -1,11 +1,13 @@
 /**
  * Pure unit tests for MarketplaceBaselineService (3D.1b Steps 1–5).
- * (Runs inside `test:e2e` only because it shares the e2e vitest project;
- * it boots no server/ES/DB — see BUG-054.)
  *
  * No server boot, no ES, no DB — verifies the fail-closed baseline contract
  * and the Step 5 refresh/retry-generation guard with mocked
  * SettingsStoreService + TransactionalConnection:
+ *
+ * BUG-054 (fixed): this suite used to live under `e2e/` as
+ * `baseline-service.e2e-spec.ts`, inflating the e2e gate count with unit
+ * assertions. It now runs in the unit gate.
  *   1. getCurrentBaseline THROWS when no baseline was ever established
  *      (no placeholder {G:0,V:0} → no false "converged" ES document)
  *   2. getCurrentBaseline returns the exact stored snapshot {G,V,computedAt}

@@ -1,9 +1,12 @@
 /**
  * Pure unit tests for the 3D.1b Step 6 Bayesian baseline refresh task wiring.
- * (Runs inside `test:e2e` only because it shares the e2e vitest project;
- * it boots no server/ES/DB — see BUG-054.)
  *
- * Verifies that the ScheduledTask orchestrates rather than doing heavy work:
+ * No server boot, no ES, no DB — verifies that the ScheduledTask
+ * orchestrates rather than doing heavy work:
+ *
+ * BUG-054 (fixed): this suite used to live under `e2e/` as
+ * `baseline-refresh-task.e2e-spec.ts`, inflating the e2e gate count with
+ * unit assertions. It now runs in the unit gate.
  *   1. generates a durable refreshGeneration (UUID) per execution
  *   2. captures the current baseline version as claimedFromVersion (undefined
  *      when the baseline has never been established)
