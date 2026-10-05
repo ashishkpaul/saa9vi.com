@@ -2,9 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, Badge, Button, Card, Input, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
 import { toast } from 'sonner';
 import { useState } from 'react';
+import { graphql } from '@/gql';
 import { useCurrentOrganization } from '../../shared/useCurrentOrganization';
 
-const GET_GRANTS = `
+const GET_GRANTS = graphql(`
   query GetBbbCapacityGrants($organizationId: ID!) {
     bbbCapacityGrants(organizationId: $organizationId) {
       items {
@@ -22,15 +23,15 @@ const GET_GRANTS = `
       totalItems
     }
   }
-`;
+`);
 
-const CREATE_GRANT = `
+const CREATE_GRANT = graphql(`
   mutation CreateBbbCapacityGrant($input: CreateBbbCapacityGrantInput!) {
     createBbbCapacityGrant(input: $input) {
       id grantedMinutes consumedMinutes validFrom validUntil exhausted sourceType
     }
   }
-`;
+`);
 
 interface Grant {
   id: string; grantedMinutes: number; consumedMinutes: number;

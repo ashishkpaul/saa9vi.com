@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { useCurrentOrganization } from '../../shared/useCurrentOrganization';
 import { useState } from 'react';
 import { Link } from '@vendure/dashboard';
+import { graphql } from '@/gql';
 
 const STATUS_BADGE: Record<string, 'success' | 'warning' | 'default' | 'destructive'> = {
   SCHEDULED: 'default',
@@ -12,7 +13,7 @@ const STATUS_BADGE: Record<string, 'success' | 'warning' | 'default' | 'destruct
   CANCELLED: 'destructive',
 };
 
-const GET_SESSIONS = `
+const GET_SESSIONS = graphql(`
   query GetBbbScheduledSessions($organizationId: ID!) {
     bbbScheduledSessions(organizationId: $organizationId) {
       id
@@ -29,13 +30,13 @@ const GET_SESSIONS = `
       organization { id name slug }
     }
   }
-`;
+`);
 
-const CANCEL_SESSION = `
+const CANCEL_SESSION = graphql(`
   mutation CancelBbbScheduledSession($id: ID!) {
     cancelBbbScheduledSession(id: $id) { id status }
   }
-`;
+`);
 
 interface BbbScheduledSession {
   id: string;

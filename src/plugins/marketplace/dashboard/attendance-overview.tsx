@@ -1,8 +1,9 @@
 import { DashboardRouteDefinition, Page, PageBlock, PageLayout, PageTitle } from '@vendure/dashboard';
 import { api } from '@vendure/dashboard';
 import { useQuery } from '@tanstack/react-query';
+import { graphql } from '@/gql';
 
-const GET_CHANNEL_ATTENDANCE_SUMMARY = `
+const GET_CHANNEL_ATTENDANCE_SUMMARY = graphql(`
     query ChannelAttendanceSummary($from: DateTime!, $to: DateTime!) {
         channelAttendanceSummary(from: $from, to: $to) {
             totalSessions
@@ -14,7 +15,7 @@ const GET_CHANNEL_ATTENDANCE_SUMMARY = `
             completionRate
         }
     }
-`;
+`);
 
 function MetricCard({ label, value }: { label: string; value: string }) {
     return (

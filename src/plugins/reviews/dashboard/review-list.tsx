@@ -17,10 +17,11 @@ import {
 } from '@vendure/dashboard';
 import { EyeIcon } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { graphql } from '@/gql';
 import { ReviewStateBadge } from './components/review-state-badge';
 import { StarRating } from './components/star-rating';
 
-const GET_REVIEWS = `
+const GET_REVIEWS = graphql(`
   query GetProductReviews($options: ProductReviewListOptions) {
     productReviews(options: $options) {
       items {
@@ -36,12 +37,12 @@ const GET_REVIEWS = `
       totalItems
     }
   }
-`;
+`);
 
-const MODERATION_MUTATIONS: Record<string, string> = {
-    approve: `mutation ApproveProductReview($id: ID!) { approveProductReview(id: $id) { id state } }`,
-    reject: `mutation RejectProductReview($id: ID!) { rejectProductReview(id: $id) { id state } }`,
-    hide: `mutation HideProductReview($id: ID!) { hideProductReview(id: $id) { id state } }`,
+const MODERATION_MUTATIONS = {
+    approve: graphql(`mutation ApproveProductReview($id: ID!) { approveProductReview(id: $id) { id state } }`),
+    reject: graphql(`mutation RejectProductReview($id: ID!) { rejectProductReview(id: $id) { id state } }`),
+    hide: graphql(`mutation HideProductReview($id: ID!) { hideProductReview(id: $id) { id state } }`),
 };
 
 interface ReviewListItem {

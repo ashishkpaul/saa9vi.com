@@ -2,8 +2,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, Input, Label, Switch, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
 import { toast } from 'sonner';
 import { useState } from 'react';
+import { graphql } from '@/gql';
 
-const GET_SERVERS = `
+const GET_SERVERS = graphql(`
   query GetBbbServers($options: BbbServerListOptions) {
     bbbServers(options: $options) {
       items {
@@ -19,9 +20,9 @@ const GET_SERVERS = `
       totalItems
     }
   }
-`;
+`);
 
-const CREATE_SERVER = `
+const CREATE_SERVER = graphql(`
   mutation CreateBbbServer($input: CreateBbbServerInput!) {
     createBbbServer(input: $input) {
       id
@@ -31,9 +32,9 @@ const CREATE_SERVER = `
       healthy
     }
   }
-`;
+`);
 
-const UPDATE_SERVER = `
+const UPDATE_SERVER = graphql(`
   mutation UpdateBbbServer($id: ID!, $input: UpdateBbbServerInput!) {
     updateBbbServer(id: $id, input: $input) {
       id
@@ -45,13 +46,13 @@ const UPDATE_SERVER = `
       maxLoad
     }
   }
-`;
+`);
 
-const DELETE_SERVER = `
+const DELETE_SERVER = graphql(`
   mutation DeleteBbbServer($id: ID!) {
     deleteBbbServer(id: $id)
   }
-`;
+`);
 
 interface BbbServer {
   id: string;

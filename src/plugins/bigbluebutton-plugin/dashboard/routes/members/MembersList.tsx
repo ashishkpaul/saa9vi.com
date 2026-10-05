@@ -3,42 +3,43 @@ import { api, Badge, Button, Card, Input, Label, Select, SelectContent, SelectIt
 import { toast } from 'sonner';
 import { useDebounce } from '@uidotdev/usehooks';
 import { useEffect, useState } from 'react';
+import { graphql } from '@/gql';
 import { useCurrentOrganization } from '../../shared/useCurrentOrganization';
 
-const GET_MEMBERS = `
+const GET_MEMBERS = graphql(`
   query GetBbbOrganizationStaff($organizationId: ID!, $options: BbbOrganizationMemberListOptions) {
     bbbOrganizationMembers(organizationId: $organizationId, options: $options) {
       items { id customerId customerName customerEmail role active createdAt updatedAt }
       totalItems
     }
   }
-`;
+`);
 
-const SEARCH_CUSTOMERS = `
+const SEARCH_CUSTOMERS = graphql(`
   query SearchCustomersForBbb($term: String!) {
     customers(options: { filter: { emailAddress: { contains: $term } }, take: 10 }) {
       items { id firstName lastName emailAddress }
     }
   }
-`;
+`);
 
-const ADD_MEMBER = `
+const ADD_MEMBER = graphql(`
   mutation AddBbbStaffMember($input: AddBbbMemberInput!) {
     addBbbMember(input: $input) { id customerId role active }
   }
-`;
+`);
 
-const UPDATE_MEMBER = `
+const UPDATE_MEMBER = graphql(`
   mutation UpdateBbbStaffMember($id: ID!, $input: UpdateBbbMemberInput!) {
     updateBbbMember(id: $id, input: $input) { id customerId role active }
   }
-`;
+`);
 
-const REMOVE_MEMBER = `
+const REMOVE_MEMBER = graphql(`
   mutation RemoveBbbStaffMember($id: ID!) {
     removeBbbMember(id: $id) { id active }
   }
-`;
+`);
 
 interface Member { id: string; customerId: string; customerName?: string; customerEmail?: string; role: string; active: boolean; }
 

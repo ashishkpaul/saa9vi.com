@@ -1,8 +1,9 @@
 import { Badge, Page, PageBlock, PageLayout, PageTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@vendure/dashboard';
 import { api } from '@vendure/dashboard';
 import { useQuery } from '@tanstack/react-query';
+import { graphql } from '@/gql';
 
-const GET_WALLET_DATA = `
+const GET_WALLET_DATA = graphql(`
     query GetWalletData {
         walletBalance
         walletLedger {
@@ -15,7 +16,7 @@ const GET_WALLET_DATA = `
             reference
         }
     }
-`;
+`);
 
 const TYPE_VARIANT: Record<string, 'default' | 'secondary' | 'success' | 'destructive'> = {
     topup: 'success',

@@ -2,8 +2,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
 import { toast } from 'sonner';
 import { useState } from 'react';
+import { graphql } from '@/gql';
 
-const GET_ORGANIZATIONS = `
+const GET_ORGANIZATIONS = graphql(`
   query GetBbbOrganizations($options: BbbOrganizationListOptions) {
     bbbOrganizations(options: $options) {
       items {
@@ -19,9 +20,9 @@ const GET_ORGANIZATIONS = `
       totalItems
     }
   }
-`;
+`);
 
-const GET_CHANNELS = `
+const GET_CHANNELS = graphql(`
   query GetChannelsForOrg {
     channels {
       items {
@@ -31,13 +32,13 @@ const GET_CHANNELS = `
       }
     }
   }
-`;
+`);
 
 // Note: TenantProfile linkage is owned by the internal TenantRegisteredEvent
 // provisioning path (BbbTenantProvisioningListener), not by this dialog —
 // channelId alone scopes the organization to its tenant (Channel=Tenant).
 
-const CREATE_ORGANIZATION = `
+const CREATE_ORGANIZATION = graphql(`
   mutation CreateBbbOrganization($input: CreateBbbOrganizationInput!) {
     createBbbOrganization(input: $input) {
       id
@@ -45,9 +46,9 @@ const CREATE_ORGANIZATION = `
       name
     }
   }
-`;
+`);
 
-const UPDATE_ORGANIZATION = `
+const UPDATE_ORGANIZATION = graphql(`
   mutation UpdateBbbOrganization($id: ID!, $input: UpdateBbbOrganizationInput!) {
     updateBbbOrganization(id: $id, input: $input) {
       id
@@ -59,13 +60,13 @@ const UPDATE_ORGANIZATION = `
       suspended
     }
   }
-`;
+`);
 
-const DELETE_ORGANIZATION = `
+const DELETE_ORGANIZATION = graphql(`
   mutation DeleteBbbOrganization($id: ID!) {
     deleteBbbOrganization(id: $id)
   }
-`;
+`);
 
 interface BbbOrganization {
   id: string;

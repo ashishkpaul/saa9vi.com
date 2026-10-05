@@ -51,28 +51,12 @@ const ROOT = path.resolve(__dirname, '../../../..');
  * makes the check pass, adding a NEW untyped document fails.
  *
  * Shrink this list as screens are migrated — never grow it.
+ *
+ * **2026-10-05 (W5 follow-up): fully shrunk.** All 19 baselined files were
+ * migrated to the typed `graphql()` helper (63 documents), so the set is empty.
+ * Any new raw document now fails the ratchet immediately.
  */
-const UNTYPED_DOCUMENT_BASELINE = new Set<string>([
-  'src/plugins/bigbluebutton-plugin/dashboard/routes/enrollments/EnrollmentsList.tsx',
-  'src/plugins/bigbluebutton-plugin/dashboard/routes/entitlements/EntitlementsList.tsx',
-  'src/plugins/bigbluebutton-plugin/dashboard/routes/members/MembersList.tsx',
-  'src/plugins/bigbluebutton-plugin/dashboard/routes/memberships/MembershipsList.tsx',
-  'src/plugins/bigbluebutton-plugin/dashboard/routes/organizations/OrganizationsList.tsx',
-  'src/plugins/bigbluebutton-plugin/dashboard/routes/plans/PlansList.tsx',
-  'src/plugins/bigbluebutton-plugin/dashboard/routes/servers/ServersList.tsx',
-  'src/plugins/bigbluebutton-plugin/dashboard/routes/sessions/SessionDetail.tsx',
-  'src/plugins/bigbluebutton-plugin/dashboard/routes/sessions/SessionsList.tsx',
-  'src/plugins/marketplace/dashboard/attendance-overview.tsx',
-  'src/plugins/marketplace/dashboard/attendance-session-detail.tsx',
-  'src/plugins/marketplace/dashboard/spend-report.tsx',
-  'src/plugins/marketplace/dashboard/wallet.tsx',
-  'src/plugins/reviews/dashboard/review-detail.tsx',
-  'src/plugins/reviews/dashboard/review-list.tsx',
-  'src/plugins/tenant-plugin/dashboard/routes/instructors/InstructorsList.tsx',
-  'src/plugins/tenant-plugin/dashboard/routes/media/MediaResourcesList.tsx',
-  'src/plugins/tenant-plugin/dashboard/routes/tenant-profiles/TenantProfileDetail.tsx',
-  'src/plugins/tenant-plugin/dashboard/shared/academy-dashboard.tsx',
-]);
+const UNTYPED_DOCUMENT_BASELINE = new Set<string>([]);
 
 /** The tenant-scoped financial ledgers that started this investigation. */
 const LEDGER_SCREENS = [

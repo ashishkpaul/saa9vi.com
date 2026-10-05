@@ -3,6 +3,7 @@ import { api, Badge, Button, Card, Link, Skeleton } from '@vendure/dashboard';
 import { ArrowRightIcon, Building2Icon, CheckCircle2Icon, CircleAlertIcon, FileImageIcon, LayoutDashboardIcon, UserSquare2Icon } from 'lucide-react';
 import { useEffect } from 'react';
 import { toast } from 'sonner';
+import { graphql } from '@/gql';
 
 export const ACADEMY_NAV_ITEMS = [
   { id: 'academy-overview', title: 'Overview', href: '/academy', icon: LayoutDashboardIcon },
@@ -11,28 +12,28 @@ export const ACADEMY_NAV_ITEMS = [
   { id: 'media-resources', title: 'Media Library', href: '/academy/media', icon: FileImageIcon },
 ];
 
-export const GET_TENANT_PROFILE = `
+export const GET_TENANT_PROFILE = graphql(`
   query GetTenantProfile($channelId: String) {
     tenantProfile(channelId: $channelId) {
       id channelId businessName tagline timezone contactEmail onboardingComplete logoAssetId
     }
   }
-`;
+`);
 
-export const GET_ACADEMY_COUNTS = `
+export const GET_ACADEMY_COUNTS = graphql(`
   query GetAcademyCounts {
     instructorProfiles(options: { take: 1 }) { totalItems }
     mediaResources(options: { take: 1 }) { totalItems }
   }
-`;
+`);
 
-export const CREATE_TENANT_PROFILE = `
+export const CREATE_TENANT_PROFILE = graphql(`
   mutation CreateTenantProfile($input: CreateTenantProfileInput!) {
     createTenantProfile(input: $input) {
       id channelId businessName tagline timezone contactEmail onboardingComplete logoAssetId
     }
   }
-`;
+`);
 
 export interface TenantProfile {
   id: string;

@@ -3,64 +3,65 @@ import { api, Badge, Button, Card, Input, Label, Select, SelectContent, SelectIt
 import { toast } from 'sonner';
 import { useDebounce } from '@uidotdev/usehooks';
 import { useEffect, useState } from 'react';
+import { graphql } from '@/gql';
 import { useCurrentOrganization } from '../../shared/useCurrentOrganization';
 
-const GET_ROOMS = `
+const GET_ROOMS = graphql(`
   query GetBbbRoomsForEnrollments($organizationId: ID!) {
     bbbRooms(organizationId: $organizationId) { items { id name state } }
   }
-`;
+`);
 
-const GET_PRODUCT_ACCESS = `
+const GET_PRODUCT_ACCESS = graphql(`
   query GetBbbProductAccess($roomId: ID!) {
     bbbProductAccessByRoom(roomId: $roomId) { id productVariantId accessDays }
   }
-`;
+`);
 
-const GET_ENROLLMENTS = `
+const GET_ENROLLMENTS = graphql(`
   query GetBbbEnrollmentsByRoom($roomId: ID!, $options: BbbEnrollmentListOptions) {
     bbbEnrollmentsByRoom(roomId: $roomId, options: $options) {
       items { id customerId customerName customerEmail active expiresAt validFrom validUntil source createdAt }
       totalItems
     }
   }
-`;
+`);
 
-const SEARCH_VARIANTS = `
+const SEARCH_VARIANTS = graphql(`
   query BbbProductVariantSearch($term: String!) {
     bbbProductVariantSearch(term: $term) { id name sku productName }
   }
-`;
+`);
 
-const SEARCH_CUSTOMERS = `
+const SEARCH_CUSTOMERS = graphql(`
   query SearchCustomersForEnrollment($term: String!) {
     customers(options: { filter: { emailAddress: { contains: $term } }, take: 10 }) {
       items { id firstName lastName emailAddress }
     }
   }
-`;
+`);
 
-const CREATE_PRODUCT_ACCESS = `
+const CREATE_PRODUCT_ACCESS = graphql(`
   mutation CreateBbbProductAccess($input: CreateBbbProductAccessInput!) {
     createBbbProductAccess(input: $input) { id productVariantId accessDays }
   }
-`;
+`);
 
-const DELETE_PRODUCT_ACCESS = `
+const DELETE_PRODUCT_ACCESS = graphql(`
   mutation DeleteBbbProductAccess($id: ID!) { deleteBbbProductAccess(id: $id) }
-`;
+`);
 
-const CREATE_ENROLLMENT = `
+const CREATE_ENROLLMENT = graphql(`
   mutation CreateBbbEnrollment($input: CreateBbbEnrollmentInput!) {
     createBbbEnrollment(input: $input) { id customerId active source }
   }
-`;
+`);
 
-const DEACTIVATE_ENROLLMENT = `
+const DEACTIVATE_ENROLLMENT = graphql(`
   mutation DeactivateBbbEnrollment($id: ID!) {
     deactivateBbbEnrollment(id: $id) { id active }
   }
-`;
+`);
 
 export function EnrollmentsList() {
   const qc = useQueryClient();

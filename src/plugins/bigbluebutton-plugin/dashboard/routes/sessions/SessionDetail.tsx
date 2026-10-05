@@ -4,6 +4,7 @@ import type { AnyRoute } from '@vendure/dashboard';
 import { toast } from 'sonner';
 import { useState } from 'react';
 import { Link } from '@vendure/dashboard';
+import { graphql } from '@/gql';
 
 const STATUS_BADGE: Record<string, 'success' | 'warning' | 'default' | 'destructive'> = {
   SCHEDULED: 'default',
@@ -12,7 +13,7 @@ const STATUS_BADGE: Record<string, 'success' | 'warning' | 'default' | 'destruct
   CANCELLED: 'destructive',
 };
 
-const GET_SESSION = `
+const GET_SESSION = graphql(`
   query GetBbbScheduledSession($id: ID!) {
     bbbScheduledSession(id: $id) {
       id
@@ -29,13 +30,13 @@ const GET_SESSION = `
       organization { id name slug }
     }
   }
-`;
+`);
 
-const CANCEL_SESSION = `
+const CANCEL_SESSION = graphql(`
   mutation CancelBbbScheduledSession($id: ID!) {
     cancelBbbScheduledSession(id: $id) { id status }
   }
-`;
+`);
 
 interface BbbScheduledSession {
   id: string;

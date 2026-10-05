@@ -2,34 +2,35 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, Input, Label, Switch, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea } from '@vendure/dashboard';
 import { toast } from 'sonner';
 import { useMemo, useState } from 'react';
+import { graphql } from '@/gql';
 import { AcademyPageHeader, EmptyState, LoadingRows, PaginationFooter } from '../../shared/academy-dashboard';
 
-const GET_INSTRUCTORS = `
+const GET_INSTRUCTORS = graphql(`
   query GetInstructorProfiles($options: InstructorProfileListOptions) {
     instructorProfiles(options: $options) {
       items { id slug fullName bio credentials expertiseAreas displayOrder isActive isPublic createdAt }
       totalItems
     }
   }
-`;
+`);
 
-const CREATE_INSTRUCTOR = `
+const CREATE_INSTRUCTOR = graphql(`
   mutation CreateInstructorProfile($input: CreateInstructorProfileInput!) {
     createInstructorProfile(input: $input) { id slug fullName isActive isPublic }
   }
-`;
+`);
 
-const UPDATE_INSTRUCTOR = `
+const UPDATE_INSTRUCTOR = graphql(`
   mutation UpdateInstructorProfile($input: UpdateInstructorProfileInput!) {
     updateInstructorProfile(input: $input) { id slug fullName bio credentials expertiseAreas displayOrder isActive isPublic }
   }
-`;
+`);
 
-const DELETE_INSTRUCTOR = `
+const DELETE_INSTRUCTOR = graphql(`
   mutation DeleteInstructorProfile($id: ID!) {
     deleteInstructorProfile(id: $id)
   }
-`;
+`);
 
 interface Instructor {
   id: string; slug: string; fullName: string; bio?: string;
