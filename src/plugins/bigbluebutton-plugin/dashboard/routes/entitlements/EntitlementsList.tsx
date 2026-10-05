@@ -2,19 +2,20 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { api, Badge, Button, Card, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@vendure/dashboard';
 import { toast } from 'sonner';
 import { useState } from 'react';
+import { graphql } from '@/gql';
 
-const GET_ENTITLEMENTS = `
+const GET_ENTITLEMENTS = graphql(`
   query GetBbbEntitlements($options: BbbEntitlementListOptions) {
     bbbEntitlements(options: $options) {
       items { id customerId type resourceId source validFrom validUntil createdAt }
       totalItems
     }
   }
-`;
+`);
 
-const DELETE_ENTITLEMENT = `
+const DELETE_ENTITLEMENT = graphql(`
   mutation DeleteBbbEntitlement($id: ID!) { deleteBbbEntitlement(id: $id) }
-`;
+`);
 
 export function EntitlementsList() {
   const [page, setPage] = useState(1);
@@ -27,7 +28,10 @@ export function EntitlementsList() {
       options: {
         skip: (page - 1) * pageSize,
         take: pageSize,
-        filter: customerIdFilter ? { customerId: { contains: customerIdFilter } } : undefined,
+        // Exact-match probe (BbbEntitlementListOptions.filter). A shape the
+        // schema rejects would fail the whole query — INV-015: that failure
+        // must surface as an error state below, never as an empty table.
+        filter: customerIdFilter ? { customerId: customerIdFilter } : undefined,
       }
     }),
   });
@@ -69,6 +73,11 @@ export function EntitlementsList() {
 
       {query.isLoading ? (
         <div className="p-4 space-y-3">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-10 w-full bg-muted animate-pulse rounded" />)}</div>
+      ) : query.isError ? (
+        // INV-015: a rejected operation is NOT an empty tenant. Show it.
+        <div className="p-6 text-center text-red-500">
+          Failed to load entitlements: {(query.error as Error)?.message ?? 'unknown error'}
+        </div>
       ) : items.length === 0 ? (
         <div className="p-6 text-center text-muted-foreground">No entitlements found.</div>
       ) : (

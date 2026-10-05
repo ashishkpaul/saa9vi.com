@@ -373,7 +373,6 @@ describe('B. Filter vocabularies come from the code that writes them (INV-015)',
  */
 const LEGACY_UNGUARDED_EMPTY_STATE = new Set<string>([
     'src/plugins/bigbluebutton-plugin/dashboard/routes/enrollments/EnrollmentsList.tsx',
-    'src/plugins/bigbluebutton-plugin/dashboard/routes/entitlements/EntitlementsList.tsx',
     'src/plugins/bigbluebutton-plugin/dashboard/routes/members/MembersList.tsx',
     'src/plugins/bigbluebutton-plugin/dashboard/routes/memberships/MembershipsList.tsx',
     'src/plugins/bigbluebutton-plugin/dashboard/routes/plans/PlansList.tsx',

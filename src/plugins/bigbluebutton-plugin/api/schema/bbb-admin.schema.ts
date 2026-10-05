@@ -657,6 +657,18 @@ export const adminApiExtensions = gql`
   input BbbEntitlementListOptions {
     skip: Int
     take: Int
+    """
+      Exact-match customerId probe used by the entitlements screen's
+      Filter by Customer ID box. This custom list input does not inherit
+      Vendure's generic filter argument, so the field is declared here — the
+      previous client-side filter key was rejected by variable coercion (the
+      whole query failed and the screen rendered the failure as an empty list).
+    """
+    filter: BbbEntitlementFilter
+  }
+
+  input BbbEntitlementFilter {
+    customerId: String
   }
 
   input CreateBbbEntitlementInput {

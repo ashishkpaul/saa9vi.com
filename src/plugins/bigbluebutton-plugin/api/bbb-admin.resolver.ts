@@ -1199,7 +1199,12 @@ export class BbbAdminResolver {
   @Allow(BbbAdminPermission.Permission, BbbManageEntitlementsPermission.Permission)
   async bbbEntitlements(
     @Ctx() ctx: RequestContext,
-    @Args("options") options?: { skip?: number; take?: number },
+    @Args("options")
+    options?: {
+      skip?: number;
+      take?: number;
+      filter?: { customerId?: string | null };
+    },
   ): Promise<{ items: BbbEntitlement[]; totalItems: number }> {
     const take = Math.min(Math.max(options?.take ?? 25, 1), 100);
     const skip = Math.max(options?.skip ?? 0, 0);
@@ -1213,9 +1218,16 @@ export class BbbAdminResolver {
         // Platform callers keep the unrestricted list, matching the same
         // platform-vs-tenant split already made by bbbMeetings/bbbOrganizations
         // (`isPlatformCaller` — tenant roles never hold BBBAdmin, ADR-033).
-        where: this.channelAccess.isPlatformCaller(ctx)
-          ? {}
-          : { channelId: String(ctx.channelId) },
+        // The customerId probe (BbbEntitlementListOptions.filter) narrows
+        // within — never instead of — that scope.
+        where: {
+          ...(this.channelAccess.isPlatformCaller(ctx)
+            ? {}
+            : { channelId: String(ctx.channelId) }),
+          ...(options?.filter?.customerId
+            ? { customerId: String(options.filter.customerId) }
+            : {}),
+        },
         order: { createdAt: "DESC" },
         skip,
         take,
