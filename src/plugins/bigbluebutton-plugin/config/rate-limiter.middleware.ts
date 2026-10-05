@@ -2,6 +2,23 @@ import type { Request, Response, NextFunction } from "express";
 import rateLimit from "express-rate-limit";
 
 /**
+ * Paths the SEC-004 webhook rate limiter is registered on — the single
+ * source of truth consumed by `BigBlueButtonPlugin` (one middleware entry
+ * per route; Vendure groups entries by route before
+ * `consumer.apply(...).forRoutes(route)`, app.module.js:60) and pinned
+ * end-to-end by `__tests__/bbb-webhook-ingress.spec.ts`.
+ *
+ * ONE entry is enough: under the current stack (Nest 11 + Vendure's
+ * registration) the `bbb/webhook` pattern also matches sub-paths such as
+ * the future W3 callback route `/bbb/webhook/<serverId>` — proven
+ * empirically by the ingress spec (101st request → 429 on BOTH shapes), so
+ * a framework upgrade or route-string change that alters path matching
+ * fails the suite instead of silently leaving per-server deliveries
+ * unthrottled.
+ */
+export const BBB_WEBHOOK_RATE_LIMIT_ROUTES = ["bbb/webhook"] as const;
+
+/**
  * IP-based rate limiter for the BBB webhook endpoint.
  *
  * BBB server IPs should be allowlisted by setting the `BBB_WEBHOOK_ALLOWED_IPS`

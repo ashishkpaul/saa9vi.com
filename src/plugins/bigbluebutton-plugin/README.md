@@ -552,6 +552,9 @@ interface BigBlueButtonPluginOptions {
 
   // BBB protocol (W7)
   checksumAlgorithm?: "sha256" | "sha1"; // default: 'sha256' — set from the deployed server's supportedChecksumAlgorithms
+
+  // Public callback base (W3/W4 webhooks)
+  publicBaseUrl?: string; // non-dev REQUIRED (BBB_PUBLIC_BASE_URL) — base for /bbb/webhook/<serverId> callbacks
 }
 ```
 

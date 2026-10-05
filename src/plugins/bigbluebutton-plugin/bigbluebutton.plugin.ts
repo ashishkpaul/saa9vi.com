@@ -86,7 +86,7 @@ import { BbbShopResolver } from "./api/bbb-shop.resolver";
 import { BbbWebhookController } from "./workers/bbb-webhook.controller";
 import { bbbReconciliationTask } from "./jobs/bbb-reconciliation.task";
 import { bbbCapacityAlertTask } from "./jobs/bbb-capacity-alert.task";
-import { bbbWebhookRateLimiter, shopApiRateLimiter } from "./config/rate-limiter.middleware";
+import { BBB_WEBHOOK_RATE_LIMIT_ROUTES, bbbWebhookRateLimiter, shopApiRateLimiter } from "./config/rate-limiter.middleware";
 import {
   bbbFulfillmentHandler,
   bbbOrderProcess,
@@ -262,11 +262,15 @@ import {
     // Register rate limiters (SEC-004)
     config.apiOptions.middleware = [
       ...(config.apiOptions.middleware ?? []),
-      {
-        // Rate limit POST /bbb/webhook — 100 req/min per IP, allowlist via env
-        route: "bbb/webhook",
+      // SEC-004: webhook rate limiting — 100 req/min per IP (allowlist via
+      // BBB_WEBHOOK_ALLOWED_IPS). One entry per path in
+      // BBB_WEBHOOK_RATE_LIMIT_ROUTES; matching, including the future W3
+      // route `/bbb/webhook/<serverId>`, is pinned by
+      // bbb-webhook-ingress.spec.ts.
+      ...BBB_WEBHOOK_RATE_LIMIT_ROUTES.map((route) => ({
+        route,
         handler: bbbWebhookRateLimiter,
-      },
+      })),
       {
         // Rate limit Shop API mutations — registerForTrial (10/min), bbbJoinMeeting (10/min), registerNewTenant (5/hour)
         route: "shop-api",

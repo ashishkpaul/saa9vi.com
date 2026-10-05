@@ -19,6 +19,12 @@
  *    Checked for shape here (64 hex chars) because the runtime service can
  *    only fail lazily: the provisioning worker calls `createMeeting()` BEFORE
  *    `encrypt()`, so a missing key orphans a live meeting on the BBB server.
+ *  - `BBB_PUBLIC_BASE_URL` — public base for the BBB webhook callbacks
+ *    (W3/W4: `publicBaseUrl + /bbb/webhook/<serverId>`). BBB signs the URL
+ *    that was REGISTERED, so the value must be an absolute http(s) URL the
+ *    BBB server can actually reach — a relative/schemeless base would
+ *    register a callback that can never carry a valid checksum and every
+ *    delivery would be rejected at verification.
  *  - Razorpay key/secret + webhook secret — an unset webhook secret fails
  *    closed (rejects all provider traffic = silent dunning outage); unset API
  *    keys fail at first checkout.
@@ -47,6 +53,7 @@ const REQUIRED_SECRETS = [
   'DB_PASSWORD',
   'BBB_ENCRYPTION_KEY',
   'BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR',
+  'BBB_PUBLIC_BASE_URL',
 ] as const;
 
 export function assertProductionSecrets(env: NodeJS.ProcessEnv = process.env): void {
@@ -86,6 +93,27 @@ export function assertProductionSecrets(env: NodeJS.ProcessEnv = process.env): v
     formatFailures.push(
       `BBB_ENCRYPTION_KEY must be a 64-character hex string (32 bytes); ` +
         `generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`,
+    );
+  }
+
+  // Public callback base: must be an absolute http(s) URL — BBB signs the
+  // URL that was REGISTERED, so hook registration and webhook verification
+  // both reconstruct from this exact base (never from request headers, which
+  // a reverse proxy rewrites). A trailing slash is accepted; normalisation
+  // happens at use.
+  const publicBaseUrl = env.BBB_PUBLIC_BASE_URL!.trim();
+  let baseUrlOk = false;
+  try {
+    const parsed = new URL(publicBaseUrl);
+    baseUrlOk = parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    baseUrlOk = false;
+  }
+  if (!baseUrlOk) {
+    formatFailures.push(
+      `BBB_PUBLIC_BASE_URL must be an absolute http(s) URL (public host ` +
+        `the BBB server can reach, e.g. https://meeting.saa9vi.com); ` +
+        `got "${publicBaseUrl}"`,
     );
   }
 

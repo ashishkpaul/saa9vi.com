@@ -280,6 +280,14 @@ apiOptions: {
           ? Number(process.env.BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR)
           : undefined,
 
+      // ─── Public callback base (W3/W4 webhooks) ─────────────────────
+      // Base for the BBB hook callback (`publicBaseUrl +
+      // /bbb/webhook/<serverId>`). UNSET is fine in dev; non-dev boot
+      // REFUSES without it (assertProductionSecrets /
+      // BBB_PUBLIC_BASE_URL) because BBB signs the REGISTERED URL — a
+      // guessed base would fail every webhook verification.
+      publicBaseUrl: process.env.BBB_PUBLIC_BASE_URL || undefined,
+
       // ─── Scalability tuning from .env ──────────────────────────
       lockTtlSeconds: Number(process.env.BBB_LOCK_TTL_SECONDS ?? 30),
       lockHeartbeatIntervalMs: Number(

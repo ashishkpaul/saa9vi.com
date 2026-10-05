@@ -161,6 +161,27 @@ export interface BigBlueButtonPluginOptions {
    */
   checksumAlgorithm?: "sha256" | "sha1";
 
+  // ─── Public callback base (W3/W4 webhooks) ─────────────────────────────
+
+  /**
+   * Publicly reachable base URL of this Saa9vi instance (scheme + host; a
+   * trailing slash is tolerated and normalised at use).
+   *
+   * W3/W4: BBB hook registration builds the callback as
+   * `publicBaseUrl + /bbb/webhook/<serverId>`, and BBB signs the URL that
+   * was REGISTERED — so webhook verification reconstructs the exact string
+   * from this option, never from the incoming request's host/scheme (a
+   * reverse proxy rewrites both). Changing it after hooks are registered
+   * requires re-registering them on the BBB server.
+   *
+   * REQUIRED in any non-dev deployment: boot refuses without it
+   * (`assertProductionSecrets` / `BBB_PUBLIC_BASE_URL`), so hook
+   * registration can never use a guessed URL.
+   *
+   * @default undefined (dev only)
+   */
+  publicBaseUrl?: string;
+
   // ─── Tenant provisioning (ADR-047 Phase 3) ──────────────────────────────
 
   /**
