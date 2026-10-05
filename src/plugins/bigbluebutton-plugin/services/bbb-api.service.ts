@@ -6,6 +6,69 @@ import { parseStringPromise } from "xml2js";
 import { BbbEncryptionService } from "./bbb-encryption.service";
 import { BbbServer } from "../entities/bbb-server.entity";
 
+/**
+ * Typed BBB API errors (W1).
+ *
+ * `getMeetingInfo()` used to return `null` for EVERY failure (timeout, DNS,
+ * HTTP 5xx, bad checksum, real notFound) and reconciliation treated `null` as
+ * "meeting destroyed" — a transient BBB outage during the reconciliation pass
+ * therefore terminated live meetings AND forfeited their billing. These types
+ * let callers distinguish "proven gone" from "cannot prove it is gone".
+ */
+export class BbbNotFoundError extends Error {
+  readonly messageKey = "notFound";
+  constructor(meetingID: string) {
+    super(`BBB meeting not found: ${meetingID}`);
+    this.name = "BbbNotFoundError";
+  }
+}
+
+/** Transient transport failure (timeout, DNS, HTTP 5xx, malformed XML). */
+export class BbbUnavailableError extends Error {
+  readonly messageKey = "unavailable";
+  constructor(
+    method: string,
+    readonly reason: string,
+  ) {
+    super(`BBB ${method} unavailable: ${reason}`);
+    this.name = "BbbUnavailableError";
+  }
+}
+
+/**
+ * BBB explicitly rejected the call (checksum/auth/other FAILED) — a
+ * configuration problem. Log and flag the server unhealthy, never treat as
+ * "gone".
+ */
+export class BbbRejectedError extends Error {
+  constructor(
+    method: string,
+    readonly messageKey: string,
+    readonly detail: string,
+  ) {
+    super(`BBB ${method} rejected [${messageKey}]: ${detail}`);
+    this.name = "BbbRejectedError";
+  }
+}
+
+/**
+ * Build a sanitized `BbbRejectedError` from a BBB FAILED response — carries
+ * only method + messageKey + truncated message, never the signed URL.
+ */
+export function bbbRejected(
+  method: string,
+  messageKey: string | undefined,
+  message: string | undefined,
+): BbbRejectedError | BbbNotFoundError {
+  const key = messageKey ?? "unknown";
+  const detail = String(message ?? "request rejected").substring(0, 200);
+  if (key === "notFound") {
+    // Meeting id is passed via message elsewhere; keep detail short.
+    return new BbbNotFoundError(detail);
+  }
+  return new BbbRejectedError(method, key, detail);
+}
+
 const loggerCtx = "BbbApiService";
 
 export interface CreateMeetingParams {
@@ -102,44 +165,100 @@ export class BbbApiService {
     return `${baseUrl}/api/${methodName}?${qs}`;
   }
 
-  private async callApi(url: string): Promise<Record<string, unknown>> {
+  private async callApi(
+    url: string,
+    describe: { method: string; serverHost: string },
+  ): Promise<Record<string, unknown>> {
     // 1. Add an explicit AbortController to fail fast
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second hard timeout (increased from 4s)
 
+    // W2: errors carry method + host + status/messageKey ONLY — never the
+    // signed URL (which embeds attendeePW/moderatorPW + checksum).
+    const { method, serverHost } = describe;
     try {
       const res = await fetch(url, { signal: controller.signal });
       if (!res.ok) {
-        throw new Error(`BBB API HTTP error ${res.status}: ${url}`);
+        throw new BbbUnavailableError(
+          method,
+          `HTTP ${res.status} from ${serverHost}`,
+        );
       }
-      const xml = await res.text();
-      const parsed = await parseStringPromise(xml, { explicitArray: false });
+      let parsed: any;
+      try {
+        const xml = await res.text();
+        parsed = await parseStringPromise(xml, { explicitArray: false });
+      } catch {
+        throw new BbbUnavailableError(
+          method,
+          `malformed XML response from ${serverHost}`,
+        );
+      }
       const response = parsed?.response;
 
       if (!response) {
-        throw new Error(
-          `BBB API returned unexpected XML: ${xml.substring(0, 200)}`,
+        throw new BbbUnavailableError(
+          method,
+          `unexpected XML envelope from ${serverHost}`,
         );
       }
       if (response.returncode !== "SUCCESS") {
-        throw new Error(
-          `BBB API error [${response.messageKey}]: ${response.message}`,
+        throw bbbRejected(
+          method,
+          response.messageKey as string | undefined,
+          response.message as string | undefined,
         );
       }
       return response;
     } catch (err: any) {
-      if (err.name === "AbortError") {
-        throw new Error(
-          `BBB API connection timed out after 10 seconds. Server unreachable: ${url}`,
-        );
+      if (err instanceof BbbNotFoundError) throw err;
+      if (err instanceof BbbRejectedError) throw err;
+      if (err instanceof BbbUnavailableError) throw err;
+      if (err?.name === "AbortError") {
+        throw new BbbUnavailableError(method, `timed out after 10s (${serverHost})`);
       }
-      throw err;
+      // Network/DNS/fetch-level failure — sanitize (node fetch errors can
+      // embed the URL, which carries passwords + checksum).
+      throw new BbbUnavailableError(method, `request failed (${serverHost})`);
     } finally {
       clearTimeout(timeoutId);
     }
   }
   private decryptSecret(server: BbbServer): string {
     return this.encryptionService.decrypt(server.encryptedApiSecret);
+  }
+
+  private serverHost(server: BbbServer): string {
+    try {
+      return new URL(server.apiUrl).host;
+    } catch {
+      return "bbb-server";
+    }
+  }
+
+  /**
+   * W2: record only a sanitized summary on the span — never the signed URL
+   * (passwords + checksum) and never the raw error (node fetch errors can
+   * embed the URL).
+   */
+  private noteSpanError(span: any, err: unknown): void {
+    const e = err as
+      | BbbNotFoundError
+      | BbbUnavailableError
+      | BbbRejectedError
+      | Error;
+    const messageKey =
+      (e as BbbNotFoundError).messageKey ??
+      (e as BbbRejectedError).messageKey ??
+      "unknown";
+    span.setStatus({
+      code: SpanStatusCode.ERROR,
+      message: `${e.name ?? "Error"} [${messageKey}]`,
+    });
+    span.recordException({
+      name: e.name ?? "Error",
+      message: `${e.name ?? "Error"} [${messageKey}]: ${(e as Error).message}`.substring(0, 300),
+    } as Error);
   }
 
   // ─── API Methods ─────────────────────────────────────────────────────────────
@@ -162,18 +281,17 @@ export class BbbApiService {
         }
         const url = this.buildApiUrl(server, secret, "create", strParams);
         Logger.debug(`createMeeting → ${params.meetingID}`, loggerCtx);
-        const response = await this.callApi(url);
+        const response = await this.callApi(url, {
+          method: "create",
+          serverHost: this.serverHost(server),
+        });
         span.setStatus({ code: SpanStatusCode.OK });
         return {
           internalMeetingID: response.internalMeetingID as string,
           meetingID: response.meetingID as string,
         };
       } catch (err) {
-        span.setStatus({
-          code: SpanStatusCode.ERROR,
-          message: (err as Error).message,
-        });
-        span.recordException(err as Error);
+        this.noteSpanError(span, err);
         throw err;
       } finally {
         span.end();
@@ -204,34 +322,39 @@ export class BbbApiService {
     return `${baseUrl}/api/join?${qs}`;
   }
 
-  async isMeetingRunning(
-    server: BbbServer,
-    meetingID: string,
-  ): Promise<boolean> {
-    const secret = this.decryptSecret(server);
-    const params = { meetingID };
-    const url = this.buildApiUrl(server, secret, "isMeetingRunning", params);
-    try {
-      const response = await this.callApi(url);
-      return response.running === "true";
-    } catch {
-      return false;
-    }
-  }
-
+  /**
+   * Existence check, NOT a "running" check: success means the BBB meeting
+   * record exists (even with zero participants). W1: throws typed errors —
+   * only `BbbNotFoundError` means "proven gone"; `BbbUnavailableError` /
+   * `BbbRejectedError` mean "cannot prove it is gone" and callers MUST skip,
+   * never stale/complete. Removed `isMeetingRunning` (W1.3): `running` is
+   * false until the first participant joins, so it caused split-class
+   * re-provisioning on API blips.
+   *
+   * Per the API-Mate capture you provided, `getMeetingInfo` requires the
+   * moderator password: `.../getMeetingInfo?meetingID=...&password=mp&checksum=...`.
+   */
   async getMeetingInfo(
     server: BbbServer,
     meetingID: string,
-  ): Promise<BbbMeetingInfo | null> {
+    moderatorPW?: string,
+  ): Promise<BbbMeetingInfo> {
     const tracer = trace.getTracer("bbb-api");
     return tracer.startActiveSpan("bbb.getMeetingInfo", async (span) => {
       span.setAttribute("bbb.server", server.apiUrl);
       span.setAttribute("bbb.meetingId", meetingID);
       try {
         const secret = this.decryptSecret(server);
-        const params = { meetingID };
+        const params: Record<string, string> = { meetingID };
+        // BBB requires the moderator password on getMeetingInfo (see
+        // API-Mate capture). Omitted only for callers that cannot load the
+        // meeting secret (metering, which uses findById without secrets).
+        if (moderatorPW) params.password = moderatorPW;
         const url = this.buildApiUrl(server, secret, "getMeetingInfo", params);
-        const response = await this.callApi(url);
+        const response = await this.callApi(url, {
+          method: "getMeetingInfo",
+          serverHost: this.serverHost(server),
+        });
         span.setStatus({ code: SpanStatusCode.OK });
         return {
           meetingID: response.meetingID as string,
@@ -244,12 +367,8 @@ export class BbbApiService {
           endTime: Number(response.endTime ?? 0),
         };
       } catch (err) {
-        span.setStatus({
-          code: SpanStatusCode.ERROR,
-          message: (err as Error).message ?? "getMeetingInfo failed",
-        });
-        span.recordException(err as Error);
-        return null;
+        this.noteSpanError(span, err);
+        throw err;
       } finally {
         span.end();
       }
@@ -268,15 +387,14 @@ export class BbbApiService {
         const secret = this.decryptSecret(server);
         const params = { meetingID, password: moderatorPW };
         const url = this.buildApiUrl(server, secret, "end", params);
-        await this.callApi(url);
+        await this.callApi(url, {
+          method: "end",
+          serverHost: this.serverHost(server),
+        });
         span.setStatus({ code: SpanStatusCode.OK });
         Logger.info(`Meeting ended: ${meetingID}`, loggerCtx);
       } catch (err) {
-        span.setStatus({
-          code: SpanStatusCode.ERROR,
-          message: (err as Error).message,
-        });
-        span.recordException(err as Error);
+        this.noteSpanError(span, err);
         throw err;
       } finally {
         span.end();
@@ -284,6 +402,11 @@ export class BbbApiService {
     });
   }
 
+  /**
+   * W1.4: no longer swallows errors — callers decide (metering skips the
+   * sample; recording-repair logs and retries later). Errors are the same
+   * typed W1 errors (sanitized, no URLs).
+   */
   async getRecordings(
     server: BbbServer,
     meetingID?: string,
@@ -292,10 +415,12 @@ export class BbbApiService {
     const params: Record<string, string> = {};
     if (meetingID) params.meetingID = meetingID;
     const url = this.buildApiUrl(server, secret, "getRecordings", params);
-    try {
-      const response = await this.callApi(url);
-      const recordings = response.recordings as Record<string, unknown>;
-      if (!recordings || recordings.recording === undefined) return [];
+    const response = await this.callApi(url, {
+      method: "getRecordings",
+      serverHost: this.serverHost(server),
+    });
+    const recordings = response.recordings as Record<string, unknown>;
+    if (!recordings || recordings.recording === undefined) return [];
       const list = Array.isArray(recordings.recording)
         ? recordings.recording
         : [recordings.recording];
@@ -317,9 +442,5 @@ export class BbbApiService {
             )?.url as string)
           : undefined,
       }));
-    } catch (err) {
-      Logger.warn(`getRecordings failed: ${(err as Error).message}`, loggerCtx);
-      return [];
-    }
   }
 }

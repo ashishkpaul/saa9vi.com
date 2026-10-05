@@ -11,7 +11,8 @@ import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbUsageLedger } from "../entities/bbb-usage-ledger.entity";
 import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbServerService } from "./bbb-server.service";
-import { BbbApiService } from "./bbb-api.service";
+import { BbbApiService, BbbNotFoundError } from "./bbb-api.service";
+import { BbbEncryptionService } from "./bbb-encryption.service";
 import { GrantConsumptionService } from "./bbb-grant-consumption.service";
 import { MeetingLifecycleService } from "./bbb-meeting-lifecycle.service";
 import { BbbMeteringService } from "./bbb-metering.service";
@@ -36,6 +37,7 @@ export class BbbReconciliationService {
     private readonly meteringService: BbbMeteringService,
     private readonly eventBus: EventBus,
     private readonly grantConsumption: GrantConsumptionService,
+    private readonly encryptionService: BbbEncryptionService,
     @Inject(BBB_PLUGIN_OPTIONS)
     private readonly options: BigBlueButtonPluginOptions,
   ) {}
@@ -140,29 +142,54 @@ export class BbbReconciliationService {
       );
       if (!server) continue;
 
-      const info = await this.bbbApiService.getMeetingInfo(
-        server,
-        meeting.bbbMeetingId,
-      );
-
-      // getMeetingInfo returns null when the meeting has been fully destroyed
-      // on BBB. isMeetingRunning() returns false for meetings with no joiners
-      // yet (hasUserJoined=false), so we must NOT use it here — it would
-      // prematurely complete perfectly valid meetings that are waiting for
-      // their first participant to join.
-      if (info === null) {
-        // Meeting is permanently unreachable on BBB — mark as STALE instead
-        // of completing, so no BbbUsageLedger is written.
-        await this.lifecycleService.markMeetingStale(
-          ctx,
-          meeting,
-          "BBB getMeetingInfo returned null — meeting destroyed or expired",
+      // W1: only a CONFIRMED notFound means "meeting destroyed" → STALE.
+      // Unavailable (outage) / Rejected (bad checksum) means "cannot prove it
+      // is gone" → skip this pass, never stale, never forfeit billing.
+      // BBB requires the moderator password on getMeetingInfo (API-Mate
+      // capture), so load it — without it every call would checksum-fail.
+      let moderatorPW: string | undefined;
+      try {
+        const withSecrets = await this.connection
+          .getRepository(ctx, BbbMeeting)
+          .createQueryBuilder("meeting")
+          .addSelect("meeting.encryptedModeratorPassword")
+          .where("meeting.id = :id", { id: meeting.id as string })
+          .getOne();
+        if (withSecrets?.encryptedModeratorPassword) {
+          moderatorPW = this.encryptionService.decrypt(
+            withSecrets.encryptedModeratorPassword,
+          );
+        }
+      } catch {
+        moderatorPW = undefined;
+      }
+      try {
+        await this.bbbApiService.getMeetingInfo(
+          server,
+          meeting.bbbMeetingId,
+          moderatorPW,
         );
-        reconciled++;
-        Logger.info(
-          `Reconciled meeting ${meeting.id}: marked as Stale (BBB missing)`,
-          loggerCtx,
-        );
+      } catch (err) {
+        if (err instanceof BbbNotFoundError) {
+          // Meeting is permanently unreachable on BBB — mark as STALE instead
+          // of completing, so no BbbUsageLedger is written.
+          await this.lifecycleService.markMeetingStale(
+            ctx,
+            meeting,
+            "BBB getMeetingInfo notFound — meeting destroyed or expired",
+          );
+          reconciled++;
+          Logger.info(
+            `Reconciled meeting ${meeting.id}: marked as Stale (BBB missing)`,
+            loggerCtx,
+          );
+        } else {
+          // Transient outage or config rejection — skip this pass.
+          Logger.warn(
+            `Reconcile skipped for meeting ${meeting.id}: ${(err as Error).message}`,
+            loggerCtx,
+          );
+        }
       }
     }
     return reconciled;

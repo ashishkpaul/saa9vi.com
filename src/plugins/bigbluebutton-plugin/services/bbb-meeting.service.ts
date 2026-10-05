@@ -24,7 +24,7 @@ import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
-import { BbbApiService } from "./bbb-api.service";
+import { BbbApiService, BbbNotFoundError } from "./bbb-api.service";
 import { BbbEncryptionService } from "./bbb-encryption.service";
 import { BbbServerService } from "./bbb-server.service";
 import { BbbServerSelectionService } from "./bbb-server-selection.service";
@@ -314,19 +314,12 @@ export class BbbMeetingService implements OnModuleInit {
   /**
    * Validates that a meeting still exists on BBB before returning a join URL.
    *
-   * Uses getMeetingInfo() which returns the full meeting record if it
-   * exists on BBB (regardless of running/joined state). Unlike
-   * isMeetingRunning() which returns false for meetings with no participants,
-   * getMeetingInfo() works immediately at creation time and correctly
-   * returns null only when the meeting was destroyed or expired.
-   *
-   * No grace period is needed here because getMeetingInfo resolves instantly
-   * on BBB — there is no boot window unlike isMeetingRunning() which has
-   * the hasUserJoined=false problem.
-   *
-   * Transient network errors (timeout, DNS) are rethrown rather than
-   * swallowed, so the caller can distinguish "meeting is dead" from
-   * "network is flaky" and avoid destroying the room on a transient fault.
+   * W1: `getMeetingInfo` now throws typed errors, so the old dead branch
+   * (string-matching "[notFound]" on a method that never threw) actually
+   * works: only `BbbNotFoundError` means gone. `Unavailable`/`Rejected`
+   * (timeout, outage, checksum) is treated as still existing so a freshly
+   * provisioned room can generate a join URL — the BBB join itself is the
+   * authoritative gate. Sends the moderator password (BBB requires it).
    */
   private async validateMeetingExistsOnBbb(
     server: import("../entities/bbb-server.entity").BbbServer,
@@ -336,25 +329,26 @@ export class BbbMeetingService implements OnModuleInit {
       return false;
     }
 
+    let moderatorPW: string | undefined;
+    if ((meeting as BbbMeeting).encryptedModeratorPassword) {
+      try {
+        moderatorPW = this.encryptionService.decrypt(
+          (meeting as BbbMeeting).encryptedModeratorPassword,
+        );
+      } catch {
+        moderatorPW = undefined;
+      }
+    }
+
     try {
-      const info = await this.bbbApiService.getMeetingInfo(
+      await this.bbbApiService.getMeetingInfo(
         server,
         meeting.bbbMeetingId,
+        moderatorPW,
       );
-      // getMeetingInfo returns null if the meeting doesn't exist or was destroyed
-      return info !== null;
+      return true;
     } catch (err: any) {
-      // BBB API error — only explicit notFound responses mean the meeting is
-      // gone. Other errors (timeout, forbidden while the room is starting, etc.)
-      // are ambiguous; treat the meeting as still existing so a freshly
-      // provisioned room can generate a join URL. The actual BBB join call is the
-      // authoritative gate — a stale URL simply fails in the browser.
-      if (
-        err.message?.includes("[notFound]") ||
-        err.message?.includes("notFound") ||
-        ((err.response as any)?.returncode === "FAILED" &&
-          (err.response as any)?.messageKey === "notFound")
-      ) {
+      if (err instanceof BbbNotFoundError) {
         return false;
       }
       Logger.warn(

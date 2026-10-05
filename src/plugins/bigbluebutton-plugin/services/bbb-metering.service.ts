@@ -13,7 +13,7 @@ import {
   RequestContextService,
   TransactionalConnection,
 } from "@vendure/core";
-import { BbbApiService } from "./bbb-api.service";
+import { BbbApiService, BbbNotFoundError } from "./bbb-api.service";
 import { BbbServerService } from "./bbb-server.service";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbMeetingSample } from "../entities/bbb-meeting-sample.entity";
@@ -136,16 +136,27 @@ export class BbbMeteringService {
     try {
       const serverId = meeting.serverId;
       if (!meeting.bbbMeetingId || !serverId) return "skipped";
-      const bbbServer = await this.serverService.findById(ctx, String(serverId));
+      // findByIdWithSecret: encryptedApiSecret is select:false, and every
+      // adapter call decrypts it — findById would leave it undefined and the
+      // checksum step would throw on every tick.
+      const bbbServer = await this.serverService.findByIdWithSecret(ctx, String(serverId));
       if (!bbbServer) return "skipped";
+      // W1: skip the sample on ANY BBB error — a failed sample is a visible
+      // gap (customer-favourable under-billing), never a meeting-killer.
+      // notFound (meeting ended without a webhook) is also a skip here: the
+      // meeting-ended path / reconciliation owns the terminal transition, not
+      // the sampler.
       let info: Awaited<ReturnType<BbbApiService["getMeetingInfo"]>>;
       try {
         info = await this.bbbApiService.getMeetingInfo(bbbServer, meeting.bbbMeetingId);
       } catch (err) {
-        Logger.warn(`Metering sample skipped for meeting ${meeting.id}: ${(err as Error).message}`, loggerCtx);
-        return "failed";
+        if (err instanceof BbbNotFoundError) {
+          Logger.info(`Metering sample skipped for meeting ${meeting.id}: meeting ended on BBB`, loggerCtx);
+        } else {
+          Logger.warn(`Metering sample skipped for meeting ${meeting.id}: ${(err as Error).message}`, loggerCtx);
+        }
+        return "skipped";
       }
-      if (!info) return "failed";
       const learnerCount = learnerCountFrom(info.participantCount, info.moderatorCount);
       const moderatorCount = normaliseCount(info.moderatorCount);
       await this.connection.rawConnection.query(

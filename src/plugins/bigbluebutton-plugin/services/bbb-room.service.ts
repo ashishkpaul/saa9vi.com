@@ -20,10 +20,11 @@ import { BBB_PLUGIN_OPTIONS } from "../constants";
 import { BbbRoomLockService } from "./bbb-room-lock.service";
 import { BbbPlatformCapacityPolicyService } from "./bbb-platform-capacity-policy.service";
 import { BbbServerService } from "./bbb-server.service";
-import { BbbApiService } from "./bbb-api.service";
+import { BbbApiService, BbbNotFoundError } from "./bbb-api.service";
 import { BbbMetricsService } from "./bbb-metrics.service";
 import { BbbChannelAccessService } from "./bbb-channel-access.service";
 import { MeetingLifecycleService } from "./bbb-meeting-lifecycle.service";
+import { BbbEncryptionService } from "./bbb-encryption.service";
 import { RoomActivatedEvent } from "../events/bbb-events";
 import { EventBus } from "@vendure/core";
 import type { BigBlueButtonPluginOptions } from "../types";
@@ -68,6 +69,7 @@ export class BbbRoomService {
     private readonly channelAccess: BbbChannelAccessService,
     private readonly capacityPolicyService: BbbPlatformCapacityPolicyService,
     private readonly lifecycleService: MeetingLifecycleService,
+    private readonly encryptionService: BbbEncryptionService,
     @Inject(BBB_PLUGIN_OPTIONS)
     private readonly options: BigBlueButtonPluginOptions,
   ) {}
@@ -304,6 +306,14 @@ export class BbbRoomService {
     return result;
   }
 
+  /**
+   * W1: existence check via `getMeetingInfo` — success (even with zero
+   * participants) means the BBB meeting is still valid. Only a CONFIRMED
+   * `BbbNotFoundError` returns false. `Unavailable`/`Rejected` (outage, bad
+   * checksum) returns TRUE — we cannot prove it is gone, and returning false
+   * here completes the DB meeting while the BBB meeting is still live
+   * (split class, metering stopped for the old one).
+   */
   private async validateRuntimeMeeting(
     ctx: RequestContext,
     room: BbbRoom,
@@ -337,14 +347,45 @@ export class BbbRoomService {
       return false;
     }
 
-    const stillRunning = await this.bbbApiService.isMeetingRunning(
-      server,
-      meeting.bbbMeetingId,
-    );
+    // Load the moderator password — BBB requires it on getMeetingInfo. If
+    // the meeting row lacks it, fall back to a password-less probe.
+    let moderatorPW: string | undefined;
+    try {
+      const withSecrets = await this.connection
+        .getRepository(ctx, BbbMeeting)
+        .createQueryBuilder("meeting")
+        .addSelect("meeting.encryptedModeratorPassword")
+        .where("meeting.id = :id", { id: meeting.id as string })
+        .getOne();
+      const enc = (withSecrets as BbbMeeting | null)?.encryptedModeratorPassword;
+      if (enc) {
+        try {
+          moderatorPW = this.encryptionService.decrypt(enc);
+        } catch {
+          moderatorPW = undefined;
+        }
+      }
+    } catch {
+      moderatorPW = undefined;
+    }
 
-    if (!stillRunning) {
-      this.metrics.recordRuntimeValidationFailed();
-      return false;
+    try {
+      await this.bbbApiService.getMeetingInfo(
+        server,
+        meeting.bbbMeetingId,
+        moderatorPW,
+      );
+    } catch (err) {
+      if (err instanceof BbbNotFoundError) {
+        this.metrics.recordRuntimeValidationFailed();
+        return false;
+      }
+      // Outage / config rejection — assume still valid.
+      Logger.warn(
+        `${prefix} runtime validation ambiguous (${(err as Error).message}) — treating as still valid`,
+        loggerCtx,
+      );
+      return true;
     }
 
     await this.connection
