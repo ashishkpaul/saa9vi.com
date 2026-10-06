@@ -6,6 +6,48 @@
 
 ## Active Bugs
 
+**BUG-056 — `endedByUserId` was NULL for every human-ended meeting: the moderator's `endBbbMeeting` only asks BBB to end, and the actual `Completed` write runs later under a system ctx, so the audit column never recorded who ended — ✅ FIXED 2026-10-06 (`e91b457`; found 2026-10-05 by the W5 lifecycle trace).**
+
+> **Status:** FIXED 2026-10-06 (`e91b457`, BBB audit follow-up 1/5).
+
+**Severity:** Medium (audit-attribution gap: the column shipped in `1791209870396-bbb-audit-trail` but was never populated on the primary human path) · **Components:** `services/bbb-meeting.service.ts` (`endMeeting`), `services/bbb-meeting-lifecycle.service.ts` (`completeMeetingLifecycle`), `e2e/s7a-lifecycle-characterization.e2e-spec.ts` (`W5-11`)
+
+**What the code did.** `endedByUserId` was stamped only inside `completeMeetingLifecycle` from `ctx.activeUserId`. The moderator's End path asks BBB to `/end` first and the `Completed` write happens afterwards under a system ctx (webhook, reconciliation, 24 h ceiling), so every human-ended meeting kept `NULL`.
+
+**Fix (post-ack stamp + keep-first).** `endMeeting` stamps the requesting user **after** BBB acknowledges `/end` — a rejected `/end` throws before the write, so failed ends stay null — via a conditional `UPDATE … WHERE endedByUserId IS NULL` (first requester wins). `completeMeetingLifecycle` takes an explicit `endedByUserId` carrier and stamps only while the row is un-stamped (`options ?? ctx.activeUserId ?? null`), so later system completions can never overwrite the human.
+
+**Evidence.** S7A `W5-11` (explicit carrier wins; system completion keeps the human; system-only stays null); failed-end-null is the throw-before-stamp path, reconcile-null covered by W5-4/6. Gates: build/lint/typecheck:e2e 0, invariants 100/100, S7A 19/19.
+
+---
+
+**BUG-057 — `BbbEntitlement` readers/writers assumed one row per natural key while `create()` was not concurrency-idempotent: duplicate rows made every `findOne`-then-decide path order-dependent, and a "successful" revoke could leave a live duplicate still granting access — ✅ FIXED 2026-10-06 (`33c7c96`; found 2026-10-05 by the W5 access-revocation trace, gap G2).**
+
+> **Status:** FIXED 2026-10-06 (`33c7c96`, BBB audit follow-up 2/5).
+
+**Severity:** High (access-control correctness: revoke silently ineffective against a duplicate; hasAccess/erase/list all order-dependent) · **Components:** `services/bbb-entitlement.service.ts` (`create`/`delete`), `entities/bbb-entitlement.entity.ts` (row helpers), `api/bbb-admin.resolver.ts` (`createBbbEntitlement`/`deleteBbbEntitlement`), `services/room-access.service.ts`, `services/learning-dashboard.service.ts`, `services/bbb-deletion.service.ts`, `dashboard/routes/entitlements/EntitlementsList.tsx`
+
+**What the code did.** The natural key `(channelId, customerId, type, resourceId)` could hold several rows (racing non-idempotent creates), but hasAccess/erase/list did `findOne`-then-decide: whichever row TypeORM returned decided access, and revoke touched ONE row — a surviving unexpired duplicate kept granting access after the operator saw "revoked". The erasure flow's stamp write could also clobber a first writer.
+
+**Fix (widened multi-row semantics).** hasAccess = **ANY** started+unexpired row across **all** rows of the key (shared `isEntitlementRowLive`/`anyEntitlementRowLive`); revoke = **ONE** schema-qualified (`repo.metadata.tablePath`) UPDATE deactivating **every** unexpired row with first-writer-wins `CASE` stamps — raw SQL must be schema-qualified: a bare table name resolves through `search_path` (`public` in the e2e suites) and silently updates 0 rows in the configured schema; grant = `pg_advisory_xact_lock` txn returning an existing unexpired row else INSERTing a **new** row (never reactivates — revoked rows keep their stamps as history); the erasure flow stamps only unstamped rows before expiring; the learning dashboard dedupes session rows; the entitlements list surfaces both rows (Revoked badge + re-grant). Cross-tenant revoke stays rejected.
+
+**Evidence.** Isolation suite rewritten to the widened spec — revoke keeps stamps (first-writer-wins), re-grant inserts a new row, opposite insert orders allowed, two live rows → one revoke → denied, 4 concurrent grants converge to one live row, list shows both rows, cross-tenant revoke rejected: **110/110**. Gates: build/lint/typecheck:e2e 0, invariants 100/100, unit 249/249. ADR wording updated same day (`platform-adr.md` "Current status" + "Uniform access check"); trace doc G2 closed.
+
+---
+
+**BUG-058 — the e2e battery hardcoded `apiOptions.port` (3070–3101) with SHARED values (3076, 3077, 3078 ×2, 3079) under vitest's parallel forks pool, so two suites racing to listen failed inside `server.init()` with a raw EADDRINUSE and one suite was skipped wholesale — ✅ FIXED 2026-10-06 (`444e3dd`; observed 2026-10-05: the battery booted 3071 twice, customer-deletion skipped).**
+
+> **Status:** FIXED 2026-10-06 (`444e3dd`, BBB audit follow-up 3/5).
+
+**Severity:** Medium (test-infrastructure defect that silently drops a whole suite's signal and can masquerade as a flaky or passing battery) · **Components:** `src/test-utils/free-port.ts` (new), `src/test-utils/__tests__/free-port.spec.ts` (new), all 29 `*.e2e-spec.ts` suites, `webhook-signature-http` `WEBHOOK_PATH`
+
+**What the code did.** Every suite hardcoded its port and `@vendure/testing` rethrows the raw Node error from `app.listen` — a collision surfaced as a cryptic `EADDRINUSE` inside `server.init()` (the customer-deletion suite carried a 3071/3072 workaround comment instead of a fix, and duplicate ports elsewhere meant the next parallel run could fail any pair).
+
+**Fix.** `getFreePort()` binds `127.0.0.1:0`, reads the OS-assigned port and closes; `startOnFreePort()` replaces `server.init()` in `beforeAll` — allocates, writes `config.apiOptions.port`, re-points both GraphQL clients' URLs (they baked the placeholder port in at `createTestEnvironment` construction), boots, then **hard-fails on EADDRINUSE with an error naming the port** instead of a downstream skip. Top-level `await` is unavailable in this CJS project (TS1309) and the clients read the port synchronously — hence the wrapper-in-`beforeAll` pattern (`apiOptions.port: 0` is a never-bound placeholder). `webhook-signature-http` additionally rebuilds its `WEBHOOK_PATH` from the returned port.
+
+**Evidence.** New `free-port.spec` (8 tests: allocatable/bindable/distinct ports, EADDRINUSE matcher, config+client rebind ordering, named-port hard-fail, untouched rethrow); isolation **110/110** and webhook-signature **8/8** running on OS-allocated ports; unit 257/257 at landing. The obsolete 3071/3072 workaround comment in the customer-deletion suite now points at the helper (history kept, dated 2026-10-05).
+
+---
+
 **BUG-053 — `tenantProfileId` was absent from `CreateBbbOrganizationInput` in the Admin SDL while the resolver arg type, the service input type, and the dashboard's "Tenant Profile ID" field all carried it, so the field could never be used — **FIXED 2026-10-01 (minimal option: surface removed, no schema change)**.**
 
 > **Status:** FIXED 2026-10-01. Minimal option applied: `tenantProfileId` removed from the create dialog, the resolver arg type, the service input, and the provisioning listener's `create()` call. The entity column stays (nullable, never written, never read as a reference), so no migration was generated. `platform-adr.md:288-289` reworded: the tenant link is the channel itself (Channel=Tenant).
@@ -92,7 +134,7 @@ flake is not re-investigated.
 
 **Why it went unnoticed.** R4's own suite is gated `R4_E2E=true` and is not in the default `npm run test:e2e` sweep, so the four failures sat in a suite nobody ran in CI, and the S7A characterization tests (`test:e2e:bbb-lifecycle`, 5/5) cover the lifecycle boundary rather than R4's grant linkage. **Cross-check (all green, same machine, 2026-10-01):** usage-ledger 5/5, channel-isolation 52/52, metering 10/10.
 
-**Related but distinct (not a bug — documented design).** TypeScript reports `TS6307` in the IDE against `tsconfig.dashboard.json` for `src/plugins/bigbluebutton-plugin/shared/format.ts`, because that file sits outside the `dashboard/**` include of the dashboard project. This is **deliberate and load-bearing**: `shared/format.ts` is also imported by a root-project unit spec (`__tests__/format-paise-inr.spec.ts`), so it must stay in the root program; adding it to `tsconfig.dashboard.json`'s `include` makes the root `tsc` fail with `TS6305` (a file cannot be a root file of both a project and the composite project that references it) — verified by trying it. The constraint is documented in the module's own header comment. `npm run build`, `npm run lint`, `npm run build:dashboard` and `npm run typecheck:e2e` are all clean; only the IDE's project view reports it.
+**Related but distinct (not a bug — documented design; STATUS UPDATED 2026-10-06).** TypeScript used to report `TS6307` in the IDE against `tsconfig.dashboard.json` for `src/plugins/bigbluebutton-plugin/shared/format.ts`, because that file sits outside the `dashboard/**` include of the dashboard project. This is **deliberate and load-bearing**: `shared/format.ts` is also imported by a root-project unit spec (`__tests__/format-paise-inr.spec.ts`), so it must stay in the root program; adding it to `tsconfig.dashboard.json`'s `include` makes the root `tsc` fail with `TS6305` (a file cannot be a root file of both a project and the composite project that references it) — verified by trying it. **Resolution (2026-10-06, `850738e`, BBB audit follow-up 4/5):** the four BBB dashboard screens now import a dashboard-local copy (`dashboard/lib/format.ts`), so no dashboard file imports `shared/format.ts` anymore and the TS6307 is gone from both the IDE and `tsc -p tsconfig.dashboard.json` (ratchet 119 → 118, `DashboardOverview.tsx` baseline entry removed). The two implementations are kept byte-identical by `__tests__/format-paise-inr-parity.spec.ts`, which dynamic-imports the dashboard copy (the only channel across the project boundary — tsc does not resolve a runtime-built specifier) and diffs its output over the full vector table. The TS6305 constraint itself is unchanged and is why the parity spec uses a dynamic import.
 
 **BUG-051 — `BbbRoom.organizationId` is declared non-null in the SDL but no entity property or resolver populates it, so selecting it is a hard error — ✅ FIXED for `BbbRoom` 2026-09-30 (found 2026-09-30 while writing the S3 default-rooms e2e; sibling types flagged below).**
 

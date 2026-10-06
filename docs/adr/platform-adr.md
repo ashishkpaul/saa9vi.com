@@ -148,7 +148,7 @@ Every entity that is tenant-scoped **must** implement `ChannelAware` and be pers
 
 All access to paid content — live sessions, recorded courses, workshops, coaching packages — is gated through a single `Entitlement` entity with a uniform `hasAccess(ctx, customerId, type, resourceId)` interface.
 
-**Current status:** `BbbEntitlement` entity and `BbbEntitlementService` are live. The entity supports `bbb_session` and `bbb_room` types with scalar `channelId` (non-ChannelAware). The service provides idempotent `create()`, `hasAccess()`, and `delete()` methods. No admin UI yet. `BbbEnrollment` remains as the legacy room-access path.
+**Current status:** `BbbEntitlement` entity and `BbbEntitlementService` are live. The entity supports `bbb_session` and `bbb_room` types with scalar `channelId` (non-ChannelAware). **Multi-row semantics since 2026-10-06** (BUG-057, `33c7c96`): `create()` is idempotent under `pg_advisory_xact_lock` on the natural key — it returns an existing unexpired row, else INSERTs a new one (a revoked row is never reactivated; it keeps its stamps as history); `hasAccess()` is **ANY**-live across all rows of `(channelId, customerId, type, resourceId)`; `delete()` **revokes by deactivating every unexpired row** in one schema-qualified UPDATE with first-writer-wins stamps. Admin UI exists (`/bbb/entitlements`, Revoked badge + re-grant). `BbbEnrollment` remains as the legacy room-access path.
 
 **Rejection criterion:** Any new entity named `*Enrollment` or `*Access` that is not `BbbEnrollment` backward-compatibility is rejected.
 
@@ -406,7 +406,7 @@ export class BbbEntitlement extends VendureEntity {
 - No `sourceOrderLineId` or `sourceSubscriptionId` yet — Phase 2
 - No admin UI or expiry cron yet — Phase 1.5
 
-**Uniform access check:** `BbbEntitlementService.hasAccess()` — checks `customerId`, `type`, `resourceId`, and `validFrom`/`validUntil` window (code-verified).
+**Uniform access check:** `BbbEntitlementService.hasAccess()` — **ANY** started+unexpired row across **all** rows of the natural key `(channelId, customerId, type, resourceId)` (unexpired = `validUntil` null or future); the key may legally hold several rows (grant → revoke → re-grant history), a revoke deactivates every unexpired row, and only a fresh INSERT (advisory-lock-guarded `create()`) restores access (code-verified 2026-10-06, BUG-057).
 
 **Integration points (all code-verified):**
 1. `BbbOrderFulfillmentListener` creates Entitlement for session purchases ✅

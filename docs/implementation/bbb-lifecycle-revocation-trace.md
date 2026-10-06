@@ -5,6 +5,10 @@ revokes access, with the audit gaps a follow-up change would close. Read-only
 trace: no behaviour changes are proposed here, only recorded facts and options.
 
 **Scope date:** 2026-10-05, branch `feat/bbb-org-context` (post `5bb9764`).
+**Governance follow-up recorded 2026-10-06:** G1 amended (`endedByUserId`
+post-ack stamp, `e91b457`) and G2 closed (`33c7c96`); test-port allocation
+(`444e3dd`) and the dashboard format parity + ratchet shrink (`850738e`)
+landed the same day. Commit-sized details in `known-bugs.md` §BUG-056–058.
 
 ## 1. Meeting lifecycle — every state writer
 
@@ -41,8 +45,8 @@ ledger immutability (INV-002) is not violated by #9.
 
 | # | Writer | Semantics | Audit stamp |
 |---|--------|-----------|-------------|
-| 1 | `deleteBbbEntitlement` resolver (`bbb-admin.resolver.ts:1272`) | **hard `delete(id)`** | none — row gone, no tombstone; `assertEntitlementAccess` ✓ (G2 remains open: columns die with the row) |
-| 2 | `BbbEntitlementService.delete` (`bbb-entitlement.service.ts:153`) | hard `delete` by natural key + channel | **zero callers — dead code** |
+| 1 | `deleteBbbEntitlement` resolver (`bbb-admin.resolver.ts:1300`) | **soft revoke (2026-10-06, `33c7c96`): one schema-qualified UPDATE deactivating EVERY unexpired row of the natural key** — no hard delete; stamps first-writer-wins (`deactivatedAt`/`deactivatedByUserId` set only when unset) | `deactivatedByUserId` + `deactivatedAt` ✓ (G2 closed) |
+| 2 | `BbbEntitlementService.delete` (`bbb-entitlement.service.ts:183`) | channel-scoped variant of the same multi-row revoke (rewritten 2026-10-06 to match #1) | stamps ✓ — **still zero callers, dead code** |
 | 3 | `BbbDeletionService.removeFromChannel` / `fullDelete` | entitlements **expire** (`validUntil = now()`), enrollments `active=false`, trials `CANCELLED`, memberships off — privacy/erasure flow | **stamps `deactivatedByUserId` + `deactivatedAt` on both tables (2026-10-05, G1)** |
 | 4 | `deactivateBbbEnrollment` resolver (`:1021`) | soft `active=false` | **stamps `deactivatedByUserId` + `deactivatedAt` (2026-10-05, G1)**; `assertEnrollmentAccess` ✓ |
 | 5 | `createBbbEnrollment` upsert (`:1068`) | re-activation: `active=true`, `source='admin'` | **clears the deactivation stamp (2026-10-05, G1)** |
@@ -69,9 +73,15 @@ possible at all sites **without signature changes**.
   - nullable `deactivatedByUserId` + `deactivatedAt` on `BbbEnrollment` and
     `BbbEntitlement`, stamped at #3/#4 and cleared at #5 (re-activation);
   - nullable `startedByUserId` + `endedByUserId` on `BbbMeeting`
-    (`startedByUserId` at meeting insert from `ctx.activeUserId`,
-    `endedByUserId` on the first transition to Completed inside
-    `completeMeetingLifecycle`; webhook/reconciliation completions leave null);
+    (`startedByUserId` at meeting insert from `ctx.activeUserId`;
+    **`endedByUserId` wording superseded 2026-10-06 (`e91b457`, BUG-056):**
+    the stamp is now written POST-ACK by `endMeeting` — the requesting user,
+    via a conditional `UPDATE … WHERE endedByUserId IS NULL` (first
+    requester wins) after BBB acknowledges `/end` — and
+    `completeMeetingLifecycle` keeps-first (`options ?? ctx.activeUserId ??
+    null`), so later system completions cannot overwrite the human; a
+    failed `/end` throws before the stamp and stays null, and
+    webhook/reconciliation-only completions stay null);
   - SQL: CLI-generated via `npx vendure migrate -g bbb-audit-trail` →
     `src/migrations/1791209870396-bbb-audit-trail.ts` (six additive nullable
     `ALTER TABLE ... ADD` statements, reversible `down()`), applied with
@@ -80,12 +90,28 @@ possible at all sites **without signature changes**.
     columns) and the tenant meeting detail `/bbb/meetings/$id`
     (new `meetingDetail` route — SessionDetail's previously dead
     "View Meeting Detail" link).
-- **G2 — inconsistent entitlement semantics.** The admin mutation hard-deletes
-  (#1) while the erasure flow expires (#3). Columns cannot survive a hard
-  delete, so G1 for entitlements requires either (a) unifying on soft-revoke
-  (`revokedAt` + read-path filter in `hasAccess`) or (b) an append-only
-  `BbbRevocationLog` row written before the delete. Option (a) changes access
-  semantics and needs an ADR; option (b) is additive.
+- **G2 — inconsistent entitlement semantics. → CLOSED 2026-10-06
+  (`33c7c96`, BUG-057).** The admin mutation no longer hard-deletes (#1):
+  revoke is **one UPDATE that deactivates every unexpired row** of the
+  natural key with first-writer-wins stamps, so the columns survive and a
+  live duplicate can never outlive a "successful" revoke; grant is
+  `pg_advisory_xact_lock`-guarded (return an existing unexpired row else
+  INSERT a new one — never reactivates, revoked rows keep stamps as
+  history); `hasAccess` is **ANY** started+unexpired row across all rows of
+  the key (`isEntitlementRowLive`/`anyEntitlementRowLive` on the entity);
+  the erasure flow stamps only unstamped rows before expiring; the learning
+  dashboard dedupes session rows and the entitlements list surfaces both
+  rows (Revoked badge + re-grant). This is option (a)'s soft-revoke shape
+  with the read-path filter folded into the shared helper — the ADR wording
+  that option (a) required was updated the same day (`platform-adr.md`
+  "Current status" + "Uniform access check"). One implementation note that
+  cost a debugging cycle: raw SQL must be schema-qualified via
+  `repo.metadata.tablePath` — a bare table name resolves through
+  `search_path` (`public` in the e2e suites) and silently updates 0 rows in
+  the configured schema. Evidence: isolation suite rewired to the widened
+  spec (revoke stamps, re-grant inserts new, opposite insert orders,
+  two-live-rows revoke, 4 concurrent grants → one live row, list both rows,
+  cross-tenant revoke rejected) **110/110**.
 - **G3 — FSM single path.** Delete the dead `transitionState` seam or route the
   worker's raw edges through one guarded helper; today the transition table
   guards exactly one edge (stale recovery).
@@ -99,8 +125,8 @@ possible at all sites **without signature changes**.
   `services/bbb-meeting-lifecycle.service.ts:91-260`,
   `services/bbb-meeting.service.ts:155-174, 557-597, 1183-1187`,
   `services/bbb-reconciliation.service.ts`, `api/bbb-admin.resolver.ts:517-658,
-  1018-1034, 1269-1280`, `services/bbb-deletion.service.ts:50-121`,
-  `services/bbb-entitlement.service.ts:153-166`.
+  1018-1034, 1251-1350`, `services/bbb-deletion.service.ts:50-121`,
+  `services/bbb-entitlement.service.ts:183-211`.
 - Dead seams: `grep -rn transitionState src/` → definition only; entitlement
   `.delete(` search across consumers → no callers.
 - FK check: `src/migrations/1790754309519-bbb-attendee-hour-billing-data-model.ts`.
