@@ -1137,6 +1137,45 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
       }
     });
 
+    it('W5-11: endedByUserId keep-first — moderator end survives system completion, failed end stays null, reconcile stays null', async () => {
+      // (a) Explicit carrier wins over a null system ctx (moderator pressed
+      // End; the webhook completion runs under a system ctx).
+      const meetingA = await makeActiveMeeting({
+        org: grantOrg,
+        minutesAgo: 10,
+        grantId: String((await freshGrant(grantOrg, 600)).id),
+      });
+      await lifecycleService.completeMeetingLifecycle(ctx, meetingA.id, {
+        source: 'end-meeting',
+        endedByUserId: 'moderator-user-1',
+      });
+      const doneA = await reloadMeeting(String(meetingA.id));
+      expect(doneA.state).toBe(MEETING_STATE.COMPLETED);
+      expect(doneA.endedByUserId).toBe('moderator-user-1');
+
+      // (b) Later system completion never overwrites the human stamp
+      // (idempotent no-op here — but the row must keep the human).
+      const systemCtx = { ...ctx, activeUserId: null };
+      await lifecycleService.completeMeetingLifecycle(systemCtx, meetingA.id, {
+        source: 'webhook',
+      });
+      expect((await reloadMeeting(String(meetingA.id))).endedByUserId).toBe(
+        'moderator-user-1',
+      );
+
+      // (c) System-only completion stays null (reconcile / webhook with no
+      // requesting user) — the keep-first guard must not invent a stamp.
+      const meetingC = await makeActiveMeeting({
+        org: grantOrg,
+        minutesAgo: 10,
+        grantId: String((await freshGrant(grantOrg, 600)).id),
+      });
+      await lifecycleService.completeMeetingLifecycle(systemCtx, meetingC.id, {
+        source: 'reconciliation',
+      });
+      expect((await reloadMeeting(String(meetingC.id))).endedByUserId).toBeNull();
+    });
+
     it('W5-10: billing ceiling books usage to provisionedAt + maxMeetingDuration, not the pass clock', async () => {
       // Frozen clock: now = 00:30 IST on February 1st. The meeting was
       // provisioned January 30th 06:30Z (12:00 IST) → 36.5 h old → the 24 h

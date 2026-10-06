@@ -54,6 +54,17 @@ export interface CompleteMeetingLifecycleOptions {
    * usage — and the fair-billing duration — into the wrong month.
    */
   completedAt?: Date;
+  /**
+   * Who-ended audit: the user id whose request initiated the end (e.g. the
+   * trainer/admin who pressed End in `endMeeting`). The actual completion runs
+   * later — via the immediate path, a webhook, or reconciliation — usually
+   * under a system context with NO active user. Passed explicitly so the
+   * lifecycle stamps the REQUESTING user instead of null. The webhook/
+   * reconciliation completions call without it: when absent, the stamp falls
+   * back to `ctx.activeUserId`, and only when the row is still un-stamped
+   * (keep-first — see below).
+   */
+  endedByUserId?: string | null;
 }
 
 /**
@@ -157,8 +168,15 @@ export class MeetingLifecycleService {
       // there is one (endBbbMeeting with an admin session); webhook and
       // reconciliation completions carry no active user → null (system end).
       // Only reached on the first transition to Completed (idempotent above).
-      meeting.endedByUserId =
-        ctx.activeUserId != null ? String(ctx.activeUserId) : null;
+      if (meeting.endedByUserId == null) {
+        const explicitEndedBy = options.endedByUserId;
+        meeting.endedByUserId =
+          explicitEndedBy != null
+            ? explicitEndedBy
+            : ctx.activeUserId != null
+              ? String(ctx.activeUserId)
+              : null;
+      }
       const completed = await manager.save(BbbMeeting, meeting);
 
       if (completed.roomId) {

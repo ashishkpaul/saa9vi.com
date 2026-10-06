@@ -595,8 +595,30 @@ export class BbbMeetingService implements OnModuleInit {
       }
     }
 
+    // Who-ended audit (post-ack): stamp the REQUESTING user only after BBB
+    // acknowledges /end. api.endMeeting THROWS on any failure (typed errors —
+    // the catch below then rethrows), so a failed end never reaches this
+    // line: endedByUserId stays null instead of crediting a human with a
+    // meeting that never ended. Conditional write (WHERE endedByUserId IS
+    // NULL) so concurrent end requests keep the FIRST requester, never the
+    // last. The later webhook/reconcile completion runs under a system ctx
+    // and keeps this value (lifecycle keep-first).
+    const requesterId =
+      ctx.activeUserId != null ? String(ctx.activeUserId) : null;
+    if (requesterId != null) {
+      await this.connection
+        .getRepository(ctx, BbbMeeting)
+        .createQueryBuilder()
+        .update(BbbMeeting)
+        .set({ endedByUserId: requesterId })
+        .where("id = :id", { id: String(meeting.id) })
+        .andWhere("endedByUserId IS NULL")
+        .execute();
+    }
+
     return this.lifecycleService.completeMeetingLifecycle(ctx, meeting, {
       source: "end-meeting",
+      endedByUserId: requesterId,
     });
   }
 
