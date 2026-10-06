@@ -41,6 +41,7 @@
     "test:e2e:subscription-self-serve": "vitest run --config vitest.config.mts src/plugins/subscription/__tests__/adr-046-self-serve.e2e-spec.ts",
     "test:e2e:webhook-signature": "vitest run --config vitest.config.mts src/plugins/subscription/__tests__/webhook-signature-http.e2e-spec.ts",
     "test:dashboard-contract": "vitest run --config vitest.config.mts src/plugins/subscription/__tests__/dashboard-graphql-contract.spec.ts",
+    "test:dashboard-tsc": "vitest run --config vitest.config.mts src/plugins/subscription/__tests__/dashboard-tsc-ratchet.spec.ts",
     "test:e2e:fixtures": "ts-node -P tsconfig.e2e.json scripts/e2e/verify.ts",
     "test:e2e:fixtures:seed": "ts-node -P tsconfig.e2e.json scripts/e2e/seed-fixtures.ts",
     "verify:bbb-dashboard": "ts-node -P tsconfig.e2e.json scripts/e2e/bbb-dashboard-browser.ts",

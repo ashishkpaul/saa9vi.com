@@ -277,6 +277,9 @@ export class BbbMeetingService implements OnModuleInit {
       title: input.title,
       state: MEETING_STATE.PENDING,
       recordingEnabled: input.recordingEnabled ?? org.recordingEnabled,
+      // W5 audit trail: attribute the meeting to the requesting user at insert
+      // (null = system origin). Provisioning later flips state without touching it.
+      startedByUserId: ctx.activeUserId != null ? String(ctx.activeUserId) : null,
       pluginManifestsJson: input.pluginManifests
         ? JSON.stringify(input.pluginManifests)
         : null,
@@ -644,6 +647,8 @@ export class BbbMeetingService implements OnModuleInit {
       state: MEETING_STATE.PENDING,
       recordingEnabled: room.recordingEnabled,
       roomId: roomId as string,
+      // W5 audit trail: who launched this room meeting (null = system auto-start).
+      startedByUserId: ctx.activeUserId != null ? String(ctx.activeUserId) : null,
     });
     try {
       const saved = await this.connection

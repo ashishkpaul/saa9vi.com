@@ -27,6 +27,7 @@ const GET_MEETINGS = graphql(`
       items {
         id createdAt title state bbbMeetingId recordingEnabled
         provisionedAt completedAt failureReason retryCount
+        startedByUserId endedByUserId
         organization { id name slug }
       }
       totalItems
@@ -71,6 +72,8 @@ interface BbbMeeting {
   bbbMeetingId?: string; recordingEnabled: boolean;
   provisionedAt?: string; completedAt?: string;
   failureReason?: string; retryCount: number;
+  /** W5 audit trail (new rows only): null = system origin / system end. */
+  startedByUserId?: string | null; endedByUserId?: string | null;
   organization: BbbOrganization;
 }
 
@@ -245,6 +248,8 @@ export function LiveMeetingsList() {
                   <TableHead>State</TableHead>
                   <TableHead>BBB Meeting ID</TableHead>
                   <TableHead>Provisioned</TableHead>
+                  <TableHead>Started by</TableHead>
+                  <TableHead>Ended by</TableHead>
                   <TableHead>Recording</TableHead>
                   <TableHead>Retry</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
@@ -269,6 +274,8 @@ export function LiveMeetingsList() {
                     </TableCell>
                     <TableCell><code className="text-xs">{m.bbbMeetingId || '—'}</code></TableCell>
                     <TableCell className="text-sm">{m.provisionedAt ? new Date(m.provisionedAt).toLocaleString() : 'Pending'}</TableCell>
+                    <TableCell className="text-sm"><code className="text-xs">{m.startedByUserId ?? '—'}</code></TableCell>
+                    <TableCell className="text-sm"><code className="text-xs">{m.endedByUserId ?? '—'}</code></TableCell>
                     <TableCell>
                       <Badge variant={m.recordingEnabled ? 'success' : 'warning'}>{m.recordingEnabled ? 'Enabled' : 'Disabled'}</Badge>
                     </TableCell>

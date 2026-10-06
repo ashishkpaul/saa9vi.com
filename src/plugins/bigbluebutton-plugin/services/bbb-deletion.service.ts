@@ -42,6 +42,19 @@ export class BbbDeletionService {
     return decoded === -1 ? String(id) : String(decoded);
   }
 
+  /**
+   * W5 audit trail: stamp for deactivation writes — who (request user, null
+   * for system/erasure context) and when. The caller passes one `now` so the
+   * expiry instant (`validUntil`) and `deactivatedAt` always agree.
+   */
+  private deactivationAudit(ctx: RequestContext, now: Date) {
+    return {
+      deactivatedByUserId:
+        ctx.activeUserId != null ? String(ctx.activeUserId) : null,
+      deactivatedAt: now,
+    };
+  }
+
   // ─── Flow A: Channel-scoped ───────────────────────────────────────────────
 
   /**
@@ -57,10 +70,11 @@ export class BbbDeletionService {
       loggerCtx,
     );
 
-    // 1. Deactivate entitlements in this channel
+    // 1. Deactivate entitlements in this channel (W5: stamped, not just expired)
+    const now = new Date();
     await this.connection.getRepository(ctx, BbbEntitlement).update(
       { customerId: this.rawId(customerId), channelId },
-      { validUntil: new Date() },
+      { validUntil: now, ...this.deactivationAudit(ctx, now) },
     );
 
     // 2. Deactivate enrollments via room → organization → channel
@@ -77,7 +91,7 @@ export class BbbDeletionService {
         const roomIds = rooms.map((r) => r.id as string);
         await this.connection.getRepository(ctx, BbbEnrollment).update(
           { customerId: this.rawId(customerId), roomId: In(roomIds) },
-          { active: false },
+          { active: false, ...this.deactivationAudit(ctx, now) },
         );
       }
     }
@@ -134,16 +148,17 @@ export class BbbDeletionService {
       loggerCtx,
     );
 
-    // 1. Deactivate all entitlements
+    // 1. Deactivate all entitlements (W5: stamped, not just expired)
+    const now = new Date();
     await this.connection.getRepository(ctx, BbbEntitlement).update(
       { customerId: this.rawId(customerId) },
-      { validUntil: new Date() },
+      { validUntil: now, ...this.deactivationAudit(ctx, now) },
     );
 
     // 2. Deactivate all enrollments
     await this.connection.getRepository(ctx, BbbEnrollment).update(
       { customerId: this.rawId(customerId) },
-      { active: false },
+      { active: false, ...this.deactivationAudit(ctx, now) },
     );
 
     // 3. Cancel all trial registrations

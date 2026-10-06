@@ -41,15 +41,19 @@ ledger immutability (INV-002) is not violated by #9.
 
 | # | Writer | Semantics | Audit stamp |
 |---|--------|-----------|-------------|
-| 1 | `deleteBbbEntitlement` resolver (`bbb-admin.resolver.ts:1272`) | **hard `delete(id)`** | none — row gone, no tombstone; `assertEntitlementAccess` ✓ |
+| 1 | `deleteBbbEntitlement` resolver (`bbb-admin.resolver.ts:1272`) | **hard `delete(id)`** | none — row gone, no tombstone; `assertEntitlementAccess` ✓ (G2 remains open: columns die with the row) |
 | 2 | `BbbEntitlementService.delete` (`bbb-entitlement.service.ts:153`) | hard `delete` by natural key + channel | **zero callers — dead code** |
-| 3 | `BbbDeletionService.removeFromChannel` / `fullDelete` | entitlements **expire** (`validUntil = now()`), enrollments `active=false`, trials `CANCELLED`, memberships off — privacy/erasure flow | none |
-| 4 | `deactivateBbbEnrollment` resolver (`:1021`) | soft `active=false` | none; `assertEnrollmentAccess` ✓ |
-| 5 | `createBbbEnrollment` upsert (`:1068`) | re-activation: `active=true`, `source='admin'` | none |
+| 3 | `BbbDeletionService.removeFromChannel` / `fullDelete` | entitlements **expire** (`validUntil = now()`), enrollments `active=false`, trials `CANCELLED`, memberships off — privacy/erasure flow | **stamps `deactivatedByUserId` + `deactivatedAt` on both tables (2026-10-05, G1)** |
+| 4 | `deactivateBbbEnrollment` resolver (`:1021`) | soft `active=false` | **stamps `deactivatedByUserId` + `deactivatedAt` (2026-10-05, G1)**; `assertEnrollmentAccess` ✓ |
+| 5 | `createBbbEnrollment` upsert (`:1068`) | re-activation: `active=true`, `source='admin'` | **clears the deactivation stamp (2026-10-05, G1)** |
 | 6 | `updateBbbTrialRegistrationStatus` (`:1160`) | trial `status` transitions | none; ADR-048 org-ownership assert ✓ |
 
-`deactivatedBy`/`deactivatedAt`/`revokedBy`/`revokedAt` fields exist **nowhere**
-in the plugin — verified by repo-wide search (2026-10-05).
+`deactivatedBy`/`deactivatedAt`/`revokedBy`/`revokedAt` fields existed **nowhere**
+in the plugin — verified by repo-wide search (2026-10-05, morning). **Superseded
+the same day: G1 below is implemented** (`1791209870396-bbb-audit-trail.ts`,
+CLI-generated + applied 2026-10-05) — `deactivatedByUserId`/`deactivatedAt`
+now exist on both tables, and `startedByUserId`/`endedByUserId` were added to
+`BbbMeeting` as part of the same approved migration.
 
 ## 3. ctx availability
 
@@ -60,11 +64,22 @@ possible at all sites **without signature changes**.
 
 ## 4. Gaps a governance follow-up would close
 
-- **G1 — no attribution.** Neither enrollment deactivation nor entitlement
-  revocation records who or when. Proposed shape: nullable
-  `deactivatedByUserId` + `deactivatedAt` on `BbbEnrollment` and
-  `BbbEntitlement` (new rows only; no backfill), stamped at #4/#1 and cleared
-  at #5 (re-activation).
+- **G1 — no attribution. → CLOSED 2026-10-05 (approved migration applied).**
+  Implemented shape (new rows only, no backfill):
+  - nullable `deactivatedByUserId` + `deactivatedAt` on `BbbEnrollment` and
+    `BbbEntitlement`, stamped at #3/#4 and cleared at #5 (re-activation);
+  - nullable `startedByUserId` + `endedByUserId` on `BbbMeeting`
+    (`startedByUserId` at meeting insert from `ctx.activeUserId`,
+    `endedByUserId` on the first transition to Completed inside
+    `completeMeetingLifecycle`; webhook/reconciliation completions leave null);
+  - SQL: CLI-generated via `npx vendure migrate -g bbb-audit-trail` →
+    `src/migrations/1791209870396-bbb-audit-trail.ts` (six additive nullable
+    `ALTER TABLE ... ADD` statements, reversible `down()`), applied with
+    `npx vendure migrate -r` and verified against `information_schema.columns`;
+  - surfaced on Platform › Live Meetings (`startedByUserId`/`endedByUserId`
+    columns) and the tenant meeting detail `/bbb/meetings/$id`
+    (new `meetingDetail` route — SessionDetail's previously dead
+    "View Meeting Detail" link).
 - **G2 — inconsistent entitlement semantics.** The admin mutation hard-deletes
   (#1) while the erasure flow expires (#3). Columns cannot survive a hard
   delete, so G1 for entitlements requires either (a) unifying on soft-revoke

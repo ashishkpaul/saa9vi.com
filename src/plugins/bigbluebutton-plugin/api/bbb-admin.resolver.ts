@@ -1030,6 +1030,10 @@ export class BbbAdminResolver {
       id,
     );
     enrollment.active = false;
+    // W5 audit trail: who deactivated, and when (trace writer #4).
+    enrollment.deactivatedByUserId =
+      ctx.activeUserId != null ? String(ctx.activeUserId) : null;
+    enrollment.deactivatedAt = new Date();
     return this.connection.getRepository(ctx, BbbEnrollment).save(enrollment);
   }
 
@@ -1069,6 +1073,10 @@ export class BbbAdminResolver {
       existing.active = true;
       existing.expiresAt = expiresAt;
       existing.source = "admin";
+      // W5 audit trail: re-activation clears the deactivation stamp (trace
+      // writer #5) — the row reads as currently-active, not deactivated.
+      existing.deactivatedByUserId = null;
+      existing.deactivatedAt = null;
       return this.connection.getRepository(ctx, BbbEnrollment).save(existing);
     }
 

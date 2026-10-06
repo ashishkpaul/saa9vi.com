@@ -53,4 +53,17 @@ export class BbbEnrollment extends VendureEntity {
   /** How the enrollment was created — for audit and future filtering */
   @Column({ type: "varchar", default: "purchase" })
   source: EnrollmentSource;
+
+  // ─── Audit trail (W5 follow-up, approved 2026-10-05) ────────────────────────
+  // New rows only — NO backfill. Stamped at deactivation (admin mutation or
+  // customer-deletion erasure); cleared on re-activation (createBbbEnrollment
+  // upsert, writer #5 in the revocation trace).
+
+  /** User (ctx.activeUserId) who deactivated this enrollment; null = system erasure. */
+  @Column({ type: "varchar", nullable: true })
+  deactivatedByUserId: string | null;
+
+  /** When the deactivation happened. */
+  @Column({ type: "timestamp", nullable: true })
+  deactivatedAt: Date | null;
 }

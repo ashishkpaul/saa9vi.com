@@ -16,7 +16,7 @@ import { DashboardOverview } from './routes/dashboard';
 import { ServersList } from './routes/servers';
 import { OrganizationsList } from './routes/organizations';
 import { RoomsList, roomDetail } from './routes/rooms';
-import { MeetingsHistoryList, LiveMeetingsList } from './routes/meetings';
+import { MeetingsHistoryList, LiveMeetingsList, meetingDetail } from './routes/meetings';
 import { PeopleList } from './routes/people';
 import { BillingOverview } from './routes/billing';
 import { MembersList } from './routes/members';
@@ -114,6 +114,7 @@ export default defineDashboardExtension({
                 requiresPermission: ['BBBAdmin', 'BBBManageMeetings'],
             },
         },
+        meetingDetail,
         {
             path: '/bbb/people',
             component: () => <PeopleList />,

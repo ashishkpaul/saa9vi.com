@@ -57,4 +57,18 @@ export class BbbEntitlement extends VendureEntity {
   /** Channel isolation — scalar FK to Channel.id (not junction table) */
   @Column({ type: "varchar", nullable: true })
   channelId: string | null;
+
+  // ─── Audit trail (W5 follow-up, approved 2026-10-05) ────────────────────────
+  // New rows only — NO backfill. Stamped when the erasure flow expires the
+  // entitlement (validUntil = now). NOTE: the admin deleteBbbEntitlement
+  // mutation hard-deletes the row, so these columns die with it — the trace
+  // doc's G2 (tombstone / soft-revoke) remains an open, ADR-gated decision.
+
+  /** User (ctx.activeUserId) who deactivated this entitlement; null = system erasure. */
+  @Column({ type: "varchar", nullable: true })
+  deactivatedByUserId: string | null;
+
+  /** When the deactivation (expiry stamp) happened. */
+  @Column({ type: "timestamp", nullable: true })
+  deactivatedAt: Date | null;
 }

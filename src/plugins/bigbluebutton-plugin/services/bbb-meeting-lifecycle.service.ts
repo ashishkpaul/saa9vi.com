@@ -153,6 +153,12 @@ export class MeetingLifecycleService {
       // endTime / last sample + 1 min) so reconciliation completions book
       // into the correct billing month.
       meeting.completedAt = meeting.completedAt ?? options.completedAt ?? new Date();
+      // W5 audit trail: attribute the completion to the requesting user when
+      // there is one (endBbbMeeting with an admin session); webhook and
+      // reconciliation completions carry no active user → null (system end).
+      // Only reached on the first transition to Completed (idempotent above).
+      meeting.endedByUserId =
+        ctx.activeUserId != null ? String(ctx.activeUserId) : null;
       const completed = await manager.save(BbbMeeting, meeting);
 
       if (completed.roomId) {

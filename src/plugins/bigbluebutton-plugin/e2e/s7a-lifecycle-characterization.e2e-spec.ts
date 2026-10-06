@@ -476,6 +476,11 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
       const done = await reloadMeeting(id);
       expect(done.state).toBe(MEETING_STATE.COMPLETED);
       expect(done.completedAt).toBeTruthy();
+      // W5 audit trail: the completing context is recorded verbatim — a bare
+      // superadmin/system context has no active user → null.
+      expect(done.endedByUserId).toBe(
+        ctx.activeUserId != null ? String(ctx.activeUserId) : null,
+      );
 
       const rows = await connection
         .getRepository(ctx, BbbUsageLedger)

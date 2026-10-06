@@ -3058,6 +3058,12 @@ describe('BBB Channel Isolation (Phase A)', () => {
         input: { organizationId: orgAId, title: 'S7 Positive Meeting' },
       });
       expect(res.createBbbMeeting.id).toBeTruthy();
+      // W5 audit trail: the meeting is attributed to the requesting user at
+      // insert (new rows only — this row was just created).
+      const row = await connection.getRepository(superCtx, BbbMeeting)
+        .findOne({ where: { title: 'S7 Positive Meeting' } });
+      expect(row?.startedByUserId).toBeTruthy();
+      expect(row?.endedByUserId).toBeNull();
     });
 
     // ── createBbbCapacityGrant (cross-org via channel assert) ────────────────
@@ -3284,6 +3290,11 @@ describe('BBB Channel Isolation (Phase A)', () => {
         id: enrollmentAId,
       });
       expect(res.deactivateBbbEnrollment.active).toBe(false);
+      // W5 audit trail: the deactivation records who and when (new rows only).
+      const row = await connection.getRepository(superCtx, BbbEnrollment)
+        .findOne({ where: { id: enrollmentAId.replace(/^T_/, '') as any } });
+      expect(row?.deactivatedByUserId).toBeTruthy();
+      expect(row?.deactivatedAt).toBeInstanceOf(Date);
     });
 
     // ── createBbbEntitlement (resource-org check) ────────────────────────────

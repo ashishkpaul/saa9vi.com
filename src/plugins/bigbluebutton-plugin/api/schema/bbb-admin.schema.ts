@@ -60,6 +60,18 @@ export const adminApiExtensions = gql`
     recordingEnabled: Boolean!
     provisionedAt: DateTime
     completedAt: DateTime
+    """
+    W5 audit trail (new rows only, no backfill): user whose request created or
+    launched this meeting. Null = system origin (queue provisioning, auto
+    room start, webhook).
+    """
+    startedByUserId: ID
+    """
+    W5 audit trail (new rows only, no backfill): user whose request performed
+    the completion that ended this meeting. Null = system completion
+    (webhook / reconciliation).
+    """
+    endedByUserId: ID
     failureReason: String
     retryCount: Int!
     billingCapped: Boolean!

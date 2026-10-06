@@ -156,6 +156,27 @@ export class BbbMeeting extends VendureEntity {
   @Column({ default: 0 })
   reconciliationAttemptCount: number;
 
+  // ─── Audit trail (W5 follow-up, approved 2026-10-05) ────────────────────────
+  // New rows only — NO backfill: rows written before the migration keep null.
+
+  /**
+   * User whose request created / launched this meeting (ctx.activeUserId at
+   * insert). null = system origin: queue-driven provisioning, auto room start,
+   * or webhook-created rows. Stamped once at insert; the queue flipping the
+   * state to Active does not overwrite it.
+   */
+  @Column({ type: "varchar", nullable: true })
+  startedByUserId: string | null;
+
+  /**
+   * User whose request performed the completion that ended this meeting
+   * (ctx.activeUserId inside completeMeetingLifecycle). null = system
+   * completion (webhook / reconciliation). Stamped once, on the first
+   * transition to Completed — later completions are idempotent no-ops.
+   */
+  @Column({ type: "varchar", nullable: true })
+  endedByUserId: string | null;
+
   // ─── BBB Plugin Manifests ───────────────────────────────────────────────
 
   @Column({ type: "text", nullable: true })
