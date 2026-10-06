@@ -33,6 +33,7 @@ import { BbbOrganizationMembership } from "../entities/bbb-organization-membersh
 import { BbbProductAccess } from "../entities/bbb-product-access.entity";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
+import { BbbEntitlementService } from "../services/bbb-entitlement.service";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbSessionTemplate } from "../entities/bbb-session-template.entity";
@@ -205,6 +206,7 @@ export class BbbAdminResolver {
     private readonly attendanceAnalytics: AttendanceAnalyticsService,
     private readonly billingService: BbbBillingService,
     private readonly reconciliationService: BbbReconciliationService,
+    private readonly entitlementService: BbbEntitlementService,
   ) {}
 
   // ─── Capacity Intelligence Dashboard (ADR v1.7 §6A CI-003) ────────────────
@@ -1272,18 +1274,24 @@ export class BbbAdminResolver {
     } else if (input.type === "bbb_room") {
       await this.channelAccess.assertRoomAccess(ctx, input.resourceId);
     }
-    const entitlement = new BbbEntitlement({
-      customerId: input.customerId,
+    // Grant (W5 follow-up 2/5 — widened duplicate-row spec): delegated to
+    // BbbEntitlementService.create, which runs the read-then-insert under a
+    // per-key advisory lock — returns an unexpired row if one exists, else
+    // INSERTs a NEW row. Revoked rows stay as stamped history; they are
+    // NEVER reactivated (the earlier reactivation path is gone: clearing
+    // deactivatedByUserId/deactivatedAt destroyed "who revoked this access").
+    // channelId = ctx.channelId keeps ADR-048: a cross-tenant write is
+    // structurally impossible; the resource-org asserts above remain for
+    // auditability (INV-029) and a clean ForbiddenError.
+    return this.entitlementService.create(ctx, {
       type: input.type,
       resourceId: input.resourceId,
+      customerId: input.customerId,
       source: input.source,
       validFrom: input.validFrom ? new Date(input.validFrom) : null,
       validUntil: input.validUntil ? new Date(input.validUntil) : null,
-      // Channel isolation (INV: Channel=Tenant). hasAccess() matches on
-      // channelId — an entitlement without it is invisible in the shop API.
       channelId: ctx.channelId as string,
     });
-    return this.connection.getRepository(ctx, BbbEntitlement).save(entitlement);
   }
 
   @Allow(BbbAdminPermission.Permission, BbbManageEntitlementsPermission.Permission)
@@ -1293,9 +1301,51 @@ export class BbbAdminResolver {
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
   ): Promise<boolean> {
-    // ADR-048: assert the caller owns the entitlement's channel before deleting.
+    // ADR-048: assert the caller owns the entitlement's channel before writing.
     await this.channelAccess.assertEntitlementAccess(ctx, id);
-    await this.connection.getRepository(ctx, BbbEntitlement).delete(id);
+    // Revocation = deactivate, not delete. A hard delete would take the audit
+    // columns (deactivatedByUserId/deactivatedAt) with the row, so "who
+    // revoked this student's access" would be unanswerable — the same gap the
+    // enrollment path already closed via deactivateBbbEnrollment.
+    //
+    // W5 follow-up 2/5: the natural key can hold MULTIPLE rows, so revoking
+    // just this one would leave a live duplicate still granting access. A
+    // SINGLE UPDATE expires EVERY unexpired row of the key; first-writer-wins
+    // stamps via CASE (an already-revoked row keeps its original revoker and
+    // expiry). Idempotent: a revoke of an already-revoked key touches 0 rows.
+    const row = await this.connection.getEntityOrThrow(ctx, BbbEntitlement, id);
+    const now = new Date();
+    const requesterId =
+      ctx.activeUserId != null ? String(ctx.activeUserId) : null;
+    const params: any[] = [
+      now,
+      requesterId,
+      row.customerId,
+      row.type,
+      row.resourceId,
+    ];
+    // Key on the ROW's channel (not ctx): legacy rows may carry null, and
+    // `col = NULL` matches nothing — revoke must never silently no-op.
+    const channelClause =
+      row.channelId == null ? `"channelId" IS NULL` : `("channelId" = $6)`;
+    if (row.channelId != null) params.push(row.channelId);
+    const repo = this.connection.getRepository(ctx, BbbEntitlement);
+    // Schema-qualify: TypeORM only rewrites METADATA-based queries — a bare
+    // `bbb_entitlement` in raw SQL resolves through search_path (public in the
+    // e2e suites) and would silently update 0 rows in the configured schema.
+    const table = repo.metadata.tablePath;
+    await repo.manager.query(
+      `UPDATE ${table}
+          SET "validUntil" = $1,
+              "deactivatedAt" = CASE WHEN "deactivatedAt" IS NULL THEN $1 ELSE "deactivatedAt" END,
+              "deactivatedByUserId" = CASE WHEN "deactivatedByUserId" IS NULL THEN $2 ELSE "deactivatedByUserId" END
+        WHERE "customerId" = $3
+          AND "type" = $4
+          AND "resourceId" = $5
+          AND ${channelClause}
+          AND ("validUntil" IS NULL OR "validUntil" > $1)`,
+      params,
+    );
     return true;
   }
 

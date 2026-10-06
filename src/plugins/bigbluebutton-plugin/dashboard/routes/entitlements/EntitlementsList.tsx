@@ -17,9 +17,18 @@ const DELETE_ENTITLEMENT = graphql(`
   mutation DeleteBbbEntitlement($id: ID!) { deleteBbbEntitlement(id: $id) }
 `);
 
+const CREATE_ENTITLEMENT = graphql(`
+  mutation ReGrantBbbEntitlement($input: CreateBbbEntitlementInput!) {
+    createBbbEntitlement(input: $input) { id }
+  }
+`);
+
 export function EntitlementsList() {
   const [page, setPage] = useState(1);
   const [customerIdFilter, setCustomerIdFilter] = useState('');
+  // Revoked rows stay queryable (audit: who revoked, when) but are hidden by
+  // default so the list answers "who has access", not "who ever had it".
+  const [showRevoked, setShowRevoked] = useState(false);
   const pageSize = 25;
 
   const query = useQuery<any>({
@@ -41,7 +50,15 @@ export function EntitlementsList() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.mutate(DELETE_ENTITLEMENT, { id }),
-    onSuccess: () => { query.refetch(); toast.success('Entitlement deleted'); },
+    onSuccess: () => { query.refetch(); toast.success('Access revoked (row kept for audit)'); },
+    onError: (err: Error) => toast.error('Error', { description: err.message }),
+  });
+
+  const reGrantMutation = useMutation({
+    mutationFn: (e: any) => api.mutate(CREATE_ENTITLEMENT, {
+      input: { customerId: e.customerId, type: e.type, resourceId: e.resourceId, source: 'admin' },
+    }),
+    onSuccess: () => { query.refetch(); toast.success('Access re-granted'); },
     onError: (err: Error) => toast.error('Error', { description: err.message }),
   });
 
@@ -51,6 +68,9 @@ export function EntitlementsList() {
     if (e.validUntil && new Date(e.validUntil) < now) return false;
     return true;
   }
+
+  // Default view hides revoked rows; the toggle reveals them for audit.
+  const visibleItems = (items as any[]).filter((e: any) => showRevoked || isValidNow(e));
 
   return (
     <div className="p-6">
@@ -68,6 +88,14 @@ export function EntitlementsList() {
             />
           </div>
           <Button variant="outline" size="sm" onClick={() => { setCustomerIdFilter(''); setPage(1); }}>Clear</Button>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={showRevoked}
+              onChange={(e) => { setShowRevoked(e.target.checked); setPage(1); }}
+            />
+            Show revoked
+          </label>
         </div>
       </Card>
 
@@ -97,22 +125,26 @@ export function EntitlementsList() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {items.map((e: any) => (
+              {visibleItems.map((e: any) => (
                 <TableRow key={e.id}>
                   <TableCell className="font-mono text-xs">{e.customerId}</TableCell>
                   <TableCell><Badge>{e.type}</Badge></TableCell>
                   <TableCell className="font-mono text-xs">{e.resourceId}</TableCell>
                   <TableCell><Badge variant="outline">{e.source}</Badge></TableCell>
                   <TableCell>
-                    <Badge variant={isValidNow(e) ? 'success' : 'warning'}>
-                      {isValidNow(e) ? 'Active' : 'Expired'}
+                    <Badge variant={isValidNow(e) ? 'success' : 'destructive'}>
+                      {isValidNow(e) ? 'Active' : 'Revoked'}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-sm">{e.validFrom ? new Date(e.validFrom).toLocaleDateString() : '—'}</TableCell>
                   <TableCell className="text-sm">{e.validUntil ? new Date(e.validUntil).toLocaleDateString() : 'Never'}</TableCell>
                   <TableCell className="text-sm">{new Date(e.createdAt).toLocaleDateString()}</TableCell>
                   <TableCell>
-                    <Button variant="destructive" size="sm" onClick={() => deleteMutation.mutate(e.id)}>Delete</Button>
+                    {isValidNow(e) ? (
+                      <Button variant="destructive" size="sm" onClick={() => deleteMutation.mutate(e.id)}>Revoke</Button>
+                    ) : (
+                      <Button variant="outline" size="sm" onClick={() => reGrantMutation.mutate(e)}>Re-grant</Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

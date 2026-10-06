@@ -19,7 +19,50 @@ export type EntitlementSource = "purchase" | "trial" | "trial_conversion" | "adm
  * Key design decision: Entitlement is *not* ChannelAware. It carries
  * a scalar channelId for channel isolation without the complexity of
  * Vendure's Channel junction table.
+ *
+ * Liveness (W5 follow-up 2/5 — duplicate rows): the natural key (channel,
+ * customer, type, resource) can carry MULTIPLE rows — the resolver create was
+ * non-idempotent before the re-grant fix, so history holds duplicates.
+ * One-row-per-key assumptions (findOne-then-decide) are order-dependent and
+ * wrong. Every reader/writer uses the helpers below:
+ *   unexpired = validUntil null or > now      (an active grant, started or
+ *               not — governs grant-return and revoke scope)
+ *   live      = started (validFrom null or <= now) AND unexpired
+ *               (governs ACCESS: hasAccess = ANY live row)
+ *   revoke    = deactivate every UNEXPIRED row for the key in one operation
+ *               (a future-dated row must not resurrect access after revoke)
+ *   grant     = advisory-lock txn → return an unexpired row else insert a NEW
+ *               row; revoked rows are kept as history, never reactivated.
  */
+export interface EntitlementLike {
+  validFrom?: Date | null;
+  validUntil?: Date | null;
+}
+
+/** An active grant: not expired. Future-dated rows still count (scheduled). */
+export function isEntitlementRowUnexpired(
+  row: EntitlementLike,
+  now: Date = new Date(),
+): boolean {
+  return row.validUntil == null || row.validUntil > now;
+}
+
+/** Access-live: started AND unexpired. */
+export function isEntitlementRowLive(
+  row: EntitlementLike,
+  now: Date = new Date(),
+): boolean {
+  if (row.validFrom != null && row.validFrom > now) return false;
+  return isEntitlementRowUnexpired(row, now);
+}
+
+/** ANY-live over the rows sharing one natural key. */
+export function anyEntitlementRowLive(
+  rows: EntitlementLike[],
+  now: Date = new Date(),
+): boolean {
+  return rows.some((r) => isEntitlementRowLive(r, now));
+}
 @Entity("bbb_entitlement")
 @Index(["customerId", "type", "resourceId"])
 @Index(["resourceId", "type"])
@@ -60,9 +103,9 @@ export class BbbEntitlement extends VendureEntity {
 
   // ─── Audit trail (W5 follow-up, approved 2026-10-05) ────────────────────────
   // New rows only — NO backfill. Stamped when the erasure flow expires the
-  // entitlement (validUntil = now). NOTE: the admin deleteBbbEntitlement
-  // mutation hard-deletes the row, so these columns die with it — the trace
-  // doc's G2 (tombstone / soft-revoke) remains an open, ADR-gated decision.
+  // entitlement (validUntil = now), and by the admin deleteBbbEntitlement
+  // mutation, which DEACTIVATES (sets validUntil + stamp) instead of deleting
+  // so "who revoked this student's access" stays answerable.
 
   /** User (ctx.activeUserId) who deactivated this entitlement; null = system erasure. */
   @Column({ type: "varchar", nullable: true })

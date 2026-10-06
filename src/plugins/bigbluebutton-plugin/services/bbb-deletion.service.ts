@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService, ID, RequestContext, TransactionalConnection } from "@vendure/core";
-import { In } from "typeorm";
+import { In, IsNull } from "typeorm";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
@@ -71,10 +71,17 @@ export class BbbDeletionService {
     );
 
     // 1. Deactivate entitlements in this channel (W5: stamped, not just expired)
+    //    Multi-row safe (revoke→re-grant keeps old rows): one UPDATE per scope.
+    //    First-writer-wins on the stamps — an earlier admin revoker is never
+    //    overwritten by a later erasure/system stamp.
     const now = new Date();
     await this.connection.getRepository(ctx, BbbEntitlement).update(
+      { customerId: this.rawId(customerId), channelId, deactivatedByUserId: IsNull() as any },
+      { ...this.deactivationAudit(ctx, now) },
+    );
+    await this.connection.getRepository(ctx, BbbEntitlement).update(
       { customerId: this.rawId(customerId), channelId },
-      { validUntil: now, ...this.deactivationAudit(ctx, now) },
+      { validUntil: now },
     );
 
     // 2. Deactivate enrollments via room → organization → channel
@@ -148,11 +155,18 @@ export class BbbDeletionService {
       loggerCtx,
     );
 
-    // 1. Deactivate all entitlements (W5: stamped, not just expired)
+    // 1. Deactivate all entitlements (W5: stamped, not just expired).
+    //    Same two-step as removeFromChannel: stamp ONLY unstamped rows
+    //    (first-writer-wins — a system erasure never overwrites an admin's
+    //    revoker), then expire every row.
     const now = new Date();
     await this.connection.getRepository(ctx, BbbEntitlement).update(
+      { customerId: this.rawId(customerId), deactivatedByUserId: IsNull() as any },
+      { ...this.deactivationAudit(ctx, now) },
+    );
+    await this.connection.getRepository(ctx, BbbEntitlement).update(
       { customerId: this.rawId(customerId) },
-      { validUntil: now, ...this.deactivationAudit(ctx, now) },
+      { validUntil: now },
     );
 
     // 2. Deactivate all enrollments

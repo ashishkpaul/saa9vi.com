@@ -4,7 +4,10 @@ import { ID, RequestContext, TransactionalConnection } from "@vendure/core";
 import { BbbMemberService } from "./bbb-member.service";
 import { BbbMembershipService } from "./bbb-membership.service";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
-import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
+import {
+  BbbEntitlement,
+  isEntitlementRowLive,
+} from "../entities/bbb-entitlement.entity";
 import {
   deriveRoomAccess,
   RoomAccessDecision,
@@ -41,7 +44,7 @@ export class BbbRoomAccessService {
     organizationId: ID,
     roomId: ID,
   ): Promise<RoomAccessDecision> {
-    const [membership, legacyMember, entitlement, enrollment] =
+    const [membership, legacyMember, entitlementRows, enrollment] =
       await Promise.all([
         this.membershipService.findActiveMembership(
           ctx,
@@ -53,9 +56,14 @@ export class BbbRoomAccessService {
           customerId,
           organizationId,
         ),
+        // W5 follow-up 2/5: the natural key can hold MULTIPLE entitlement rows
+        // (history), so a findOne picks an arbitrary row and the decision
+        // becomes order-dependent. Fetch ALL rows for the key and pass a
+        // started-and-unexpired one when any exists (ANY-live); otherwise pass
+        // the first stale row so the pure policy still derives a denial.
         this.connection
           .getRepository(ctx, BbbEntitlement)
-          .findOne({
+          .find({
             where: {
               customerId: String(customerId),
               type: "bbb_room",
@@ -72,10 +80,15 @@ export class BbbRoomAccessService {
             },
           }),
       ]);
+    const now = new Date();
+    const entitlement =
+      entitlementRows.find((r) => isEntitlementRowLive(r, now)) ??
+      entitlementRows[0] ??
+      null;
 
     return deriveRoomAccess(
       { membership, legacyMember, entitlement, enrollment },
-      new Date(),
+      now,
     );
   }
 }

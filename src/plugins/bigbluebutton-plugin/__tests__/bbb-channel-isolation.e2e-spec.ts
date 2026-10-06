@@ -102,6 +102,7 @@ import { BbbEncryptionService } from '../services/bbb-encryption.service';
 import { MeetingCompletedEvent } from '../events/bbb-events';
 import { BbbMeetingService } from '../services/bbb-meeting.service';
 import { MeetingLifecycleService } from '../services/bbb-meeting-lifecycle.service';
+import { BbbEntitlementService } from '../services/bbb-entitlement.service';
 import { TenantRegisteredEvent } from '../../tenant-plugin/events/tenant-events';
 import {
   DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR,
@@ -572,13 +573,16 @@ const BBB_ORG_MEMBERSHIPS = gql`
 `;
 
 const BBB_ENTITLEMENTS = gql`
-  query BbbEntitlements {
-    bbbEntitlements {
+  query BbbEntitlements($options: BbbEntitlementListOptions) {
+    bbbEntitlements(options: $options) {
       items {
         id
         customerId
         type
         resourceId
+        validFrom
+        validUntil
+        createdAt
       }
       totalItems
     }
@@ -2795,8 +2799,19 @@ describe('BBB Channel Isolation (Phase A)', () => {
       }
 
       // ── Entitlements ──────────────────────────────────────────────────────
+      // Anchor on the FULL natural key the S7 entitlement cases exercise
+      // (customer + bbb_room + roomA). An earlier revision picked "the first
+      // entitlement of channel A", which can belong to a different key (another
+      // customer/room from S5/S6 fixtures) — the revoke/re-grant cases would
+      // then operate on a row the re-grant never matches.
+      const keyWhere = {
+        channelId: String(orgA.channelId),
+        customerId: String(customerAId).replace(/^T_/, ''),
+        type: 'bbb_room' as const,
+        resourceId: String(roomAId).replace(/^T_/, ''),
+      };
       const existingEntitlementA = await entitlementRepo.findOne({
-        where: { channelId: String(orgA.channelId) },
+        where: keyWhere,
       });
       if (existingEntitlementA) {
         entitlementAId = enc(existingEntitlementA.id);
@@ -3357,11 +3372,83 @@ describe('BBB Channel Isolation (Phase A)', () => {
       expect(row).toBeTruthy();
     });
 
-    it('deleteBbbEntitlement: tenant A CAN delete its own entitlement', async () => {
+    // ── deleteBbbEntitlement / multi-row semantics (W5 follow-up 2/5) ─────────
+    // The natural key (channel, customer, type, resource) may hold MULTIPLE
+    // rows — history from the pre-fix non-idempotent create plus the
+    // insert-new re-grant path. These cases pin the widened spec:
+    //   • revoke = ONE operation deactivating EVERY unexpired row of the key
+    //   • access = ANY live row, independent of row order
+    //   • re-grant = INSERT NEW; the revoked row keeps its stamps forever
+    //     (the earlier reactivation approach — clearing the stamps — is gone)
+    //   • concurrent grants converge on ONE live row (per-key advisory lock)
+
+    const entitlementKeyWhere = () => ({
+      channelId: String(orgA.channelId),
+      customerId: String(customerAId).replace(/^T_/, ''),
+      type: 'bbb_room' as const,
+      resourceId: String(roomAId).replace(/^T_/, ''),
+    });
+    const entitlementKeyRows = () =>
+      connection
+        .getRepository(superCtx, BbbEntitlement)
+        .find({ where: entitlementKeyWhere() });
+    const isUnexpired = (r: BbbEntitlement) =>
+      r.validUntil == null || r.validUntil > new Date();
+    // hasAccess keys on ctx.channelId: shadow the superadmin default channel
+    // with tenant A's channel. RequestContext.channelId is a prototype GETTER
+    // (no setter), so assignment throws — define an own data property instead.
+    const entitlementHasAccess = async () => {
+      const accessCtx = Object.create(superCtx) as RequestContext;
+      Object.defineProperty(accessCtx, 'channelId', {
+        value: String(orgA.channelId),
+        enumerable: true,
+        configurable: true,
+      });
+      return server.app.get(BbbEntitlementService).hasAccess(
+        accessCtx,
+        String(customerAId).replace(/^T_/, ''),
+        'bbb_room',
+        String(roomAId).replace(/^T_/, ''),
+      );
+    };
+
+    it('deleteBbbEntitlement: tenant A revokes its entitlement — row kept with audit stamps, first-writer-wins', async () => {
       await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
       adminClient.setChannelToken(tenantAChannelToken);
-      // Create a fresh one to delete without breaking other tests.
-      const fresh: any = await adminClient.query(CREATE_BBB_ENTITLEMENT, {
+      const rawId = String(entitlementAId).replace(/^T_/, '');
+      const res: any = await adminClient.query(DELETE_BBB_ENTITLEMENT, {
+        id: entitlementAId,
+      });
+      expect(res.deleteBbbEntitlement).toBe(true);
+      // Revoke = deactivate: the ROW SURVIVES with validUntil + stamp, so
+      // "who revoked this student's access" stays answerable.
+      const revoked = await connection.getRepository(superCtx, BbbEntitlement)
+        .findOne({ where: { id: rawId as any } });
+      expect(revoked).toBeTruthy();
+      expect(revoked!.validUntil).toBeInstanceOf(Date);
+      expect(revoked!.deactivatedByUserId).toBeTruthy();
+      expect(revoked!.deactivatedAt).toBeInstanceOf(Date);
+      // The revoked row alone no longer grants access (ANY-live over one
+      // expired row = denied).
+      expect(await entitlementHasAccess()).toBe(false);
+      // A second revoke keeps the FIRST revoker (first-writer-wins) and does
+      // not move the original expiry: the row is already out of the
+      // unexpired-scope UPDATE, so it is untouched.
+      const firstRevoker = revoked!.deactivatedByUserId;
+      const firstExpiry = revoked!.validUntil;
+      await adminClient.query(DELETE_BBB_ENTITLEMENT, { id: entitlementAId });
+      const reRevoked = await connection.getRepository(superCtx, BbbEntitlement)
+        .findOne({ where: { id: rawId as any } });
+      expect(reRevoked!.deactivatedByUserId).toBe(firstRevoker);
+      expect(reRevoked!.validUntil).toEqual(firstExpiry);
+    });
+
+    it('re-grant INSERTs a NEW row — revoked row keeps its stamps (no reactivation), access live again', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const rawId = String(entitlementAId).replace(/^T_/, '');
+      const rowsBefore = await entitlementKeyRows();
+      const reGrant: any = await adminClient.query(CREATE_BBB_ENTITLEMENT, {
         input: {
           customerId: customerAId,
           type: 'bbb_room',
@@ -3369,11 +3456,127 @@ describe('BBB Channel Isolation (Phase A)', () => {
           source: 'admin',
         },
       });
-      const freshId = fresh.createBbbEntitlement.id;
+      const newRawId = String(reGrant.createBbbEntitlement.id).replace(/^T_/, '');
+      // INSERT NEW — never reactivate the revoked row.
+      expect(newRawId).not.toBe(rawId);
+      expect(await entitlementKeyRows()).toHaveLength(rowsBefore.length + 1);
+      // History row: expiry + BOTH stamps survive the re-grant untouched.
+      const oldRow = await connection.getRepository(superCtx, BbbEntitlement)
+        .findOne({ where: { id: rawId as any } });
+      expect(oldRow!.validUntil).toBeInstanceOf(Date);
+      expect(oldRow!.deactivatedByUserId).toBeTruthy();
+      expect(oldRow!.deactivatedAt).toBeInstanceOf(Date);
+      // New row: clean — no expiry, no revocation stamps.
+      const newRow = await connection.getRepository(superCtx, BbbEntitlement)
+        .findOne({ where: { id: newRawId as any } });
+      expect(newRow).toBeTruthy();
+      expect(newRow!.validUntil).toBeNull();
+      expect(newRow!.deactivatedByUserId).toBeNull();
+      expect(newRow!.deactivatedAt).toBeNull();
+      // Insert order #1: expired history row FIRST, live row SECOND — the
+      // key is allowed (ANY-live, not findOne-order).
+      expect(await entitlementHasAccess()).toBe(true);
+    });
+
+    it('access = ANY-live with the opposite insert order too (live row FIRST, expired duplicate SECOND)', async () => {
+      const repo = connection.getRepository(superCtx, BbbEntitlement);
+      const where = entitlementKeyWhere();
+      const rows = await repo.find({ where });
+      expect(rows.some(isUnexpired)).toBe(true); // live row exists (inserted first)
+      // Expired duplicate lands AFTER the live one in insertion order.
+      await repo.save(
+        repo.create({
+          ...where,
+          source: 'admin',
+          validUntil: new Date(Date.now() - 60_000),
+        }),
+      );
+      const after = await repo.find({ where });
+      expect(after.filter(isUnexpired)).toHaveLength(1);
+      expect(after.some((r) => !isUnexpired(r))).toBe(true);
+      // A findOne could return the expired duplicate — ANY-live must not care.
+      expect(await entitlementHasAccess()).toBe(true);
+    });
+
+    it('two live rows for one key → a single revoke deactivates BOTH → access denied', async () => {
+      const repo = connection.getRepository(superCtx, BbbEntitlement);
+      const where = entitlementKeyWhere();
+      // Ensure ≥ 2 unexpired rows: keep the re-grant row and add a second
+      // live duplicate (the pre-fix create could mint these).
+      await repo.save(repo.create({ ...where, source: 'admin' }));
+      const beforeRows = await repo.find({ where });
+      const unexpiredBefore = beforeRows.filter(isUnexpired);
+      expect(unexpiredBefore.length).toBeGreaterThanOrEqual(2);
+      // Revoke via ANY row id of the key — ONE operation for the WHOLE key.
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
       const res: any = await adminClient.query(DELETE_BBB_ENTITLEMENT, {
-        id: freshId,
+        id: entitlementAId,
       });
       expect(res.deleteBbbEntitlement).toBe(true);
+      const afterRows = await repo.find({ where });
+      // Every row the revoke deactivated is now expired AND stamped; no
+      // unexpired survivor can keep granting access.
+      expect(afterRows.filter(isUnexpired)).toHaveLength(0);
+      for (const before of unexpiredBefore) {
+        const after = afterRows.find((r) => String(r.id) === String(before.id));
+        expect(after).toBeTruthy();
+        expect(after!.validUntil).toBeInstanceOf(Date);
+        expect(after!.deactivatedByUserId).toBeTruthy();
+        expect(after!.deactivatedAt).toBeInstanceOf(Date);
+      }
+      expect(await entitlementHasAccess()).toBe(false);
+    });
+
+    it('concurrent grants for one key converge to a SINGLE live row (per-key advisory lock)', async () => {
+      // Precondition: the revoke above left NO unexpired row for the key.
+      const repo = connection.getRepository(superCtx, BbbEntitlement);
+      const where = entitlementKeyWhere();
+      expect((await repo.find({ where })).filter(isUnexpired)).toHaveLength(0);
+      const input = {
+        customerId: customerAId,
+        type: 'bbb_room',
+        resourceId: roomAId,
+        source: 'admin',
+      };
+      const results: any[] = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          adminClient.query(CREATE_BBB_ENTITLEMENT, { input }),
+        ),
+      );
+      const ids = results
+        .map((r) => r?.createBbbEntitlement?.id)
+        .filter((id) => !!id);
+      expect(ids).toHaveLength(4);
+      // Every racer saw THE same row — exactly one insert won the lock.
+      expect(new Set(ids).size).toBe(1);
+      const unexpired = (await repo.find({ where })).filter(isUnexpired);
+      expect(unexpired).toHaveLength(1);
+      expect(`T_${unexpired[0].id}`).toBe(ids[0]);
+      expect(await entitlementHasAccess()).toBe(true);
+    });
+
+    it('bbbEntitlements lists BOTH the revoked history and the live row (Revoked badge data)', async () => {
+      await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
+      adminClient.setChannelToken(tenantAChannelToken);
+      const res: any = await adminClient.query(BBB_ENTITLEMENTS, {
+        options: {
+          // BbbEntitlementFilter.customerId is a String — raw PK, not the
+          // encoded ID form (output fields still come back encoded).
+          filter: { customerId: String(customerAId).replace(/^T_/, '') },
+        },
+      });
+      const keyItems = res.bbbEntitlements.items.filter(
+        (e: any) =>
+          e.type === 'bbb_room' &&
+          e.resourceId === roomAId &&
+          e.customerId === customerAId,
+      );
+      // Revoked history + the live re-grant are BOTH visible — the dashboard
+      // derives its badge from validUntil (Active = unexpired, Revoked = past).
+      expect(keyItems.length).toBeGreaterThanOrEqual(2);
+      expect(keyItems.some((e: any) => e.validUntil == null)).toBe(true);
+      expect(keyItems.some((e: any) => e.validUntil != null)).toBe(true);
     });
   });
 });
