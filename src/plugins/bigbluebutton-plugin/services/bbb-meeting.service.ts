@@ -588,16 +588,22 @@ export class BbbMeetingService implements OnModuleInit {
           Logger.info(`Meeting ${meetingId} terminated via BBB API`, loggerCtx);
         }
       } catch (err) {
+        // Post-ack who-ended contract (BUG-059): a failed /end must not
+        // complete the meeting or stamp a human — RETHROW before the stamp
+        // below, so endedByUserId stays null and the state stays Active.
+        // Reconciliation / the meeting-ended webhook later completes it under
+        // a system ctx (keep-first → stays null, W5-11(c)).
         Logger.warn(
-          `Failed to end meeting via BBB API: ${(err as Error).message}. Database state will still transition.`,
+          `Failed to end meeting via BBB API: ${(err as Error).message}. Meeting stays ACTIVE; endedByUserId stays null.`,
           loggerCtx,
         );
+        throw err;
       }
     }
 
     // Who-ended audit (post-ack): stamp the REQUESTING user only after BBB
     // acknowledges /end. api.endMeeting THROWS on any failure (typed errors —
-    // the catch below then rethrows), so a failed end never reaches this
+    // the catch above rethrows, BUG-059), so a failed end never reaches this
     // line: endedByUserId stays null instead of crediting a human with a
     // meeting that never ended. Conditional write (WHERE endedByUserId IS
     // NULL) so concurrent end requests keep the FIRST requester, never the

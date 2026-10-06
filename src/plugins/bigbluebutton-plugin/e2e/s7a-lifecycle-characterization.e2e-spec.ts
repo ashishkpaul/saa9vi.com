@@ -79,6 +79,7 @@ import {
   LanguageCode,
   LogLevel,
   mergeConfig,
+  RequestContextService,
   TransactionalConnection,
 } from '@vendure/core';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -96,6 +97,7 @@ import {
   BbbUnavailableError,
 } from '../services/bbb-api.service';
 import { MeetingLifecycleService } from '../services/bbb-meeting-lifecycle.service';
+import { BbbMeetingService } from '../services/bbb-meeting.service';
 import { BbbReconciliationService } from '../services/bbb-reconciliation.service';
 import { BbbRoomService } from '../services/bbb-room.service';
 import { BbbMeteringService } from '../services/bbb-metering.service';
@@ -172,6 +174,7 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
   let connection: TransactionalConnection;
   let eventBus: EventBus;
   let lifecycleService: MeetingLifecycleService;
+  let meetingService: BbbMeetingService;
   let roomService: BbbRoomService;
   let reconciliationService: BbbReconciliationService;
   let grantOrg: BbbOrganization;
@@ -210,6 +213,7 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
       connection = server.app.get(TransactionalConnection);
       eventBus = server.app.get(EventBus);
       lifecycleService = server.app.get(MeetingLifecycleService);
+      meetingService = server.app.get(BbbMeetingService);
       roomService = server.app.get(BbbRoomService);
       reconciliationService = server.app.get(BbbReconciliationService);
       encryptionService = server.app.get(BbbEncryptionService);
@@ -1156,8 +1160,14 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
       expect(doneA.endedByUserId).toBe('moderator-user-1');
 
       // (b) Later system completion never overwrites the human stamp
-      // (idempotent no-op here — but the row must keep the human).
-      const systemCtx = { ...ctx, activeUserId: null };
+      // (idempotent no-op here — but the row must keep the human). A REAL
+      // system ctx via RequestContextService (no user), not a spread copy:
+      // `{ ...ctx, activeUserId: null }` loses the RequestContext prototype
+      // (B3 red run), so getters like channelId and methods like
+      // userHasPermissions disappear.
+      const systemCtx = await server.app
+        .get(RequestContextService)
+        .create({ apiType: 'admin' });
       await lifecycleService.completeMeetingLifecycle(systemCtx, meetingA.id, {
         source: 'webhook',
       });
@@ -1176,6 +1186,64 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
         source: 'reconciliation',
       });
       expect((await reloadMeeting(String(meetingC.id))).endedByUserId).toBeNull();
+
+      // (d) A failed /end through BbbMeetingService leaves endedByUserId null
+      // AND the meeting ACTIVE (post-ack contract, BUG-059: the catch rethrows
+      // before the stamp). The BBB hop is stubbed at the injected
+      // BbbApiService — the in-repo precedent (r4-runtime-lifecycle). The
+      // moderator password is real-encrypted (W5 fixture path) so decrypt runs.
+      const meetingD = await makeActiveMeeting({
+        org: grantOrg,
+        minutesAgo: 10,
+        grantId: String((await freshGrant(grantOrg, 600)).id),
+        observable: true,
+      });
+      const idD = String(meetingD.id);
+      const failingApi: any = Object.create(server.app.get(BbbApiService));
+      failingApi.endMeeting = async () => {
+        throw new BbbUnavailableError('endMeeting', 'w5-11d outage');
+      };
+      const meetingSvc = meetingService as any;
+      const realApi = meetingSvc.bbbApiService;
+      meetingSvc.bbbApiService = failingApi;
+      try {
+        await expect(meetingService.endMeeting(ctx, idD)).rejects.toThrow(
+          'w5-11d outage',
+        );
+      } finally {
+        meetingSvc.bbbApiService = realApi;
+      }
+      const afterFail = await reloadMeeting(idD);
+      expect(afterFail.state).toBe(MEETING_STATE.ACTIVE);
+      expect(afterFail.endedByUserId).toBeNull();
+      expect(completedFor(idD)).toHaveLength(0);
+
+      // (e) Successful /end through BbbMeetingService stamps the post-ack
+      // requester (ctx.activeUserId) and completes the meeting. Same seam as
+      // (d), resolving stub this time — the path (a)/(b) exercise only at the
+      // lifecycle layer.
+      const meetingE = await makeActiveMeeting({
+        org: grantOrg,
+        minutesAgo: 10,
+        grantId: String((await freshGrant(grantOrg, 600)).id),
+        observable: true,
+      });
+      const idE = String(meetingE.id);
+      const succeedingApi: any = Object.create(server.app.get(BbbApiService));
+      succeedingApi.endMeeting = async () => undefined;
+      meetingSvc.bbbApiService = succeedingApi;
+      try {
+        const ended = await meetingService.endMeeting(ctx, idE);
+        expect(ended.state).toBe(MEETING_STATE.COMPLETED);
+      } finally {
+        meetingSvc.bbbApiService = realApi;
+      }
+      const afterSuccess = await reloadMeeting(idE);
+      expect(afterSuccess.state).toBe(MEETING_STATE.COMPLETED);
+      expect(afterSuccess.endedByUserId).toBe(
+        ctx.activeUserId != null ? String(ctx.activeUserId) : null,
+      );
+      expect(completedFor(idE)).toHaveLength(1);
     });
 
     it('W5-10: billing ceiling books usage to provisionedAt + maxMeetingDuration, not the pass clock', async () => {

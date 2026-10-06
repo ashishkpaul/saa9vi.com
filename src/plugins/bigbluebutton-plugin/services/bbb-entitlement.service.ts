@@ -186,26 +186,20 @@ export class BbbEntitlementService {
     type: EntitlementType,
     resourceId: string,
   ): Promise<void> {
-    const channelId = ctx.channelId as string;
-    const requesterId =
-      ctx.activeUserId != null ? String(ctx.activeUserId) : null;
-    const now = new Date();
-    const repo = this.connection.getRepository(ctx, BbbEntitlement);
-    // Schema-qualify (repo.metadata.tablePath): TypeORM only rewrites
-    // METADATA-based queries — a bare `bbb_entitlement` in raw SQL resolves
-    // through search_path (public in the e2e suites) and would silently
-    // update 0 rows in the configured test schema.
-    await repo.manager.query(
-      `UPDATE ${repo.metadata.tablePath}
-          SET "validUntil" = $1,
-              "deactivatedAt" = CASE WHEN "deactivatedAt" IS NULL THEN $1 ELSE "deactivatedAt" END,
-              "deactivatedByUserId" = CASE WHEN "deactivatedByUserId" IS NULL THEN $2 ELSE "deactivatedByUserId" END
-        WHERE "channelId" = $3
-          AND "customerId" = $4
-          AND "type" = $5
-          AND "resourceId" = $6
-          AND ("validUntil" IS NULL OR "validUntil" > $1)`,
-      [now, requesterId, channelId, String(customerId), type, resourceId],
+    // REMOVED (pre-merge review): this was revoke-as-deactivate behind a
+    // `delete` name — a later caller reaching for a hard delete would have
+    // destroyed the deactivatedByUserId/deactivatedAt audit trail. The live
+    // deactivation path is `deleteBbbEntitlement` in `api/bbb-admin.resolver.ts`
+    // (channel-clause keyed on the ROW, tablePath-qualified). There are no
+    // callers of this method (verified pre-merge: only create/hasAccess are
+    // referenced outside this service); if a service-layer revocation is ever
+    // needed, reintroduce it there as `deactivate` delegating to the resolver
+    // logic — never a row delete.
+    throw new Error(
+      "BbbEntitlementService.delete was removed: revocation is deactivation " +
+        "via deleteBbbEntitlement (api/bbb-admin.resolver.ts), which preserves " +
+        "the deactivatedByUserId/deactivatedAt audit trail. A hard row delete " +
+        "would make 'who revoked access' unanswerable.",
     );
   }
 }
