@@ -37,6 +37,7 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../../test-utils/free-port';
 import {
   DefaultLogger,
   LogLevel,
@@ -267,7 +268,8 @@ async function searchSessions(query: string, subjectTags?: string[]): Promise<an
 
 const { server, adminClient, shopClient } = createTestEnvironment(
   mergeConfig(testConfig, {
-    apiOptions: { port: 3075 },
+    // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
+    apiOptions: { port: 0 },
     // Verbose logging: the projection pipeline runs in background jobs whose
     // failures are otherwise invisible to the e2e assertions.
     logger: new DefaultLogger({ level: LogLevel.Debug }),
@@ -332,7 +334,7 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
       // pre-clean is best-effort; assertInfrastructure() already proved ES is up
     }
 
-    await server.init({
+    await startOnFreePort({ server, adminClient, shopClient }, {
       initialData: E2E_INITIAL_DATA,
       productsCsvPath: path.join(__dirname, '../../tenant-plugin/e2e/fixtures/e2e-products.csv'),
       customerCount: 2,

@@ -35,6 +35,7 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../test-utils/free-port';
 import { SchemaPostgresInitializer } from '../../plugins/tenant-plugin/e2e/schema-postgres-initializer';
 import {
   Customer,
@@ -109,10 +110,11 @@ const LEAVE_ACADEMY = gql`
 describe('CustomerDeletion (INV-013)', () => {
   const { server, adminClient, shopClient } = createTestEnvironment(
     mergeConfig(testConfig, {
-      // 3072 (was 3071): bbb-channel-isolation.e2e-spec.ts also hardcodes 3071,
-      // so the parallel battery could boot both servers at once → EADDRINUSE
-      // → this suite skipped wholesale (observed 2026-10-05). Unique port.
-      apiOptions: { port: 3072 },
+      // Was hardcoded 3072 (3071 before that, colliding with
+      // bbb-channel-isolation.e2e-spec.ts → EADDRINUSE → this suite skipped
+      // wholesale, observed 2026-10-05). Ports are now allocated per boot via
+      // startOnFreePort() in beforeAll (test-utils/free-port).
+      apiOptions: { port: 0 },
       authOptions: {
         // BUG-033 root-cause fix (same as tenant-plugin e2e): shop-registered
         // customers and tenant admins have verified=false, and testConfig
@@ -143,7 +145,7 @@ describe('CustomerDeletion (INV-013)', () => {
   // ── Bootstrap ────────────────────────────────────────────────────────────
 
   beforeAll(async () => {
-    await server.init({
+    await startOnFreePort({ server, adminClient, shopClient }, {
       initialData: E2E_INITIAL_DATA,
       productsCsvPath: path.join(
         __dirname,

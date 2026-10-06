@@ -20,6 +20,7 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../../test-utils/free-port';
 import { mergeConfig, TransactionalConnection, RequestContextService } from '@vendure/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { NestFactory } from '@nestjs/core';
@@ -46,13 +47,13 @@ const __origCreate = NestFactory.create.bind(NestFactory);
   return __origCreate(...(args as Parameters<typeof __origCreate>));
 }) as any;
 
-const PORT = 3078;
 const WEBHOOK_SECRET = 'e2e-recovery-webhook-secret';
 const RECOVERY_EVENT_ID = 'test-enqueue-recovery-001';
 
-const { server } = createTestEnvironment(
+const { server, adminClient, shopClient } = createTestEnvironment(
   mergeConfig(testConfig, {
-    apiOptions: { port: PORT },
+    // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
+    apiOptions: { port: 0 },
     dbConnectionOptions: {
       type: 'postgres',
       host: process.env.DB_HOST ?? 'localhost',
@@ -89,7 +90,7 @@ describe('Webhook enqueue-failure recovery (V1)', () => {
 
   beforeAll(async () => {
     process.env.RAZORPAY_WEBHOOK_SECRET = WEBHOOK_SECRET;
-    await server.init({
+    await startOnFreePort({ server, adminClient, shopClient }, {
       initialData: E2E_INITIAL_DATA,
       productsCsvPath: path.join(
         __dirname,

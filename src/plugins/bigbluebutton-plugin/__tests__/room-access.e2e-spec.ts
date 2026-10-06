@@ -41,6 +41,7 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../../test-utils/free-port';
 import { getSuperadminContext } from '@vendure/testing/lib/utils/get-superadmin-context';
 import { mergeConfig, TransactionalConnection } from '@vendure/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -197,7 +198,8 @@ const JOIN_ROOM = gql`
 describe('INV-027 room preview/join parity (BUG-045)', () => {
   const { server, adminClient, shopClient } = createTestEnvironment(
     mergeConfig(testConfig, {
-      apiOptions: { port: 3097 },
+      // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
+      apiOptions: { port: 0 },
       authOptions: {
         // Same rationale as bbb-channel-isolation: harness-created accounts
         // are unverified, so login must not require verification here.
@@ -335,7 +337,7 @@ describe('INV-027 room preview/join parity (BUG-045)', () => {
 
   beforeAll(async () => {
     await assertPostgres();
-    await server.init({
+    await startOnFreePort({ server, adminClient, shopClient }, {
       initialData: E2E_INITIAL_DATA,
       customerCount: 0,
     });

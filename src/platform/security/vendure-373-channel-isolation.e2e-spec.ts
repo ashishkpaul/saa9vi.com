@@ -30,6 +30,7 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../test-utils/free-port';
 import { getSuperadminContext } from '@vendure/testing/lib/utils/get-superadmin-context';
 import { SchemaPostgresInitializer } from '../../plugins/tenant-plugin/e2e/schema-postgres-initializer';
 import { mergeConfig } from '@vendure/core';
@@ -149,7 +150,8 @@ const UPDATE_ADMINISTRATOR = gql`
 describe('Vendure 3.7.2/3.7.3 channel-isolation probes (INV-001)', () => {
   const { server, adminClient, shopClient } = createTestEnvironment(
     mergeConfig(testConfig, {
-      apiOptions: { port: 3078 },
+      // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
+      apiOptions: { port: 0 },
       authOptions: { requireVerification: false },
       dbConnectionOptions: {
         type: 'postgres',
@@ -207,7 +209,7 @@ describe('Vendure 3.7.2/3.7.3 channel-isolation probes (INV-001)', () => {
   }
 
   beforeAll(async () => {
-    await server.init({
+    await startOnFreePort({ server, adminClient, shopClient }, {
       initialData: E2E_INITIAL_DATA,
       productsCsvPath: undefined,
       customerCount: 0,

@@ -33,6 +33,7 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../../test-utils/free-port';
 import { mergeConfig, TransactionalConnection } from '@vendure/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -140,7 +141,8 @@ const SESSION_BY_ID = gql`
 describe('BbbScheduledSession room linkage (ADR-047 / D5)', () => {
   const { server, adminClient, shopClient } = createTestEnvironment(
     mergeConfig(testConfig, {
-      apiOptions: { port: 3098 },
+      // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
+      apiOptions: { port: 0 },
       authOptions: {
         // Harness-created tenant admins are unverified — same rationale as
         // bbb-channel-isolation.e2e-spec.ts: login must not require verification.
@@ -302,7 +304,7 @@ describe('BbbScheduledSession room linkage (ADR-047 / D5)', () => {
 
   beforeAll(async () => {
     await assertPostgres();
-    await server.init({
+    await startOnFreePort({ server, adminClient, shopClient }, {
       initialData: E2E_INITIAL_DATA,
       productsCsvPath: path.join(
         __dirname,

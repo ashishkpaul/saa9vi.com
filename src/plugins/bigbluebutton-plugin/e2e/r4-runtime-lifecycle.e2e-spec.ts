@@ -55,6 +55,7 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../../test-utils/free-port';
 import {
   Channel,
   DefaultLogger,
@@ -115,7 +116,8 @@ export const R4_SCHEMA = 'e2e_r4_lifecycle';
 
 const { server, adminClient, shopClient } = createTestEnvironment(
   mergeConfig(testConfig, {
-    apiOptions: { port: 3092 },
+    // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
+    apiOptions: { port: 0 },
     logger: new DefaultLogger({ level: LogLevel.Warn }),
     authOptions: { requireVerification: false },
     dbConnectionOptions: {
@@ -1070,7 +1072,7 @@ describe('Slice 10 — R4 runtime lifecycle evidence', () => {
 
     beforeAll(async () => {
       await assertPostgres();
-      await server.init({
+      await startOnFreePort({ server, adminClient, shopClient }, {
         initialData: E2E_INITIAL_DATA,
         customerCount: 0,
       });

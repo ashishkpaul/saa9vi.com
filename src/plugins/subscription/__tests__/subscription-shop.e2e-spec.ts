@@ -49,6 +49,7 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../../test-utils/free-port';
 import { SchemaPostgresInitializer } from '../../tenant-plugin/e2e/schema-postgres-initializer';
 import {
   Customer,
@@ -177,7 +178,8 @@ const ACTIVE_CUSTOMER = gql`
 describe('SubscriptionPlugin — Shop API commercial reads (slice 8)', () => {
   const { server, adminClient, shopClient } = createTestEnvironment(
     mergeConfig(testConfig, {
-      apiOptions: { port: 3085 },
+      // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
+      apiOptions: { port: 0 },
       authOptions: {
         // Same BUG-033/BUG-037 class as the sibling suites: registerNewTenant
         // creates admins with user.verified=false while testConfig defaults
@@ -269,7 +271,7 @@ describe('SubscriptionPlugin — Shop API commercial reads (slice 8)', () => {
   }
 
   beforeAll(async () => {
-    await server.init({
+    await startOnFreePort({ server, adminClient, shopClient }, {
       initialData: E2E_INITIAL_DATA,
       productsCsvPath: path.join(
         __dirname,

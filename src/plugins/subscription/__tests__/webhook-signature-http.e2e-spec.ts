@@ -46,6 +46,7 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../../test-utils/free-port';
 import { mergeConfig, TransactionalConnection } from '@vendure/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { NestFactory } from '@nestjs/core';
@@ -73,11 +74,13 @@ const __origCreate = NestFactory.create.bind(NestFactory);
   return __origCreate(...(args as Parameters<typeof __origCreate>));
 }) as any;
 
-const PORT = 3083;
+// Allocated by startOnFreePort() in beforeAll (test-utils/free-port).
+let PORT = 0;
 const WEBHOOK_SECRET = 'e2e-signature-http-secret';
-const WEBHOOK_PATH = `http://localhost:${PORT}/payments/razorpay/webhook`;
+// Rebuilt in beforeAll once PORT is allocated.
+let WEBHOOK_PATH = '';
 
-const { server } = createTestEnvironment(
+const { server, adminClient, shopClient } = createTestEnvironment(
   mergeConfig(testConfig, {
     apiOptions: { port: PORT },
     dbConnectionOptions: {
@@ -139,11 +142,12 @@ describe('Signed webhook delivery over HTTP (ADR-044 / INV-004)', () => {
   });
 
   beforeAll(async () => {
-    // Must be set BEFORE server.init(): RazorpayWebhookVerifier reads the secret
-    // in its constructor, which DI runs during init.
+    // Must be set BEFORE boot (startOnFreePort → server.init()): the
+    // RazorpayWebhookVerifier reads the secret in its constructor, which DI
+    // runs during init.
     process.env.RAZORPAY_WEBHOOK_SECRET = WEBHOOK_SECRET;
 
-    await server.init({
+    PORT = await startOnFreePort({ server, adminClient, shopClient }, {
       initialData: E2E_INITIAL_DATA,
       productsCsvPath: path.join(
         __dirname,
@@ -151,6 +155,7 @@ describe('Signed webhook delivery over HTTP (ADR-044 / INV-004)', () => {
       ),
       customerCount: 2,
     });
+    WEBHOOK_PATH = `http://localhost:${PORT}/payments/razorpay/webhook`;
 
     connection = server.app.get(TransactionalConnection);
     queueService = server.app.get(ProviderWebhookQueueService);

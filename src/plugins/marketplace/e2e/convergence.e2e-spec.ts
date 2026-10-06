@@ -27,6 +27,7 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../../test-utils/free-port';
 import {
   DefaultLogger,
   LogLevel,
@@ -192,7 +193,8 @@ async function waitFor<T>(
 
 const { server, adminClient, shopClient } = createTestEnvironment(
   mergeConfig(testConfig, {
-    apiOptions: { port: 3081 },
+    // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
+    apiOptions: { port: 0 },
     logger: new DefaultLogger({ level: LogLevel.Debug }),
     authOptions: { requireVerification: false },
     dbConnectionOptions: {
@@ -270,7 +272,7 @@ describe('Marketplace convergence / recovery (3D.1b Step 9)', () => {
       // pre-clean is best-effort; assertInfrastructure() already proved ES is up
     }
 
-    await server.init({
+    await startOnFreePort({ server, adminClient, shopClient }, {
       initialData: E2E_INITIAL_DATA,
       productsCsvPath: path.join(__dirname, '../../tenant-plugin/e2e/fixtures/e2e-products.csv'),
       customerCount: 2,

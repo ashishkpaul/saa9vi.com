@@ -61,6 +61,7 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../../test-utils/free-port';
 import { SchemaPostgresInitializer } from '../../tenant-plugin/e2e/schema-postgres-initializer';
 import {
   EventBus,
@@ -697,7 +698,8 @@ async function rejectionOf(promise: Promise<unknown>): Promise<any> {
 describe('BBB Channel Isolation (Phase A)', () => {
   const { server, adminClient, shopClient } = createTestEnvironment(
     mergeConfig(testConfig, {
-      apiOptions: { port: 3071 },
+      // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
+      apiOptions: { port: 0 },
       authOptions: {
         // BUG-037 root-cause fix (same class as BUG-033): registerNewTenant
         // creates admins with user.verified=false, and testConfig defaults
@@ -767,7 +769,7 @@ describe('BBB Channel Isolation (Phase A)', () => {
   // ── Bootstrap ────────────────────────────────────────────────────────────
 
   beforeAll(async () => {
-    await server.init({
+    await startOnFreePort({ server, adminClient, shopClient }, {
       initialData: E2E_INITIAL_DATA,
       productsCsvPath: path.join(
         __dirname,

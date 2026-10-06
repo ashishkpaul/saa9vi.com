@@ -41,6 +41,7 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../../test-utils/free-port';
 import {
   Administrator,
   Channel,
@@ -92,7 +93,8 @@ async function assertPostgres(): Promise<void> {
 
 const { server, adminClient, shopClient } = createTestEnvironment(
   mergeConfig(testConfig, {
-    apiOptions: { port: 3077 },
+    // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
+    apiOptions: { port: 0 },
     logger: new DefaultLogger({ level: LogLevel.Debug }),
     authOptions: { requireVerification: false },
     dbConnectionOptions: {
@@ -526,7 +528,7 @@ describe('Commission reconciliation surface (R3)', () => {
   d('reconciliation cases', () => {
     beforeAll(async () => {
       await assertPostgres();
-      await server.init({
+      await startOnFreePort({ server, adminClient, shopClient }, {
         initialData: {
           defaultLanguage: 'en' as any,
           defaultZone: 'India',
