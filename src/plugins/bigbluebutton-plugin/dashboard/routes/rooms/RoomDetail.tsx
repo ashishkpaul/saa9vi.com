@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 import { useState } from 'react';
 import { Link } from '@vendure/dashboard';
 import { useCurrentOrganization } from '../../shared/useCurrentOrganization';
-import { formatPaiseInr } from '../../../shared/format';
+import { formatPaiseInr } from '../../lib/format';
 import { resolveListState } from '../../../../../platform/dashboard/query-state';
 
 // ─── S6 (Phase 6 UX completion) — Room detail ───────────────────────────────

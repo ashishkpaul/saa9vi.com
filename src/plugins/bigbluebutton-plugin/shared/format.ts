@@ -3,11 +3,14 @@
  * integer-paise rule: money crosses every boundary as integer paise and is
  * formatted only at the presentation edge).
  *
- * Lives OUTSIDE `dashboard/` on purpose: the dashboard folder is a separate
- * tsconfig project (`tsconfig.dashboard.json`, referenced by the root), so
- * unit specs under the root project cannot import across that boundary
- * (TS6305). Dashboard screens import it as `../../shared/format` — vite
- * resolves it without any project-boundary concerns.
+ * ROOT-CANONICAL copy. Lives OUTSIDE `dashboard/` because the dashboard
+ * folder is a separate tsconfig project (`tsconfig.dashboard.json`,
+ * composite, referenced by the root) and unit specs under the root project
+ * cannot import across that boundary (TS6305). Dashboard screens use the
+ * dashboard-local copy at `dashboard/lib/format.ts` (importing this file
+ * from them is TS6307); the two implementations are kept byte-identical by
+ * `__tests__/format-paise-inr-parity.spec.ts`, which dynamic-imports the
+ * dashboard copy and diffs its output against this one.
  *
  * `formatPaiseInr(2000)` → `"₹20.00"`; `formatPaiseInr(10_000_000)` →
  * `"₹1,00,000.00"` (lakh grouping via `en-IN`).

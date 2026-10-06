@@ -4,7 +4,7 @@ import { graphql } from '@/gql';
 import { useState } from 'react';
 import { Link } from '@vendure/dashboard';
 import { useCurrentOrganization } from '../../shared/useCurrentOrganization';
-import { formatPaiseInr } from '../../../shared/format';
+import { formatPaiseInr } from '../../lib/format';
 
 // ─── S5 (Phase 6 lean) — tenant Meetings history ─────────────────────────────
 // Billed meeting history from bbbMeteredMeetings (D3: org from ctx.channelId,

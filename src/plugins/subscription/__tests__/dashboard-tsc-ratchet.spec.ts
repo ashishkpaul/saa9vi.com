@@ -6,18 +6,37 @@
  * `npx tsc -p tsconfig.dashboard.json --noEmit` currently reports a
  * documented, pre-existing set of errors: node_modules .d.ts clashes
  * (ts-morph / @ts-morph/common / @tanstack / @dnd-kit), the marketplace and
- * CMS screens, the generated src/gql/graphql-env.d.ts TS2717, and two BBB
- * TS6307 cross-project imports (FLAGGED below). The gate is a ratchet: both
- * the per-file counts and the total may SHRINK, never grow. A single new
- * error in any file — including a file absent from this baseline — fails.
+ * CMS screens, the generated src/gql/graphql-env.d.ts TS2717, and BBB
+ * TS6307 cross-project imports (QUERY-STATE REPORT below). The gate is a
+ * ratchet: both the per-file counts and the total may SHRINK, never grow.
+ * A single new error in any file — including a file absent from this
+ * baseline — fails.
  *
  * Baseline captured 2026-10-05: 119 errors across 39 files.
+ * SHRUNK 2026-10-06: 118 — DashboardOverview.tsx's TS6307 (import of the
+ * root-owned `shared/format`) is cleared by the dashboard-local copy bound
+ * to the canonical by a parity spec (`dashboard/lib/format.ts` +
+ * `__tests__/format-paise-inr-parity.spec.ts`).
  *
- * FLAG (BBB dashboard files, tracked, must shrink to 0):
- *   - routes/dashboard/DashboardOverview.tsx (1) — TS6307: imports
- *     `shared/format` which tsconfig.dashboard.json `include` does not cover.
+ * QUERY-STATE REPORT (remaining TS6307 — tracked; the format fix above is
+ * the template for closing it):
  *   - routes/rooms/RoomDetail.tsx (1) — TS6307: imports
- *     `src/platform/dashboard/query-state` (same root cause).
+ *     `src/platform/dashboard/query-state` (INV-015 resolveListState), a
+ *     root-project file, from the composite dashboard project.
+ *     Attribution: tsc emits TS6307 ONCE PER out-of-project target at the
+ *     first importer it visits — the other 7 dashboard importers of
+ *     query-state (BBB TrialRegistrationsList, PeopleList; subscription
+ *     query-state-panel + 4 list screens) are NOT charged, and neither are
+ *     the other importers of `shared/format` (only DashboardOverview was).
+ *     Sibling case: subscription's `platform/dashboard/billing-vocabularies`
+ *     is charged once to MandatesList (1).
+ *     Root cause is shared: the file is a ROOT-program file while the
+ *     dashboard project is a referenced COMPOSITE (root tsconfig
+ *     `references`), so widening `include` is TS6305 (a file cannot be a
+ *     root file of both projects — verified, see known-bugs.md).
+ *     Fix path = the format pattern (dashboard-owned copy + root-side
+ *     parity/dynamic-import spec); not taken yet: query-state is 211 lines
+ *     shared by 8 screens across 2 plugins.
  *
  * SHRINKING: when you fix errors, lower the counts here (and TOTAL_BASELINE).
  * Never raise them. The total must stay equal to the sum of FILE_BASELINE.
@@ -35,7 +54,7 @@ import { describe, expect, it } from 'vitest';
 const ROOT = path.resolve(__dirname, '../../../..');
 
 /** Total allowed error count — shrink-only. Must equal the sum of the map. */
-const TOTAL_BASELINE = 119;
+const TOTAL_BASELINE = 118;
 
 /** Per-file allowed error counts — shrink-only. Repo-relative paths. */
 const FILE_BASELINE_A: Record<string, number> = {
@@ -73,7 +92,6 @@ const FILE_BASELINE_B: Record<string, number> = {
     "node_modules/@vendure/dashboard/src/lib/lib/load-i18n-messages.ts": 1,
     "node_modules/@vendure/dashboard/src/lib/utils/config-utils.ts": 1,
     "src/gql/graphql-env.d.ts": 1,
-    "src/plugins/bigbluebutton-plugin/dashboard/routes/dashboard/DashboardOverview.tsx": 1,
     "src/plugins/bigbluebutton-plugin/dashboard/routes/rooms/RoomDetail.tsx": 1,
     "src/plugins/cms/dashboard/article-detail.tsx": 2,
     "src/plugins/cms/dashboard/banner-detail.tsx": 2,

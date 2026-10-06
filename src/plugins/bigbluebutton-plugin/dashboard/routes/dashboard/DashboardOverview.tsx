@@ -3,7 +3,7 @@ import { api, Badge, Card, Skeleton } from '@vendure/dashboard';
 import { graphql } from '@/gql';
 import { Link } from '@vendure/dashboard';
 import { useCurrentOrganization } from '../../shared/useCurrentOrganization';
-import { formatPaiseInr } from '../../../shared/format';
+import { formatPaiseInr } from '../../lib/format';
 
 // ─── S6 (Phase 6 UX completion) — tenant Dashboard ──────────────────────────
 // The 5th locked tenant nav item (Dashboard, Rooms, Meetings, People, Billing).
