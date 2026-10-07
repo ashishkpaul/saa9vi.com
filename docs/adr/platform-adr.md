@@ -716,7 +716,8 @@ Both `BbbServer.encryptedApiSecret` and `BbbMeeting.encryptedAttendeePassword` /
 
 ```typescript
 /**
- * Operator-configured maximum virtual load score for this server's hardware spec.
+ * Operator-configured maximum virtual load value (same units as currentLoad)
+ * for this server's hardware spec.
  * Used by CapacityIntelligenceService for pool-level headroom calculations.
  *
  * Not used by BbbServerSelectionService — that service continues to use

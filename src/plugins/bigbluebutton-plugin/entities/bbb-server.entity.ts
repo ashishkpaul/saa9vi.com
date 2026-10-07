@@ -47,25 +47,30 @@ export class BbbServer extends VendureEntity {
   enabled: boolean;
 
   /**
-   * Current load score for server selection (0–100).
+   * Selection load value — an OPAQUE integer input to server selection.
    *
-   * Updated by `BbbReconciliationService.reconcileServerLoad()` which computes
-   * a composite score from active meetings and participant counts. Lower scores
-   * are preferred during selection.
+   * Relabelled 2026-10-07 from the earlier "load score" wording, which
+   * claimed `BbbReconciliationService.reconcileServerLoad()` maintained a
+   * composite score from active meetings and participants — that method
+   * has never existed in code (BUG-014 doc drift). Verified reality:
+   * written only at insert (default 0), with NO runtime updater.
+   * Consequences today: every enabled+healthy server ties at 0, so
+   * `BbbServerSelectionService` picks randomly among them (its min-load
+   * jitter), and CapacityIntelligenceService's
+   * `loadPercent = currentLoad / capacity × 100` reads 0.
    *
-   * The score is intentionally opaque to `BbbServerSelectionService` — that
-   * service only needs to filter (`currentLoad < maxLoad`) and sort by this
-   * column. The reconciliation service owns the scoring formula and can evolve
-   * it without touching the selection algorithm.
+   * Intentionally opaque to `BbbServerSelectionService` — it only filters
+   * (`currentLoad < maxLoad`) and sorts by this column, so a future
+   * composite updater can land without touching the selection algorithm.
    */
   @Column({ default: 0 })
   currentLoad: number;
 
   /**
-   * Maximum acceptable load score.
+   * Maximum tolerated selection load value (same units as currentLoad).
    *
-   * Servers at or above this threshold are excluded from selection.
-   * Default 100 means the scale is effectively 0–100.
+   * Servers with `currentLoad >= maxLoad` are excluded from selection.
+   * Default 100; operators set it via the dashboard "Max Load" field.
    */
   @Column({ default: 100 })
   maxLoad: number;
@@ -77,7 +82,8 @@ export class BbbServer extends VendureEntity {
   lastHealthCheckAt: Date;
 
   /**
-   * Operator-configured maximum virtual load score for this server's hardware spec.
+   * Operator-configured maximum virtual load value (same units as currentLoad)
+   * for this server's hardware spec.
    * Used by CapacityIntelligenceService for pool-level headroom calculations.
    *
    * Not used by BbbServerSelectionService — that service continues to use
