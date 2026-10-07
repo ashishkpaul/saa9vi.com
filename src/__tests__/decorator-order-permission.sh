@@ -13,9 +13,30 @@
 # Usage: bash src/__tests__/decorator-order-permission.sh
 
 set -euo pipefail
-BASE="https://core.meeting.lan"
+BASE="${PERM_TEST_BASE:-https://core.meeting.lan}"
 SUPERADMIN_USER="${SUPERADMIN_USERNAME:-superadmin}"
 SUPERADMIN_PASS="${SUPERADMIN_PASSWORD:-}"
+
+# ─── Non-dev refusal (Track A item 3) ──────────────────────────────────────
+# This script creates REAL rows (a tenant, a BbbServer) through the API, so
+# it may only ever run against a development/staging deployment. The host is
+# allow-list checked HERE — before any request leaves the process. A leaked
+# fixture BbbServer is an eligible selection target (the 2026-10-07 incident:
+# perm-test-server won provisioning for meetings 31–33), and a leaked tenant
+# is worse. Production hosts (*.saa9vi.com), public IPs and anything
+# unrecognised are refused outright — extend the list only for hosts you
+# have confirmed are dev.
+BASE_HOST="$(printf '%s' "$BASE" | sed -E 's#^[A-Za-z][A-Za-z0-9+.-]*://##; s#[/:].*$##')"
+case "$BASE_HOST" in
+  localhost|127.0.0.1|::1|0.0.0.0) : ;;
+  *.lan|*.local|*.test|*.localhost) : ;;
+  *)
+    echo "REFUSED: BASE=$BASE (host: $BASE_HOST) is not a recognised dev host."
+    echo "Allowed: localhost, 127.0.0.1, ::1, 0.0.0.0, *.lan, *.local, *.test, *.localhost."
+    echo "Run this permission test only against a development deployment."
+    exit 3
+    ;;
+esac
 
 if [[ -z "$SUPERADMIN_PASS" ]]; then
   echo "Set SUPERADMIN_PASSWORD env var before running this script."
@@ -36,6 +57,39 @@ check() {
     ((FAIL++)) || true
   fi
 }
+
+# ─── Fixture cleanup via EXIT trap (Track A item 3) ────────────────────────
+# Test 3 creates `perm-test-server` — enabled+healthy by default, i.e. an
+# ELIGIBLE selection target (see the 2026-10-07 incident where the leaked row
+# won provisioning for meetings 31–33 while meeting 30 rolled the real
+# server). CreateBbbServerInput has no `enabled` field, so the row cannot be
+# created pre-disabled: it must be deleted after the assertion — and it must
+# be deleted EVEN IF this script dies mid-way (set -e, Ctrl-C, a later test
+# crashing). The trap owns that; the normal path calls `cleanup` explicitly
+# right after registration so its verdict lands inside Test 3 and the
+# Results summary, which clears the id and leaves the trap a no-op.
+CLEANUP_SERVER_ID=""
+cleanup() {
+  local id="$CLEANUP_SERVER_ID"
+  CLEANUP_SERVER_ID=""
+  [[ -n "$id" ]] || return 0
+  local out
+  out=$(curl -s -k -X POST "$BASE/admin-api" \
+    -H "Content-Type: application/json" \
+    -b /tmp/perm-test-cookies.txt \
+    -d "{\"query\":\"mutation { deleteBbbServer(id: \\\"$id\\\") }\"}" || true)
+  echo "  Cleanup deleteBbbServer(id=$id): $out"
+  if echo "$out" | grep -q '"deleteBbbServer":true'; then
+    echo "  ✅  fixture server row deleted — no selection leak"
+    ((PASS++)) || true
+  else
+    echo "  ❌  fixture server row LEAKED — remove it now:"
+    echo "      BBB Platform → Servers → perm-test-server → Disable"
+    echo "      (or: mutation { updateBbbServer(id: \\\"$id\\\", input: { enabled: false }) { id enabled } })"
+    ((FAIL++)) || true
+  fi
+}
+trap cleanup EXIT
 
 echo ""
 echo "=== Test 1: registerNewTenant (Public) — no auth required ==="
@@ -80,33 +134,17 @@ else
   ((PASS++)) || true
 fi
 
-# ─── Cleanup: this test must not leak an eligible server row ──────────────
-# A leaked enabled+healthy BbbServer participates in server selection
-# (random jitter among currentLoad ties) — exactly how perm-test-server
-# (https://test.bbb.example.com) won provisioning for real meetings 31–33
-# on 2026-10-07 and drove Room 2 to Failed after 3 retries, while meeting
-# 30 rolled the real server. A fixture row that cannot be cleaned up is a
-# FAILED check, not a warning. (CreateBbbServerInput has no `enabled`
-# field, so the row cannot be created pre-disabled — delete after assert.)
-SERVER_ID=$(echo "$RESULT" | sed -n 's/.*"createBbbServer":{"id":"\([0-9]*\)".*/\1/p')
-if [[ -n "$SERVER_ID" ]]; then
-  CLEANUP=$(curl -s -k -X POST "$BASE/admin-api" \
-    -H "Content-Type: application/json" \
-    -b /tmp/perm-test-cookies.txt \
-    -d "{\"query\":\"mutation { deleteBbbServer(id: \\\"$SERVER_ID\\\") }\"}" || true)
-  echo "  Cleanup deleteBbbServer(id=$SERVER_ID): $CLEANUP"
-  if echo "$CLEANUP" | grep -q '"deleteBbbServer":true'; then
-    echo "  ✅  fixture server row deleted — no selection leak"
-    ((PASS++)) || true
-  else
-    echo "  ❌  fixture server row LEAKED — remove it now:"
-    echo "      BBB Platform → Servers → perm-test-server → Disable"
-    echo "      (or: mutation { updateBbbServer(id: \\\"$SERVER_ID\\\", input: { enabled: false }) { id enabled } })"
-    ((FAIL++)) || true
-  fi
+# Register the fixture row for EXIT-trap cleanup (idempotent — see
+# cleanup() above; a row that cannot be cleaned up is a FAILED check, not a
+# warning). The explicit `cleanup` call right after deletes it on the normal
+# path; between registration and that call, the trap covers abnormal exits.
+CLEANUP_SERVER_ID=$(echo "$RESULT" | sed -n 's/.*"createBbbServer":{"id":"\([0-9]*\)".*/\1/p')
+if [[ -n "$CLEANUP_SERVER_ID" ]]; then
+  echo "  Fixture server row $CLEANUP_SERVER_ID registered for EXIT-trap cleanup"
 else
   echo "  ℹ️  no server row created (validation/auth rejected it) — nothing to clean"
 fi
+cleanup
 
 echo ""
 echo "=== Test 4: Tenant admin (registered via registerNewTenant) calling createBbbServer ==="
