@@ -136,6 +136,9 @@ describe("save-time normalisation (create/update persist the canonical form)", (
     const service = new BbbServerService(
       connection as never,
       encryption as never,
+      {} as never, // ctxService (unused — no probe on this path)
+      {} as never, // bbbApiService (unused — no probe on this path)
+      {} as never, // opsAlert (unused — no probe on this path)
     );
     return { service, save, legacyRow };
   }

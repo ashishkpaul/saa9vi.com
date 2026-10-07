@@ -61,6 +61,7 @@ import { BbbMeteringService } from "./services/bbb-metering.service";
 import { BbbBillingService } from "./services/bbb-billing.service";
 import { BbbOpsAlertService } from "./services/bbb-ops-alert.service";
 import { bbbDailyAllowanceTask } from "./jobs/bbb-daily-allowance.task";
+import { bbbServerHealthTask } from "./jobs/bbb-server-health.task";
 import { bbbMeteringTask } from "./jobs/bbb-metering.task";
 import { bbbMeteringPruneTask } from "./jobs/bbb-metering-prune.task";
 import { LearningDashboardService } from "./services/learning-dashboard.service";
@@ -257,6 +258,15 @@ import {
       config.schedulerOptions.tasks = [
         ...(config.schedulerOptions.tasks ?? []),
         bbbDailyAllowanceTask,
+      ];
+    }
+    // Track A (2026-10-07): signed per-server health probe — the ONLY path
+    // that ever writes `healthy = true` (recovery after a failed streak or
+    // a config flag), plus proactive lastHealthCheckAt stamping.
+    if (!existingIds.has(bbbServerHealthTask.id)) {
+      config.schedulerOptions.tasks = [
+        ...(config.schedulerOptions.tasks ?? []),
+        bbbServerHealthTask,
       ];
     }
     // Register rate limiters (SEC-004)

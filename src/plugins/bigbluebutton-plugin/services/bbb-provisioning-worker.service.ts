@@ -13,7 +13,7 @@ import * as crypto from "crypto";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
-import { BbbApiService } from "./bbb-api.service";
+import { BbbApiService, BbbUnavailableError } from "./bbb-api.service";
 import { BbbEncryptionService } from "./bbb-encryption.service";
 import { BbbServerSelectionService } from "./bbb-server-selection.service";
 import { BbbMetricsService } from "./bbb-metrics.service";
@@ -184,11 +184,6 @@ export class BbbProvisioningWorkerService
       if (isMeteredOrganization(meeting.organization)) {
         await this.assertMeteredProvisionable(ctx, meeting);
       }
-      const server = await this.serverSelectionService.selectServer(ctx);
-      if (!server) {
-        throw new Error("No healthy BBB server available");
-      }
-
       // Resolve the active grant at provisioning time — immutable linkage.
       // BUG-036: selection is restricted to tenant-selectable source types
       // (`internal_overhead` is ops headroom, not an allowance) and the minutes
@@ -249,22 +244,57 @@ export class BbbProvisioningWorkerService
         .replace(/-/g, "")
         .substring(0, 16);
 
-      const { internalMeetingID } = await this.bbbApiService.createMeeting(
-        server,
-        {
-          meetingID: bbbMeetingId,
-          name: meeting.title,
-          attendeePW,
-          moderatorPW,
-          record: meeting.recordingEnabled,
-          autoStartRecording: false,
-          allowStartStopRecording: true,
-          maxParticipants: meeting.organization.maxParticipantsPerMeeting,
-          logoutURL: process.env.STOREFRONT_URL
-            ? `${process.env.STOREFRONT_URL}/bbb-logout`
-            : undefined,
-        },
-      );
+      // ── Server selection + /create with connection-failure failover ──────
+      // On a connection-class failure (BbbUnavailableError: DNS, HTTP 5xx,
+      // timeout, malformed XML) the failed server is RECORDED — it is
+      // excluded from the next selection (2-min window owned by the
+      // selection service), so this loop fails over to another eligible
+      // server, and the streak counts toward N=3 consecutive failures →
+      // unhealthy + de-duplicated `bbb-server-unreachable` ops alert. When
+      // every server is excluded/unhealthy the loop ends where the tenant
+      // contract says it must: "No healthy BBB server available" (the raw
+      // connection error stays in the worker/selection logs, not in the
+      // tenant-visible failureReason). Non-connection errors
+      // (rejected/misconfigured/policy) rethrow immediately — retrying
+      // another server cannot fix a checksum or config problem.
+      let created: Awaited<ReturnType<BbbApiService["createMeeting"]>>;
+      let createdOnServerId: string;
+      for (;;) {
+        const server = await this.serverSelectionService.selectServer(ctx);
+        if (!server) {
+          throw new Error("No healthy BBB server available");
+        }
+        try {
+          created = await this.bbbApiService.createMeeting(server, {
+            meetingID: bbbMeetingId,
+            name: meeting.title,
+            attendeePW,
+            moderatorPW,
+            record: meeting.recordingEnabled,
+            autoStartRecording: false,
+            allowStartStopRecording: true,
+            maxParticipants: meeting.organization.maxParticipantsPerMeeting,
+            logoutURL: process.env.STOREFRONT_URL
+              ? `${process.env.STOREFRONT_URL}/bbb-logout`
+              : undefined,
+          });
+          createdOnServerId = String(server.id);
+          this.serverSelectionService.noteConnectionSuccess(createdOnServerId);
+          break;
+        } catch (err) {
+          if (err instanceof BbbUnavailableError) {
+            await this.serverSelectionService.noteConnectionFailure(
+              ctx,
+              server,
+              err,
+            );
+            continue;
+          }
+          throw err;
+        }
+      }
+      const { internalMeetingID } = created;
+      const serverId = createdOnServerId;
 
       const encryptedAttendeePW = this.encryptionService.encrypt(attendeePW);
       const encryptedModeratorPW = this.encryptionService.encrypt(moderatorPW);
@@ -274,7 +304,7 @@ export class BbbProvisioningWorkerService
         .update(meetingId as string, {
           bbbMeetingId,
           bbbInternalMeetingId: internalMeetingID,
-          serverId: server.id as string,
+          serverId,
           grantId: grant ? (grant.id as string) : null,
           encryptedAttendeePassword: encryptedAttendeePW,
           encryptedModeratorPassword: encryptedModeratorPW,

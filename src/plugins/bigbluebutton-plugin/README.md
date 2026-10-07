@@ -1378,13 +1378,16 @@ verifier must be:
 
 ## Reconciliation Workers & Scheduled Tasks
 
-Three `ScheduledTask`s are registered by the plugin's `configuration()` hook (id-deduped, so a shared server+worker config registers each once). Set `runScheduledTasks: false` to skip registration on nodes that must not run them.
+Six `ScheduledTask`s are registered by the plugin's `configuration()` hook (id-deduped, so a shared server+worker config registers each once). Set `runScheduledTasks: false` to skip registration on nodes that must not run them.
 
 | Task id | Cadence | Purpose |
 |---------|---------|---------|
 | `bbb-reconciliation` | every 5 min | Repair provisioning/active/room/billing drift + recording URLs (W8 `repairRecordings`), report-only orphan scan (`scanOrphanMeetings`); also emits and resets the metrics snapshot |
 | `bbb-capacity-alert` | every 15 min | Capacity forecast sweep → `BbbCapacityAlertLog` row always, `CapacityAlertEvent` on `soon`/`immediate` |
 | `bbb-daily-allowance` | every 1 h | Idempotent daily live-allowance writer for provider-free plans (ADR-045, INV-026) |
+| `bbb-metering` | every 1 min | Metered per-minute sampling tick (INV-028) |
+| `bbb-metering-prune` | daily 03:30 | Delete metered samples past their 35-day retention window |
+| `bbb-server-health` | every 5 min | Signed `getMeetings` probe per enabled server: SUCCESS → `healthy=true` + `lastHealthCheckAt` (the only recovery path back to healthy), typed error → `healthy=false` + de-duplicated ops alert |
 
 ```ts
 // bbb-reconciliation.task.ts

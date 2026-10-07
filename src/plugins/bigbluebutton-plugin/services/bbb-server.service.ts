@@ -1,8 +1,22 @@
 import { Injectable } from "@nestjs/common";
-import { ID, RequestContext, TransactionalConnection } from "@vendure/core";
+import {
+  ID,
+  Logger,
+  RequestContext,
+  RequestContextService,
+  TransactionalConnection,
+} from "@vendure/core";
 import { BbbServer } from "../entities/bbb-server.entity";
 import { BbbEncryptionService } from "./bbb-encryption.service";
+import {
+  BbbApiService,
+  BbbMisconfiguredError,
+  BbbRejectedError,
+} from "./bbb-api.service";
+import { BbbOpsAlertService } from "./bbb-ops-alert.service";
 import { normalizeBbbApiUrl } from "../shared/bbb-api-url";
+
+const loggerCtx = "BbbServerService";
 
 export interface CreateBbbServerInput {
   name: string;
@@ -26,6 +40,9 @@ export class BbbServerService {
   constructor(
     private readonly connection: TransactionalConnection,
     private readonly encryptionService: BbbEncryptionService,
+    private readonly ctxService: RequestContextService,
+    private readonly bbbApiService: BbbApiService,
+    private readonly opsAlert: BbbOpsAlertService,
   ) {}
 
   async findAll(
@@ -129,5 +146,74 @@ export class BbbServerService {
 
   async delete(ctx: RequestContext, id: ID): Promise<void> {
     await this.connection.getRepository(ctx, BbbServer).delete(id);
+  }
+
+  /**
+   * Periodic signed health probe — `bbb-server-health` task (every 5 min).
+   * No health job existed before this (jobs/ held only reconciliation,
+   * capacity-alert, daily-allowance, metering and metering-prune), and
+   * nothing in the codebase ever wrote `healthy = true`: a single
+   * markHealthy(false) from the config/consumption paths was permanent —
+   * `updateBbbServer` cannot write `healthy`. This probe is both the
+   * detection and the recovery path:
+   *
+   *  - one signed read-only `getMeetings` per ENABLED server;
+   *  - SUCCESS → `healthy = true` (+ `lastHealthCheckAt` stamp) — recovers
+   *    a server previously flagged by this probe or by a failure streak;
+   *  - ANY typed BBB error (unavailable / rejected / misconfigured /
+   *    notFound) → `healthy = false` + de-duplicated ops alert —
+   *    `bbb-server-config` for rejected/misconfigured (same family as
+   *    flagServerConfigProblem), `bbb-server-health` otherwise. A probe
+   *    expects SUCCESS; the next passing probe (≤5 min) restores the
+   *    server, and BbbOpsAlertService dedupes so flapping alerts once
+   *    per hour per server.
+   * Advisory: failures are logged, never thrown — the task cannot be
+   * tripped by one bad server.
+   */
+  async runHealthProbe(): Promise<{
+    probed: number;
+    flagged: number;
+    recovered: number;
+  }> {
+    const ctx = await this.ctxService.create({ apiType: "admin" });
+    const servers = await this.connection
+      .getRepository(ctx, BbbServer)
+      .createQueryBuilder("server")
+      .addSelect("server.encryptedApiSecret")
+      .where("server.enabled = :enabled", { enabled: true })
+      .getMany();
+
+    let flagged = 0;
+    let recovered = 0;
+    for (const server of servers) {
+      try {
+        await this.bbbApiService.getMeetings(server);
+        if (!server.healthy) recovered++;
+        await this.markHealthy(ctx, server.id, true);
+      } catch (err) {
+        flagged++;
+        await this.markHealthy(ctx, server.id, false);
+        const config =
+          err instanceof BbbMisconfiguredError ||
+          err instanceof BbbRejectedError;
+        this.opsAlert.notify(
+          config ? "bbb-server-config" : "bbb-server-health",
+          `server-${String(server.id)}`,
+          `BBB health probe failed for "${server.name}": ${(err as Error).message}`.substring(
+            0,
+            300,
+          ),
+          {
+            serverId: String(server.id),
+            messageKey: (err as { messageKey?: string }).messageKey ?? "unknown",
+          },
+        );
+        Logger.warn(
+          `Health probe failed for BBB server ${String(server.id)}: ${(err as Error).message}`,
+          loggerCtx,
+        );
+      }
+    }
+    return { probed: servers.length, flagged, recovered };
   }
 }
