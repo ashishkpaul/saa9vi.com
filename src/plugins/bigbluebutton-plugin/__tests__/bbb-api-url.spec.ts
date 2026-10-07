@@ -139,6 +139,7 @@ describe("save-time normalisation (create/update persist the canonical form)", (
       {} as never, // ctxService (unused on this path)
       { getMeetings: vi.fn(async () => []) } as never, // connection test passes
       {} as never, // opsAlert (unused on this path)
+      { ensureWebhook: vi.fn(async () => {}) } as never, // hooksService (fire-and-forget)
     );
     return { service, save, legacyRow };
   }

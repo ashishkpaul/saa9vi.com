@@ -1222,20 +1222,56 @@ export class BbbMeetingService implements OnModuleInit {
   // ─── Webhook Handler ─────────────────────────────────────────────────────────
 
   /**
-   * Normalizes BBB webhook payloads from both formats:
-   * - Legacy: { meetingID: "..." }
-   * - bbb-webhooks module: { event: { data: { attributes: { meeting: { externalMeetingId: "..." } } } } }
+   * Extracts the external BBB meeting ID from a webhook payload.
+   *
+   * Supports three payload shapes:
+   *
+   * 1. Legacy / pre-W3 direct format:
+   *    `{ meetingID: "ext-id" }`
+   *
+   * 2. Old bbb-webhooks nested camelCase (pre-W3 processor):
+   *    `{ event: { data: { attributes: { meeting: { externalMeetingId: "ext-id" } } } } }`
+   *
+   * 3. W3 bbb-webhooks data node (current — processor passes `event.data`):
+   *    `{ id: "meeting-ended", attributes: { meeting: { "external-meeting-id": "ext-id" } } }`
+   *    Hyphenated keys are the canonical bbb-webhooks source shape.
+   *    Falls back to `"internal-meeting-id"` when external is absent.
+   *
+   * Correlation priority:
+   *   externalMeetingId + serverId (preferred — stable across restarts)
+   *   internalMeetingId + serverId (fallback — requires nullable
+   *     `bbbInternalMeetingId` column, which is already on BbbMeeting)
+   *
+   * TODO(W3-correlation): the `serverId` parameter is threaded through from
+   * the persisted event (BbbWebhookEvent.serverId). Pass it here once the
+   * processor is updated to load serverId from the event row. Until then,
+   * correlation uses externalMeetingId alone (the current production behaviour
+   * is unchanged for meeting-ended; only rap-publish-ended is new and it
+   * carries attributes["record-id"], not a meeting ID, so it looks up by
+   * bbbRecordingId instead — see handleWebhookEvent).
    */
   private extractBbbMeetingId(payload: Record<string, unknown>): string | null {
-    // Legacy / direct format
+    // 1. Legacy direct format
     if (typeof payload.meetingID === "string" && payload.meetingID) {
       return payload.meetingID;
     }
-    // bbb-webhooks nested format
+    // 2. Old nested camelCase format
     try {
       const externalId = (payload.event as any)?.data?.attributes?.meeting
         ?.externalMeetingId;
       if (typeof externalId === "string" && externalId) return externalId;
+    } catch {
+      // ignore
+    }
+    // 3. W3: processor passes event.data — hyphenated keys from bbb-webhooks source
+    try {
+      const attrs = (payload.attributes as any)?.meeting;
+      if (attrs) {
+        const ext = attrs["external-meeting-id"];
+        if (typeof ext === "string" && ext) return ext;
+        const int_ = attrs["internal-meeting-id"];
+        if (typeof int_ === "string" && int_) return int_;
+      }
     } catch {
       // ignore
     }
@@ -1248,21 +1284,57 @@ export class BbbMeetingService implements OnModuleInit {
     RECORDING_READY: "rap-publish-ended",
   } as const;
 
+  /**
+   * Entry point called by BbbWebhookProcessorService.
+   *
+   * @param serverId  The BbbServer.id that authenticated and received this
+   *   event — enforced in meeting lookups so a server cannot complete a
+   *   meeting that was provisioned on a different server.
+   */
   async handleWebhookEvent(
     ctx: RequestContext,
     eventType: string,
     payload: Record<string, unknown>,
     webhookEventId?: string,
+    serverId?: string | null,
   ): Promise<void> {
+    // ── rap-publish-ended: correlate on external-meeting-id / record-id ────
+    if (eventType === BbbMeetingService.BBB_EVENTS.RECORDING_READY) {
+      await this.handleRapPublishEnded(ctx, payload, serverId ?? null);
+      return;
+    }
+
+    // ── All other events: correlate on external meeting ID + serverId ───────
     const bbbMeetingId = this.extractBbbMeetingId(payload);
     if (!bbbMeetingId) {
       this.metrics.recordWebhookParseFailure();
       return;
     }
 
-    const meeting = await this.connection
-      .getRepository(ctx, BbbMeeting)
-      .findOne({ where: { bbbMeetingId } });
+    const meetingRepo = this.connection.getRepository(ctx, BbbMeeting);
+    let meeting: BbbMeeting | null = null;
+
+    if (serverId) {
+      // Preferred: scope lookup to the server that delivered the event.
+      meeting = await meetingRepo.findOne({
+        where: { bbbMeetingId, serverId },
+      });
+      if (!meeting) {
+        // Fallback: find by external ID alone, then validate server match.
+        const byExternal = await meetingRepo.findOne({ where: { bbbMeetingId } });
+        if (byExternal && byExternal.serverId && byExternal.serverId !== serverId) {
+          Logger.warn(
+            `Webhook event "${eventType}" for bbbMeetingId ${bbbMeetingId}: ` +
+              `authenticated server ${serverId} does not match meeting.serverId ${byExternal.serverId} — dropping`,
+            loggerCtx,
+          );
+          return;
+        }
+        meeting = byExternal;
+      }
+    } else {
+      meeting = await meetingRepo.findOne({ where: { bbbMeetingId } });
+    }
 
     if (!meeting) {
       Logger.warn(
@@ -1279,7 +1351,11 @@ export class BbbMeetingService implements OnModuleInit {
         });
         await this.updateTrialAttendanceForMeeting(ctx, meeting, payload);
         // 3D.3b — derive SessionAttendance from the final attendee snapshot.
-        // channelId is derived server-side from the linked session.
+        // NOTE(attendance-gap): a real meeting-ended event carries no attendee
+        // list. The attendee extraction below will always return an empty set.
+        // Attendance must be tracked separately by reading getMeetingInfo
+        // during metering and recording the userIDs seen at join time.
+        // This is tracked as a separate task pending schema approval.
         try {
           const session = await this.connection
             .getRepository(ctx, BbbScheduledSession)
@@ -1297,34 +1373,146 @@ export class BbbMeetingService implements OnModuleInit {
             );
           }
         } catch (err) {
-          // Attendance derivation must not break the meeting lifecycle.
-          // The raw webhook event remains persisted for replay/recovery.
           Logger.error(
             `Session attendance derivation failed for meeting ${meeting.id}: ${(err as Error).message}`,
             loggerCtx,
           );
         }
         break;
-      case BbbMeetingService.BBB_EVENTS.RECORDING_READY: {
-        const recordId = payload.recordID as string;
-        const playbackUrl = (payload.playback as Record<string, unknown>)
-          ?.url as string;
-        if (recordId) {
-          await this.connection
-            .getRepository(ctx, BbbMeeting)
-            .update(meeting.id as string, {
-              bbbRecordingId: recordId,
-              recordingUrl: playbackUrl ?? null,
-            });
-          Logger.info(
-            `Recording ready for meeting ${meeting.id}: ${recordId}`,
-            loggerCtx,
-          );
-        }
-        break;
-      }
       default:
         Logger.debug(`Unhandled webhook event: ${eventType}`, loggerCtx);
+    }
+  }
+
+  /**
+   * Handle `rap-publish-ended` (recording published).
+   *
+   * Correlation priority (item 2 fix):
+   *   1. attributes.meeting["external-meeting-id"] + serverId  (preferred)
+   *   2. attributes["record-id"] against bbbInternalMeetingId + serverId
+   *      (record-id IS the internal meeting id in BBB)
+   *   3. Same lookups without serverId scope as fallback for events with no
+   *      serverId (legacy or mis-configured delivery)
+   *
+   * bbb-webhooks payload shape (W3, from source):
+   * ```
+   * {
+   *   id: "rap-publish-ended",
+   *   attributes: {
+   *     "record-id": "<internalMeetingId>",
+   *     success: true,
+   *     workflow: "presentation",
+   *     recording: {
+   *       playback: { link?: "…", url?: "…" },  // field name TBC from live capture
+   *       ...
+   *     },
+   *     meeting: { "external-meeting-id": "…", "internal-meeting-id": "…" }
+   *   }
+   * }
+   * ```
+   */
+  private async handleRapPublishEnded(
+    ctx: RequestContext,
+    payload: Record<string, unknown>,
+    serverId: string | null,
+  ): Promise<void> {
+    const attrs = (payload.attributes ?? {}) as Record<string, unknown>;
+
+    if (attrs.success !== true) {
+      Logger.debug("rap-publish-ended: success !== true, skipping", loggerCtx);
+      return;
+    }
+    const workflow = attrs.workflow as string | undefined;
+    if (workflow && workflow !== "presentation") {
+      Logger.debug(
+        `rap-publish-ended: workflow "${workflow}" is not "presentation", skipping`,
+        loggerCtx,
+      );
+      return;
+    }
+
+    const recordId = attrs["record-id"] as string | undefined;
+    const recording = (attrs.recording ?? {}) as Record<string, unknown>;
+    const playback = (recording.playback ?? {}) as Record<string, unknown>;
+    // TODO(W3-playback): confirm field name from live capture — expected .link
+    const playbackUrl =
+      (playback.link as string | undefined) ??
+      (playback.url as string | undefined) ??
+      null;
+
+    const meetingRepo = this.connection.getRepository(ctx, BbbMeeting);
+    let meeting: BbbMeeting | null = null;
+
+    // Priority 1: external-meeting-id + serverId
+    const meetingAttrs = (attrs.meeting ?? {}) as Record<string, unknown>;
+    const externalId = meetingAttrs["external-meeting-id"] as string | undefined;
+
+    if (externalId) {
+      if (serverId) {
+        meeting = await meetingRepo.findOne({
+          where: { bbbMeetingId: externalId, serverId },
+        });
+      }
+      if (!meeting) {
+        meeting = await meetingRepo.findOne({ where: { bbbMeetingId: externalId } });
+        if (meeting && serverId && meeting.serverId && meeting.serverId !== serverId) {
+          Logger.warn(
+            `rap-publish-ended: externalId ${externalId} found but server mismatch ` +
+              `(auth'd=${serverId}, meeting.serverId=${meeting.serverId}) — dropping`,
+            loggerCtx,
+          );
+          return;
+        }
+      }
+    }
+
+    // Priority 2: record-id matches bbbInternalMeetingId (record-id IS the internal meeting id)
+    if (!meeting && recordId) {
+      if (serverId) {
+        meeting = await meetingRepo.findOne({
+          where: { bbbInternalMeetingId: recordId, serverId },
+        });
+      }
+      if (!meeting) {
+        meeting = await meetingRepo.findOne({ where: { bbbInternalMeetingId: recordId } });
+        if (meeting && serverId && meeting.serverId && meeting.serverId !== serverId) {
+          Logger.warn(
+            `rap-publish-ended: recordId ${recordId} found via bbbInternalMeetingId but server mismatch ` +
+              `(auth'd=${serverId}, meeting.serverId=${meeting.serverId}) — dropping`,
+            loggerCtx,
+          );
+          return;
+        }
+      }
+    }
+
+    if (!meeting) {
+      Logger.warn(
+        `rap-publish-ended: no meeting found (externalId=${externalId ?? "n/a"} recordId=${recordId ?? "n/a"})`,
+        loggerCtx,
+      );
+      return;
+    }
+
+    const updates: Partial<Pick<BbbMeeting, "bbbRecordingId" | "recordingUrl">> = {};
+    if (recordId && meeting.bbbRecordingId !== recordId) {
+      updates.bbbRecordingId = recordId;
+    }
+    if (playbackUrl && meeting.recordingUrl !== playbackUrl) {
+      updates.recordingUrl = playbackUrl;
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await meetingRepo.update(meeting.id as string, updates);
+      Logger.info(
+        `rap-publish-ended: meeting ${meeting.id} updated — recordId=${recordId ?? "n/a"} playbackUrl=${playbackUrl ?? "(none)"}`,
+        loggerCtx,
+      );
+    } else {
+      Logger.debug(
+        `rap-publish-ended: meeting ${meeting.id} already up to date (idempotent)`,
+        loggerCtx,
+      );
     }
   }
 

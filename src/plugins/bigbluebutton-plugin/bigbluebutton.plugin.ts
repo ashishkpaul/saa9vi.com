@@ -1,6 +1,6 @@
 // src/plugins/bigbluebutton-plugin/bigbluebutton.plugin.ts
 
-import { Inject, OnApplicationBootstrap } from "@nestjs/common";
+import { Inject, Logger, OnApplicationBootstrap } from "@nestjs/common";
 import {
   PluginCommonModule,
   RuntimeVendureConfig,
@@ -9,7 +9,6 @@ import {
 import { CustomerDeletionLog } from "../../platform/customer-deletion/entities/customer-deletion-log.entity";
 import { CustomerDeletionModule } from "../../platform/customer-deletion/customer-deletion.module";
 import { CustomerDeletionService } from "../../platform/customer-deletion/customer-deletion.service";
-
 import { BbbServer } from "./entities/bbb-server.entity";
 import { BbbOrganization } from "./entities/bbb-organization.entity";
 import { BbbMeeting } from "./entities/bbb-meeting.entity";
@@ -88,6 +87,10 @@ import { BbbWebhookController } from "./workers/bbb-webhook.controller";
 import { bbbReconciliationTask } from "./jobs/bbb-reconciliation.task";
 import { bbbCapacityAlertTask } from "./jobs/bbb-capacity-alert.task";
 import { BBB_WEBHOOK_RATE_LIMIT_ROUTES, bbbWebhookRateLimiter, shopApiRateLimiter } from "./config/rate-limiter.middleware";
+import { BbbHooksService } from "./services/bbb-hooks.service";
+import { BbbWebhookRetentionService } from "./services/bbb-webhook-retention.service";
+import { bbbHooksReconciliationTask } from "./jobs/bbb-hooks-reconciliation.task";
+import { bbbWebhookRetentionTask } from "./jobs/bbb-webhook-retention.task";
 import {
   bbbFulfillmentHandler,
   bbbOrderProcess,
@@ -98,6 +101,7 @@ import { BigBlueButtonPluginOptions } from "./types";
 import {
   BBB_GRANULAR_PERMISSIONS,
   BBB_PLUGIN_OPTIONS,
+  BBB_PUBLIC_BASE_URL,
   BbbAdminPermission,
 } from "./constants";
 
@@ -202,6 +206,18 @@ import {
     // any organisation whose plan-derived concurrentMeetingLimit cache missed an
     // event or predates plan-derived capacity.
     BbbPlanCapacityReconciliationBootstrap,
+    // W4: hook registration and reconciliation service.
+    BbbHooksService,
+    // Item 11: webhook event retention (prune PROCESSED/PARSE_FAILED after 90 days).
+    BbbWebhookRetentionService,
+    // W3: inject publicBaseUrl into the webhook controller so it can reconstruct
+    // the registered callback URL without trusting incoming request headers.
+    {
+      provide: BBB_PUBLIC_BASE_URL,
+      useFactory: () =>
+        (BigBlueButtonPlugin.options.publicBaseUrl ?? process.env.BBB_PUBLIC_BASE_URL ?? "")
+          .replace(/\/+$/, ""),
+    },
   ],
 
   adminApiExtensions: {
@@ -269,6 +285,22 @@ import {
         bbbServerHealthTask,
       ];
     }
+    // W4: ensure BBB webhook hooks are registered and not stale on every
+    // enabled server. Runs every 5 minutes; no-op when the hook is already
+    // correct (one hooks/list call per server).
+    if (!existingIds.has(bbbHooksReconciliationTask.id)) {
+      config.schedulerOptions.tasks = [
+        ...(config.schedulerOptions.tasks ?? []),
+        bbbHooksReconciliationTask,
+      ];
+    }
+    // Item 11: daily retention of processed webhook events.
+    if (!existingIds.has(bbbWebhookRetentionTask.id)) {
+      config.schedulerOptions.tasks = [
+        ...(config.schedulerOptions.tasks ?? []),
+        bbbWebhookRetentionTask,
+      ];
+    }
     // Register rate limiters (SEC-004)
     config.apiOptions.middleware = [
       ...(config.apiOptions.middleware ?? []),
@@ -325,21 +357,28 @@ export class BigBlueButtonPlugin implements OnApplicationBootstrap {
     private readonly meetingService: BbbMeetingService,
     private readonly webhookProcessor: BbbWebhookProcessorService,
     private readonly bbbDeletionService: BbbDeletionService,
+    private readonly hooksService: BbbHooksService,
     @Inject(CustomerDeletionService)
     private readonly customerDeletionService: CustomerDeletionService,
   ) {}
 
   async onApplicationBootstrap() {
-    // Guard: prevent double-initialization when both server and worker
-    // share the same plugin instance and onApplicationBootstrap fires twice.
     if (this.initialized) return;
     this.initialized = true;
 
-    // Initialize job queues
     await this.meetingService.init();
     await this.webhookProcessor.init();
 
-    // Register customer deletion handlers
+    // W4: run hook reconciliation at startup so a freshly deployed or
+    // restarted instance re-registers any missing hooks without waiting up
+    // to 5 minutes for the scheduled task.
+    this.hooksService.ensureAllWebhooks().catch((err) =>
+      Logger.warn(
+        `W4: startup ensureAllWebhooks failed: ${(err as Error).message}`,
+        "BigBlueButtonPlugin",
+      ),
+    );
+
     this.customerDeletionService.registerChannelScopedHandler(
       'bbb-plugin',
       (ctx, customerId, channelId) =>

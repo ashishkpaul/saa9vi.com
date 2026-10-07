@@ -57,6 +57,7 @@ function harness(opts: {
     { create: async () => CTX } as never,
     api as never,
     {} as never, // opsAlert — unused by the connection test
+    { ensureWebhook: vi.fn(async () => {}) } as never, // hooksService
   );
   return { service, save, api, row, encryption };
 }

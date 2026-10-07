@@ -336,6 +336,7 @@ function buildProbe(opts: {
     { create: async () => CTX } as never,
     api as never,
     opsAlert as never,
+    { ensureWebhook: vi.fn(async () => {}) } as never, // hooksService
   );
   return { svc, updates, opsAlert };
 }

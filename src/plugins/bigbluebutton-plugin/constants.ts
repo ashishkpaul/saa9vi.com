@@ -5,6 +5,9 @@ import { PermissionDefinition } from "@vendure/core";
 
 export const BBB_PLUGIN_OPTIONS = Symbol("BBB_PLUGIN_OPTIONS");
 
+/** Injection token for the publicBaseUrl string used by W3/W4 (BbbWebhookController + BbbHooksService). */
+export const BBB_PUBLIC_BASE_URL = Symbol("BBB_PUBLIC_BASE_URL");
+
 export const BBB_PROVISIONING_QUEUE = "bbb-meeting-provisioning";
 export const BBB_WEBHOOK_QUEUE = "bbb-webhook-processor";
 

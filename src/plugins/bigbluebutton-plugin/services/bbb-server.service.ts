@@ -17,6 +17,7 @@ import {
   BbbUnavailableError,
 } from "./bbb-api.service";
 import { BbbOpsAlertService } from "./bbb-ops-alert.service";
+import { BbbHooksService } from "./bbb-hooks.service";
 import { normalizeBbbApiUrl } from "../shared/bbb-api-url";
 
 const loggerCtx = "BbbServerService";
@@ -46,6 +47,7 @@ export class BbbServerService {
     private readonly ctxService: RequestContextService,
     private readonly bbbApiService: BbbApiService,
     private readonly opsAlert: BbbOpsAlertService,
+    private readonly hooksService: BbbHooksService,
   ) {}
 
   async findAll(
@@ -117,7 +119,17 @@ export class BbbServerService {
     // so it must prove reachability + a working checksum BEFORE it can
     // enter server selection.
     await this.assertReachable(server.apiUrl, server.encryptedApiSecret);
-    return this.connection.getRepository(ctx, BbbServer).save(server);
+    const saved = await this.connection.getRepository(ctx, BbbServer).save(server);
+    // W4: register the webhook hook immediately after creating a server
+    // (also runs on the 5-min reconcile, but eager registration avoids
+    // missing the first meeting-ended of a freshly added server).
+    this.hooksService.ensureWebhook(saved).catch((err) =>
+      Logger.warn(
+        `W4: ensureWebhook after server create failed for ${saved.id}: ${(err as Error).message}`,
+        loggerCtx,
+      ),
+    );
+    return saved;
   }
 
   async update(
@@ -148,7 +160,17 @@ export class BbbServerService {
       }
       await this.assertReachable(server.apiUrl, secret);
     }
-    return this.connection.getRepository(ctx, BbbServer).save(server);
+    const saved = await this.connection.getRepository(ctx, BbbServer).save(server);
+    // W4: re-register hook when a server is re-enabled.
+    if (input.enabled === true) {
+      this.hooksService.ensureWebhook(saved).catch((err) =>
+        Logger.warn(
+          `W4: ensureWebhook after server enable failed for ${saved.id}: ${(err as Error).message}`,
+          loggerCtx,
+        ),
+      );
+    }
+    return saved;
   }
 
   async markHealthy(
