@@ -8,7 +8,7 @@ const loggerCtx = "BbbReconciliationTask";
 export const bbbReconciliationTask = new ScheduledTask({
   id: "bbb-reconciliation",
   description:
-    "Reconcile BBB meeting states, room drift, stuck provisioning, and recording URLs",
+    "Reconcile BBB meetings/rooms/billing, repair recording URLs, report orphan remote meetings",
   schedule: (cron) => cron.every(5).minutes(),
   async execute({ injector }) {
     const reconciliationService = injector.get(BbbReconciliationService);
@@ -24,6 +24,7 @@ export const bbbReconciliationTask = new ScheduledTask({
       billingRecovered,
       meteredRecovered,
       recordingsRepaired,
+      orphanMeetings,
     ] = await Promise.all([
       reconciliationService.reconcileProvisioning(),
       reconciliationService.reconcileActiveMeetings(),
@@ -33,6 +34,9 @@ export const bbbReconciliationTask = new ScheduledTask({
       // W8: pull-side repair for a missed rap-publish-ended webhook —
       // backfills bbbRecordingId/recordingUrl from BBB's getRecordings.
       reconciliationService.repairRecordings(),
+      // Report-only: unknown remote meetings are surfaced, NEVER ended
+      // (the meeting FSM owns termination).
+      reconciliationService.scanOrphanMeetings(),
     ]);
 
     if (
@@ -41,10 +45,11 @@ export const bbbReconciliationTask = new ScheduledTask({
       roomsReconciled > 0 ||
       billingRecovered > 0 ||
       meteredRecovered > 0 ||
-      recordingsRepaired > 0
+      recordingsRepaired > 0 ||
+      orphanMeetings > 0
     ) {
       Logger.log(
-        `provisioningFixed=${provisioningFixed} activeReconciled=${activeReconciled} roomsReconciled=${roomsReconciled} billingRecovered=${billingRecovered} meteredRecovered=${meteredRecovered} recordingsRepaired=${recordingsRepaired}`,
+        `provisioningFixed=${provisioningFixed} activeReconciled=${activeReconciled} roomsReconciled=${roomsReconciled} billingRecovered=${billingRecovered} meteredRecovered=${meteredRecovered} recordingsRepaired=${recordingsRepaired} orphanMeetings=${orphanMeetings}`,
         loggerCtx,
       );
     }
@@ -56,6 +61,7 @@ export const bbbReconciliationTask = new ScheduledTask({
       billingRecovered,
       meteredRecovered,
       recordingsRepaired,
+      orphanMeetings,
     };
   },
 });

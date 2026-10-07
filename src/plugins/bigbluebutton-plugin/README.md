@@ -1382,7 +1382,7 @@ Three `ScheduledTask`s are registered by the plugin's `configuration()` hook (id
 
 | Task id | Cadence | Purpose |
 |---------|---------|---------|
-| `bbb-reconciliation` | every 5 min | Repair provisioning/active/room/billing drift + recording URLs (W8 `repairRecordings`); also emits and resets the metrics snapshot |
+| `bbb-reconciliation` | every 5 min | Repair provisioning/active/room/billing drift + recording URLs (W8 `repairRecordings`), report-only orphan scan (`scanOrphanMeetings`); also emits and resets the metrics snapshot |
 | `bbb-capacity-alert` | every 15 min | Capacity forecast sweep → `BbbCapacityAlertLog` row always, `CapacityAlertEvent` on `soon`/`immediate` |
 | `bbb-daily-allowance` | every 1 h | Idempotent daily live-allowance writer for provider-free plans (ADR-045, INV-026) |
 
@@ -1401,6 +1401,7 @@ new ScheduledTask({
       reconciliationService.reconcilePendingBilling(),   // ledger rows missing after a completed meeting
       reconciliationService.reconcilePendingMeteredBilling(), // metered recovery scan (INV-028)
       reconciliationService.repairRecordings(),          // W8: backfill recording URLs from getRecordings
+      reconciliationService.scanOrphanMeetings(),        // report-only: unknown remote meetings, NEVER ended
     ]);
   },
 });
@@ -1415,6 +1416,7 @@ new ScheduledTask({
 | `reconcileRooms()` | Room/meeting state drift (4 cases below) |
 | `reconcilePendingBilling()` | Meeting already `Completed` but with no ledger entry → write the missing `BbbMeetingUsageLedger` row and consume the grant |
 | `repairRecordings()` (W8) | Meeting `Completed` + `recordingEnabled` + `recordingUrl` still NULL (72 h window, ≤ 20/pass) → `getRecordings` backfills `bbbRecordingId`/`recordingUrl` from BBB's answer — the pull-side repair for a dropped `rap-publish-ended` webhook. Typed W1 errors: `notFound` → silent skip, `unavailable` → retry next pass + de-duplicated `bbb-recording-repair` ops alert (server health untouched), rejected/misconfigured → `flagServerConfigProblem`. Never invents a URL; never touches meeting state or billing |
+| `scanOrphanMeetings()` | Per enabled server: `getMeetings` census diffed against local rows (match on `bbbMeetingId` or the `bbb-<meeting.id>` derivation, one IN-query per server). Unknown remote meeting → `Logger.warn` + de-duplicated `bbb-orphan-meeting` ops alert. **Report-only — never calls `end`, never writes state** (the meeting FSM owns termination); census failures use the same typed-error family as `repairRecordings` (`bbb-orphan-scan` alert) |
 
 ### Room Drift Cases
 

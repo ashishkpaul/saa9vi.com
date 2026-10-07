@@ -136,6 +136,23 @@ export interface BbbRecording {
 }
 
 /**
+ * One entry of the server-side census (`getMeetings`) — the report-only
+ * orphan scanner's read-only view of what BBB currently knows about.
+ * Passwords are deliberately NOT part of this shape: the raw XML carries
+ * attendeePW/moderatorPW, and the scanner only ever logs meetingID /
+ * running / counts (W2 extends to data we choose not to keep).
+ */
+export interface BbbRemoteMeeting {
+  meetingID: string;
+  internalMeetingID: string;
+  name: string;
+  running: boolean;
+  participantCount: number;
+  moderatorCount: number;
+  hasBeenForciblyEnded: boolean;
+}
+
+/**
  * Thin adapter for the BigBlueButton API.
  *
  * Checksum contract (W7):
@@ -494,5 +511,43 @@ export class BbbApiService {
             )?.url as string)
           : undefined,
       }));
+  }
+
+  /**
+   * Server-side census for the report-only orphan scanner: every meeting
+   * BBB currently knows about, mapped read-only (see BbbRemoteMeeting —
+   * passwords are dropped at parse time). Typed W1 errors like every other
+   * call; this method NEVER issues `end` or any other write — the scanner
+   * built on it is report-only by construction.
+   */
+  async getMeetings(server: BbbServer): Promise<BbbRemoteMeeting[]> {
+    const secret = this.decryptSecret(server);
+    const url = this.buildApiUrl(server, secret, "getMeetings", {});
+    const response = await this.callApi(url, {
+      method: "getMeetings",
+      serverHost: this.serverHost(server),
+    });
+    const meetings = response.meetings as
+      | Record<string, unknown>
+      | string
+      | undefined;
+    // xml2js (explicitArray:false): empty <meetings></meetings> → "" (falsy),
+    // a single <meeting> → object, several → array.
+    if (!meetings || typeof meetings !== "object") return [];
+    const raw = (meetings as Record<string, unknown>).meeting as
+      | Record<string, unknown>
+      | Record<string, unknown>[]
+      | undefined;
+    if (raw === undefined) return [];
+    const list = Array.isArray(raw) ? raw : [raw];
+    return list.map((m) => ({
+      meetingID: (m.meetingID as string) ?? "",
+      internalMeetingID: (m.internalMeetingID as string) ?? "",
+      name: (m.name as string) ?? "",
+      running: m.running === "true",
+      participantCount: Number(m.participantCount ?? 0),
+      moderatorCount: Number(m.moderatorCount ?? 0),
+      hasBeenForciblyEnded: m.hasBeenForciblyEnded === "true",
+    }));
   }
 }

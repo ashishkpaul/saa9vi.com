@@ -19,7 +19,7 @@ import {
   BbbRejectedError,
   BbbUnavailableError,
 } from "./bbb-api.service";
-import type { BbbServer } from "../entities/bbb-server.entity";
+import { BbbServer } from "../entities/bbb-server.entity";
 import { BbbEncryptionService } from "./bbb-encryption.service";
 import { BbbOpsAlertService } from "./bbb-ops-alert.service";
 import { BbbMetricsService } from "./bbb-metrics.service";
@@ -889,5 +889,129 @@ export class BbbReconciliationService {
       );
     }
     return repaired;
+  }
+
+  // ─── 7. Report-only orphan scan (unknown remote meetings; NEVER auto-ends) ──
+  // getMeetings is the server-side census: every meeting BBB knows about.
+  // Anything on a server with no local row — matched by bbbMeetingId, or by
+  // the `bbb-<meeting.id>` derivation used at provisioning — is an ORPHAN:
+  // evidence of a meeting our FSM never saw (created out-of-band via
+  // API-Mate / another integration, or leaked from a lost provisioning
+  // write).
+  //
+  // REPORT-ONLY, by design: this pass NEVER calls endMeeting and NEVER
+  // writes meeting/room state. It surfaces the orphan (Logger.warn +
+  // de-duplicated ops alert, keyed per server+meeting for 1 h) so an
+  // operator decides — the meeting FSM owns termination, and guessing here
+  // could end a live session someone else started.
+  //
+  // Matching is driven by the REMOTE list (small): one IN-query per server
+  // against bbbMeetingId / derived local id — no full-table scan. Typed W1
+  // error handling mirrors repairRecordings().
+
+  async scanOrphanMeetings(): Promise<number> {
+    const ctx = await this.ctxService.create({ apiType: "admin" });
+    const servers = await this.connection
+      .getRepository(ctx, BbbServer)
+      .createQueryBuilder("server")
+      .addSelect("server.encryptedApiSecret")
+      .where("server.enabled = :enabled", { enabled: true })
+      .getMany();
+
+    let orphans = 0;
+    for (const server of servers) {
+      const serverId = String(server.id);
+      try {
+        const remote = await this.bbbApiService.getMeetings(server);
+        if (remote.length === 0) continue;
+        const bbbIds = remote.map((r) => r.meetingID).filter(Boolean);
+        if (bbbIds.length === 0) continue;
+        const localIds = bbbIds
+          .filter((id) => id.startsWith("bbb-"))
+          .map((id) => id.slice("bbb-".length));
+        const known = await this.connection
+          .getRepository(ctx, BbbMeeting)
+          .createQueryBuilder("meeting")
+          .select("meeting.id")
+          .addSelect("meeting.bbbMeetingId")
+          .where("meeting.bbbMeetingId IN (:...bbbIds)", { bbbIds })
+          .orWhere("meeting.id IN (:...localIds)", {
+            localIds: localIds.length > 0 ? localIds : [""],
+          })
+          .getMany();
+        const knownBbbIds = new Set(
+          known
+            .map((k) => k.bbbMeetingId)
+            .filter((v): v is string => Boolean(v)),
+        );
+        const knownLocalIds = new Set(known.map((k) => k.id));
+
+        for (const r of remote) {
+          const derived = r.meetingID.startsWith("bbb-")
+            ? r.meetingID.slice("bbb-".length)
+            : null;
+          if (
+            knownBbbIds.has(r.meetingID) ||
+            (derived !== null && knownLocalIds.has(derived))
+          ) {
+            continue; // ours — known locally
+          }
+          orphans++;
+          Logger.warn(
+            `Orphan remote meeting on server ${serverId}: meetingID=${r.meetingID} running=${r.running} participants=${r.participantCount} — no local row; REPORT-ONLY (not ended)`,
+            loggerCtx,
+          );
+          this.opsAlert.notify(
+            "bbb-orphan-meeting",
+            `${serverId}:${r.meetingID}`,
+            `BBB server "${server.name ?? serverId}" hosts unknown meeting ${r.meetingID} (running=${r.running}, participants=${r.participantCount}) — no local row; reported only, never auto-ended`,
+            {
+              serverId,
+              meetingID: r.meetingID,
+              running: r.running,
+              participantCount: r.participantCount,
+            },
+          );
+        }
+      } catch (err) {
+        if (err instanceof BbbNotFoundError) {
+          Logger.info(
+            `Orphan scan skipped for server ${serverId}: census not found`,
+            loggerCtx,
+          );
+        } else if (err instanceof BbbUnavailableError) {
+          Logger.warn(
+            `Orphan scan skipped for server ${serverId}: ${(err as Error).message}`,
+            loggerCtx,
+          );
+          this.opsAlert.notify(
+            "bbb-orphan-scan",
+            `server-${serverId}`,
+            `getMeetings unavailable during orphan scan (server ${serverId}) — will retry next pass`,
+            { serverId, messageKey: err.messageKey },
+          );
+        } else if (
+          err instanceof BbbMisconfiguredError ||
+          err instanceof BbbRejectedError
+        ) {
+          await this.flagServerConfigProblem(ctx, server, err);
+        } else {
+          Logger.error(
+            `Orphan scan failed for server ${serverId}: ${(err as Error).message}`,
+            loggerCtx,
+          );
+          this.opsAlert.notify(
+            "bbb-orphan-scan",
+            `server-${serverId}`,
+            `Orphan scan failed on server ${serverId}: ${(err as Error).message}`.substring(
+              0,
+              300,
+            ),
+            { serverId },
+          );
+        }
+      }
+    }
+    return orphans;
   }
 }
