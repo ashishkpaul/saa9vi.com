@@ -207,10 +207,19 @@ export class BbbHooksService {
     );
 
     // Check if our hook has the correct event filter and raw setting.
+    //
+    // eventID mismatch logic:
+    //   - hooks/list omits <eventID> when no filter was set at creation time.
+    //     That means ours.eventID === "" (our parser uses ?? "").
+    //   - An empty eventID means "all events" — that is a superset of what we
+    //     want but functionally incorrect (we'd receive meeting-created etc.).
+    //   - We only skip recreation when the filter exactly matches ours.
+    //   - getRaw=false is also required; true means raw un-normalised XML.
+    const oursEventIDNormalised = ours ? normaliseEventFilter(ours.eventID) : "";
+    const expectedEventIDNormalised = normaliseEventFilter(BBB_HOOK_EVENT_FILTER);
     const hookNeedsRecreate =
       ours !== undefined &&
-      (normaliseEventFilter(ours.eventID) !== normaliseEventFilter(BBB_HOOK_EVENT_FILTER) ||
-        ours.rawData !== false);
+      (oursEventIDNormalised !== expectedEventIDNormalised || ours.rawData !== false);
 
     // ── 3. Destroy stale and misconfigured hooks ──────────────────────────
     for (const hook of stale) {
@@ -224,7 +233,7 @@ export class BbbHooksService {
     if (hookNeedsRecreate && ours) {
       Logger.log(
         `BbbHooksService: destroying misconfigured hook ${ours.hookID} on server ${server.id} ` +
-          `(eventID=${ours.eventID} rawData=${ours.rawData})`,
+          `(eventID="${ours.eventID}" want="${BBB_HOOK_EVENT_FILTER}" rawData=${ours.rawData})`,
         loggerCtx,
       );
       await this.destroyHook(server, secret, ours.hookID);
