@@ -1382,7 +1382,7 @@ Three `ScheduledTask`s are registered by the plugin's `configuration()` hook (id
 
 | Task id | Cadence | Purpose |
 |---------|---------|---------|
-| `bbb-reconciliation` | every 5 min | Repair provisioning/active/room/billing drift; also emits and resets the metrics snapshot |
+| `bbb-reconciliation` | every 5 min | Repair provisioning/active/room/billing drift + recording URLs (W8 `repairRecordings`); also emits and resets the metrics snapshot |
 | `bbb-capacity-alert` | every 15 min | Capacity forecast sweep → `BbbCapacityAlertLog` row always, `CapacityAlertEvent` on `soon`/`immediate` |
 | `bbb-daily-allowance` | every 1 h | Idempotent daily live-allowance writer for provider-free plans (ADR-045, INV-026) |
 
@@ -1395,10 +1395,12 @@ new ScheduledTask({
     metricsService.logSnapshot();   // emit counters, then
     metricsService.reset();         //           zero them for the next window
     await Promise.all([
-      reconciliationService.reconcileProvisioning(),    // stuck jobs
-      reconciliationService.reconcileActiveMeetings(),  // DB/BBB drift
-      reconciliationService.reconcileRooms(),           // room/meeting drift
-      reconciliationService.reconcilePendingBilling(),  // ledger rows missing after a completed meeting
+      reconciliationService.reconcileProvisioning(),     // stuck jobs
+      reconciliationService.reconcileActiveMeetings(),   // DB/BBB drift
+      reconciliationService.reconcileRooms(),            // room/meeting drift
+      reconciliationService.reconcilePendingBilling(),   // ledger rows missing after a completed meeting
+      reconciliationService.reconcilePendingMeteredBilling(), // metered recovery scan (INV-028)
+      reconciliationService.repairRecordings(),          // W8: backfill recording URLs from getRecordings
     ]);
   },
 });
@@ -1412,6 +1414,7 @@ new ScheduledTask({
 | `reconcileActiveMeetings()` | Meeting is `Active` in DB but confirmed gone on BBB (`notFound`, or `getMeetingInfo` success with `endTime > 0`): metered orgs with samples → `Completed` + bill via `source: "reconcile-remote-gone"` (`completedAt` from BBB `endTime`, else last sample + 1 min, clamped), metered orgs with zero samples → `Stale` + `bbb-metering-zero-samples` alert, grant orgs → `Stale`; meetings missing their moderator password → per-meeting skip (server health untouched); meetings still `Active` past `maxMeetingDurationMs` (24 h) → force-complete and bill at the cap (`completedAt` pinned to `provisionedAt + maxMeetingDurationMs` so usage books to the month the meeting ended in) |
 | `reconcileRooms()` | Room/meeting state drift (4 cases below) |
 | `reconcilePendingBilling()` | Meeting already `Completed` but with no ledger entry → write the missing `BbbMeetingUsageLedger` row and consume the grant |
+| `repairRecordings()` (W8) | Meeting `Completed` + `recordingEnabled` + `recordingUrl` still NULL (72 h window, ≤ 20/pass) → `getRecordings` backfills `bbbRecordingId`/`recordingUrl` from BBB's answer — the pull-side repair for a dropped `rap-publish-ended` webhook. Typed W1 errors: `notFound` → silent skip, `unavailable` → retry next pass + de-duplicated `bbb-recording-repair` ops alert (server health untouched), rejected/misconfigured → `flagServerConfigProblem`. Never invents a URL; never touches meeting state or billing |
 
 ### Room Drift Cases
 

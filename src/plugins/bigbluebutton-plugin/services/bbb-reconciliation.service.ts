@@ -17,7 +17,9 @@ import {
   BbbMisconfiguredError,
   BbbNotFoundError,
   BbbRejectedError,
+  BbbUnavailableError,
 } from "./bbb-api.service";
+import type { BbbServer } from "../entities/bbb-server.entity";
 import { BbbEncryptionService } from "./bbb-encryption.service";
 import { BbbOpsAlertService } from "./bbb-ops-alert.service";
 import { BbbMetricsService } from "./bbb-metrics.service";
@@ -701,5 +703,191 @@ export class BbbReconciliationService {
       cleaned++;
     }
     return cleaned;
+  }
+
+  // ─── 6. W8 — Repair Recording URLs (missed rap-publish-ended webhooks) ──────
+  // The `rap-publish-ended` webhook is the normal writer of `bbbRecordingId`
+  // + `recordingUrl` (BbbMeetingService.handleWebhookEvent). If that delivery
+  // is dropped — BBB retries for a few minutes then gives up — the recording
+  // exists on BBB but the meeting row never gets its playback link. This pass
+  // is the pull-side repair: `getRecordings` for completed, recording-enabled
+  // meetings whose `recordingUrl` is still NULL, backfilled from BBB's own
+  // answer (never invented — the URL only ever comes from the BBB response).
+  //
+  // Safety properties (W1/W5 rules, mirrored from the metering sampler):
+  //  - BOUNDED: 72 h window, ≤ 20 candidates per pass (oldest completedAt
+  //    first) — the rest is picked up by the next 5-min tick;
+  //  - TYPED errors per meeting: notFound → nothing to repair (silent);
+  //    unavailable → transient skip + de-duplicated ops alert, server health
+  //    untouched; rejected/misconfigured → flagServerConfigProblem (the
+  //    per-server config family) — getRecordings authenticates with the API
+  //    secret only, so a rejection IS a server-level problem (unlike
+  //    getMeetingInfo, whose moderator-password is a per-meeting concern);
+  //  - no meeting-state, billing, or health side effects on the happy path;
+  //    a failed pass repairs nothing and kills nothing.
+  // Wire-up: the `bbb-reconciliation` scheduled task (6th pass).
+  // runBbbReconciliation() deliberately stays at the original five passes —
+  // its GraphQL result shape (BbbReconciliationResult) is unchanged.
+
+  /** Only completed meetings from the last 72 h are repair candidates. */
+  private static readonly RECORDING_REPAIR_WINDOW_MS = 72 * 60 * 60 * 1000;
+
+  /** Hard cap per pass — oldest completed first; the rest wait for the next tick. */
+  private static readonly RECORDING_REPAIR_BATCH = 20;
+
+  async repairRecordings(): Promise<number> {
+    const ctx = await this.ctxService.create({ apiType: "admin" });
+    const cutoff = new Date(
+      Date.now() - BbbReconciliationService.RECORDING_REPAIR_WINDOW_MS,
+    );
+
+    let candidates: BbbMeeting[];
+    try {
+      candidates = await this.connection
+        .getRepository(ctx, BbbMeeting)
+        .createQueryBuilder("meeting")
+        .where("meeting.state = :state", { state: MEETING_STATE.COMPLETED })
+        .andWhere("meeting.recordingEnabled = true")
+        .andWhere("meeting.recordingUrl IS NULL")
+        .andWhere("meeting.bbbMeetingId IS NOT NULL")
+        .andWhere("meeting.serverId IS NOT NULL")
+        .andWhere("meeting.completedAt >= :cutoff", { cutoff })
+        .orderBy("meeting.completedAt", "ASC")
+        .limit(BbbReconciliationService.RECORDING_REPAIR_BATCH)
+        .getMany();
+    } catch (err) {
+      // Candidate loading is infrastructure, not a per-meeting verdict —
+      // alert once per pass (deduped) and let the task record the failure.
+      this.opsAlert.notify(
+        "bbb-recording-repair",
+        "pass",
+        `Recording repair pass failed to load candidates: ${(err as Error).message}`,
+      );
+      throw err;
+    }
+
+    let repaired = 0;
+    const serverCache = new Map<string, BbbServer | null>();
+    for (const meeting of candidates) {
+      const serverId = String(meeting.serverId);
+      if (!serverCache.has(serverId)) {
+        try {
+          // findByIdWithSecret: encryptedApiSecret is select:false — every
+          // adapter call decrypts it (same rule as the metering sampler).
+          serverCache.set(
+            serverId,
+            await this.serverService.findByIdWithSecret(ctx, serverId),
+          );
+        } catch (err) {
+          Logger.warn(
+            `Recording repair: server ${serverId} load failed: ${(err as Error).message}`,
+            loggerCtx,
+          );
+          continue;
+        }
+      }
+      const server = serverCache.get(serverId) ?? null;
+      if (!server) {
+        Logger.warn(
+          `Recording repair: server ${serverId} not found for meeting ${meeting.id}`,
+          loggerCtx,
+        );
+        continue;
+      }
+
+      try {
+        const recordings = await this.bbbApiService.getRecordings(
+          server,
+          meeting.bbbMeetingId,
+        );
+        const recording = recordings.find(
+          (r) => r.meetingID === meeting.bbbMeetingId,
+        );
+        if (!recording) {
+          // BBB answered SUCCESS with no recording row for this meeting —
+          // nothing exists to repair yet; the candidate filter keeps the
+          // row eligible for the next pass.
+          continue;
+        }
+        if (!recording.playbackUrl) {
+          // Recording exists but is not published yet (no playback URL):
+          // link the recordID now for traceability; recordingUrl stays NULL
+          // so the row remains a candidate until the playback URL appears.
+          if (
+            recording.recordID &&
+            meeting.bbbRecordingId !== recording.recordID
+          ) {
+            await this.connection
+              .getRepository(ctx, BbbMeeting)
+              .update(meeting.id as string, {
+                bbbRecordingId: recording.recordID,
+              });
+          }
+          continue;
+        }
+        await this.connection
+          .getRepository(ctx, BbbMeeting)
+          .update(meeting.id as string, {
+            bbbRecordingId: recording.recordID,
+            recordingUrl: recording.playbackUrl,
+          });
+        repaired++;
+        Logger.info(
+          `Recording repaired for meeting ${meeting.id}: ${recording.recordID}`,
+          loggerCtx,
+        );
+      } catch (err) {
+        if (err instanceof BbbNotFoundError) {
+          // No recording for this meeting on BBB — normal, not a failure.
+          Logger.info(
+            `Recording repair skipped for meeting ${meeting.id}: no recording on BBB`,
+            loggerCtx,
+          );
+        } else if (err instanceof BbbUnavailableError) {
+          // Transient (timeout/HTTP 5xx/malformed XML): retry next pass.
+          // De-duplicated per server for 1 h so an outage alerts once.
+          Logger.warn(
+            `Recording repair skipped for meeting ${meeting.id}: ${(err as Error).message}`,
+            loggerCtx,
+          );
+          this.opsAlert.notify(
+            "bbb-recording-repair",
+            `server-${serverId}`,
+            `getRecordings unavailable during recording repair (server ${serverId}) — will retry next pass`,
+            {
+              serverId,
+              meetingId: String(meeting.id),
+              messageKey: err.messageKey,
+            },
+          );
+        } else if (
+          err instanceof BbbMisconfiguredError ||
+          err instanceof BbbRejectedError
+        ) {
+          await this.flagServerConfigProblem(ctx, server, err);
+        } else {
+          Logger.error(
+            `Recording repair failed for meeting ${meeting.id}: ${(err as Error).message}`,
+            loggerCtx,
+          );
+          this.opsAlert.notify(
+            "bbb-recording-repair",
+            `server-${serverId}`,
+            `Recording repair failed for meeting ${meeting.id} (server ${serverId}): ${(err as Error).message}`.substring(
+              0,
+              300,
+            ),
+            { serverId, meetingId: String(meeting.id) },
+          );
+        }
+      }
+    }
+    if (candidates.length > 0) {
+      Logger.info(
+        `Recording repair: candidates=${candidates.length} repaired=${repaired}`,
+        loggerCtx,
+      );
+    }
+    return repaired;
   }
 }
