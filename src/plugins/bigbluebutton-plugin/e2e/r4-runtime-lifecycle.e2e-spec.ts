@@ -933,6 +933,12 @@ async function installStubbedBbbTransport(): Promise<void> {
   // generation keep working — only the two outbound HTTP hops are replaced.
   const real: any = server.app.get(BbbApiService);
   const stubbed: any = Object.create(real);
+  // "Test connection" (create/enable probe) runs inside BbbServerService,
+  // which holds its OWN reference to the singleton — patch getMeetings on
+  // the real instance too, or createBbbServer would probe localhost:1999
+  // for real and refuse. Read-only and harmless if the health/orphan tasks
+  // ever tick mid-run.
+  real.getMeetings = async () => [];
   stubbed.createMeeting = async () => ({
     internalMeetingID: `r4-internal-${Date.now()}`,
     meetingID: `r4-${Date.now()}`,
@@ -1110,6 +1116,12 @@ describe('Slice 10 — R4 runtime lifecycle evidence', () => {
       }
 
       // One enabled/healthy BBB server so provisioning can select a target.
+      // The "Test connection" probe (create/enable gate) runs inside
+      // BbbServerService against ITS reference to the singleton, and this
+      // beforeAll runs before installStubbedBbbTransport (R4-04) — patch
+      // getMeetings here or createBbbServer would really dial localhost:1999
+      // and refuse. Read-only; the full transport install inherits it.
+      (server.app.get(BbbApiService) as any).getMeetings = async () => [];
       const srv: any = await adminClient.query(CREATE_BBB_SERVER, {
         input: {
           name: `R4 Server ${Date.now()}`,

@@ -5,13 +5,16 @@ import {
   RequestContext,
   RequestContextService,
   TransactionalConnection,
+  UserInputError,
 } from "@vendure/core";
 import { BbbServer } from "../entities/bbb-server.entity";
 import { BbbEncryptionService } from "./bbb-encryption.service";
 import {
   BbbApiService,
   BbbMisconfiguredError,
+  BbbNotFoundError,
   BbbRejectedError,
+  BbbUnavailableError,
 } from "./bbb-api.service";
 import { BbbOpsAlertService } from "./bbb-ops-alert.service";
 import { normalizeBbbApiUrl } from "../shared/bbb-api-url";
@@ -110,6 +113,10 @@ export class BbbServerService {
       maxLoad: input.maxLoad ?? 100,
       capacity: input.capacity ?? 200,
     });
+    // "Test connection" (Track A item 2): a new row is enabled by default,
+    // so it must prove reachability + a working checksum BEFORE it can
+    // enter server selection.
+    await this.assertReachable(server.apiUrl, server.encryptedApiSecret);
     return this.connection.getRepository(ctx, BbbServer).save(server);
   }
 
@@ -130,6 +137,17 @@ export class BbbServerService {
     if (input.maxLoad !== undefined) server.maxLoad = input.maxLoad;
     if (input.capacity !== undefined) server.capacity = input.capacity;
     if (input.enabled !== undefined) server.enabled = input.enabled;
+    if (input.enabled === true) {
+      // "Test connection" on ENABLE too. getEntityOrThrow does not
+      // populate the select:false encryptedApiSecret — side-load it
+      // unless this update supplied a fresh secret (applied above).
+      let secret = server.encryptedApiSecret;
+      if (!secret) {
+        secret =
+          (await this.findByIdWithSecret(ctx, id))?.encryptedApiSecret ?? "";
+      }
+      await this.assertReachable(server.apiUrl, secret);
+    }
     return this.connection.getRepository(ctx, BbbServer).save(server);
   }
 
@@ -146,6 +164,70 @@ export class BbbServerService {
 
   async delete(ctx: RequestContext, id: ID): Promise<void> {
     await this.connection.getRepository(ctx, BbbServer).delete(id);
+  }
+
+  /**
+   * "Test connection" (Track A item 2) — signed read-only `getMeetings`
+   * against a candidate configuration. Refuses (UserInputError — the
+   * dashboard renders it as a toast, nothing is saved) exactly the two
+   * failure classes an operator can fix:
+   *  - unreachable (BbbUnavailableError: DNS / HTTP 5xx / timeout /
+   *    malformed XML);
+   *  - checksum rejection (BbbRejectedError with a checksum messageKey —
+   *    a wrong apiSecret maps to the checksum key on every call).
+   * Any OTHER typed rejection means the server answered AND accepted the
+   * checksum (a bad checksum never produces a different key), and
+   * BbbNotFoundError likewise proves reachability + auth — both pass
+   * with a log line rather than blocking configuration. Misconfigured
+   * (missing/undecryptable secret) refuses defensively. W2: the errors
+   * are already sanitized (method + host/messageKey only — never the
+   * signed URL or the secret).
+   */
+  private async assertReachable(
+    apiUrl: string,
+    encryptedApiSecret: string,
+  ): Promise<void> {
+    const candidate = {
+      id: "connection-test",
+      name: "connection-test",
+      apiUrl,
+      encryptedApiSecret,
+    } as unknown as BbbServer;
+    try {
+      await this.bbbApiService.getMeetings(candidate);
+      Logger.info("BBB connection test succeeded", loggerCtx);
+    } catch (err) {
+      if (err instanceof BbbUnavailableError) {
+        throw new UserInputError(`BBB server unreachable: ${err.message}`);
+      }
+      if (err instanceof BbbMisconfiguredError) {
+        throw new UserInputError(
+          `BBB connection test could not authenticate: ${err.message}`,
+        );
+      }
+      if (err instanceof BbbRejectedError) {
+        if (/checksum/i.test(err.messageKey)) {
+          throw new UserInputError(
+            `BBB checksum rejected — check the API secret: ${err.message}`,
+          );
+        }
+        Logger.warn(
+          `BBB connection test answered (non-checksum rejection: ${err.messageKey}) — allowing`,
+          loggerCtx,
+        );
+        return;
+      }
+      if (err instanceof BbbNotFoundError) {
+        Logger.warn(
+          "BBB connection test reached the server (method not found) — allowing",
+          loggerCtx,
+        );
+        return;
+      }
+      throw new UserInputError(
+        `BBB connection test failed: ${(err as Error).message}`,
+      );
+    }
   }
 
   /**
