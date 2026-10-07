@@ -18,6 +18,20 @@
  * to the canonical by a parity spec (`dashboard/lib/format.ts` +
  * `__tests__/format-paise-inr-parity.spec.ts`).
  *
+ * AMENDED 2026-10-07: 118 → 105 (Vendure 3.7.4 bump — package.json +
+ * tsconfig.dashboard.json, documented exception, see known rationale here):
+ * @vendure/dashboard 3.7.4's src imports @vendure-io/ui 1.3.0, a
+ * SOURCE-ONLY package (files: ["src"], no .d.ts anywhere) whose Map
+ * iteration tripped TS2802 under the project's implicit ES5 default — one
+ * NEW node_modules file against this baseline (the bump's gate failure).
+ * Fix: `"downlevelIteration": true` in tsconfig.dashboard.json (emit is
+ * unused — this ratchet runs `--noEmit`), which cleared that error AND 13
+ * cascade errors across 7 node_modules files (entries below removed) and
+ * shrank use-extended-router 2 → 1. Clearing the cascades unmasked ONE
+ * latent vendor error: @vendure/dashboard layout-engine/page-layout.tsx
+ * TS2322 (310,29) — baselined at 1, node_modules, attributed to the bump.
+ * Per-file shrink-only resumes from 105.
+ *
  * QUERY-STATE REPORT (remaining TS6307 — tracked; the format fix above is
  * the template for closing it):
  *   - routes/rooms/RoomDetail.tsx (1) — TS6307: imports
@@ -54,7 +68,7 @@ import { describe, expect, it } from 'vitest';
 const ROOT = path.resolve(__dirname, '../../../..');
 
 /** Total allowed error count — shrink-only. Must equal the sum of the map. */
-const TOTAL_BASELINE = 118;
+const TOTAL_BASELINE = 105;
 
 /** Per-file allowed error counts — shrink-only. Repo-relative paths. */
 const FILE_BASELINE_A: Record<string, number> = {
@@ -68,24 +82,18 @@ const FILE_BASELINE_A: Record<string, number> = {
     "node_modules/@tanstack/router-core/dist/esm/ssr/types.d.ts": 1,
     "node_modules/@ts-morph/common/lib/ts-morph-common.d.ts": 14,
     "node_modules/ts-morph/lib/ts-morph.d.ts": 31,
-    "node_modules/@vendure/dashboard/src/lib/components/data-input/relation-selector.tsx": 1,
     "node_modules/@vendure/dashboard/src/lib/components/layout/language-dialog.tsx": 1,
-    "node_modules/@vendure/dashboard/src/lib/components/shared/assigned-facet-values.tsx": 1,
     "node_modules/@vendure/dashboard/src/lib/components/shared/detail-page-button.tsx": 1,
-    "node_modules/@vendure/dashboard/src/lib/components/shared/entity-assets.tsx": 1,
     "node_modules/@vendure/dashboard/src/lib/components/shared/powered-by-vendure.tsx": 1,
     "node_modules/@vendure/dashboard/src/lib/framework/dashboard-widget/metrics-widget/index.tsx": 1,
-    "node_modules/@vendure/dashboard/src/lib/framework/data-table/data-table-extensions.ts": 1,
     "node_modules/@vendure/dashboard/src/lib/framework/document-introspection/get-document-structure.ts": 1,
 };
 
 const FILE_BASELINE_B: Record<string, number> = {
-    "node_modules/@vendure/dashboard/src/lib/framework/document-introspection/include-only-selected-list-fields.ts": 6,
-    "node_modules/@vendure/dashboard/src/lib/framework/extension-api/custom-providers.ts": 1,
-    "node_modules/@vendure/dashboard/src/lib/framework/extension-api/define-dashboard-extension.ts": 2,
     "node_modules/@vendure/dashboard/src/lib/framework/extension-api/use-dashboard-extensions.ts": 1,
+    "node_modules/@vendure/dashboard/src/lib/framework/layout-engine/page-layout.tsx": 1,
     "node_modules/@vendure/dashboard/src/lib/framework/page/detail-page.tsx": 1,
-    "node_modules/@vendure/dashboard/src/lib/framework/page/use-extended-router.tsx": 2,
+    "node_modules/@vendure/dashboard/src/lib/framework/page/use-extended-router.tsx": 1,
     "node_modules/@vendure/dashboard/src/lib/graphql/api.ts": 1,
     "node_modules/@vendure/dashboard/src/lib/graphql/schema-enums.ts": 1,
     "node_modules/@vendure/dashboard/src/lib/index.ts": 1,
