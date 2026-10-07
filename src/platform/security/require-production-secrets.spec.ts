@@ -7,6 +7,8 @@
  * relative or schemeless value would register a callback BBB can never
  * produce a valid checksum for, and the verifier reconstructing a different
  * string would reject every delivery. Non-dev boot must refuse without it.
+ * W4 amendment: non-dev must be absolute `https://` (plain http refused —
+ * the registered callback carries the auth material W3 verifies).
  */
 import { describe, expect, it } from "vitest";
 import { assertProductionSecrets } from "./require-production-secrets";
@@ -60,12 +62,13 @@ describe("assertProductionSecrets", () => {
     ["/relative/path"],
     ["ftp://files.example.com"],
     ["meeting.saa9vi.com"], // missing scheme — would register garbage
+    ["http://meeting.saa9vi.com"], // W4: plain http refused outside dev
   ])(
     "non-dev with invalid BBB_PUBLIC_BASE_URL %s refuses to boot",
     (value) => {
       expect(() =>
         guard(prodEnv({ BBB_PUBLIC_BASE_URL: value })),
-      ).toThrow(/BBB_PUBLIC_BASE_URL must be an absolute http\(s\) URL/);
+      ).toThrow(/BBB_PUBLIC_BASE_URL must be an absolute https URL/);
     },
   );
 

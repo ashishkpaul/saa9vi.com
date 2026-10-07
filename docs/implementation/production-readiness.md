@@ -1487,6 +1487,24 @@ Priority order:
 1. Rotate and validate the production Razorpay secrets.
 2. Close the webhook perimeter/configuration controls (HTTPS, request-size/rate limits,
    proxy exposure, raw-body preservation, and secret hygiene).
+   - **W3 inbound verifier — RECORDED; implementation blocked on the W0 capture:**
+     the verifier must be algorithm-agnostic (derive the HMAC from the digest
+     length with an explicit allow-list — 40 hex chars → sha1, 64 → sha256,
+     96 → sha384, 128 → sha512), compare in constant time, and never log
+     checksums or `Authorization` headers. The body format and any bearer
+     header follow the capture (`auth2_0: true` on this server). Contract
+     recorded in the plugin README under "Pending: W3 verifier + W4 hook
+     registration".
+   - **W4 `ensureWebhook` — AMENDED; implementation blocked on the W0 capture:**
+     run every 5–10 minutes (BBB drops a hook after ~5 minutes of failed
+     retries, so a registration gap must be detected and repaired inside that
+     window), alert when a hook is missing (deduplicated ops alert), register
+     only `eventID=meeting-ended,rap-publish-ended`, and require an HTTPS
+     `BBB_PUBLIC_BASE_URL` in production — the https-only boot guard is now
+     enforced (`assertProductionSecrets` refuses plain http outside dev).
+   - Already closed: raw-body ingress probe, rate-limiter route coverage,
+     publicBaseUrl presence boot guard (W0), https-only `BBB_PUBLIC_BASE_URL`
+     (current change), `BbbServer.apiUrl` canonicalisation (current change).
 3. Close P0-K so production fails startup when PostgreSQL or Redis is unavailable instead
    of silently degrading to pg-mem or an in-process queue.
 4. Complete provider webhook/queue observability and production failure-boundary tests.

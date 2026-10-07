@@ -554,7 +554,7 @@ interface BigBlueButtonPluginOptions {
   checksumAlgorithm?: "sha256" | "sha1"; // default: 'sha256' — set from the deployed server's supportedChecksumAlgorithms
 
   // Public callback base (W3/W4 webhooks)
-  publicBaseUrl?: string; // non-dev REQUIRED (BBB_PUBLIC_BASE_URL) — base for /bbb/webhook/<serverId> callbacks
+  publicBaseUrl?: string; // non-dev REQUIRED + https:// only (BBB_PUBLIC_BASE_URL) — base for /bbb/webhook/<serverId> callbacks
 }
 ```
 
@@ -586,6 +586,8 @@ mutation {
 ```
 
 The API secret is AES-256-GCM encrypted before storage and never exposed via any API.
+
+`apiUrl` is the BBB base **without** `/api` and without a trailing slash. Both operator paste shapes — `…/bigbluebutton` and `…/bigbluebutton/api/` — are canonicalised on save and again when each request URL is built (`shared/bbb-api-url.ts`), so existing rows need no manual editing.
 
 ### Step 2 — Create an Organization
 
@@ -1326,6 +1328,51 @@ The webhook receiver is hardened end-to-end:
 2. **Persist before processing (INV-004)** — the raw payload is written to `BbbWebhookEvent` and only then enqueued on the `bbb-webhook-processor` BullMQ queue. A crash between receipt and processing loses nothing.
 3. **Both payload dialects** — legacy `{ event, meetingID }` and the `bbb-webhooks` module shape `{ event: { data: { id, attributes: { meeting: { externalMeetingId } } } } }` are normalised.
 4. **Idempotent consumers** — the queue worker plus `BbbWebhookEvent` status and `SessionAttendance.lastProcessedWebhookEventId` make replays safe.
+
+### Pending: W3 verifier + W4 hook registration (awaiting the W0 capture)
+
+The two remaining webhook-perimeter items are **specified, not yet
+implemented** — both wait on the operator's W0 localhost capture (deployed
+BBB version, `hooks/list` output, a real delivery body). Implement against
+this contract:
+
+**W3 — inbound verifier (amended).** When the per-server route lands, the
+verifier must be:
+
+- **Algorithm-agnostic.** Derive the HMAC algorithm from the digest LENGTH
+  with an explicit allow-list: 40 hex chars → sha1, 64 → sha256,
+  96 → sha384, 128 → sha512. Any other length or an unlisted algorithm is
+  rejected. Do not hard-code `sha256`/`x-hub-signature-256` the way the
+  current receiver does — BBB builds vary.
+- **Constant-time.** `crypto.timingSafeEqual` on equal-length buffers;
+  compare lengths first so a mismatch can neither throw nor leak through an
+  early plain-string compare.
+- **Silent.** Never log checksums or `Authorization` headers (extends the W2
+  "never log the signed URL" rule to every error/log path).
+- **Capture-defined framing.** The body dialect and any bearer header are
+  read off the W0 capture, not assumed — `auth2_0: true` is set on this BBB
+  server, so token-style auth must be verified alongside/instead of the
+  checksum exactly as the capture shows.
+
+**W4 — `ensureWebhook` (amended).**
+
+- **Cadence: every 5–10 minutes** (recommended: 5 min, matching
+  `bbb-reconciliation`). BBB drops a hook after ~5 minutes of failed retries,
+  so a registration gap must be detected and repaired inside that window —
+  a daily sweep would silently lose terminal events.
+- **Alert on a missing hook** (deduplicated ops alert, the
+  `flagServerConfigProblem` family) before re-registering, so a hook that
+  keeps falling off is visible rather than only self-healed.
+- **Register only** `eventID=meeting-ended,rap-publish-ended`
+  (`BbbMeetingService.BBB_EVENTS`) — the only two events the processor
+  consumes.
+- **HTTPS `publicBaseUrl` in production — ENFORCED:** non-dev boot refuses
+  `BBB_PUBLIC_BASE_URL` unless it is an absolute `https://` URL
+  (`assertProductionSecrets`); BBB signs the registered callback and the
+  delivery carries the auth material W3 verifies.
+- Callback URL stays `publicBaseUrl + /bbb/webhook/<serverId>`
+  (`BigBlueButtonPluginOptions.publicBaseUrl`); changing the base requires
+  re-registering every hook.
 
 ---
 

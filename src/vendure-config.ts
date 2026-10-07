@@ -150,8 +150,8 @@ apiOptions: {
   authOptions: {
     tokenMethod: ["bearer", "cookie"],
     superadminCredentials: {
-      identifier: process.env.SUPERADMIN_USERNAME || "superadmin",
-      password: process.env.SUPERADMIN_PASSWORD || "superadmin",
+      identifier: process.env.SUPERADMIN_USERNAME,
+      password: process.env.SUPERADMIN_PASSWORD,
     },
     cookieOptions: {
       secret: process.env.COOKIE_SECRET || "cookie-secret-dev-fallback",
@@ -284,8 +284,9 @@ apiOptions: {
       // Base for the BBB hook callback (`publicBaseUrl +
       // /bbb/webhook/<serverId>`). UNSET is fine in dev; non-dev boot
       // REFUSES without it (assertProductionSecrets /
-      // BBB_PUBLIC_BASE_URL) because BBB signs the REGISTERED URL — a
-      // guessed base would fail every webhook verification.
+      // BBB_PUBLIC_BASE_URL) and requires https:// (W4) because BBB
+      // signs the REGISTERED URL — a guessed base fails every webhook
+      // verification, a plaintext base exposes the auth material.
       publicBaseUrl: process.env.BBB_PUBLIC_BASE_URL || undefined,
 
       // ─── Scalability tuning from .env ──────────────────────────

@@ -29,6 +29,15 @@ const loggerCtx = "BbbWebhookController";
  * the event is safely stored in the DB and can be replayed.
  *
  * Mount point: POST /bbb/webhook
+ *
+ * W3 (PENDING — awaiting the W0 capture): when the amended per-server
+ * verifier lands it must be algorithm-agnostic (digest length →
+ * sha1/256/384/512, explicit allow-list), compare in constant time on
+ * equal-length buffers, and never log checksums or Authorization headers.
+ * The body dialect and any bearer header (`auth2_0: true` on this server)
+ * follow the capture — the current sha256 / x-hub-signature-256 contract
+ * does NOT automatically carry over. Full contract: README "Pending: W3
+ * verifier + W4 hook registration".
  */
 @Controller("bbb")
 export class BbbWebhookController {

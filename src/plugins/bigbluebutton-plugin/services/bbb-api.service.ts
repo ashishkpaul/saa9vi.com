@@ -5,6 +5,7 @@ import { trace, SpanStatusCode } from "@opentelemetry/api";
 import { parseStringPromise } from "xml2js";
 import { BbbEncryptionService } from "./bbb-encryption.service";
 import { BbbServer } from "../entities/bbb-server.entity";
+import { normalizeBbbApiUrl } from "../shared/bbb-api-url";
 import { BBB_PLUGIN_OPTIONS } from "../constants";
 import type { BigBlueButtonPluginOptions } from "../types";
 
@@ -191,7 +192,7 @@ export class BbbApiService {
   ): string {
     const checksum = this.buildChecksum(methodName, params, apiSecret);
     const qs = new URLSearchParams({ ...params, checksum }).toString();
-    const baseUrl = server.apiUrl.replace(/\/$/, "");
+    const baseUrl = normalizeBbbApiUrl(server.apiUrl);
     return `${baseUrl}/api/${methodName}?${qs}`;
   }
 
@@ -275,7 +276,7 @@ export class BbbApiService {
 
   private serverHost(server: BbbServer): string {
     try {
-      return new URL(server.apiUrl).host;
+      return new URL(normalizeBbbApiUrl(server.apiUrl)).host;
     } catch {
       return "bbb-server";
     }
@@ -361,7 +362,7 @@ export class BbbApiService {
     if (params.userID) strParams.userID = params.userID;
     if (params.createTime) strParams.createTime = String(params.createTime);
     if (params.logoutURL) strParams.logoutURL = params.logoutURL;
-    const baseUrl = server.apiUrl.replace(/\/$/, "");
+    const baseUrl = normalizeBbbApiUrl(server.apiUrl);
     const checksum = this.buildChecksum("join", strParams, secret);
     const qs = new URLSearchParams({ ...strParams, checksum }).toString();
     return `${baseUrl}/api/join?${qs}`;

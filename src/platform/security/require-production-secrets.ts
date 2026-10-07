@@ -21,10 +21,12 @@
  *    `encrypt()`, so a missing key orphans a live meeting on the BBB server.
  *  - `BBB_PUBLIC_BASE_URL` — public base for the BBB webhook callbacks
  *    (W3/W4: `publicBaseUrl + /bbb/webhook/<serverId>`). BBB signs the URL
- *    that was REGISTERED, so the value must be an absolute http(s) URL the
+ *    that was REGISTERED, so the value must be an absolute HTTPS URL the
  *    BBB server can actually reach — a relative/schemeless base would
  *    register a callback that can never carry a valid checksum and every
- *    delivery would be rejected at verification.
+ *    delivery would be rejected at verification. W4 amendment: non-dev
+ *    requires `https://` — plain http would expose the registered callback
+ *    (and the auth material W3 verifies) to interception.
  *  - Razorpay key/secret + webhook secret — an unset webhook secret fails
  *    closed (rejects all provider traffic = silent dunning outage); unset API
  *    keys fail at first checkout.
@@ -96,24 +98,25 @@ export function assertProductionSecrets(env: NodeJS.ProcessEnv = process.env): v
     );
   }
 
-  // Public callback base: must be an absolute http(s) URL — BBB signs the
+  // Public callback base: must be an absolute HTTPS URL — BBB signs the
   // URL that was REGISTERED, so hook registration and webhook verification
   // both reconstruct from this exact base (never from request headers, which
   // a reverse proxy rewrites). A trailing slash is accepted; normalisation
-  // happens at use.
+  // happens at use. W4 amendment: https only — the registered callback
+  // carries the auth material W3 verifies, which plain http would expose.
   const publicBaseUrl = env.BBB_PUBLIC_BASE_URL!.trim();
   let baseUrlOk = false;
   try {
     const parsed = new URL(publicBaseUrl);
-    baseUrlOk = parsed.protocol === "http:" || parsed.protocol === "https:";
+    baseUrlOk = parsed.protocol === "https:";
   } catch {
     baseUrlOk = false;
   }
   if (!baseUrlOk) {
     formatFailures.push(
-      `BBB_PUBLIC_BASE_URL must be an absolute http(s) URL (public host ` +
-        `the BBB server can reach, e.g. https://meeting.saa9vi.com); ` +
-        `got "${publicBaseUrl}"`,
+      `BBB_PUBLIC_BASE_URL must be an absolute https URL (public host ` +
+        `the BBB server can reach, e.g. https://meeting.saa9vi.com; ` +
+        `plain http is refused outside dev); got "${publicBaseUrl}"`,
     );
   }
 

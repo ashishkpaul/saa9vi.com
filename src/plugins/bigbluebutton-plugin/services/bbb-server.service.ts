@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { ID, RequestContext, TransactionalConnection } from "@vendure/core";
 import { BbbServer } from "../entities/bbb-server.entity";
 import { BbbEncryptionService } from "./bbb-encryption.service";
+import { normalizeBbbApiUrl } from "../shared/bbb-api-url";
 
 export interface CreateBbbServerInput {
   name: string;
@@ -87,7 +88,7 @@ export class BbbServerService {
   ): Promise<BbbServer> {
     const server = new BbbServer({
       name: input.name,
-      apiUrl: input.apiUrl.replace(/\/$/, ""),
+      apiUrl: normalizeBbbApiUrl(input.apiUrl),
       encryptedApiSecret: this.encryptionService.encrypt(input.apiSecret),
       maxLoad: input.maxLoad ?? 100,
       capacity: input.capacity ?? 200,
@@ -103,7 +104,7 @@ export class BbbServerService {
     const server = await this.connection.getEntityOrThrow(ctx, BbbServer, id);
     if (input.name !== undefined) server.name = input.name;
     if (input.apiUrl !== undefined)
-      server.apiUrl = input.apiUrl.replace(/\/$/, "");
+      server.apiUrl = normalizeBbbApiUrl(input.apiUrl);
     if (input.apiSecret !== undefined) {
       server.encryptedApiSecret = this.encryptionService.encrypt(
         input.apiSecret,

@@ -15,7 +15,17 @@ export class BbbServer extends VendureEntity {
   @Column({ unique: true })
   name: string;
 
-  /** e.g. https://bbb.example.com/bigbluebutton */
+  /**
+   * BBB API base, WITHOUT the trailing `/api` and without a trailing slash
+   * (request URLs are always built as `<apiUrl>/api/<methodName>`).
+   * e.g. https://bbb.example.com/bigbluebutton
+   *
+   * Both paste shapes operators use (`…/bigbluebutton` and
+   * `…/bigbluebutton/api`, with or without a trailing slash) are canonicalised
+   * on save AND re-canonicalised at request-build time
+   * (`shared/bbb-api-url.ts`), so legacy rows are served correctly with NO
+   * data migration and no hand-edited rows.
+   */
   @Column()
   apiUrl: string;
 

@@ -176,7 +176,9 @@ export interface BigBlueButtonPluginOptions {
    *
    * REQUIRED in any non-dev deployment: boot refuses without it
    * (`assertProductionSecrets` / `BBB_PUBLIC_BASE_URL`), so hook
-   * registration can never use a guessed URL.
+   * registration can never use a guessed URL. Non-dev must be `https://`
+   * (W4 amendment; plain http is refused at boot — the registered callback
+   * carries the auth material W3 verifies).
    *
    * @default undefined (dev only)
    */
