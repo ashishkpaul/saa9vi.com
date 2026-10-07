@@ -20,6 +20,7 @@
  * create/update persist the canonical form.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as crypto from "crypto";
 import { normalizeBbbApiUrl } from "../shared/bbb-api-url";
 import { BbbApiService } from "../services/bbb-api.service";
 import { BbbServerService } from "../services/bbb-server.service";
@@ -168,5 +169,62 @@ describe("save-time normalisation (create/update persist the canonical form)", (
     await service.update({} as never, "id", { maxLoad: 42 });
     expect(legacyRow.apiUrl).toBe("https://legacy.example.com/bbb/api/");
     expect(save).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("slash-containing call names (hooks/create-style — W4 ensureWebhook)", () => {
+  /**
+   * `buildApiUrl` is private because no public method uses a slash-containing
+   * methodName yet — the W4 `ensureWebhook` implementation will call it as
+   * `hooks/create`. The pin: the method name is appended VERBATIM after a
+   * single `/api` segment (normalisation must never eat or duplicate a path
+   * segment of a call name), and the checksum covers the FULL slash name.
+   */
+  function signed(
+    apiUrl: string,
+    method: string,
+    params: Record<string, string>,
+  ): URL {
+    const svc = api() as unknown as {
+      buildApiUrl: (
+        s: BbbServer,
+        secret: string,
+        m: string,
+        p: Record<string, string>,
+      ) => string;
+    };
+    return new URL(svc.buildApiUrl(server(apiUrl), SECRET, method, params));
+  }
+
+  const HOOK_PARAMS = {
+    callbackURL: "https://app.example.com/bbb/webhook/srv-1",
+    eventID: "meeting-ended,rap-publish-ended",
+  };
+
+  it.each([
+    ["canonical base", BASE],
+    ["trailing slash", `${BASE}/`],
+    ["stored /api", `${BASE}/api`],
+    ["stored /api/", `${BASE}/api/`],
+  ])("appends hooks/create verbatim after a single /api (%s)", (_label, apiUrl) => {
+    const url = signed(apiUrl, "hooks/create", HOOK_PARAMS);
+    expect(url.origin).toBe(ORIGIN);
+    expect(url.pathname).toBe("/bigbluebutton/api/hooks/create");
+    expect(url.pathname).not.toContain("/api/api/");
+  });
+
+  it("checksums the FULL slash name + query + secret (independently recomputed)", () => {
+    const url = signed(BASE, "hooks/create", HOOK_PARAMS);
+    const qs = new URLSearchParams(HOOK_PARAMS).toString();
+    const expected = crypto
+      .createHash("sha256")
+      .update(`hooks/create${qs}${SECRET}`)
+      .digest("hex");
+    expect(url.searchParams.get("checksum")).toBe(expected);
+    // Param VALUES keep their slash/comma payload untouched.
+    expect(url.searchParams.get("callbackURL")).toBe(HOOK_PARAMS.callbackURL);
+    expect(url.searchParams.get("eventID")).toBe(
+      "meeting-ended,rap-publish-ended",
+    );
   });
 });
