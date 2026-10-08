@@ -288,6 +288,7 @@ apiOptions: {
       // signs the REGISTERED URL — a guessed base fails every webhook
       // verification, a plaintext base exposes the auth material.
       publicBaseUrl: process.env.BBB_PUBLIC_BASE_URL || undefined,
+      checksumAlgorithm: 'sha1',
 
       // ─── Scalability tuning from .env ──────────────────────────
       lockTtlSeconds: Number(process.env.BBB_LOCK_TTL_SECONDS ?? 30),

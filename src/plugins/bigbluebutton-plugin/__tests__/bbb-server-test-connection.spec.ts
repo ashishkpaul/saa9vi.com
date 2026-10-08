@@ -12,6 +12,17 @@
  *       stored secret for the probe; unreachable → refused, not saved;
  *  (T6) update without `enabled` → no probe (cheap config edits stay cheap);
  *  (T7) update {enabled:true} + SUCCESS → saved enabled.
+ *  (T8) update {apiSecret} (rotation) + probe FAIL → UserInputError, save
+ *       never ran, the STORED ciphertext is unchanged (the candidate never
+ *       reaches the database);
+ *  (T9) update {apiUrl} on an enabled server + probe FAIL → UserInputError,
+ *       the stored URL is unchanged (probe side-loaded the stored secret);
+ *  (T10) update {apiSecret} + probe SUCCESS → the NEW ciphertext persists;
+ *  (T11) update {apiSecret} on a DISABLED server → no probe (staging a
+ *        server must not require live BBB reachability), rotation persists.
+ *
+ * No real BBB secret appears anywhere in this file — all secrets are
+ * `enc:`-prefixed fakes supplied by the harness.
  */
 import { describe, expect, it, vi } from "vitest";
 import { UserInputError } from "@vendure/core";
