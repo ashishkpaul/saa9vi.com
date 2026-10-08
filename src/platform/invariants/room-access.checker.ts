@@ -11,7 +11,10 @@ import { CheckResult, Checker, readFileContent } from './runner';
  *     longer hand-rolls its own source list;
  *  3. `joinRoom` (action) delegates to the same evaluator and evaluates it
  *     BEFORE `requestProvisioning`, with no re-implemented gate left behind;
- *  4. the evaluator is registered as a plugin provider (DI actually resolves).
+ *  4. the evaluator is registered as a plugin provider (DI actually resolves);
+ *  5. a non-moderator can never cause provisioning: the `waiting_for_trainer`
+ *     short-circuit sits between the access decision and `requestProvisioning`
+ *     (product invariant — trainers start a class, learners only join one).
  *
  * Pure source inspection — no database. Behavioral parity (same customer, same
  * room, same instant) is pinned by the infra-free policy spec
@@ -26,6 +29,7 @@ export class RoomAccessChecker implements Checker {
       this.policyEnumeratesSources(),
       this.previewDelegates(),
       this.joinAuthorizesBeforeProvisioning(),
+      this.joinBlocksLearnerProvisioning(),
       this.evaluatorIsRegistered(),
     ];
 
@@ -235,6 +239,74 @@ export class RoomAccessChecker implements Checker {
     return this.pass(
       'join-authorizes-before-provisioning',
       'joinRoom delegates to the shared evaluator before requestProvisioning',
+      'services/bbb-meeting.service.ts',
+    );
+  }
+
+  /**
+   * Product invariant: **Tenant Admin / Trainer start a class; learners only
+   * join a class that has already been started.**
+   *
+   * Enforced at the service boundary inside `joinRoom`, so no Shop/Admin
+   * caller can bypass it. This proves the SHAPE: the `waiting_for_trainer`
+   * short-circuit is present and lands between the shared access decision and
+   * the `requestProvisioning` call — i.e. an authorized non-moderator returns
+   * before provisioning can run. Behavioral proof (no meeting row, no room
+   * state flip, no enqueue) lives in `__tests__/room-access.e2e-spec.ts`.
+   */
+  private async joinBlocksLearnerProvisioning(): Promise<CheckResult> {
+    const src = this.read(
+      'src/plugins/bigbluebutton-plugin/services/bbb-meeting.service.ts',
+    );
+    const body = src
+      ? this.methodBody(src, 'async joinRoom(', '// ─── Update')
+      : null;
+    if (!body) {
+      return this.fail(
+        'join-blocks-learner-provisioning',
+        'joinRoom method not found in bbb-meeting.service.ts',
+        'The learner-provisioning invariant lives inside joinRoom',
+      );
+    }
+
+    const provisioningIdx = body.indexOf('this.roomService.requestProvisioning');
+    if (provisioningIdx === -1) {
+      return this.fail(
+        'join-blocks-learner-provisioning',
+        'joinRoom no longer requests provisioning (anchor changed — update this checker)',
+        'The ordering check needs the requestProvisioning call site',
+      );
+    }
+
+    const waitingIdx = body.indexOf('JOIN_STATUS_WAITING_FOR_TRAINER');
+    if (waitingIdx === -1) {
+      return this.fail(
+        'join-blocks-learner-provisioning',
+        'joinRoom no longer emits `waiting_for_trainer` — a learner can provision a room again',
+        'Trainers start a class; learners may only join one. Restore the non-moderator short-circuit before requestProvisioning',
+      );
+    }
+
+    const roleIdx = body.indexOf('access.isModerator');
+    if (roleIdx === -1 || roleIdx > waitingIdx) {
+      return this.fail(
+        'join-blocks-learner-provisioning',
+        'the waiting_for_trainer branch is not gated on the shared access decision (access.isModerator)',
+        'The guard must use the INV-027 evaluator result, not a hand-rolled role check',
+      );
+    }
+
+    if (waitingIdx > provisioningIdx) {
+      return this.fail(
+        'join-blocks-learner-provisioning',
+        'the waiting_for_trainer return lands AFTER requestProvisioning — a learner still causes provisioning',
+        'Return before the provisioning boundary: no meeting row, no room state flip, no job',
+      );
+    }
+
+    return this.pass(
+      'join-blocks-learner-provisioning',
+      'joinRoom returns waiting_for_trainer for a non-moderator BEFORE requestProvisioning',
       'services/bbb-meeting.service.ts',
     );
   }

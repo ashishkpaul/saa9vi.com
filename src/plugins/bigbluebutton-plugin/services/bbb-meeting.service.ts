@@ -50,6 +50,7 @@ import {
   MeetingFailedEvent,
 } from "../events/bbb-events";
 import {
+  JOIN_STATUS_WAITING_FOR_TRAINER,
   MEETING_STATE,
   MEETING_STATE_TRANSITIONS,
   START_ROOM_POLL_INTERVAL_MS,
@@ -716,9 +717,21 @@ export class BbbMeetingService implements OnModuleInit {
 
   /**
    * Entry point for the shop `bbbJoinRoom` mutation.
-   * - If room is Active: returns join URL immediately.
-   * - If room is Idle/Failed (within retry budget): provisions a new meeting and returns status.
-   * - Frontend polls bbbRoom(id) until state === Active, then calls again.
+   *
+   * Access is evaluated first (INV-027 — preview denial ⇔ join denial), then
+   * the product invariant "learners never provision" is enforced at this
+   * service boundary:
+   *
+   * - **Moderator (ORG_ADMIN / TRAINER)**
+   *   - room Active → returns the moderator join URL.
+   *   - room Idle/Failed (within retry budget) → provisions a new meeting and
+   *     returns `provisioning`; the frontend polls `bbbRoom(id)` until
+   *     `state === Active` and calls again.
+   * - **Non-moderator (learner via entitlement/enrollment)**
+   *   - room Active → returns the attendee join URL.
+   *   - room NOT Active → returns `waiting_for_trainer` and causes **no**
+   *     `requestProvisioning`, no `BbbMeeting` row, no room state flip and no
+   *     provisioning job (`JOIN_STATUS_WAITING_FOR_TRAINER`).
    */
   async joinRoom(
     ctx: RequestContext,
@@ -765,6 +778,24 @@ export class BbbMeetingService implements OnModuleInit {
       `[joinRoom] access allowed (INV-027) source=${access.source} isModerator=${access.isModerator} customerId=${customerId} roomId=${roomId}`,
       loggerCtx,
     );
+
+    // ── Product invariant — learners never provision ──────────────────────────
+    // Tenant Admin / Trainer START a class; learners only JOIN a class that has
+    // already been started. An authorized non-moderator on a non-active room
+    // gets a terminal "waiting for trainer" answer, returned BEFORE
+    // `requestProvisioning` so it causes no BbbMeeting row, no Idle→Provisioning
+    // flip and no provisioning job.
+    //
+    // This sits at the SERVICE boundary (not the resolver) on purpose: any
+    // future Shop/Admin caller that reaches `joinRoom` inherits the rule, and
+    // INV-027 still guarantees preview denial ⇔ join denial above it.
+    if (!access.isModerator && room.state !== "Active") {
+      Logger.info(
+        `[joinRoom] non-moderator (source=${access.source}) on non-active room ${roomId} (state=${room.state}) → ${JOIN_STATUS_WAITING_FOR_TRAINER}; provisioning skipped`,
+        loggerCtx,
+      );
+      return { status: JOIN_STATUS_WAITING_FOR_TRAINER };
+    }
 
     const result = await this.roomService.requestProvisioning(ctx, roomId);
     Logger.info(
@@ -839,6 +870,18 @@ export class BbbMeetingService implements OnModuleInit {
         `[joinRoom] shouldEnqueue=true — creating meeting and enqueuing provisioning job`,
         loggerCtx,
       );
+      // Second fence for the SAME invariant: a non-moderator may only reach
+      // here when the room was Active and requestProvisioning decided the
+      // Active reference was stale (stale-active rebuild). Letting a learner
+      // trigger that rebuild would still be "a non-moderator causing
+      // provisioning", so it is refused here too — before the insert.
+      if (!access.isModerator) {
+        Logger.info(
+          `[joinRoom] non-moderator blocked from enqueuing on room ${roomId} (stale-active rebuild) → ${JOIN_STATUS_WAITING_FOR_TRAINER}`,
+          loggerCtx,
+        );
+        return { status: JOIN_STATUS_WAITING_FOR_TRAINER };
+      }
       await this.createRoomMeetingAndEnqueue(ctx, roomId);
     } else {
       this.metrics.recordProvisioningSuppressed();

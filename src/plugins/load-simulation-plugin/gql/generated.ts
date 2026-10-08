@@ -250,7 +250,14 @@ export type BbbJoinRoomResult = {
   __typename?: 'BbbJoinRoomResult';
   /** Present only when status is active */
   joinUrl?: Maybe<Scalars['String']['output']>;
-  /** active | provisioning | failed */
+  /**
+   * active | provisioning | failed | waiting_for_trainer
+   *
+   * waiting_for_trainer = the caller is authorized but is NOT a moderator
+   * (no org_admin/trainer role) and the room has not been started yet. It is a
+   * success outcome: the join caused no provisioning — the learner waits for a
+   * trainer to start the class.
+   */
   status: Scalars['String']['output'];
 };
 
@@ -2596,9 +2603,9 @@ export type MutationVoteOnReviewArgs = {
  * Live meeting-minutes allowance for the active channel's current period.
  *
  * Sourced from BbbCapacityGrant, restricted to tenant-selectable source types
- * ('order', 'subscription'): 'internal_overhead' is ops headroom and is never
- * reported as customer allowance (BUG-036 semantics, shared with the
- * provisioning gate).
+ * ('order', 'subscription', 'manual'): 'internal_overhead' is ops headroom and
+ * is never reported as customer allowance (BUG-036 semantics, shared with the
+ * provisioning gate; 'manual' added by BUG-044).
  */
 export type MyLiveUsage = {
   __typename?: 'MyLiveUsage';

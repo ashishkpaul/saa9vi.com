@@ -43,7 +43,12 @@ export const shopApiExtensions = gql`
 
   type BbbJoinRoomResult {
     """
-    active | provisioning | failed
+    active | provisioning | failed | waiting_for_trainer
+
+    waiting_for_trainer = the caller is authorized but is NOT a moderator
+    (no org_admin/trainer role) and the room has not been started yet. It is a
+    success outcome: the join caused no provisioning — the learner waits for a
+    trainer to start the class.
     """
     status: String!
     """

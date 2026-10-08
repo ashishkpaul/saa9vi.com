@@ -98,6 +98,21 @@ export const START_ROOM_WAIT_MS_MAX = 20_000;
 /** Poll interval while waiting for the room state machine. */
 export const START_ROOM_POLL_INTERVAL_MS = 400;
 
+// ─── `joinRoom` statuses (Shop `bbbJoinRoom.status`) ─────────────────────────
+
+/**
+ * Saa9vi product invariant, enforced at the service boundary:
+ * **Tenant Admin / Trainer start a class; learners only join a class that has
+ * already been started.**
+ *
+ * Returned by `BbbMeetingService.joinRoom` when an *authorized non-moderator*
+ * asks to join a room that is not `Active`. It is a SUCCESS outcome (access
+ * was granted) — not an error — and it is returned BEFORE
+ * `requestProvisioning`, so the caller causes no meeting row, no room state
+ * flip and no provisioning job.
+ */
+export const JOIN_STATUS_WAITING_FOR_TRAINER = "waiting_for_trainer";
+
 // ─── Organisation Member Roles ───────────────────────────────────────────────
 
 /**

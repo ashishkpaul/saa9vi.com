@@ -13,6 +13,13 @@
  *   C3 no access        → preview ✗, join ✗ AND zero BbbMeeting rows /
  *                         room still Idle (join authorizes BEFORE
  *                         requestProvisioning — the ordering defect)
+ *   C4 learner + Idle   → preview ✓, join `waiting_for_trainer` AND
+ *                         requestProvisioning never called, zero BbbMeeting
+ *                         rows, room row byte-identical (product invariant:
+ *                         trainers start a class, learners only join one) —
+ *                         then the SAME room starts fine for a moderator,
+ *                         proving the fence is role-scoped and not a broken
+ *                         room.
  *
  * Also asserts BUG-044: `createBbbCapacityGrant` persists
  * `sourceType='manual'` (not the `'order'` column default) and the Admin
@@ -44,7 +51,7 @@ import {
 import { startOnFreePort } from '../../../test-utils/free-port';
 import { getSuperadminContext } from '@vendure/testing/lib/utils/get-superadmin-context';
 import { mergeConfig, TransactionalConnection } from '@vendure/core';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { TenantPlugin } from '../../tenant-plugin/tenant-plugin.plugin';
 import { BigBlueButtonPlugin } from '../bigbluebutton.plugin';
@@ -57,6 +64,7 @@ import { BbbMeeting } from '../entities/bbb-meeting.entity';
 import { BbbRoom } from '../entities/bbb-room.entity';
 import { BbbCapacityGrant } from '../entities/bbb-capacity-grant.entity';
 import { BbbRoomAccessService } from '../services/room-access.service';
+import { BbbRoomService } from '../services/bbb-room.service';
 
 registerInitializer('postgres', new SchemaPostgresInitializer());
 
@@ -233,6 +241,8 @@ describe('INV-027 room preview/join parity (BUG-045)', () => {
   let roomEnrolledId = '';
   /** Fresh room used only by the denied persona (C3). */
   let roomDeniedId = '';
+  /** Fresh Idle room used only by the learner-provisioning fence (C4). */
+  let roomWaitId = '';
   /** C1: BbbEnrollment only — no membership, no entitlement. */
   let enrolledCustomerId = '';
   /** C2: BbbOrganizationMembership(org_admin) only. */
@@ -386,6 +396,20 @@ describe('INV-027 room preview/join parity (BUG-045)', () => {
     }
     roomDeniedId = decode(deniedRoom.createBbbRoom.id);
 
+    // C4 — a room that stays Idle until a MODERATOR starts it. The learner is
+    // enrolled on it (authorized) so the only difference from C1 is the role.
+    const waitRoom: any = await adminClient.query(CREATE_BBB_ROOM, {
+      input: {
+        organizationId: encode(orgId),
+        name: `INV-027 Wait Room ${stamp}`,
+        slug: `inv027-room-wait-${stamp}`,
+      },
+    });
+    if (!waitRoom.createBbbRoom?.id) {
+      fail('createBbbRoom(wait)', waitRoom);
+    }
+    roomWaitId = decode(waitRoom.createBbbRoom.id);
+
     enrolledEmail = `inv027-enrolled-${stamp}@example.com`;
     staffEmail = `inv027-staff-${stamp}@example.com`;
     outsiderEmail = `inv027-outsider-${stamp}@example.com`;
@@ -413,6 +437,21 @@ describe('INV-027 room preview/join parity (BUG-045)', () => {
       fail('createBbbEnrollment', enrollment);
     }
     expect(enrollment.createBbbEnrollment.active).toBe(true);
+
+    // Same learner on the C4 room — authorized (enrollment) but NOT a
+    // moderator, so the fence below is the only thing that can stop her.
+    const waitEnrollment: any = await adminClient.query(CREATE_BBB_ENROLLMENT, {
+      input: {
+        roomId: encode(roomWaitId),
+        customerId: encode(enrolledCustomerId),
+        accessDays: 30,
+        reason: 'INV-027 C4 fixture',
+      },
+    });
+    if (!waitEnrollment.createBbbEnrollment?.id) {
+      fail('createBbbEnrollment(wait)', waitEnrollment);
+    }
+    expect(waitEnrollment.createBbbEnrollment.active).toBe(true);
 
     // C2 — FEAT-001 org membership only (org_admin ⇒ moderator role).
     const membership: any = await adminClient.query(
@@ -518,7 +557,7 @@ describe('INV-027 room preview/join parity (BUG-045)', () => {
 
   // ─── C1 — enrollment persona: preview ✓ and join ✓ ───────────────────────
 
-  it('C1 (enrollment only): preview succeeds AND join succeeds (enrollment honored at join time)', async () => {
+  it('C1 (enrollment only): preview succeeds AND join is honored — but as waiting_for_trainer', async () => {
     await shopClient.asUserWithCredentials(enrolledEmail, PASSWORD);
 
     const preview: any = await shopClient.query(ROOM_STATUS, {
@@ -529,13 +568,21 @@ describe('INV-027 room preview/join parity (BUG-045)', () => {
     // Pre-INV-027 this threw "You do not have access to this room" because
     // join's Gate 3 read BbbEntitlement only — enrollment was authoritative
     // for display but decorative for the action that matters.
+    //
+    // Enrollment now DOES authorize the action — and because an enrollment is
+    // a VIEWER source (isModerator=false) on a room nobody has started, the
+    // answer is the terminal `waiting_for_trainer` rather than provisioning.
+    // A ForbiddenError here would regress INV-027; a `provisioning` status
+    // would regress "learners never provision".
     const join: any = await shopClient.query(JOIN_ROOM, {
       roomId: encode(roomEnrolledId),
       participantName: 'Enrolled Learner',
     });
-    expect(join.bbbJoinRoom.status).toBe('provisioning');
-    // Authorization passed ⇒ at least one meeting was created for the room.
-    expect(await meetingCountFor(roomEnrolledId)).toBeGreaterThanOrEqual(1);
+    expect(join.bbbJoinRoom.status).toBe('waiting_for_trainer');
+    expect(join.bbbJoinRoom.joinUrl).toBeNull();
+    // Authorization passed (no error) yet nothing was provisioned.
+    expect(await meetingCountFor(roomEnrolledId)).toBe(0);
+    expect(await roomState(roomEnrolledId)).toBe('Idle');
   });
 
   // ─── C2 — staff persona: preview ✓ (was Forbidden) and join ✓ ────────────
@@ -550,14 +597,91 @@ describe('INV-027 room preview/join parity (BUG-045)', () => {
 
     // Pre-INV-027 bbbRoomStatus never consulted BbbOrganizationMembership,
     // so FEAT-001 staff who passed join's Gate 1 got ForbiddenError here.
-    // The room is already Provisioning from C1, so join must fast-exit with
-    // 'provisioning' — the assertion is that NO access error is raised.
+    //
+    // C1 no longer provisions (the learner is fenced), so the room is still
+    // Idle here: a MODERATOR is exactly who may start it, so join must take
+    // the provisioning branch. The assertion is that NO access error is raised
+    // and that the moderator — unlike the learner in C1 — actually provisions.
     const join: any = await shopClient.query(JOIN_ROOM, {
       roomId: encode(roomEnrolledId),
       participantName: 'Org Admin',
     });
     expect(['provisioning', 'active']).toContain(join.bbbJoinRoom.status);
+    expect(join.bbbJoinRoom.status).not.toBe('waiting_for_trainer');
+    expect(await meetingCountFor(roomEnrolledId)).toBeGreaterThanOrEqual(1);
   });
+
+  // ─── C4 — learner provisioning fence (product invariant) ──────────────────
+
+  it('C4 (learner + Idle room): waiting_for_trainer with ZERO provisioning side effects', async () => {
+    await shopClient.asUserWithCredentials(enrolledEmail, PASSWORD);
+
+    // Preview must still authorize — the fence is about the ACTION, not access.
+    const preview: any = await shopClient.query(ROOM_STATUS, {
+      id: encode(roomWaitId),
+    });
+    expect(decode(preview.bbbRoomStatus.id)).toBe(roomWaitId);
+    expect(preview.bbbRoomStatus.state).toBe('Idle');
+
+    const roomBefore = await rawConn()
+      .getRepository(BbbRoom)
+      .findOne({ where: { id: roomWaitId } });
+    expect(roomBefore).toBeTruthy();
+    const meetingsBefore = await meetingCountFor(roomWaitId);
+    expect(meetingsBefore).toBe(0);
+
+    // Strongest form of "no provisioning": the boundary itself is never
+    // entered — so no Redis lock, no Idle→Provisioning flip, no enqueue.
+    const roomSvc = server.app.get(BbbRoomService);
+    const spy = vi.spyOn(roomSvc, 'requestProvisioning');
+
+    let join: any;
+    let requestCalls = -1;
+    try {
+      join = await shopClient.query(JOIN_ROOM, {
+        roomId: encode(roomWaitId),
+        participantName: 'Waiting Learner',
+      });
+      requestCalls = spy.mock.calls.length;
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(join.bbbJoinRoom.status).toBe('waiting_for_trainer');
+    expect(join.bbbJoinRoom.joinUrl).toBeNull();
+    expect(requestCalls).toBe(0);
+
+    expect(await meetingCountFor(roomWaitId)).toBe(meetingsBefore);
+    expect(await roomState(roomWaitId)).toBe('Idle');
+
+    const roomAfter = await rawConn()
+      .getRepository(BbbRoom)
+      .findOne({ where: { id: roomWaitId } });
+    expect(roomAfter).toBeTruthy();
+    // The room row is untouched: state, optimistic-lock version, the active
+    // meeting pointer, the debounce stamp and the retry budget all unchanged.
+    expect(roomAfter!.version).toBe(roomBefore!.version);
+    expect(roomAfter!.state).toBe(roomBefore!.state);
+    expect(roomAfter!.currentMeetingId).toBe(roomBefore!.currentMeetingId);
+    expect(roomAfter!.retryCount).toBe(roomBefore!.retryCount);
+    expect(roomAfter!.lastProvisionRequestedAt?.getTime() ?? null).toBe(
+      roomBefore!.lastProvisionRequestedAt?.getTime() ?? null,
+    );
+  }, 30000);
+
+  it('C4b: the SAME room starts normally for a moderator (the fence is role-scoped)', async () => {
+    await shopClient.asUserWithCredentials(staffEmail, PASSWORD);
+
+    const join: any = await shopClient.query(JOIN_ROOM, {
+      roomId: encode(roomWaitId),
+      participantName: 'Org Admin Starts',
+    });
+    // Not an access error, and not the learner's terminal answer.
+    expect(['provisioning', 'active']).toContain(join.bbbJoinRoom.status);
+    expect(join.bbbJoinRoom.status).not.toBe('waiting_for_trainer');
+    expect(await meetingCountFor(roomWaitId)).toBeGreaterThanOrEqual(1);
+    expect(await roomState(roomWaitId)).not.toBe('Idle');
+  }, 30000);
 
   // ─── The single shared evaluation (INV-027) ──────────────────────────────
 
