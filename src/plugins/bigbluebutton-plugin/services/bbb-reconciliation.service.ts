@@ -929,16 +929,19 @@ export class BbbReconciliationService {
         const localIds = bbbIds
           .filter((id) => id.startsWith("bbb-"))
           .map((id) => id.slice("bbb-".length));
-        const known = await this.connection
+        const qb = this.connection
           .getRepository(ctx, BbbMeeting)
           .createQueryBuilder("meeting")
           .select("meeting.id")
           .addSelect("meeting.bbbMeetingId")
-          .where("meeting.bbbMeetingId IN (:...bbbIds)", { bbbIds })
-          .orWhere("meeting.id IN (:...localIds)", {
-            localIds: localIds.length > 0 ? localIds : [""],
-          })
-          .getMany();
+          .where("meeting.bbbMeetingId IN (:...bbbIds)", { bbbIds });
+        // Only add the localIds clause when there are actual IDs to match —
+        // an empty array with orWhere would pass [""] which Postgres
+        // rejects with "invalid input syntax for type integer".
+        if (localIds.length > 0) {
+          qb.orWhere("meeting.id IN (:...localIds)", { localIds });
+        }
+        const known = await qb.getMany();
         const knownBbbIds = new Set(
           known
             .map((k) => k.bbbMeetingId)
