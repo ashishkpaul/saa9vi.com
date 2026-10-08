@@ -249,19 +249,21 @@ export class BbbAdminResolver {
   @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
   @Transaction()
   @Mutation()
-  createBbbServer(@Ctx() ctx: RequestContext, @Args("input") input: CreateBbbServerInput) {
-    return this.serverService.create(ctx, input);
+  async createBbbServer(@Ctx() ctx: RequestContext, @Args("input") input: CreateBbbServerInput) {
+    const s = await this.serverService.create(ctx, input);
+    return { ...s, credentialStatus: await this.serverService.credentialStatus(ctx, s.id) };
   }
 
   @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
   @Transaction()
   @Mutation()
-  updateBbbServer(
+  async updateBbbServer(
     @Ctx() ctx: RequestContext,
     @Args("id") id: string,
     @Args("input") input: UpdateBbbServerInput,
   ) {
-    return this.serverService.update(ctx, id, input);
+    const s = await this.serverService.update(ctx, id, input);
+    return { ...s, credentialStatus: await this.serverService.credentialStatus(ctx, s.id) };
   }
 
   // ─── Organizations ──────────────────────────────────────────────────────────
