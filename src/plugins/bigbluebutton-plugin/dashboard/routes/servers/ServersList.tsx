@@ -13,6 +13,7 @@ const GET_SERVERS = graphql(`
         apiUrl
         enabled
         healthy
+        credentialStatus
         currentLoad
         maxLoad
         lastHealthCheckAt
@@ -30,6 +31,7 @@ const CREATE_SERVER = graphql(`
       apiUrl
       enabled
       healthy
+      credentialStatus
     }
   }
 `);
@@ -42,6 +44,7 @@ const UPDATE_SERVER = graphql(`
       apiUrl
       enabled
       healthy
+      credentialStatus
       currentLoad
       maxLoad
     }
@@ -60,6 +63,7 @@ interface BbbServer {
   apiUrl: string;
   enabled: boolean;
   healthy: boolean;
+  credentialStatus: string;
   currentLoad: number;
   maxLoad: number;
   lastHealthCheckAt: string | null;
@@ -91,6 +95,7 @@ export function ServersList() {
   // Edit form state
   const [editName, setEditName] = useState('');
   const [editApiUrl, setEditApiUrl] = useState('');
+  const [editApiSecret, setEditApiSecret] = useState('');
   const [editMaxLoad, setEditMaxLoad] = useState(50);
 
   const { data, isLoading, isError } = useQuery<ServersResponse>({
@@ -159,6 +164,7 @@ export function ServersList() {
     setEditingServer(server);
     setEditName(server.name);
     setEditApiUrl(server.apiUrl);
+    setEditApiSecret(''); // always blank — operator types new secret only when changing
     setEditMaxLoad(server.maxLoad);
     setEditDialogOpen(true);
   }
@@ -276,6 +282,7 @@ export function ServersList() {
                   <TableHead>Name</TableHead>
                   <TableHead>API URL</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Credential</TableHead>
                   <TableHead>Load</TableHead>
                   <TableHead>Enabled</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
@@ -292,6 +299,17 @@ export function ServersList() {
                       <Badge variant={server.healthy ? 'success' : 'destructive'}>
                         {server.healthy ? 'Healthy' : 'Unhealthy'}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {server.credentialStatus === 'CREDENTIAL_UNREADABLE' ? (
+                        <Badge variant="destructive" title="GCM auth failed — re-enter secret via Edit">
+                          Re-enter secret
+                        </Badge>
+                      ) : server.credentialStatus === 'OK' ? (
+                        <Badge variant="success">OK</Badge>
+                      ) : (
+                        <Badge variant="warning">Unknown</Badge>
+                      )}
                     </TableCell>
                     <TableCell>
                       {server.currentLoad} / {server.maxLoad}
@@ -362,11 +380,15 @@ export function ServersList() {
         )}
       </Card>
 
+      {/* Delete confirmation */}
       <Dialog open={!!deleteTargetId} onOpenChange={(o) => !o && setDeleteTargetId(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete Server</DialogTitle>
-            <DialogDescription>Are you sure you want to delete this server? This action cannot be undone.</DialogDescription>
+            <DialogDescription>
+              Are you sure? This cannot be undone. Servers with linked meeting
+              records cannot be deleted — disable them instead.
+            </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteTargetId(null)}>Cancel</Button>
@@ -382,7 +404,15 @@ export function ServersList() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit Server</DialogTitle>
-            <DialogDescription>Update server configuration.</DialogDescription>
+            <DialogDescription>
+              Update server configuration. Leave "New API Secret" blank to keep
+              the existing secret.{' '}
+              {editingServer?.credentialStatus === 'CREDENTIAL_UNREADABLE' && (
+                <span className="text-destructive font-medium">
+                  ⚠ Credential unreadable — enter the BBB API secret to restore access.
+                </span>
+              )}
+            </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
@@ -399,6 +429,20 @@ export function ServersList() {
                 id="edit-apiUrl"
                 value={editApiUrl}
                 onChange={(e) => setEditApiUrl(e.target.value)}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="edit-apiSecret">
+                New API Secret{' '}
+                <span className="text-muted-foreground font-normal">(leave blank to keep existing)</span>
+              </Label>
+              <Input
+                id="edit-apiSecret"
+                type="password"
+                value={editApiSecret}
+                onChange={(e) => setEditApiSecret(e.target.value)}
+                placeholder="Enter new secret to rotate"
+                autoComplete="new-password"
               />
             </div>
             <div className="grid gap-2">
@@ -419,9 +463,10 @@ export function ServersList() {
             <Button
               onClick={() => {
                 if (!editingServer) return;
-                const input: any = {};
+                const input: Record<string, unknown> = {};
                 if (editName !== editingServer.name) input.name = editName;
                 if (editApiUrl !== editingServer.apiUrl) input.apiUrl = editApiUrl;
+                if (editApiSecret.trim()) input.apiSecret = editApiSecret.trim();
                 if (editMaxLoad !== editingServer.maxLoad) input.maxLoad = editMaxLoad;
                 if (Object.keys(input).length === 0) {
                   setEditDialogOpen(false);

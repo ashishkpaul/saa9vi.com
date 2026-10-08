@@ -215,6 +215,24 @@ export class BbbServerService {
   }
 
   async delete(ctx: RequestContext, id: ID): Promise<void> {
+    // Guard: refuse to delete a server that has linked meeting rows.
+    // bbb_meeting.serverId is a FK to bbb_server — deleting the server row
+    // with meetings present violates the FK constraint and would also destroy
+    // the billing audit trail. Operators should disable the server instead
+    // and only delete once all meetings are archived.
+    const meetingCount = await this.connection
+      .getRepository(ctx, BbbServer)
+      .manager.query(
+        `SELECT COUNT(*) AS cnt FROM "bbb_meeting" WHERE "serverId" = $1`,
+        [id],
+      ) as Array<{ cnt: string }>;
+    const count = parseInt(meetingCount[0]?.cnt ?? "0", 10);
+    if (count > 0) {
+      throw new UserInputError(
+        `Cannot delete server: ${count} meeting record(s) reference this server. ` +
+          `Disable it instead, or archive all linked meetings first.`,
+      );
+    }
     await this.connection.getRepository(ctx, BbbServer).delete(id);
   }
 
