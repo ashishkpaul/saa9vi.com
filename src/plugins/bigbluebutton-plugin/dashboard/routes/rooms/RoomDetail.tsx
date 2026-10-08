@@ -31,9 +31,12 @@ import { resolveListState } from '../../../../../platform/dashboard/query-state'
 //   · Attendance   — scheduledSessionAttendanceSummary per session of the room
 //                    (Phase 5.6: derive sessions via roomId, reuse the existing
 //                    per-session read — no new fact tables).
-//   · Recordings   — the room's billed meetings carrying the recordingUrl the
-//                    rap-publish-ended webhook stored (month-scoped; never
-//                    invented).
+//   · Recordings   — the room's meetings that carry a stored recordingUrl
+//                    (channel-scoped bbbRoomRecordings, month-scoped on the
+//                    IST month of completedAt; never invented). Read from
+//                    BbbMeeting, NOT from metered usage, so grant-billed rooms
+//                    appear too. Columns are limited to what BbbMeeting has —
+//                    attendance/learner-minutes stay on Overview.
 //   · Settings     — name, max students, recording. No provisioning fields.
 //
 // No plumbing in the tenant document (A11): no currentMeetingId, retryCount,
@@ -80,6 +83,21 @@ const ROOM_METERED = graphql(`
         peakLearners
         learnerMinutes
         chargePaise
+        recordingUrl
+      }
+      totalItems
+    }
+  }
+`);
+
+const ROOM_RECORDINGS = graphql(`
+  query BbbTenantRoomRecordings($month: String, $skip: Int, $take: Int) {
+    bbbRoomRecordings(month: $month, skip: $skip, take: $take) {
+      items {
+        id
+        title
+        roomId
+        completedAt
         recordingUrl
       }
       totalItems
@@ -277,7 +295,9 @@ export function RoomDetailPage({ route }: { route: AnyRoute }) {
   const meteredQuery = useQuery({
     queryKey: ['bbbRoomMetered', month],
     queryFn: () => api.query(ROOM_METERED, { month, take: 200 }),
-    enabled: !!id && (tab === 'overview' || tab === 'recordings'),
+    // Overview only: today's student-minutes. The Recordings tab reads
+    // bbbRoomRecordings instead — metered usage has no rows for grant rooms.
+    enabled: !!id && tab === 'overview',
   });
   // INV-015: resolveListState prevents a rejected or disabled query from
   // rendering as "no metered meetings". The raw filter below is safe only
@@ -285,7 +305,7 @@ export function RoomDetailPage({ route }: { route: AnyRoute }) {
   const meteredState = resolveListState(
     meteredQuery,
     (data: any) => data?.bbbMeteredMeetings,
-    { expected: 'bbbMeteredMeetings', blocked: !id },
+    { expected: 'bbbMeteredMeetings', blocked: !id || tab !== 'overview' },
   );
   const roomMetered: any[] = meteredState.status === 'ready'
     ? (meteredState.items as any[]).filter((m: any) => m.roomId === id)
@@ -293,6 +313,24 @@ export function RoomDetailPage({ route }: { route: AnyRoute }) {
   const todayMinutes = roomMetered
     .filter((m: any) => isToday(m.startedAt))
     .reduce((sum: number, m: any) => sum + (m.learnerMinutes ?? 0), 0);
+
+  const recordingsQuery = useQuery({
+    queryKey: ['bbbRoomRecordings', month],
+    queryFn: () => api.query(ROOM_RECORDINGS, { month, skip: 0, take: 100 }),
+    enabled: !!id && tab === 'recordings',
+  });
+  // INV-015: a rejected/absent bbbRoomRecordings must read as an error, not
+  // as "no recordings in this room".
+  const recordingsState = resolveListState(
+    recordingsQuery,
+    (data: any) => data?.bbbRoomRecordings,
+    { expected: 'bbbRoomRecordings', blocked: !id },
+  );
+  // Channel-scoped read; the tab shows ONE room, so filter locally (the same
+  // pattern the metered list used before it).
+  const roomRecordings: any[] = recordingsState.status === 'ready'
+    ? (recordingsState.items as any[]).filter((m: any) => m.roomId === id)
+    : [];
 
   const sessionsQuery = useQuery({
     queryKey: ['bbbRoomSessions', organizationId],
@@ -719,13 +757,13 @@ export function RoomDetailPage({ route }: { route: AnyRoute }) {
               />
             </div>
           </div>
-          {meteredState.status === 'loading' ? (
+          {recordingsState.status === 'loading' ? (
               <div className="p-4 space-y-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
-            ) : meteredState.status === 'error' ? (
+            ) : recordingsState.status === 'error' ? (
               <div className="p-6 text-center text-red-500">Failed to load recordings</div>
-            ) : roomMetered.length === 0 ? (
+            ) : roomRecordings.length === 0 ? (
             <div className="p-6 text-center text-muted-foreground">
-              No classes recorded in this room in {month}.
+              No recordings published for this room in {month}.
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -733,32 +771,26 @@ export function RoomDetailPage({ route }: { route: AnyRoute }) {
                 <thead>
                   <tr className="border-b text-left text-muted-foreground">
                     <th className="px-4 py-3 font-medium">Class</th>
-                    <th className="px-4 py-3 font-medium">When</th>
-                    <th className="px-4 py-3 font-medium">Students</th>
-                    <th className="px-4 py-3 font-medium">Student-hours</th>
+                    <th className="px-4 py-3 font-medium">Ended</th>
                     <th className="px-4 py-3 font-medium">Recording</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {roomMetered.map((m: any) => (
+                  {roomRecordings.map((m: any) => (
                     <tr key={m.id} className="border-b last:border-0">
                       <td className="px-4 py-3 font-medium">{m.title}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{new Date(m.startedAt).toLocaleString()}</td>
-                      <td className="px-4 py-3">{m.peakLearners}</td>
-                      <td className="px-4 py-3">{toStudentHours(m.learnerMinutes)}</td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {new Date(m.completedAt).toLocaleString()}
+                      </td>
                       <td className="px-4 py-3">
-                        {m.recordingUrl ? (
-                          <a
-                            href={m.recordingUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-blue-500 hover:underline"
-                          >
-                            Watch
-                          </a>
-                        ) : (
-                          <span className="text-muted-foreground">Pending</span>
-                        )}
+                        <a
+                          href={m.recordingUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-blue-500 hover:underline"
+                        >
+                          Watch
+                        </a>
                       </td>
                     </tr>
                   ))}
@@ -768,7 +800,8 @@ export function RoomDetailPage({ route }: { route: AnyRoute }) {
           )}
           <div className="border-t px-4 py-3 text-xs text-muted-foreground">
             A recording appears once BigBlueButton publishes its playback link — never before, and
-            only when recording was enabled for the room.
+            only when recording was enabled for the room. Grant-billed classes appear here too;
+            attendance and student-hours live on the Overview tab.
           </div>
         </Card>
       )}

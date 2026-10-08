@@ -974,6 +974,27 @@ export const adminApiExtensions = gql`
     totalItems: Int!
   }
 
+  """
+  One published recording for a room — the Room Recordings read model.
+
+  Minimal projection over BbbMeeting: only columns the entity actually has
+  (no startedAt / duration are invented, and nothing is derived from a billing
+  table). recordingUrl is whatever the rap-publish-ended webhook stored —
+  never invented — and is always non-null in a returned row.
+  """
+  type BbbRoomRecording {
+    id: ID!
+    title: String!
+    roomId: ID
+    completedAt: DateTime!
+    recordingUrl: String!
+  }
+
+  type BbbRoomRecordingList {
+    items: [BbbRoomRecording!]!
+    totalItems: Int!
+  }
+
   "Platform-wide roll-up across tenants (platform tier only)."
   type BbbPlatformBillingSummary {
     month: String!
@@ -1000,6 +1021,15 @@ export const adminApiExtensions = gql`
     and recordingUrl. Organization from ctx.channelId — D3: no organizationId.
     """
     bbbMeteredMeetings(month: String, skip: Int, take: Int): BbbMeteredMeetingList!
+    """
+    Room Recordings for a month (YYYY-MM; defaults to the current IST month).
+
+    Read straight from BbbMeeting where a recordingUrl is stored, NOT from
+    metered usage — so GRANT-billed rooms appear too. Organization is derived
+    from ctx.channelId (D3): no organizationId argument. The month is the IST
+    calendar month of completedAt, matching the billing period key.
+    """
+    bbbRoomRecordings(month: String, skip: Int, take: Int): BbbRoomRecordingList!
     """
     Platform-wide metered roll-up across all tenants. Platform tier only
     (BBBAdmin / BBBPlatformInfrastructure) — never a tenant-held permission.

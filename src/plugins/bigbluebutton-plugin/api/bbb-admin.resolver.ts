@@ -1620,6 +1620,23 @@ export class BbbAdminResolver {
   }
 
   /**
+   * Room Recordings for a month — channel-scoped over `BbbMeeting`
+   * (`recordingUrl IS NOT NULL`, IST month on `completedAt`, skip/take,
+   * minimal projection). Deliberately separate from `bbbMeteredMeetings`:
+   * grant-billed rooms have no metered-usage row but DO have recordings.
+   */
+  @Query()
+  @Allow(BbbAdminPermission.Permission, BbbManageMeetingsPermission.Permission)
+  bbbRoomRecordings(
+    @Ctx() ctx: RequestContext,
+    @Args("month") month?: string,
+    @Args("skip") skip?: number,
+    @Args("take") take?: number,
+  ) {
+    return this.meetingService.getRecordings(ctx, month, skip, take);
+  }
+
+  /**
    * Platform-wide roll-up across tenants — platform tier only. Tenants hold
    * neither `BBBAdmin` nor `BBBPlatformInfrastructure`, never a `BbbManage*`
    * permission (a tenant-held permission here would be a permission regression).

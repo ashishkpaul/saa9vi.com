@@ -3,7 +3,7 @@ import {
   OnModuleInit,
   Inject,
 } from "@nestjs/common";
-import { EntityNotFoundError } from "@vendure/core";
+import { EntityNotFoundError, UserInputError } from "@vendure/core";
 import {
   Administrator,
   ConfigService,
@@ -37,6 +37,7 @@ import { MeetingLifecycleService } from "./bbb-meeting-lifecycle.service";
 import { BbbEntitlementService } from "./bbb-entitlement.service";
 import { BbbChannelAccessService } from "./bbb-channel-access.service";
 import { BbbMeteringService } from "./bbb-metering.service";
+import { IST_OFFSET_MS } from "../../../platform/timezone";
 import {
   isMeteredOrganization,
   monthOf,
@@ -68,6 +69,27 @@ export interface CreateMeetingInput {
   maxParticipants?: number;
   welcomeMessage?: string;
   pluginManifests?: Array<{ url: string }>;
+}
+
+/**
+ * One row of `bbbRoomRecordings` — the Room Recordings read model.
+ *
+ * Deliberately a MINIMAL projection over columns `BbbMeeting` actually has:
+ * no `startedAt` / `endedAt` / `durationMinutes` exist on the entity, so none
+ * are invented here and nothing is derived from a billing table. Attendance
+ * and learner-minutes are metered-billing facts and stay on the billing reads
+ * (`bbbMeteredMeetings`).
+ *
+ * `recordingUrl` is never null in a returned row — the query filters on it —
+ * and it is whatever the `rap-publish-ended` webhook (or the getRecordings
+ * repair pass) stored. Never invented.
+ */
+export interface RoomRecordingRow {
+  id: string;
+  title: string;
+  roomId: string | null;
+  completedAt: Date;
+  recordingUrl: string;
 }
 
 /**
@@ -229,6 +251,86 @@ export class BbbMeetingService implements OnModuleInit {
       .take(take)
       .getManyAndCount();
     return { items, totalItems };
+  }
+
+  /**
+   * Room Recordings read model — a channel-scoped query over `BbbMeeting`.
+   *
+   * Why this exists: the Recordings tab used to read `bbbMeteredMeetings`
+   * (a `BbbMeteredUsage`-backed read), so a GRANT-billed tenant's recordings
+   * were invisible — grant meetings never write a metered-usage row, even
+   * when the `rap-publish-ended` webhook stored a playback link. Recording
+   * facts live on `BbbMeeting`; billing facts stay on the billing reads.
+   *
+   * Scope and semantics:
+   * - **Channel-scoped (INV-001 / D3)**: the organization is derived from
+   *   `ctx.channelId` server-side. There is deliberately NO `organizationId`
+   *   argument, so a tenant read can never widen to another tenant.
+   * - **Only real recordings**: `recordingUrl IS NOT NULL` — the URL is
+   *   whatever BBB reported, never invented, so "Pending" rows simply do not
+   *   appear here.
+   * - **IST month**: the window is the IST calendar month of `completedAt`,
+   *   expressed as absolute UTC instants (`IST_OFFSET_MS`, no DST) so it
+   *   matches `monthOf()` / `istDateParts()` exactly — the same month key the
+   *   billing reads use.
+   * - **Minimal projection**: only columns `BbbMeeting` actually has.
+   */
+  async getRecordings(
+    ctx: RequestContext,
+    month?: string,
+    skip?: number,
+    take?: number,
+  ): Promise<{ items: RoomRecordingRow[]; totalItems: number }> {
+    const period = month ?? monthOf(new Date());
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) {
+      throw new UserInputError(
+        `month must be a YYYY-MM period key (e.g. "2030-01"), got ${JSON.stringify(month)}`,
+      );
+    }
+    const [year, mon] = period.split("-").map(Number);
+    // IST calendar month → absolute UTC instants: IST midnight of the 1st is
+    // (UTC midnight of the 1st) − 5:30. `[start, end)` is half-open, so a
+    // completion at exactly the boundary books to the later month.
+    const start = new Date(Date.UTC(year, mon - 1, 1) - IST_OFFSET_MS);
+    const end = new Date(Date.UTC(year, mon, 1) - IST_OFFSET_MS);
+
+    const takeN = Math.min(Math.max(take ?? 25, 1), 100);
+    const skipN = Math.max(skip ?? 0, 0);
+
+    const [rows, totalItems] = await this.connection
+      .getRepository(ctx, BbbMeeting)
+      .createQueryBuilder("meeting")
+      .innerJoin("meeting.organization", "org")
+      .select([
+        "meeting.id",
+        "meeting.title",
+        "meeting.roomId",
+        "meeting.completedAt",
+        "meeting.recordingUrl",
+      ])
+      .andWhere("org.channelId = :channelId", {
+        channelId: ctx.channelId as string,
+      })
+      .andWhere("meeting.recordingUrl IS NOT NULL")
+      .andWhere(
+        "meeting.completedAt IS NOT NULL AND meeting.completedAt >= :start AND meeting.completedAt < :end",
+        { start, end },
+      )
+      .orderBy("meeting.completedAt", "DESC")
+      .skip(skipN)
+      .take(takeN)
+      .getManyAndCount();
+
+    return {
+      items: rows.map((m) => ({
+        id: String(m.id),
+        title: m.title,
+        roomId: m.roomId ?? null,
+        completedAt: m.completedAt,
+        recordingUrl: m.recordingUrl as string,
+      })),
+      totalItems,
+    };
   }
 
   async findById(ctx: RequestContext, id: ID): Promise<BbbMeeting | null> {
