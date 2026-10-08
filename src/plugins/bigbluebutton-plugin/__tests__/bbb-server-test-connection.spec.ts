@@ -185,4 +185,64 @@ describe("Test connection on enable (update)", () => {
     expect(save).toHaveBeenCalledTimes(1);
     expect(result.enabled).toBe(true);
   });
+
+  it("(T8) update {apiSecret} (rotation) + probe FAIL → UserInputError, stored ciphertext unchanged", async () => {
+    const getMeetings = vi.fn(async () => {
+      throw new BbbUnavailableError("getMeetings", "request failed (bbb)");
+    });
+    const row = { id: "id", name: "legacy", apiUrl: BASE, enabled: true, encryptedApiSecret: "enc:old-secret" };
+    const { service, save, encryption } = harness({ api: { getMeetings }, row });
+
+    await expect(
+      service.update(CTX, "id", { apiSecret: "new-secret" }),
+    ).rejects.toThrow(/unreachable/);
+
+    // The new ciphertext was built in memory but save never ran.
+    expect(save).not.toHaveBeenCalled();
+    // The probe used the NEW candidate ciphertext (not the stored one).
+    expect(encryption.encrypt).toHaveBeenCalledWith("new-secret");
+    expect(getMeetings).toHaveBeenCalledWith(
+      expect.objectContaining({ encryptedApiSecret: "enc:new-secret" }),
+    );
+  });
+
+  it("(T9) update {apiUrl} on enabled server + probe FAIL → UserInputError, URL unchanged", async () => {
+    const getMeetings = vi.fn(async () => {
+      throw new BbbUnavailableError("getMeetings", "request failed (bbb)");
+    });
+    const row = { id: "id", name: "legacy", apiUrl: BASE, enabled: true };
+    const { service, save } = harness({ api: { getMeetings }, row });
+
+    await expect(
+      service.update(CTX, "id", { apiUrl: "https://new.example.com/bigbluebutton" }),
+    ).rejects.toThrow(/unreachable/);
+
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("(T10) update {apiSecret} + probe SUCCESS → new ciphertext persists", async () => {
+    const row = { id: "id", name: "legacy", apiUrl: BASE, enabled: true, encryptedApiSecret: "enc:old-secret" };
+    const { service, save, encryption } = harness({ row });
+
+    await service.update(CTX, "id", { apiSecret: "rotated-secret" });
+
+    expect(encryption.encrypt).toHaveBeenCalledWith("rotated-secret");
+    expect(save).toHaveBeenCalledTimes(1);
+    // The saved row carries the NEW ciphertext.
+    expect((save.mock.calls[0]?.[0] as any).encryptedApiSecret).toBe("enc:rotated-secret");
+  });
+
+  it("(T11) update {apiSecret} on DISABLED server → no probe, rotation persists", async () => {
+    const getMeetings = vi.fn(async () => {
+      throw new BbbUnavailableError("getMeetings", "would fail if called");
+    });
+    const row = { id: "id", name: "legacy", apiUrl: BASE, enabled: false };
+    const { service, save, api } = harness({ api: { getMeetings }, row });
+
+    // Disabled server: a secret rotation must not require live BBB reachability.
+    await service.update(CTX, "id", { apiSecret: "new-secret-for-disabled" });
+
+    expect(api.getMeetings).not.toHaveBeenCalled();
+    expect(save).toHaveBeenCalledTimes(1);
+  });
 });
