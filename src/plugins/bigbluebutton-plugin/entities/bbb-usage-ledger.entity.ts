@@ -30,7 +30,14 @@ export class BbbUsageLedger extends VendureEntity {
   @ManyToOne(() => BbbCapacityGrant, { nullable: false })
   grant: BbbCapacityGrant;
 
-  /** Minutes consumed for this meeting (minimum 1, rounded up). */
+  /**
+   * Minutes consumed for this meeting.
+   *
+   * `0` for a meeting below the fair-billing threshold (see
+   * `bbb-grant-consumption.service.ts`) — the row still exists so
+   * `reconcilePendingBilling` never revisits the meeting — and otherwise
+   * rounded UP to a whole minute with a minimum of 1.
+   */
   @Column({ type: "int", default: 0 })
   consumedMinutes: number;
 

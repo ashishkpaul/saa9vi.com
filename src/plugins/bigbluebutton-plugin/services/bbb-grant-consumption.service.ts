@@ -70,13 +70,23 @@ export class GrantConsumptionService {
     const endedAt = meeting.completedAt ?? new Date();
     const durationMs = endedAt.getTime() - provisionedAt.getTime();
 
-    // Fair billing guard: skip billing for micro-sessions under threshold.
-    if (durationMs < this.fairBillingMinDurationMs) {
+    // Fair billing: a meeting shorter than the threshold bills ZERO minutes.
+    //
+    // It still writes an immutable ledger row — that row is exactly what tells
+    // `reconcilePendingBilling` "this meeting has been accounted for". Before
+    // this, the early return left the row absent forever, so the recovery scan
+    // re-visited the same sub-threshold meeting on EVERY pass and re-published
+    // MeetingCompletedEvent each time.
+    //
+    // INV-002 is untouched: the row is still inserted with
+    // INSERT … ON CONFLICT (meeting, grant) DO NOTHING, so replay stays
+    // idempotent — it just inserts 0 minutes instead of nothing.
+    const subThreshold = durationMs < this.fairBillingMinDurationMs;
+    if (subThreshold) {
       Logger.info(
-        `Meeting ${meeting.id} lasted less than fair billing threshold (${Math.round(durationMs / 1000)}s). Skipping billing.`,
+        `Meeting ${meeting.id} lasted less than fair billing threshold (${Math.round(durationMs / 1000)}s). Billing 0 minutes — the ledger row still records the fact.`,
         loggerCtx,
       );
-      return;
     }
 
     // Billing ceiling: cap duration if the meeting was force-completed.
@@ -84,8 +94,11 @@ export class GrantConsumptionService {
       ? Math.min(durationMs, this.maxMeetingDurationMs)
       : durationMs;
 
-    // Round up to nearest minute; minimum 1 minute.
-    const durationMinutes = Math.max(1, Math.ceil(effectiveDurationMs / (1000 * 60)));
+    // Round up to nearest minute; minimum 1 minute — EXCEPT a sub-threshold
+    // meeting, which bills exactly 0.
+    const durationMinutes = subThreshold
+      ? 0
+      : Math.max(1, Math.ceil(effectiveDurationMs / (1000 * 60)));
 
     // Resolve grant via GrantReaderService (RFC-001 Q-009 seam)
     const grantEntity = await this.grantReader.resolveEntityForMeeting(
@@ -143,6 +156,15 @@ export class GrantConsumptionService {
         }
         billingWon = true;
 
+        // Sub-threshold (0 minutes): the ledger row is the whole story. No
+        // grant movement for a meeting that consumed nothing — a CAS on
+        // `consumedMinutes + 0` would be pointless churn on a grant we
+        // deliberately did not change, and could only flip `exhausted` around
+        // an already-true value.
+        if (durationMinutes === 0) {
+          return;
+        }
+
         // internal_overhead grants: write ledger row only, skip exhaustion logic
         if (sourceType === "internal_overhead") {
           return;
@@ -174,6 +196,17 @@ export class GrantConsumptionService {
     );
 
     if (!billingWon) {
+      return;
+    }
+
+    // Sub-threshold: the immutable row exists and the grant did not move, so
+    // there is nothing for a consumer to react to — GrantConsumedEvent would
+    // only report "0 minutes consumed" noise to quota listeners.
+    if (durationMinutes === 0) {
+      Logger.info(
+        `Billed meeting ${meeting.id}: 0 min (below fair-billing threshold) — ledger row written, grant untouched`,
+        loggerCtx,
+      );
       return;
     }
 
