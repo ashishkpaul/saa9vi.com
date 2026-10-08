@@ -8,7 +8,7 @@ import {
   UserInputError,
 } from "@vendure/core";
 import { BbbServer } from "../entities/bbb-server.entity";
-import { BbbEncryptionService } from "./bbb-encryption.service";
+import { BbbEncryptionService, BbbCredentialUnreadableError } from "./bbb-encryption.service";
 import {
   BbbApiService,
   BbbMisconfiguredError,
@@ -21,6 +21,16 @@ import { BbbHooksService } from "./bbb-hooks.service";
 import { normalizeBbbApiUrl } from "../shared/bbb-api-url";
 
 const loggerCtx = "BbbServerService";
+
+/**
+ * Credential status for a BbbServer — surfaced in the Servers UI.
+ *
+ * OK                  — secret decrypts successfully.
+ * CREDENTIAL_UNREADABLE — GCM auth failed on all available keys. Operator
+ *                         must re-enter the secret via the Servers UI.
+ * UNKNOWN             — secret column was not loaded (select:false).
+ */
+export type BbbServerCredentialStatus = "OK" | "CREDENTIAL_UNREADABLE" | "UNKNOWN";
 
 export interface CreateBbbServerInput {
   name: string;
@@ -149,10 +159,30 @@ export class BbbServerService {
     if (input.maxLoad !== undefined) server.maxLoad = input.maxLoad;
     if (input.capacity !== undefined) server.capacity = input.capacity;
     if (input.enabled !== undefined) server.enabled = input.enabled;
-    if (input.enabled === true) {
-      // "Test connection" on ENABLE too. getEntityOrThrow does not
-      // populate the select:false encryptedApiSecret — side-load it
-      // unless this update supplied a fresh secret (applied above).
+    // "Test connection" (Track A item 2), extended to credential rotation —
+    // probe BEFORE persisting any write that can change how this server is
+    // called, so a bad candidate never reaches the database:
+    //  - `enabled: true` — entering the selection pool (original rule);
+    //  - `apiSecret` — the candidate ciphertext must authenticate BEFORE it
+    //    replaces the stored one (otherwise a wrong secret persists silently
+    //    and only surfaces later as `secret undecryptable` / checksum
+    //    failures on every call);
+    //  - `apiUrl` — the probe vouches for the COMBINED candidate
+    //    (new URL + the supplied secret, or the side-loaded stored one).
+    // No probe when the server will be DISABLED after this update
+    // (`enabled: false`, or a config edit to an already-disabled row): an
+    // operator must be able to stage a server without live BBB reachability.
+    // Cosmetic fields (name/maxLoad/capacity) never probe — cheap edits
+    // stay cheap.
+    const willBeEnabled = input.enabled ?? server.enabled ?? true;
+    const touchesRuntimeConfig =
+      input.apiSecret !== undefined || input.apiUrl !== undefined;
+    if (willBeEnabled && (input.enabled === true || touchesRuntimeConfig)) {
+      // getEntityOrThrow does not populate the select:false
+      // encryptedApiSecret — use the in-memory candidate when this update
+      // supplied a fresh secret (applied above), otherwise side-load the
+      // stored ciphertext. Only ever the ciphertext leaves this scope; the
+      // plaintext input.apiSecret is encrypted above and never logged.
       let secret = server.encryptedApiSecret;
       if (!secret) {
         secret =
@@ -186,6 +216,24 @@ export class BbbServerService {
 
   async delete(ctx: RequestContext, id: ID): Promise<void> {
     await this.connection.getRepository(ctx, BbbServer).delete(id);
+  }
+
+  /**
+   * Returns the credential status for a server by attempting a decrypt.
+   * Loads `encryptedApiSecret` (select:false) if not already present.
+   * Never throws — returns UNKNOWN if the secret column is unavailable.
+   *
+   * Used by the GraphQL field resolver for `BbbServer.credentialStatus`.
+   */
+  async credentialStatus(
+    ctx: RequestContext,
+    serverId: ID,
+  ): Promise<BbbServerCredentialStatus> {
+    const server = await this.findByIdWithSecret(ctx, serverId);
+    if (!server?.encryptedApiSecret) return "UNKNOWN";
+    return this.encryptionService.canDecrypt(server.encryptedApiSecret)
+      ? "OK"
+      : "CREDENTIAL_UNREADABLE";
   }
 
   /**
@@ -297,23 +345,40 @@ export class BbbServerService {
       } catch (err) {
         flagged++;
         await this.markHealthy(ctx, server.id, false);
-        const config =
-          err instanceof BbbMisconfiguredError ||
-          err instanceof BbbRejectedError;
+
+        // Credential unreadable is its own alert kind — it means the
+        // encryption key changed without re-encrypting. The operator fix is
+        // to re-enter the secret in the Servers UI (not a BBB connectivity
+        // problem).
+        const isUnreadable = (err as any)?.isCredentialUnreadable === true;
+        const isConfig =
+          !isUnreadable &&
+          (err instanceof BbbMisconfiguredError || err instanceof BbbRejectedError);
+
         this.opsAlert.notify(
-          config ? "bbb-server-config" : "bbb-server-health",
+          isUnreadable
+            ? "bbb-credential-unreadable"
+            : isConfig
+              ? "bbb-server-config"
+              : "bbb-server-health",
           `server-${String(server.id)}`,
-          `BBB health probe failed for "${server.name}": ${(err as Error).message}`.substring(
-            0,
-            300,
-          ),
+          isUnreadable
+            ? `BBB server "${server.name}" (${String(server.id)}): credential unreadable — ` +
+                `re-enter the secret in the Servers UI ` +
+                `(key fingerprint: ${this.encryptionService.keyFingerprint})`
+            : `BBB health probe failed for "${server.name}": ${(err as Error).message}`.substring(0, 300),
           {
             serverId: String(server.id),
+            keyFingerprint: this.encryptionService.keyFingerprint,
             messageKey: (err as { messageKey?: string }).messageKey ?? "unknown",
           },
         );
         Logger.warn(
-          `Health probe failed for BBB server ${String(server.id)}: ${(err as Error).message}`,
+          isUnreadable
+            ? `BBB server ${String(server.id)} credential unreadable ` +
+                `(key fingerprint: ${this.encryptionService.keyFingerprint}) — ` +
+                "re-enter the secret in the Servers UI"
+            : `Health probe failed for BBB server ${String(server.id)}: ${(err as Error).message}`,
           loggerCtx,
         );
       }

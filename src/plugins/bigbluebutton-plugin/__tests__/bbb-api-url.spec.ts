@@ -127,9 +127,16 @@ describe("save-time normalisation (create/update persist the canonical form)", (
     const legacyRow = {
       name: "legacy",
       apiUrl: "https://legacy.example.com/bbb/api/",
+      enabled: true,
+      encryptedApiSecret: "enc:stored-secret",
+    };
+    const qb = {
+      addSelect: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      getOne: vi.fn(async () => legacyRow),
     };
     const connection = {
-      getRepository: vi.fn(() => ({ save })),
+      getRepository: vi.fn(() => ({ save, createQueryBuilder: () => qb })),
       getEntityOrThrow: vi.fn(async () => legacyRow),
     };
     const encryption = { encrypt: vi.fn((value: string) => `enc:${value}`) };

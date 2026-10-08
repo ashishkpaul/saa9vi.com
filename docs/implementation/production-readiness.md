@@ -1573,3 +1573,74 @@ The launch scope therefore remains:
 with **cross-tenant marketplace purchases deferred**.
 
 **Current overall verdict: NOT READY --- verification remains open.**
+
+
+# 19. BBB encryption key runbook (DA-003)
+
+## Key storage and backup
+
+`BBB_ENCRYPTION_KEY` is a 64-char hex string (AES-256-GCM, 32 bytes). It
+encrypts every BBB server API secret and every BBB meeting attendee/moderator
+password stored in the database. **Loss of this key makes all BBB server rows
+and all stored meeting passwords permanently unreadable.** There is no
+recovery path other than re-entering every secret via the Servers UI.
+
+**Required before go-live:**
+1. Generate the key: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+2. Store it in your secrets manager (Vault, AWS Secrets Manager, etc.) as a
+   versioned secret — not just in the `.env` file.
+3. Record the key fingerprint (first 8 hex chars of sha256 of the key bytes)
+   in your secrets inventory alongside the secret name and creation date.
+   The fingerprint is logged at boot: `Encryption key loaded (fingerprint xxxxxxxx)`.
+   It appears in error messages and ops alerts but never contains key material.
+4. Back up the `.env` file (or its secrets-manager equivalent) independently
+   of the database backup. A database restore without the matching key is
+   useless for BBB operations.
+
+## Detecting a key mismatch
+
+When `BBB_ENCRYPTION_KEY` does not match the key used to encrypt a row:
+- The Servers UI shows `credentialStatus: CREDENTIAL_UNREADABLE` for affected servers.
+- An ops alert fires with kind `bbb-credential-unreadable` including the
+  current key fingerprint.
+- The health probe logs: `BBB server <id> credential unreadable (key fingerprint: xxxxxxxx)`.
+- The webhook controller returns HTTP 500 for that server's deliveries (BBB retries).
+
+**Fix for the incident case (no older key, one affected server):**
+Re-enter the secret via the Servers UI (`updateBbbServer` mutation with
+`apiSecret`). The new ciphertext is written with the current key and the
+error clears immediately.
+
+## Zero-downtime key rotation (DA-003)
+
+When you need to rotate `BBB_ENCRYPTION_KEY` (e.g., suspected compromise):
+
+1. Generate a new key (as above). Record its fingerprint.
+2. Set `BBB_ENCRYPTION_KEY_PREVIOUS` to the current key value.
+3. Set `BBB_ENCRYPTION_KEY` to the new key.
+4. Deploy. At boot, the log will confirm both keys are loaded:
+   `Previous key also loaded (fingerprint xxxxxxxx) — fallback decryption active.`
+5. Run the re-encrypt command (once implemented — see below) to re-encrypt
+   all `bbb_server.encryptedApiSecret` and `bbb_meeting.encryptedAttendeePassword`
+   / `encryptedModeratorPassword` rows with the new key.
+6. Verify `bbbServers` query returns `credentialStatus: OK` for all servers.
+7. Remove `BBB_ENCRYPTION_KEY_PREVIOUS` from the environment and redeploy.
+
+**Do not leave `BBB_ENCRYPTION_KEY_PREVIOUS` set permanently** — it extends
+the window in which a compromised old key still decrypts data.
+
+## Re-encrypt command (design, pending implementation approval)
+
+The `encryptionKeyVersion` column already exists on `bbb_server` and
+`bbb_meeting`. The re-encrypt command will:
+
+1. Load every `bbb_server` row with `encryptedApiSecret` (select:false).
+2. For each row: `decrypt(encryptedApiSecret)` (tries current key, then previous).
+3. Re-encrypt the plaintext with `encrypt()` (always uses the current key).
+4. Write the new ciphertext and increment `encryptionKeyVersion`.
+5. Repeat for `bbb_meeting.encryptedAttendeePassword` and
+   `bbb_meeting.encryptedModeratorPassword`.
+
+No schema change is required — `encryptionKeyVersion` already exists.
+The command will be a one-shot admin script (not a scheduled task).
+Implementation is pending explicit approval before code is generated.

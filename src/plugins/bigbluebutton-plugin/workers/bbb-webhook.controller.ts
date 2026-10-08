@@ -146,15 +146,20 @@ export class BbbWebhookController {
     try {
       secret = this.encryptionService.decrypt(server.encryptedApiSecret);
     } catch (err) {
+      const isUnreadable = (err as any)?.isCredentialUnreadable === true;
       Logger.error(
-        `BBB webhook: failed to decrypt secret for server ${serverId}: ${(err as Error).message}`,
+        `BBB webhook: failed to decrypt secret for server ${serverId} ` +
+          `(key fingerprint: ${this.encryptionService.keyFingerprint}): ${(err as Error).message}`,
         loggerCtx,
       );
       this.opsAlert.notify(
-        "bbb-webhook-decrypt-failure",
+        isUnreadable ? "bbb-credential-unreadable" : "bbb-webhook-decrypt-failure",
         serverId,
-        `BBB webhook: secret decrypt failed for server ${serverId}`,
-        { serverId },
+        isUnreadable
+          ? `BBB server ${serverId}: credential unreadable — re-enter the secret in the Servers UI ` +
+              `(key fingerprint: ${this.encryptionService.keyFingerprint})`
+          : `BBB webhook: secret decrypt failed for server ${serverId}`,
+        { serverId, keyFingerprint: this.encryptionService.keyFingerprint },
       );
       return this.respond500();
     }

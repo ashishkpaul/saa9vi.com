@@ -13,6 +13,18 @@ export const adminApiExtensions = gql`
     maxLoad: Int!
     capacity: Int!
     lastHealthCheckAt: DateTime
+    """
+    Whether the stored API secret can be decrypted with the current key.
+
+    OK                   — secret decrypts successfully.
+    CREDENTIAL_UNREADABLE — GCM authentication failed on all available keys.
+                            Re-enter the secret in the Servers UI. This
+                            happens when BBB_ENCRYPTION_KEY was rotated
+                            without re-encrypting existing rows.
+    UNKNOWN              — secret column not loaded (internal, should not
+                            appear in normal dashboard queries).
+    """
+    credentialStatus: String!
   }
 
   type BbbOrganization {

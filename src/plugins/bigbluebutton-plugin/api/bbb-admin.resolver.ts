@@ -221,17 +221,29 @@ export class BbbAdminResolver {
 
   @Query()
   @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
-  bbbServers(
+  async bbbServers(
     @Ctx() ctx: RequestContext,
     @Args("options") options?: { skip?: number; take?: number },
   ) {
-    return this.serverService.findAll(ctx, options);
+    const result = await this.serverService.findAll(ctx, options);
+    const items = await Promise.all(
+      result.items.map(async (s) => ({
+        ...s,
+        credentialStatus: await this.serverService.credentialStatus(ctx, s.id),
+      })),
+    );
+    return { items, totalItems: result.totalItems };
   }
 
   @Query()
   @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
-  bbbServer(@Ctx() ctx: RequestContext, @Args("id") id: string) {
-    return this.serverService.findById(ctx, id);
+  async bbbServer(@Ctx() ctx: RequestContext, @Args("id") id: string) {
+    const s = await this.serverService.findById(ctx, id);
+    if (!s) return null;
+    return {
+      ...s,
+      credentialStatus: await this.serverService.credentialStatus(ctx, s.id),
+    };
   }
 
   @Allow(BbbAdminPermission.Permission, BbbPlatformInfrastructurePermission.Permission)
