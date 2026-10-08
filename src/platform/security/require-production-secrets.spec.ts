@@ -72,9 +72,28 @@ describe("assertProductionSecrets", () => {
     },
   );
 
-  it("a trailing slash is accepted (normalisation happens at use)", () => {
+  it.each([
+    ["https://core.saa9vi.com/bbb/webhook/1"],    // exact incident value
+    ["https://core.saa9vi.com/bbb/webhook/1/"],   // with trailing slash
+    ["https://example.com/some/path"],
+  ])(
+    "non-dev with path in BBB_PUBLIC_BASE_URL %s refuses with origin-only error",
+    (value) => {
+      expect(() =>
+        guard(prodEnv({ BBB_PUBLIC_BASE_URL: value })),
+      ).toThrow(/must be the origin only/);
+    },
+  );
+
+  it("a trailing slash on the origin is accepted (normalisation happens at use)", () => {
     expect(() =>
       guard(prodEnv({ BBB_PUBLIC_BASE_URL: "https://meeting.saa9vi.com/" })),
+    ).not.toThrow();
+  });
+
+  it("a URL with a port but no path is accepted", () => {
+    expect(() =>
+      guard(prodEnv({ BBB_PUBLIC_BASE_URL: "https://my-vendure.example.com:3000" })),
     ).not.toThrow();
   });
 

@@ -98,25 +98,36 @@ export function assertProductionSecrets(env: NodeJS.ProcessEnv = process.env): v
     );
   }
 
-  // Public callback base: must be an absolute HTTPS URL — BBB signs the
-  // URL that was REGISTERED, so hook registration and webhook verification
-  // both reconstruct from this exact base (never from request headers, which
-  // a reverse proxy rewrites). A trailing slash is accepted; normalisation
-  // happens at use. W4 amendment: https only — the registered callback
-  // carries the auth material W3 verifies, which plain http would expose.
+  // Public callback base: must be an absolute HTTPS URL with no path beyond
+  // the origin (scheme + host + optional port). BBB signs the URL that was
+  // REGISTERED — `publicBaseUrl + /bbb/webhook/<serverId>` — so a value like
+  // `https://core.saa9vi.com/bbb/webhook/1` would produce a doubled path
+  // `/bbb/webhook/1/bbb/webhook/1` at registration. Trailing slash is allowed;
+  // normalisation strips it at use. W4 amendment: https only.
   const publicBaseUrl = env.BBB_PUBLIC_BASE_URL!.trim();
   let baseUrlOk = false;
+  let baseUrlPathError = false;
   try {
     const parsed = new URL(publicBaseUrl);
     baseUrlOk = parsed.protocol === "https:";
+    // pathname must be empty, "/", or only trailing slashes — no real path segments.
+    const pathname = parsed.pathname.replace(/\/+$/, "");
+    if (pathname !== "" && pathname !== "/") {
+      baseUrlPathError = true;
+      baseUrlOk = false;
+    }
   } catch {
     baseUrlOk = false;
   }
   if (!baseUrlOk) {
     formatFailures.push(
-      `BBB_PUBLIC_BASE_URL must be an absolute https URL (public host ` +
-        `the BBB server can reach, e.g. https://meeting.saa9vi.com; ` +
-        `plain http is refused outside dev); got "${publicBaseUrl}"`,
+      baseUrlPathError
+        ? `BBB_PUBLIC_BASE_URL must be the origin only (scheme + host, no path). ` +
+            `The path /bbb/webhook/<serverId> is appended automatically. ` +
+            `Got "${publicBaseUrl}" — remove the path segment.`
+        : `BBB_PUBLIC_BASE_URL must be an absolute https URL (public host ` +
+            `the BBB server can reach, e.g. https://core.saa9vi.com; ` +
+            `plain http is refused outside dev); got "${publicBaseUrl}"`,
     );
   }
 
