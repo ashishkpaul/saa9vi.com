@@ -146,6 +146,26 @@ export interface BigBlueButtonPluginOptions {
    */
   defaultRatePaisePerLearnerHour?: number;
 
+  // ─── Recording (BBB /create flags) ─────────────────────────────────────────
+
+  /**
+   * When the room has `recordingEnabled`, also pass `autoStartRecording=true`
+   * to BBB `/create` so recording begins automatically when the first
+   * participant joins.
+   *
+   * BBB's own default for `autoStartRecording` is `false`, so `record=true`
+   * alone only ENABLES recording — without this the trainer must press Record
+   * manually. `allowStartStopRecording` stays `true` regardless, so a
+   * moderator can still pause/restart a recording that auto-started.
+   *
+   * Effective value: `(this option ?? true) && meeting.recordingEnabled` — a
+   * room with recording disabled never records, whatever this is set to.
+   *
+   * @default true
+   */
+  autoStartRecording?: boolean;
+
+
   // ─── BBB protocol (W7) ──────────────────────────────────────────────────
 
   /**

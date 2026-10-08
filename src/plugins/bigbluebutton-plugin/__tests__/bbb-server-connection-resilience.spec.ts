@@ -224,6 +224,7 @@ function buildWorker(opts: {
     eventBus as never,
     {} as never, // meteringService — metered org without a spend limit skips it
     {} as never, // roomService — roomId null keeps every room hook idle
+    {} as never, // options — {} means autoStartRecording falls back to its default
   );
   vi.spyOn(worker as any, "reserveProvisioningCapacity").mockResolvedValue(
     true,

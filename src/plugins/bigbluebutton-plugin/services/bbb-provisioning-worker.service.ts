@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from "@nestjs/common";
+import { Inject, Injectable, OnModuleInit } from "@nestjs/common";
 import {
   EventBus,
   ID,
@@ -23,7 +23,7 @@ import {
   MeetingProvisionedEvent,
   MeetingFailedEvent,
 } from "../events/bbb-events";
-import { BBB_PROVISIONING_QUEUE, BILLING_MODE, MEETING_STATE } from "../constants";
+import { BBB_PLUGIN_OPTIONS, BBB_PROVISIONING_QUEUE, BILLING_MODE, MEETING_STATE } from "../constants";
 import {
   PROVISIONING_ALLOWANCE_EXHAUSTED_ERROR,
   TENANT_SELECTABLE_SOURCE_TYPES,
@@ -31,6 +31,8 @@ import {
   hasProvisionableMinutes,
 } from "./grant-selection.policy";
 import { BbbMeteringService } from "./bbb-metering.service";
+import { recordingProvisioningParams } from "./recording-provisioning.policy";
+import type { BigBlueButtonPluginOptions } from "../types";
 import {
   computeMonthChargePaise,
   isMeteredOrganization,
@@ -64,6 +66,8 @@ export class BbbProvisioningWorkerService
     // and injects MeetingLifecycleService rather than this worker, so
     // worker → room is one-directional.
     private readonly roomService: BbbRoomService,
+    @Inject(BBB_PLUGIN_OPTIONS)
+    private readonly options: BigBlueButtonPluginOptions,
   ) {}
 
   async onModuleInit() {
@@ -270,9 +274,10 @@ export class BbbProvisioningWorkerService
             name: meeting.title,
             attendeePW,
             moderatorPW,
-            record: meeting.recordingEnabled,
-            autoStartRecording: false,
-            allowStartStopRecording: true,
+            // Saa9vi invariant: a recording-enabled room records itself.
+            // `record` alone does not start the recording (BBB defaults
+            // autoStartRecording=false) — see recording-provisioning.policy.ts.
+            ...recordingProvisioningParams(this.options, meeting.recordingEnabled),
             maxParticipants: meeting.organization.maxParticipantsPerMeeting,
             logoutURL: process.env.STOREFRONT_URL
               ? `${process.env.STOREFRONT_URL}/bbb-logout`
