@@ -36,11 +36,15 @@ export class PaymentsProductionGuard implements OnApplicationBootstrap {
       );
       return;
     }
-    const offenders = methods.filter((m) => (m.handler as { code?: string })?.code === DUMMY_PAYMENT_HANDLER_CODE);
+    const offenders = methods.filter(
+      (m) =>
+        m.enabled !== false &&
+        (m.handler as { code?: string })?.code === DUMMY_PAYMENT_HANDLER_CODE,
+    );
     if (offenders.length > 0) {
       const detail = offenders.map((m) => `${m.code} (id=${m.id})`).join(', ');
       throw new Error(
-        `Refusing to start: ${offenders.length} PaymentMethod(s) use the dev-only dummy handler (${DUMMY_PAYMENT_HANDLER_CODE}): ${detail}. ` +
+        `Refusing to start: ${offenders.length} ENABLED PaymentMethod(s) use the dev-only dummy handler (${DUMMY_PAYMENT_HANDLER_CODE}): ${detail}. ` +
           `Remove or disable them via the Admin API before deploying.`,
       );
     }

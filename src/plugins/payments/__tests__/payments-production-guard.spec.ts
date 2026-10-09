@@ -12,7 +12,7 @@ async function loadGuard() {
   return mod.PaymentsProductionGuard;
 }
 
-function guardWith(methods: Array<{ id: unknown; code: string; handler: unknown }>, env: Record<string, string | undefined>) {
+function guardWith(methods: Array<{ id: unknown; code: string; enabled?: boolean; handler: unknown }>, env: Record<string, string | undefined>) {
   const connection = {
     rawConnection: { getRepository: () => ({ find: async () => methods }) },
   };
@@ -20,16 +20,29 @@ function guardWith(methods: Array<{ id: unknown; code: string; handler: unknown 
 }
 
 describe('PaymentsProductionGuard (Commit 1)', () => {
-  it('throws outside dev/test when a dummy-handler method exists', async () => {
+  it('throws outside dev/test when an ENABLED dummy-handler method exists', async () => {
     const Guard = await loadGuard();
     const { connection } = guardWith(
-      [{ id: 1, code: 'dummy', handler: { code: 'dummy-payment-handler', args: [] } }],
+      [{ id: 1, code: 'dummy', enabled: true, handler: { code: 'dummy-payment-handler', args: [] } }],
       {},
     );
     const guard = new Guard(connection as never);
     vi.stubEnv('APP_ENV', 'prod');
     vi.stubEnv('NODE_ENV', '');
     await expect(guard.onApplicationBootstrap()).rejects.toThrow(/dummy-payment-handler/);
+    vi.unstubAllEnvs();
+  });
+
+  it('passes outside dev/test when the dummy-handler method is DISABLED', async () => {
+    const Guard = await loadGuard();
+    const { connection } = guardWith(
+      [{ id: 1, code: 'dummy', enabled: false, handler: { code: 'dummy-payment-handler', args: [] } }],
+      {},
+    );
+    const guard = new Guard(connection as never);
+    vi.stubEnv('APP_ENV', 'prod');
+    vi.stubEnv('NODE_ENV', '');
+    await expect(guard.onApplicationBootstrap()).resolves.toBeUndefined();
     vi.unstubAllEnvs();
   });
 
