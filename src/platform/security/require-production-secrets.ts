@@ -147,6 +147,37 @@ export function assertProductionSecrets(env: NodeJS.ProcessEnv = process.env): v
     );
   }
 
+  // Commit 3: production mail transport. Dev writes rendered HTML to disk
+  // (devMode mailbox); production must send real mail over SMTP.
+  if (!env.SMTP_HOST || !String(env.SMTP_HOST).trim()) {
+    formatFailures.push(
+      `SMTP_HOST must be set (production EmailPlugin uses SMTP transport; ` +
+        `SMTP_PORT/SMTP_USER/SMTP_PASS configure port/auth)`,
+    );
+  }
+
+  // Commit 3: CORS allow-list must not be empty in production — an empty
+  // list with credentials:true would reject every browser client.
+  const corsAllowed = `${env.STOREFRONT_URL ?? ''},${env.ADMIN_URL ?? ''}`
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (corsAllowed.length === 0) {
+    formatFailures.push(
+      `STOREFRONT_URL (and optionally ADMIN_URL) must be set — ` +
+        `production CORS is an exact-match allow-list, never allow-all`,
+    );
+  }
+
+  // Commit 3: asset URLs must point at the real origin/CDN in production.
+  // The old config handed production a localhost prefix (inverted fallback).
+  if (!env.ASSET_URL_PREFIX || !String(env.ASSET_URL_PREFIX).trim()) {
+    formatFailures.push(
+      `ASSET_URL_PREFIX must be set (e.g. https://core.saa9vi.com/assets/) — ` +
+        `product images resolve against it`,
+    );
+  }
+
   if (formatFailures.length > 0) {
     throw new Error(
       `Refusing to start: APP_ENV is "${env.APP_ENV ?? 'unset'}" (not "dev") ` +

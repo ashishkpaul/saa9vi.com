@@ -113,12 +113,31 @@ apiOptions: {
     trustProxy: 1,
 
     // Enable permissive CORS for development to allow GraphiQL/Dashboard access via AI Studio proxy
-    cors: {
-      origin: (origin: any, callback: any) => callback(null, true),
-      credentials: true,
-    },
-    adminApiPlayground: true,
-    shopApiPlayground: true,
+    // Commit 3: production uses an explicit allow-list (STOREFRONT_URL +
+    // ADMIN_URL, comma-separated supported). Dev keeps allow-all for the AI
+    // Studio proxy. credentials:true with origin:true is allow-any + cookies
+    // and must never ship to production.
+    cors: IS_DEV
+      ? {
+          origin: (origin: any, callback: any) => callback(null, true),
+          credentials: true,
+        }
+      : {
+          origin: (origin: any, callback: any) => {
+            if (!origin) return callback(null, true); // same-origin / curl
+            const allowed = `${process.env.STOREFRONT_URL ?? ''},${process.env.ADMIN_URL ?? ''}`
+              .split(',')
+              .map((s) => s.trim().replace(/\/+$/, ''))
+              .filter(Boolean);
+            if (allowed.includes(String(origin).replace(/\/+$/, ''))) {
+              return callback(null, true);
+            }
+            return callback(null, false);
+          },
+          credentials: true,
+        },
+    adminApiPlayground: IS_DEV,
+    shopApiPlayground: IS_DEV,
 
     middleware: [
       {
@@ -211,14 +230,15 @@ apiOptions: {
     Page: [],
   },
   plugins: [
-    GraphiqlPlugin.init(),
+    ...(IS_DEV || process.env.NODE_ENV === 'test' ? [GraphiqlPlugin.init()] : []),
     AssetServerPlugin.init({
       route: "assets",
       assetUploadDir: path.join(__dirname, "../static/assets"),
-      // For local dev, the correct value for assetUrlPrefix should
-      // be guessed correctly, but for production it will usually need
-      // to be set manually to match your production url.
-      assetUrlPrefix: IS_DEV ? undefined : "http://localhost:3000/assets/",
+      // Commit 3: production serves assets from ASSET_URL_PREFIX (CDN/origin).
+      // The old inverted fallback handed production a localhost URL; dev keeps
+      // the auto-guess. Boot refuses without it outside dev (see
+      // assertProductionSecrets).
+      assetUrlPrefix: IS_DEV ? undefined : process.env.ASSET_URL_PREFIX,
     }),
     DefaultSchedulerPlugin.init(),
     ...(process.env.REDIS_HOST
@@ -241,30 +261,54 @@ apiOptions: {
         ]
       : [DefaultJobQueuePlugin.init({})]),
     DefaultSearchPlugin.init({ bufferUpdates: false, indexStockStatus: true }),
-    EmailPlugin.init({
-      devMode: true,
-      outputPath: path.join(__dirname, "../static/email/test-emails"),
-      route: "mailbox",
-      handlers: [
-        ...customerEmailHandlers,
-        ...sellerEmailHandlers,
-      ],
-      templateLoader: new ChannelBasedTemplateLoader(
-        path.join(__dirname, "../static/email/templates"),
-      ),
-      globalTemplateVars: {
-        fromAddress: process.env.EMAIL_FROM_ADDRESS || '"Saa9vi" <noreply@saa9vi.com>',
-        verifyEmailAddressUrl: IS_DEV
-          ? "http://localhost:8080/verify"
-          : (process.env.STOREFRONT_URL ? `${process.env.STOREFRONT_URL}/verify` : "https://www.saa9vi.com/verify"),
-        passwordResetUrl: IS_DEV
-          ? "http://localhost:8080/password-reset"
-          : (process.env.STOREFRONT_URL ? `${process.env.STOREFRONT_URL}/password-reset` : "https://www.saa9vi.com/password-reset"),
-        changeEmailAddressUrl: IS_DEV
-          ? "http://localhost:8080/verify-email-address-change"
-          : (process.env.STOREFRONT_URL ? `${process.env.STOREFRONT_URL}/verify-email-address-change` : "https://www.saa9vi.com/verify-email-address-change"),
-      },
-    }),
+    EmailPlugin.init(
+      IS_DEV || process.env.NODE_ENV === 'test'
+        ? {
+            devMode: true,
+            outputPath: path.join(__dirname, "../static/email/test-emails"),
+            route: "mailbox",
+            handlers: [
+              ...customerEmailHandlers,
+              ...sellerEmailHandlers,
+            ],
+            templateLoader: new ChannelBasedTemplateLoader(
+              path.join(__dirname, "../static/email/templates"),
+            ),
+            globalTemplateVars: {
+              fromAddress: process.env.EMAIL_FROM_ADDRESS || '"Saa9vi" <noreply@saa9vi.com>',
+              verifyEmailAddressUrl: "http://localhost:8080/verify",
+              passwordResetUrl: "http://localhost:8080/password-reset",
+              changeEmailAddressUrl: "http://localhost:8080/verify-email-address-change",
+            },
+          }
+        : {
+            // Commit 3: production sends real mail over SMTP (env transport).
+            // Boot refuses without SMTP_HOST outside dev. No mailbox route,
+            // no file output — the devMode mailbox must never be public.
+            transport: {
+              type: 'smtp',
+              host: process.env.SMTP_HOST,
+              port: Number(process.env.SMTP_PORT ?? 587),
+              auth: {
+                user: process.env.SMTP_USER,
+                pass: process.env.SMTP_PASS,
+              },
+            },
+            handlers: [
+              ...customerEmailHandlers,
+              ...sellerEmailHandlers,
+            ],
+            templateLoader: new ChannelBasedTemplateLoader(
+              path.join(__dirname, "../static/email/templates"),
+            ),
+            globalTemplateVars: {
+              fromAddress: process.env.EMAIL_FROM_ADDRESS || '"Saa9vi" <noreply@saa9vi.com>',
+              verifyEmailAddressUrl: process.env.STOREFRONT_URL ? `${process.env.STOREFRONT_URL}/verify` : "https://www.saa9vi.com/verify",
+              passwordResetUrl: process.env.STOREFRONT_URL ? `${process.env.STOREFRONT_URL}/password-reset` : "https://www.saa9vi.com/password-reset",
+              changeEmailAddressUrl: process.env.STOREFRONT_URL ? `${process.env.STOREFRONT_URL}/verify-email-address-change` : "https://www.saa9vi.com/verify-email-address-change",
+            },
+          },
+    ),
     DashboardPlugin.init({
       route: "dashboard",
       appDir: path.join(__dirname, "../dist/dashboard"),
@@ -298,7 +342,24 @@ apiOptions: {
       // signs the REGISTERED URL — a guessed base fails every webhook
       // verification, a plaintext base exposes the auth material.
       publicBaseUrl: process.env.BBB_PUBLIC_BASE_URL || undefined,
-      checksumAlgorithm: 'sha1',
+      // Commit 3.5 — checksum algorithm.
+      //
+      // Default sha256 (verified live 2026-10-09: in-process probe
+      // scripts/bbb/checksum-probe.ts signed getMeetings + hooks/list with
+      // BOTH sha256 and sha1 against meeting.saa9vi.com — all four returned
+      // HTTP 200 + <returncode>SUCCESS</returncode>). The server accepts the
+      // full BBB 3.0 set (sha1/256/384/512); sha256 is the modern default.
+      // The 1a8a38a 'sha1 … confirmed from hookChecksumAlgorithm in
+      // default.yml' note described the bbb-webhooks VERIFY side, not an
+      // outbound restriction — the probe proves outbound sha256 verifies.
+      //
+      // Code paths using THIS option: BbbApiService.buildChecksum (all
+      // outbound API calls incl. getMeetings/create/join) and
+      // BbbHooksService.ensureWebhook (hooks/create). Inbound webhook
+      // verification is INDEPENDENT (workers/bbb-webhook-auth.ts infers
+      // sha1/256/384/512 from the digest hex length). Override per server
+      // when Commit 4 lands (nullable BbbServer.checksumAlgorithm).
+      checksumAlgorithm: 'sha256',
 
       // ─── Scalability tuning from .env ──────────────────────────
       lockTtlSeconds: Number(process.env.BBB_LOCK_TTL_SECONDS ?? 30),
