@@ -187,6 +187,19 @@ const ROOM_STATUS = gql`
       id
       name
       state
+      classAction
+    }
+  }
+`;
+
+/** Room list — must NOT claim an action it never computed. */
+const MY_BBB_ROOMS = gql`
+  query RoomAccessMyBbbRooms {
+    myBbbRooms {
+      id
+      name
+      state
+      classAction
     }
   }
 `;
@@ -243,6 +256,8 @@ describe('INV-027 room preview/join parity (BUG-045)', () => {
   let roomDeniedId = '';
   /** Fresh Idle room used only by the learner-provisioning fence (C4). */
   let roomWaitId = '';
+  /** Fresh room used to pin the server-driven classAction contract (C5). */
+  let roomActionId = '';
   /** C1: BbbEnrollment only — no membership, no entitlement. */
   let enrolledCustomerId = '';
   /** C2: BbbOrganizationMembership(org_admin) only. */
@@ -410,6 +425,20 @@ describe('INV-027 room preview/join parity (BUG-045)', () => {
     }
     roomWaitId = decode(waitRoom.createBbbRoom.id);
 
+    // C5 — a room whose state the test drives directly, so the four-valued
+    // classAction contract can be pinned without a BBB server.
+    const actionRoom: any = await adminClient.query(CREATE_BBB_ROOM, {
+      input: {
+        organizationId: encode(orgId),
+        name: `INV-027 Action Room ${stamp}`,
+        slug: `inv027-room-action-${stamp}`,
+      },
+    });
+    if (!actionRoom.createBbbRoom?.id) {
+      fail('createBbbRoom(action)', actionRoom);
+    }
+    roomActionId = decode(actionRoom.createBbbRoom.id);
+
     enrolledEmail = `inv027-enrolled-${stamp}@example.com`;
     staffEmail = `inv027-staff-${stamp}@example.com`;
     outsiderEmail = `inv027-outsider-${stamp}@example.com`;
@@ -452,6 +481,20 @@ describe('INV-027 room preview/join parity (BUG-045)', () => {
       fail('createBbbEnrollment(wait)', waitEnrollment);
     }
     expect(waitEnrollment.createBbbEnrollment.active).toBe(true);
+
+    // Same learner on the C5 room — she must see WAIT / JOIN, never START.
+    const actionEnrollment: any = await adminClient.query(CREATE_BBB_ENROLLMENT, {
+      input: {
+        roomId: encode(roomActionId),
+        customerId: encode(enrolledCustomerId),
+        accessDays: 30,
+        reason: 'INV-027 C5 fixture',
+      },
+    });
+    if (!actionEnrollment.createBbbEnrollment?.id) {
+      fail('createBbbEnrollment(action)', actionEnrollment);
+    }
+    expect(actionEnrollment.createBbbEnrollment.active).toBe(true);
 
     // C2 — FEAT-001 org membership only (org_admin ⇒ moderator role).
     const membership: any = await adminClient.query(
@@ -681,6 +724,57 @@ describe('INV-027 room preview/join parity (BUG-045)', () => {
     expect(join.bbbJoinRoom.status).not.toBe('waiting_for_trainer');
     expect(await meetingCountFor(roomWaitId)).toBeGreaterThanOrEqual(1);
     expect(await roomState(roomWaitId)).not.toBe('Idle');
+  }, 30000);
+
+  // ─── C5 — server-driven classAction (INV-008) ────────────────────────────
+
+  it('C5: bbbRoomStatus exposes the four-valued classAction for every state/role pair', async () => {
+    const setRoomState = async (state: string): Promise<void> => {
+      await rawConn()
+        .getRepository(BbbRoom)
+        .update(roomActionId, { state: state as any });
+    };
+    const actionAs = async (email: string): Promise<string | null> => {
+      await shopClient.asUserWithCredentials(email, PASSWORD);
+      const res: any = await shopClient.query(ROOM_STATUS, {
+        id: encode(roomActionId),
+      });
+      return res.bbbRoomStatus?.classAction ?? null;
+    };
+
+    // Idle — trainer STARTs it, learner WAITs for a trainer.
+    await setRoomState('Idle');
+    expect(await actionAs(enrolledEmail)).toBe('WAIT');
+    expect(await actionAs(staffEmail)).toBe('START');
+
+    // Provisioning — the split holds: a learner is never told to start it.
+    await setRoomState('Provisioning');
+    expect(await actionAs(enrolledEmail)).toBe('WAIT');
+    expect(await actionAs(staffEmail)).toBe('START');
+
+    // Active — everyone with access JOINS, learner and trainer alike.
+    await setRoomState('Active');
+    expect(await actionAs(enrolledEmail)).toBe('JOIN');
+    expect(await actionAs(staffEmail)).toBe('JOIN');
+
+    // Failed — no action for anyone; it needs an admin reset.
+    await setRoomState('Failed');
+    expect(await actionAs(enrolledEmail)).toBe('NONE');
+    expect(await actionAs(staffEmail)).toBe('NONE');
+
+    await setRoomState('Idle');
+  }, 30000);
+
+  it('C5b: myBbbRooms never claims an action it did not compute (classAction is null)', async () => {
+    await shopClient.asUserWithCredentials(enrolledEmail, PASSWORD);
+    const res: any = await shopClient.query(MY_BBB_ROOMS);
+    const rooms: any[] = res.myBbbRooms ?? [];
+    expect(rooms.length).toBeGreaterThan(0);
+    for (const room of rooms) {
+      // The list does not evaluate per-room access, so it must admit the
+      // action is unknown rather than invent one.
+      expect(room.classAction).toBeNull();
+    }
   }, 30000);
 
   // ─── The single shared evaluation (INV-027) ──────────────────────────────

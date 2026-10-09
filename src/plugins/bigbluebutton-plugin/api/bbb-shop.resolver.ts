@@ -20,6 +20,7 @@ import { BbbOrganizationService } from "../services/bbb-organization.service";
 import { BbbRoomService } from "../services/bbb-room.service";
 import { BbbMemberService } from "../services/bbb-member.service";
 import { BbbRoomAccessService } from "../services/room-access.service";
+import { deriveClassAction } from "../services/room-access.policy";
 import { BbbScheduledSessionService } from "../services/bbb-scheduled-session.service";
 import { TrialRegistrationService } from "../services/trial-registration.service";
 import { LearningDashboardService } from "../services/learning-dashboard.service";
@@ -200,7 +201,17 @@ export class BbbShopResolver {
     );
     if (!access.allowed) throw new ForbiddenError();
 
-    return room;
+    // Server-driven action (INV-008): the storefront renders this instead of
+    // re-deriving role/eligibility. Derived from the SAME evaluation above, so
+    // the button label and the join decision can never disagree.
+    return {
+      ...room,
+      classAction: deriveClassAction({
+        allowed: access.allowed,
+        isModerator: access.isModerator,
+        roomState: room.state,
+      }),
+    };
   }
 
   @Mutation()

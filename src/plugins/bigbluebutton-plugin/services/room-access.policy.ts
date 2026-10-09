@@ -50,6 +50,46 @@ export interface RoomAccessDecision {
 }
 
 /**
+ * The server-driven action the storefront renders for a room (INV-008: the
+ * client renders, it never re-derives eligibility from the clock or the role).
+ *
+ * Four states, because a boolean cannot answer all four questions:
+ *
+ *   | viewer      | room        | action |
+ *   |-------------|-------------|--------|
+ *   | moderator   | Idle/Prov.  | START  |  trainer starts the class
+ *   | moderator   | Active      | JOIN   |  it is already running
+ *   | learner     | Active      | JOIN   |  it is already running
+ *   | learner     | Idle/Prov.  | WAIT   |  waiting for a trainer
+ *   | anyone      | Failed      | NONE   |  needs an admin reset
+ *   | no access   | any         | NONE   |  (the preview throws before this)
+ */
+export type ClassAction = "START" | "JOIN" | "WAIT" | "NONE";
+
+/**
+ * Derive the room's action from the shared access decision plus room state.
+ *
+ * Pure and total: same inputs → same answer, no clock, no I/O, so the preview
+ * surface and the storefront cannot disagree about what a button should say.
+ */
+export function deriveClassAction(input: {
+  allowed: boolean;
+  isModerator: boolean;
+  roomState: string;
+}): ClassAction {
+  // No access: the preview throws ForbiddenError before reaching this, but the
+  // answer is still defined so no caller can invent its own.
+  if (!input.allowed) return "NONE";
+  // Failed rooms need `resetBbbRoom` (Admin dashboard) — offering START/JOIN
+  // would send the user into a meeting that cannot exist.
+  if (input.roomState === "Failed") return "NONE";
+  // Live room: every authorized viewer joins, moderator or not.
+  if (input.roomState === "Active") return "JOIN";
+  // Idle / Provisioning: only a moderator may start it; a learner waits.
+  return input.isModerator ? "START" : "WAIT";
+}
+
+/**
  * Entitlement window: `validFrom <= now <= validUntil` (a null bound is open).
  * Includes `validFrom`, which the old preview omitted — the shared evaluation
  * uses the stricter, correct window for both surfaces.

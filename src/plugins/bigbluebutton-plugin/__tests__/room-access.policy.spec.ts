@@ -22,6 +22,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MEMBERSHIP_MODERATOR_ROLES,
+  deriveClassAction,
   deriveRoomAccess,
   isEnrollmentValid,
   isEntitlementValid,
@@ -183,6 +184,70 @@ describe('INV-027 room-access policy', () => {
       expect(isLegacyMemberModerator('org-admin')).toBe(true);
       expect(isLegacyMemberModerator('trainer')).toBe(true);
       expect(isLegacyMemberModerator('student')).toBe(false);
+    });
+  });
+
+  // ─── classAction — the server-driven storefront action (INV-008) ─────────
+  // A boolean cannot answer all four questions the room card asks, so the
+  // contract is a four-valued action derived from the SAME access decision
+  // plus the room state. The storefront only renders it.
+
+  describe('deriveClassAction (START | JOIN | WAIT | NONE)', () => {
+    it('lets a moderator START an idle or provisioning room', () => {
+      expect(
+        deriveClassAction({ allowed: true, isModerator: true, roomState: 'Idle' }),
+      ).toBe('START');
+      expect(
+        deriveClassAction({
+          allowed: true,
+          isModerator: true,
+          roomState: 'Provisioning',
+        }),
+      ).toBe('START');
+    });
+
+    it('makes a learner WAIT on a room nobody has started yet', () => {
+      expect(
+        deriveClassAction({ allowed: true, isModerator: false, roomState: 'Idle' }),
+      ).toBe('WAIT');
+      expect(
+        deriveClassAction({
+          allowed: true,
+          isModerator: false,
+          roomState: 'Provisioning',
+        }),
+      ).toBe('WAIT');
+    });
+
+    it('lets EVERY authorized viewer JOIN a live room — learners included', () => {
+      expect(
+        deriveClassAction({ allowed: true, isModerator: false, roomState: 'Active' }),
+      ).toBe('JOIN');
+      expect(
+        deriveClassAction({ allowed: true, isModerator: true, roomState: 'Active' }),
+      ).toBe('JOIN');
+    });
+
+    it('offers no action on a Failed room — it needs an admin reset', () => {
+      expect(
+        deriveClassAction({ allowed: true, isModerator: true, roomState: 'Failed' }),
+      ).toBe('NONE');
+      expect(
+        deriveClassAction({
+          allowed: true,
+          isModerator: false,
+          roomState: 'Failed',
+        }),
+      ).toBe('NONE');
+    });
+
+    it('returns NONE when access was denied (the preview throws first, but the answer is total)', () => {
+      expect(
+        deriveClassAction({ allowed: false, isModerator: false, roomState: 'Idle' }),
+      ).toBe('NONE');
+      expect(
+        deriveClassAction({ allowed: false, isModerator: true, roomState: 'Active' }),
+      ).toBe('NONE');
     });
   });
 });

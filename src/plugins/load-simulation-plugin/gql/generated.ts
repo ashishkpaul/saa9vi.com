@@ -278,6 +278,18 @@ export type BbbMeetingPublicList = {
 
 export type BbbRoomPublic = {
   __typename?: 'BbbRoomPublic';
+  /**
+   * Server-driven action for the calling customer (INV-008): START | JOIN |
+   * WAIT | NONE. Derived from the SAME shared access evaluation as joinRoom
+   * plus the room state, so the storefront never re-derives role or
+   * eligibility from the clock.
+   *
+   * Populated by bbbRoomStatus only. myBbbRooms leaves it null — that list
+   * does not evaluate per-room access, and claiming an action it has not
+   * computed would be worse than admitting it is unknown (the studentCount
+   * precedent).
+   */
+  classAction?: Maybe<Scalars['String']['output']>;
   currentMeetingId?: Maybe<Scalars['ID']['output']>;
   id: Scalars['ID']['output'];
   name: Scalars['String']['output'];
