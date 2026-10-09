@@ -131,6 +131,22 @@ export function assertProductionSecrets(env: NodeJS.ProcessEnv = process.env): v
     );
   }
 
+  // Commit 2: the one-time payments webhook secret resolves with `||`
+  // fallback (RAZORPAY_PAYMENTS_WEBHOOK_SECRET → RAZORPAY_WEBHOOK_SECRET).
+  // An empty resolution fails closed at runtime (every webhook rejected =
+  // silent dunning outage), so non-dev boot refuses when it is blank.
+  const paymentsSecret = (
+    env.RAZORPAY_PAYMENTS_WEBHOOK_SECRET ||
+    env.RAZORPAY_WEBHOOK_SECRET ||
+    ''
+  ).trim();
+  if (!paymentsSecret) {
+    formatFailures.push(
+      `RAZORPAY_PAYMENTS_WEBHOOK_SECRET (or fallback RAZORPAY_WEBHOOK_SECRET) must be set — ` +
+        `an empty one-time webhook secret rejects ALL provider traffic`,
+    );
+  }
+
   if (formatFailures.length > 0) {
     throw new Error(
       `Refusing to start: APP_ENV is "${env.APP_ENV ?? 'unset'}" (not "dev") ` +

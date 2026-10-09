@@ -8,6 +8,7 @@ import { PaymentWebhookEvent } from './entities/payment-webhook-event.entity';
 import { razorpayShopApiExtensions } from './api/razorpay-shop.schema';
 import { RazorpayShopResolver } from './api/razorpay-shop.resolver';
 import { RazorpayPaymentsWebhookController } from './api/razorpay-payments-webhook.controller';
+import { PaymentOpsAlertService } from './services/payment-ops-alert.service';
 
 /** Vendure core handler code for the dev-only dummy payment handler. */
 export const DUMMY_PAYMENT_HANDLER_CODE = 'dummy-payment-handler';
@@ -61,7 +62,7 @@ export class PaymentsProductionGuard implements OnApplicationBootstrap {
 @VendurePlugin({
   imports: [PluginCommonModule],
   entities: [PaymentWebhookEvent],
-  providers: [RazorpayOrdersClient, RazorpayCheckoutService, PaymentWebhookQueueService, PaymentsProductionGuard],
+  providers: [RazorpayOrdersClient, RazorpayCheckoutService, PaymentWebhookQueueService, PaymentsProductionGuard, PaymentOpsAlertService],
   controllers: [RazorpayPaymentsWebhookController],
   shopApiExtensions: {
     schema: razorpayShopApiExtensions,
