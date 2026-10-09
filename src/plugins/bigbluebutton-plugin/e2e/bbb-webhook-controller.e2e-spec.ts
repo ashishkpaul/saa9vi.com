@@ -31,6 +31,7 @@ import {
   testConfig,
 } from "@vendure/testing";
 import { mergeConfig, TransactionalConnection } from "@vendure/core";
+import { NestFactory } from "@nestjs/core";
 import {
   afterAll,
   afterEach,
@@ -41,7 +42,6 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
-import { getSuperadminContext } from "@vendure/testing/lib/utils/get-superadmin-context";
 
 import { TenantPlugin } from "../../tenant-plugin/tenant-plugin.plugin";
 import { BigBlueButtonPlugin } from "../bigbluebutton.plugin";
@@ -57,6 +57,22 @@ import { webhookCallbackUrl } from "../shared/bbb-webhook-url";
 import { MEETING_STATE } from "../constants";
 
 registerInitializer("postgres", new SchemaPostgresInitializer());
+
+// Mirror production rawBody capture in the e2e harness (same mechanism as
+// webhook-signature-http.e2e-spec.ts). `src/index.ts` passes
+// `nestApplicationOptions: { rawBody: true }`, but @vendure/testing's
+// TestServer hardcodes NestFactory.create without it — so `req.rawBody` is
+// undefined and the controller's deliberate "missing rawBody → 500" fires on
+// EVERY request, masking all 12 cases behind an infrastructure 500.
+const __origCreate = NestFactory.create.bind(NestFactory);
+(NestFactory as any).create = ((...args: [any, any?, ...any[]]) => {
+  if (args[1] && typeof args[1] === "object" && (args[1] as any).rawBody !== true) {
+    args[1] = { ...args[1], rawBody: true };
+  } else if (!args[1]) {
+    args[1] = { rawBody: true };
+  }
+  return __origCreate(...(args as Parameters<typeof __origCreate>));
+}) as any;
 
 const SKIP = process.env.BBB_WEBHOOK_CONTROLLER_E2E !== "true";
 
@@ -197,11 +213,28 @@ describe.skipIf(SKIP)(
     beforeAll(async () => {
       await assertPostgres();
 
-      // Stub fetch to satisfy hooks/list calls on startup without real BBB.
+      // Stub ONLY outbound BBB API calls (the fixture's `apiUrl` host) so the
+      // startup hooks/list probe resolves without a real BBB server.
+      //
+      // Everything else must reach the REAL server — including this suite's
+      // own `postWebhook()` assertions against `base`. A blanket fetch stub
+      // answers those with BBB XML, so every case silently "passes" against
+      // the stub instead of the controller under test (C6/C11 reported 200
+      // for exactly that reason).
+      const realFetch = globalThis.fetch.bind(globalThis);
+      const STUBBED_BBB_HOST = "https://bbb.example.com";
       vi.stubGlobal(
         "fetch",
-        vi.fn(async (url: string) => {
-          if (String(url).includes("/api/hooks/list")) {
+        vi.fn(async (input: any, init?: any) => {
+          const url = String(
+            input && typeof input === "object" && "url" in input
+              ? (input as { url: string }).url
+              : input,
+          );
+          if (!url.startsWith(STUBBED_BBB_HOST)) {
+            return realFetch(input, init);
+          }
+          if (url.includes("/api/hooks/list")) {
             return new Response(
               `<?xml version="1.0"?><response><returncode>SUCCESS</returncode><hooks></hooks></response>`,
               { status: 200 },
@@ -227,9 +260,6 @@ describe.skipIf(SKIP)(
       const opsAlert = server.app.get(BbbOpsAlertService);
       opsAlertSpy = vi.spyOn(opsAlert, "notify");
 
-      const ctx = await getSuperadminContext(server.app);
-      _ = ctx; // suppress unused-var lint
-
       // Create test server row.
       const serverRepo = conn.rawConnection.getRepository(BbbServer);
       const s = serverRepo.create({
@@ -240,12 +270,24 @@ describe.skipIf(SKIP)(
         healthy: true,
       });
       const savedServer = await serverRepo.save(s);
-      serverId = savedServer.id as string;
+      // `savedServer.id` is a NUMBER at runtime (int PK) despite the `as string`
+      // cast — `dedupeKeyFor` does `hash.update(serverId)`, and Node's
+      // createHash rejects anything that is not a string/Buffer/TypedArray.
+      // It must also match the controller, which reads the id from the URL
+      // path as a string, or the recomputed dedupe key will never line up.
+      serverId = String(savedServer.id);
       callbackUrl = webhookCallbackUrl(PUBLIC_BASE, serverId);
 
       // Create org + meeting for event-processing tests.
+      // `slug` is NOT NULL + unique on BbbOrganization — omitting it aborts
+      // beforeAll, which is exactly how this spec stayed red-but-skipped.
       const orgRepo = conn.rawConnection.getRepository(BbbOrganization);
-      const org = orgRepo.create({ name: "W3 Test Org", channelId: "1", billingMode: "grant" as any });
+      const org = orgRepo.create({
+        name: "W3 Test Org",
+        slug: "w3-test-org",
+        channelId: "1",
+        billingMode: "grant" as any,
+      });
       const savedOrg = await orgRepo.save(org);
 
       const meetingRepo = conn.rawConnection.getRepository(BbbMeeting);
@@ -442,6 +484,3 @@ describe.skipIf(SKIP)(
     });
   },
 );
-
-// Suppress unused-variable TS error for ctx
-declare let _: unknown;

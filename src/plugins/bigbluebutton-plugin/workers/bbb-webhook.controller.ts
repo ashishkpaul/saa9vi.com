@@ -123,6 +123,17 @@ export class BbbWebhookController {
     // Query by ID only — do NOT filter on `enabled`. A server disabled for
     // draining still has live meetings whose events must arrive; only a
     // completely unknown serverId (no row at all) returns 404.
+    // A non-numeric serverId can never match the integer PK — treat it as
+    // unknown (404), not an infrastructure error. Without this guard Postgres
+    // raises `invalid input syntax for type integer` on the lookup below,
+    // which would bubble out of Nest as a 500 and make BBB retry for 5 min.
+    if (!/^\d+$/.test(serverId)) {
+      Logger.warn(
+        `BBB webhook for malformed serverId: ${serverId} — returning 404`,
+        loggerCtx,
+      );
+      return this.respond404();
+    }
     const serverRepo = this.connection.rawConnection.getRepository(BbbServer);
     const server = await serverRepo
       .createQueryBuilder("server")
@@ -300,9 +311,18 @@ export class BbbWebhookController {
       // Insert via raw query with ON CONFLICT DO NOTHING for atomic deduplication
       // (INV-002). TypeORM's .save() does a SELECT then INSERT which has a TOCTOU
       // race; a raw INSERT...ON CONFLICT is the only safe option.
-      const tableName = eventRepo.metadata.tableName;
+      //
+      // The table name MUST be schema-qualified (`metadata.schema` +
+      // `metadata.tableName`). A bare `INSERT INTO "bbb_webhook_event"`
+      // resolves against the connection's search_path, which is the `public`
+      // schema — not the `schema:`-isolated e2e schema and not any
+      // tenant-scoped schema. An unqualified insert therefore lands in the
+      // wrong schema while every subsequent read targets the right one.
+      const tablePath = eventRepo.metadata.schema
+        ? `"${eventRepo.metadata.schema}"."${eventRepo.metadata.tableName}"`
+        : `"${eventRepo.metadata.tableName}"`;
       const result = await eventRepo.query(
-        `INSERT INTO "${tableName}"
+        `INSERT INTO ${tablePath}
            ("serverId","rawBody","dedupeKey","eventType","payload","receivedAt","status","bbbMeetingId","createdAt","updatedAt")
          VALUES ($1,$2,$3,$4,$5::json,$6,$7,$8,NOW(),NOW())
          ON CONFLICT ("dedupeKey") WHERE "dedupeKey" IS NOT NULL
