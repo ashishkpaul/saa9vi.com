@@ -1,6 +1,6 @@
 import { createRequire } from 'module';
 
-import { InvariantRunner, AdrChecker, RfcLifecycleChecker, StoryFlowChecker, RoomAccessChecker, MeteredBillingChecker, CheckResult, DashboardGraphqlContractChecker } from './index';
+import { InvariantRunner, AdrChecker, RfcLifecycleChecker, StoryFlowChecker, RoomAccessChecker, MeteredBillingChecker, PaymentHygieneChecker, CheckResult, DashboardGraphqlContractChecker } from './index';
 import { RuntimeInvariantRunner } from './event-chain/runtime-invariant-runner';
 import { RuntimeTraceStore, RuntimeCausalityValidator } from '../tracing';
 import { CausalityGraphStore, CausalityQueryAPI, LayerReconciler } from '../causality';
@@ -64,6 +64,9 @@ async function main() {
     // documentation/registration shape (ADR-047, INV-028, INV-029, SEC-008, BUG-046…049);
     // Phase 2 extends the same checker with the code-level assertions.
     new MeteredBillingChecker(),
+    // INV-030 (Commit 1): payment-method hygiene — tenant role read-only,
+    // dummy handler dev/test-gated, Razorpay-only auto-provision, boot guard.
+    new PaymentHygieneChecker(),
     // INV-015: every Dashboard GraphQL document must validate against the Admin
     // schema. An unknown field rejects the whole operation, which the UI then
     // renders as an empty dataset — a silently broken ledger.

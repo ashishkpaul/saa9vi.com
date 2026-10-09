@@ -1,4 +1,5 @@
-import { PluginCommonModule, RuntimeVendureConfig, VendurePlugin } from '@vendure/core';
+import { PluginCommonModule, RuntimeVendureConfig, VendurePlugin, TransactionalConnection, PaymentMethod } from '@vendure/core';
+import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { razorpayPaymentHandler } from './config/razorpay-payment-handler';
 import { RazorpayOrdersClient } from './services/razorpay-orders.client';
 import { RazorpayCheckoutService } from './services/razorpay-checkout.service';
@@ -7,6 +8,43 @@ import { PaymentWebhookEvent } from './entities/payment-webhook-event.entity';
 import { razorpayShopApiExtensions } from './api/razorpay-shop.schema';
 import { RazorpayShopResolver } from './api/razorpay-shop.resolver';
 import { RazorpayPaymentsWebhookController } from './api/razorpay-payments-webhook.controller';
+
+/** Vendure core handler code for the dev-only dummy payment handler. */
+export const DUMMY_PAYMENT_HANDLER_CODE = 'dummy-payment-handler';
+
+const loggerCtx = 'PaymentsPlugin';
+
+/**
+ * Commit 1 hygiene guard: in any non-dev deployment, boot must fail when a
+ * PaymentMethod row still uses the dummy handler — tenants must pay through
+ * the platform Razorpay method. Dev/test keep the dummy for e2e fixtures.
+ */
+@Injectable()
+export class PaymentsProductionGuard implements OnApplicationBootstrap {
+  constructor(private readonly connection: TransactionalConnection) {}
+
+  async onApplicationBootstrap(): Promise<void> {
+    if (process.env.APP_ENV === 'dev' || process.env.NODE_ENV === 'test') return;
+    let methods: PaymentMethod[] = [];
+    try {
+      methods = await this.connection.rawConnection.getRepository(PaymentMethod).find();
+    } catch (err: any) {
+      Logger.warn(
+        `PaymentsProductionGuard: could not list PaymentMethods (${err?.message}) — skipping dummy check`,
+        loggerCtx,
+      );
+      return;
+    }
+    const offenders = methods.filter((m) => (m.handler as { code?: string })?.code === DUMMY_PAYMENT_HANDLER_CODE);
+    if (offenders.length > 0) {
+      const detail = offenders.map((m) => `${m.code} (id=${m.id})`).join(', ');
+      throw new Error(
+        `Refusing to start: ${offenders.length} PaymentMethod(s) use the dev-only dummy handler (${DUMMY_PAYMENT_HANDLER_CODE}): ${detail}. ` +
+          `Remove or disable them via the Admin API before deploying.`,
+      );
+    }
+  }
+}
 
 /**
  * R3 — one-time commerce (plan §3.9; ADR-038 "One-time commerce" branch).
@@ -23,7 +61,7 @@ import { RazorpayPaymentsWebhookController } from './api/razorpay-payments-webho
 @VendurePlugin({
   imports: [PluginCommonModule],
   entities: [PaymentWebhookEvent],
-  providers: [RazorpayOrdersClient, RazorpayCheckoutService, PaymentWebhookQueueService],
+  providers: [RazorpayOrdersClient, RazorpayCheckoutService, PaymentWebhookQueueService, PaymentsProductionGuard],
   controllers: [RazorpayPaymentsWebhookController],
   shopApiExtensions: {
     schema: razorpayShopApiExtensions,

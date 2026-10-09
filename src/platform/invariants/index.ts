@@ -7,6 +7,7 @@ export { RoomAccessChecker } from './room-access.checker';
 // and tenant-tier reads derive their organization from the channel. Phase 0 asserts the
 // documentation/registration shape; Phase 2 adds the code-level assertions.
 export { MeteredBillingChecker } from './metered-billing.checker';
+export { PaymentHygieneChecker } from './payment-hygiene.checker';
 export { EventTraceCollector, EventEmission, EventChain } from './event-chain/event-trace-collector';
 export { EventCausalityValidator, CausalityRule } from './event-chain/event-causality-validator';
 export { RuntimeInvariantRunner } from './event-chain/runtime-invariant-runner';

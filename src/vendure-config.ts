@@ -62,6 +62,11 @@ export const securityHeadersMiddleware = (req: any, res: any, next: any) => {
 };
 
 const IS_DEV = process.env.APP_ENV === "dev";
+const IS_TEST = process.env.NODE_ENV === "test";
+// Commit 1 hygiene: dummyPaymentHandler is dev/test only. Production boot
+// must fail if any PaymentMethod row still uses it (see PaymentsPlugin
+// onApplicationBootstrap guard) — tenants use the platform Razorpay method.
+const allowDummyPaymentHandler = IS_DEV || IS_TEST;
 const serverPort = 3000;
 
 export const config: VendureConfig = {
@@ -174,7 +179,12 @@ apiOptions: {
     password: process.env.DB_PASSWORD || "postgres",
   },
   paymentOptions: {
-    paymentMethodHandlers: [dummyPaymentHandler],
+    // Commit 1: dummy stays registered for dev/test only (e2e suites create
+    // their own dummy method rows; see tenant-plugin/e2e/fixtures).
+    // In production the array is empty here — PaymentsPlugin appends the
+    // Razorpay handler, and its bootstrap guard refuses to start if any
+    // PaymentMethod row uses the dummy handler code.
+    paymentMethodHandlers: allowDummyPaymentHandler ? [dummyPaymentHandler] : [],
   },
   // When adding or altering custom field definitions, the database will
   // need to be updated. See the "Migrations" section in README.md.
