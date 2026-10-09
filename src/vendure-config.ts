@@ -344,14 +344,17 @@ apiOptions: {
       publicBaseUrl: process.env.BBB_PUBLIC_BASE_URL || undefined,
       // Commit 3.5 — checksum algorithm.
       //
-      // Default sha256 (verified live 2026-10-09: in-process probe
-      // scripts/bbb/checksum-probe.ts signed getMeetings + hooks/list with
-      // BOTH sha256 and sha1 against meeting.saa9vi.com — all four returned
-      // HTTP 200 + <returncode>SUCCESS</returncode>). The server accepts the
-      // full BBB 3.0 set (sha1/256/384/512); sha256 is the modern default.
-      // The 1a8a38a 'sha1 … confirmed from hookChecksumAlgorithm in
-      // default.yml' note described the bbb-webhooks VERIFY side, not an
-      // outbound restriction — the probe proves outbound sha256 verifies.
+      // Default sha256 (verified live 2026-10-09, re-verified post-rotation
+      // 2026-10-09: in-process probe scripts/bbb/checksum-probe.ts signed
+      // getMeetings + hooks/list with BOTH sha256 and sha1 against
+      // meeting.saa9vi.com — all four returned HTTP 200 +
+      // <returncode>SUCCESS</returncode> on both runs). The server accepts
+      // the full BBB 3.0 set (sha1/256/384/512); sha256 is the modern
+      // default. The 1a8a38a 'sha1 … confirmed from hookChecksumAlgorithm
+      // in default.yml' note described the bbb-webhooks VERIFY side, not
+      // an outbound restriction — the probe proves outbound sha256
+      // verifies. Post-rotation SUCCESS also confirms the new secret
+      // decrypts (BBB_ENCRYPTION_KEY in sync, no CREDENTIAL_UNREADABLE).
       //
       // Code paths using THIS option: BbbApiService.buildChecksum (all
       // outbound API calls incl. getMeetings/create/join) and
