@@ -32,6 +32,7 @@ import {
 } from "./grant-selection.policy";
 import { BbbMeteringService } from "./bbb-metering.service";
 import { recordingProvisioningParams } from "./recording-provisioning.policy";
+import { resolveLogoutUrl } from "./storefront-url";
 import type { BigBlueButtonPluginOptions } from "../types";
 import {
   computeMonthChargePaise,
@@ -279,9 +280,10 @@ export class BbbProvisioningWorkerService
             // autoStartRecording=false) — see recording-provisioning.policy.ts.
             ...recordingProvisioningParams(this.options, meeting.recordingEnabled),
             maxParticipants: meeting.organization.maxParticipantsPerMeeting,
-            logoutURL: process.env.STOREFRONT_URL
-              ? `${process.env.STOREFRONT_URL}/bbb-logout`
-              : undefined,
+            logoutURL: resolveLogoutUrl(
+              this.options.storefrontUrl,
+              process.env.STOREFRONT_URL,
+            ),
           });
           createdOnServerId = String(server.id);
           this.serverSelectionService.noteConnectionSuccess(createdOnServerId);

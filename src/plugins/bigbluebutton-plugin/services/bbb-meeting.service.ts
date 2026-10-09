@@ -51,6 +51,7 @@ import {
   MeetingFailedEvent,
 } from "../events/bbb-events";
 import {
+  BBB_PLUGIN_OPTIONS,
   JOIN_STATUS_WAITING_FOR_TRAINER,
   MEETING_STATE,
   MEETING_STATE_TRANSITIONS,
@@ -59,6 +60,8 @@ import {
   START_ROOM_WAIT_MS_MAX,
 } from "../constants";
 import type { MeetingState } from "../constants";
+import type { BigBlueButtonPluginOptions } from "../types";
+import { resolveLogoutUrl } from "./storefront-url";
 
 const loggerCtx = "BbbMeetingService";
 
@@ -162,6 +165,11 @@ export class BbbMeetingService implements OnModuleInit {
     private readonly opsAlert: BbbOpsAlertService,
     @Inject(BBB_PROVISIONING_ENQUEUER)
     private readonly provisioningEnqueuer: BbbProvisioningEnqueuer,
+    // W6: join URLs carry BBB's logoutURL, which is built from the documented
+    // `storefrontUrl` option (falling back to STOREFRONT_URL) — the same
+    // resolution the /create call uses, so the two can never diverge.
+    @Inject(BBB_PLUGIN_OPTIONS)
+    private readonly options: BigBlueButtonPluginOptions,
   ) {}
 
   /**
@@ -507,9 +515,10 @@ export class BbbMeetingService implements OnModuleInit {
       meeting.encryptedAttendeePassword,
     );
 
-    const logoutURL = process.env.STOREFRONT_URL
-      ? `${process.env.STOREFRONT_URL.replace(/\/$/, "")}/bbb-logout`
-      : undefined;
+    const logoutURL = resolveLogoutUrl(
+      this.options.storefrontUrl,
+      process.env.STOREFRONT_URL,
+    );
 
     return this.bbbApiService.buildJoinUrl(server, {
       fullName: participantName,
@@ -567,9 +576,10 @@ export class BbbMeetingService implements OnModuleInit {
       meeting.encryptedModeratorPassword,
     );
 
-    const logoutURL = process.env.STOREFRONT_URL
-      ? `${process.env.STOREFRONT_URL.replace(/\/$/, "")}/bbb-logout`
-      : undefined;
+    const logoutURL = resolveLogoutUrl(
+      this.options.storefrontUrl,
+      process.env.STOREFRONT_URL,
+    );
 
     return this.bbbApiService.buildJoinUrl(server, {
       fullName: moderatorName,
