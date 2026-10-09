@@ -1558,13 +1558,24 @@ export class BbbMeetingService implements OnModuleInit {
    *     success: true,
    *     workflow: "presentation",
    *     recording: {
-   *       playback: { link?: "…", url?: "…" },  // field name TBC from live capture
+   *       playback: { format, link, processing_time, duration, extensions, size }
    *       ...
    *     },
    *     meeting: { "external-meeting-id": "…", "internal-meeting-id": "…" }
    *   }
    * }
    * ```
+   *
+   * Playback field name — CONFIRMED from a live BBB 3.0 capture stored in
+   * `bbb_webhook_event` (event `rap-publish-ended`, received 2026-10-08,
+   * status PROCESSED). Its `attributes.recording.playback` is exactly:
+   *
+   *     { format, link, processing_time, duration, extensions: { preview… }, size }
+   *
+   * So the field is **`link`** and there is NO `url` key at all. The `url`
+   * branch kept in the code below is only a defensive fallback for other BBB
+   * builds — the `??` order already picks `link`, so this resolves the
+   * ambiguity without changing behaviour.
    */
   private async handleRapPublishEnded(
     ctx: RequestContext,
@@ -1589,7 +1600,8 @@ export class BbbMeetingService implements OnModuleInit {
     const recordId = attrs["record-id"] as string | undefined;
     const recording = (attrs.recording ?? {}) as Record<string, unknown>;
     const playback = (recording.playback ?? {}) as Record<string, unknown>;
-    // TODO(W3-playback): confirm field name from live capture — expected .link
+    // Live capture (2026-10-08) proved the field name: `playback.link`, with
+    // no `url` key present. `.url` stays as a defensive fallback only.
     const playbackUrl =
       (playback.link as string | undefined) ??
       (playback.url as string | undefined) ??
