@@ -1118,7 +1118,7 @@ export class BbbAdminResolver {
     Array<{ id: string; name: string; sku: string; productName: string }>
   > {
     const { ProductVariant } = await import("@vendure/core");
-    const variants = await this.connection
+    const qb = await this.connection
       .getRepository(ctx, ProductVariant)
       .createQueryBuilder("v")
       .innerJoinAndSelect("v.product", "p")
@@ -1130,9 +1130,18 @@ export class BbbAdminResolver {
           term: `%${term}%`,
         },
       )
-      .andWhere("v.deletedAt IS NULL")
-      .take(10)
-      .getMany();
+      .andWhere("v.deletedAt IS NULL");
+    // Channel scoping (ADR-049 track): ProductVariant is ChannelAware via the
+    // v.channels join table. Platform callers (SuperAdmin / BBBAdmin /
+    // BBBPlatformInfrastructure) see everything; tenant callers see only
+    // variants assigned to their active channel, so one tenant can never
+    // enumerate another tenant's SKUs/names through this search.
+    if (!this.channelAccess.isPlatformCaller(ctx)) {
+      qb.innerJoin("v.channels", "vch", "vch.id = :channelId", {
+        channelId: ctx.channelId,
+      });
+    }
+    const variants = await qb.take(10).getMany();
 
     return variants.map((v) => ({
       id: String(v.id),

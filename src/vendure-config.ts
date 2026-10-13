@@ -17,6 +17,7 @@ import {
 import { AssetServerPlugin } from "@vendure/asset-server-plugin";
 import { DashboardPlugin } from "@vendure/dashboard/plugin";
 import { GraphiqlPlugin } from "@vendure/graphiql-plugin";
+import { HardenPlugin } from '@vendure/harden-plugin';
 import "dotenv/config";
 import path from "path";
 import { BullMQJobQueuePlugin } from "@vendure/job-queue-plugin/package/bullmq";
@@ -276,9 +277,9 @@ apiOptions: {
             ),
             globalTemplateVars: {
               fromAddress: process.env.EMAIL_FROM_ADDRESS || '"Saa9vi" <noreply@saa9vi.com>',
-              verifyEmailAddressUrl: "http://localhost:8080/verify",
-              passwordResetUrl: "http://localhost:8080/password-reset",
-              changeEmailAddressUrl: "http://localhost:8080/verify-email-address-change",
+              verifyEmailAddressUrl: "https://storefront.meeting.lan/verify",
+              passwordResetUrl: "https://storefront.meeting.lan/password-reset",
+              changeEmailAddressUrl: "https://storefront.meeting.lan/verify-email-address-change",
             },
           }
         : {
@@ -312,6 +313,11 @@ apiOptions: {
     DashboardPlugin.init({
       route: "dashboard",
       appDir: path.join(__dirname, "../dist/dashboard"),
+    }),
+
+    HardenPlugin.init({
+      maxQueryComplexity: 500,
+      apiMode: IS_DEV ? 'dev' : 'prod',
     }),
 
     TenantPlugin,
