@@ -3,46 +3,47 @@ import { api, Badge, Button, Card, Input, Label, Select, SelectContent, SelectIt
 import { toast } from 'sonner';
 import { useDebounce } from '@uidotdev/usehooks';
 import { useEffect, useState } from 'react';
+import { graphql } from '@/gql';
 
-const GET_ORGS = `
+const GET_ORGS = graphql(`
   query GetBbbOrganizationsForMemberships {
     bbbOrganizations { items { id name slug channelId } totalItems }
   }
-`;
+`);
 
-const GET_MEMBERSHIPS = `
+const GET_MEMBERSHIPS = graphql(`
   query GetBbbOrgMemberships($organizationId: ID!) {
     bbbOrgMemberships(organizationId: $organizationId) {
       id customerId channelId role isActive createdAt updatedAt
     }
   }
-`;
+`);
 
-const SEARCH_CUSTOMERS = `
+const SEARCH_CUSTOMERS = graphql(`
   query SearchCustomersForBbb($term: String!) {
     customers(options: { filter: { emailAddress: { contains: $term } }, take: 10 }) {
       items { id firstName lastName emailAddress }
     }
   }
-`;
+`);
 
-const CREATE_MEMBERSHIP = `
+const CREATE_MEMBERSHIP = graphql(`
   mutation CreateBbbOrgMembership($input: CreateBbbOrgMembershipInput!) {
     createBbbOrgMembership(input: $input) { id customerId role isActive }
   }
-`;
+`);
 
-const UPDATE_MEMBERSHIP = `
+const UPDATE_MEMBERSHIP = graphql(`
   mutation UpdateBbbOrgMembership($id: ID!, $input: UpdateBbbOrgMembershipInput!) {
     updateBbbOrgMembership(id: $id, input: $input) { id customerId role isActive }
   }
-`;
+`);
 
-const REMOVE_MEMBERSHIP = `
+const REMOVE_MEMBERSHIP = graphql(`
   mutation RemoveBbbOrgMembership($id: ID!) {
     removeBbbOrgMembership(id: $id)
   }
-`;
+`);
 
 interface Membership { id: string; customerId: string; channelId: string; role: string; isActive: boolean; createdAt: string; updatedAt: string; }
 

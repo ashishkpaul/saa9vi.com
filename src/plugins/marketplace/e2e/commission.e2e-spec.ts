@@ -28,6 +28,7 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../../test-utils/free-port';
 import {
   DefaultLogger,
   LogLevel,
@@ -66,7 +67,8 @@ async function assertPostgres(): Promise<void> {
 
 const { server, adminClient, shopClient } = createTestEnvironment(
   mergeConfig(testConfig, {
-    apiOptions: { port: 3076 },
+    // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
+    apiOptions: { port: 0 },
     logger: new DefaultLogger({ level: LogLevel.Debug }),
     authOptions: { requireVerification: false },
     dbConnectionOptions: {
@@ -353,7 +355,7 @@ describe('Commission classification + ledger (3B.5)', () => {
 
   beforeAll(async () => {
     await assertPostgres();
-    await server.init({
+    await startOnFreePort({ server, adminClient, shopClient }, {
       initialData: {
         defaultLanguage: 'en' as any,
         defaultZone: 'India',

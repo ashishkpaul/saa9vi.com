@@ -11,9 +11,17 @@ import * as crypto from 'crypto';
 import { PaymentWebhookEvent } from '../entities/payment-webhook-event.entity';
 import { RAZORPAY_HANDLER_CODE } from '../constants';
 import { RazorpayCheckoutService } from './razorpay-checkout.service';
+import { PaymentOpsAlertService } from './payment-ops-alert.service';
 
 const loggerCtx = 'PaymentWebhookQueueService';
 const QUEUE_NAME = 'payment-webhook-reconciliation';
+
+/**
+ * Commit 2: only these event types may settle an order. Everything else
+ * (payment.failed, payment.authorized, refund.*, …) is terminal-by-inspection
+ * and reconciles to 'ignored' with an ignored-by-type marker — never a retry.
+ */
+export const SETTLING_WEBHOOK_EVENT_TYPES = ['payment.captured', 'order.paid'] as const;
 
 const MAX_ATTEMPTS = 3;
 const BULLMQ_RETRIES = MAX_ATTEMPTS - 1;
@@ -69,6 +77,7 @@ export class PaymentWebhookQueueService implements OnModuleInit {
     private readonly requestContextService: RequestContextService,
     private readonly orderService: OrderService,
     private readonly checkoutService: RazorpayCheckoutService,
+    private readonly opsAlert: PaymentOpsAlertService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -161,6 +170,18 @@ export class PaymentWebhookQueueService implements OnModuleInit {
    */
   private async reconcileEvent(event: PaymentWebhookEvent): Promise<'processed' | 'ignored'> {
     const payload = (event.rawPayload ?? {}) as any;
+
+    // Commit 2: handle only settling event types. payment.failed (and any
+    // other non-settling type) is terminal-by-inspection — ignored-by-type,
+    // never retried.
+    const eventType: string = (event.eventType ?? payload?.event ?? 'unknown') as string;
+    if (!(SETTLING_WEBHOOK_EVENT_TYPES as readonly string[]).includes(eventType)) {
+      Logger.log(
+        `Payment webhook event ${event.id} ignored-by-type (${eventType}) — only ${SETTLING_WEBHOOK_EVENT_TYPES.join('/')} settle orders`,
+        loggerCtx,
+      );
+      return 'ignored';
+    }
     const paymentEntity = payload?.payload?.payment?.entity;
     const razorpayPaymentId: string | undefined = paymentEntity?.id;
     const razorpayOrderId: string | undefined =
@@ -193,8 +214,31 @@ export class PaymentWebhookQueueService implements OnModuleInit {
     }
 
     if (order.state !== 'ArrangingPayment') {
-      Logger.log(
-        `Order ${order.code} already in state ${order.state} — event ${event.id} ignored`,
+      // Commit 2 correction: distinguish a benign redelivery (this exact
+      // Razorpay payment already recorded on the order — Vendure's payment
+      // pipeline is idempotent) from a genuine anomaly (a DIFFERENT payment
+      // arriving for an order that is no longer payable).
+      const alreadyRecorded = await this.isPaymentAlreadyRecorded(order.id, razorpayPaymentId);
+      if (alreadyRecorded) {
+        Logger.log(
+          `Order ${order.code} already settled with Razorpay payment ${razorpayPaymentId} — duplicate delivery ${event.id} ignored (no alert)`,
+          loggerCtx,
+        );
+        return 'ignored';
+      }
+      // A CAPTURED payment landing on a non-ArrangingPayment order with NO
+      // matching payment is a money-path anomaly (double-settle attempt,
+      // stale replay, or manual state move). Still terminal 'ignored' —
+      // retrying would risk a second settlement — but raise an ops alert
+      // instead of staying silent.
+      this.opsAlert.notify(
+        'payment-captured-on-settled-order',
+        String(order.code),
+        `Captured payment ${razorpayPaymentId} for order ${order.code} arrived while order is ${order.state} (event ${event.id}) with no matching payment — ignored, operator review needed`,
+        { orderCode: order.code, orderState: order.state, eventId: event.id, eventType, razorpayPaymentId },
+      );
+      Logger.warn(
+        `Order ${order.code} in state ${order.state} received unmatched captured payment ${razorpayPaymentId} (event ${event.id}) — ignored with ops alert`,
         loggerCtx,
       );
       return 'ignored';
@@ -237,6 +281,39 @@ export class PaymentWebhookQueueService implements OnModuleInit {
     throw new Error(
       `Webhook reconciliation failed for order ${order.code}: ${JSON.stringify(addPaymentResult)}`,
     );
+  }
+
+  /**
+   * Commit 2 correction: has this exact Razorpay payment already been
+   * recorded on the order (transactionId match)? A redelivered webhook for
+   * the SAME payment is benign — the order settled, the payment is there —
+   * and must NOT page an operator.
+   */
+  private async isPaymentAlreadyRecorded(orderId: unknown, razorpayPaymentId: string): Promise<boolean> {
+    try {
+      const paymentRepo = this.connection.rawConnection.getRepository('Payment' as never) as {
+        find: (opts: unknown) => Promise<Array<{ transactionId?: string; metadata?: Record<string, unknown> }>>;
+      };
+      const payments = await paymentRepo.find({
+        where: { order: { id: orderId } },
+        relations: { order: true },
+      }).catch(async () => {
+        // Fallback: query without the relation join (driver-dependent).
+        const repo2 = this.connection.rawConnection.getRepository('Payment' as never) as {
+          find: (opts: unknown) => Promise<Array<{ transactionId?: string; metadata?: Record<string, unknown> }>>;
+        };
+        return repo2.find({ where: { orderId } });
+      });
+      return payments.some(
+        (p) =>
+          p.transactionId === razorpayPaymentId ||
+          (p.metadata as Record<string, unknown> | undefined)?.['razorpay_payment_id'] === razorpayPaymentId,
+      );
+    } catch {
+      // Fail toward alerting: if we cannot prove the payment is recorded,
+      // the caller raises the ops alert rather than silently ignoring.
+      return false;
+    }
   }
 
   /**

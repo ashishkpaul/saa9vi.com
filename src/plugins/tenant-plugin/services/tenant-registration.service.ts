@@ -28,6 +28,7 @@ import { Repository } from 'typeorm';
 import { TenantRegistrationLog } from '../entities/tenant-registration-log.entity';
 import { TenantProfileService } from './tenant-profile.service';
 import { TENANT_ADMIN_ROLE_PERMISSIONS } from '../constants';
+import { RAZORPAY_HANDLER_CODE } from '../../payments/constants';
 
 const loggerCtx = 'TenantRegistrationService';
 
@@ -462,15 +463,31 @@ export class TenantRegistrationService {
       Logger.warn(`Failed to assign shipping methods to channel ${newChannel.code}: ${e.message}`, loggerCtx);
     }
 
-    // PaymentMethods
+    // PaymentMethods — Commit 1 hygiene: assign only the platform Razorpay
+    // method(s); never copy a dummy/dev method onto a tenant channel.
     try {
       const { items: paymentMethods } = await this.paymentMethodService.findAll(ctx);
-      if (paymentMethods.length > 0) {
+      const razorpayMethods = paymentMethods.filter(
+        (m) => (m.handler as { code?: string })?.code === RAZORPAY_HANDLER_CODE,
+      );
+      const skipped = paymentMethods.length - razorpayMethods.length;
+      if (skipped > 0) {
+        Logger.warn(
+          `Skipped ${skipped} non-Razorpay payment method(s) for channel ${newChannel.code} (Commit 1 hygiene)`,
+          loggerCtx,
+        );
+      }
+      if (razorpayMethods.length > 0) {
         await this.paymentMethodService.assignPaymentMethodsToChannel(ctx, {
           channelId: newChannel.id,
-          paymentMethodIds: paymentMethods.map((m) => m.id),
+          paymentMethodIds: razorpayMethods.map((m) => m.id),
         });
-        Logger.log(`Assigned ${paymentMethods.length} payment methods to channel ${newChannel.code}`, loggerCtx);
+        Logger.log(`Assigned ${razorpayMethods.length} Razorpay payment method(s) to channel ${newChannel.code}`, loggerCtx);
+      } else {
+        Logger.warn(
+          `No Razorpay payment method to assign to channel ${newChannel.code} — checkout will fail until a platform admin creates one`,
+          loggerCtx,
+        );
       }
     } catch (e: any) {
       Logger.warn(`Failed to assign payment methods to channel ${newChannel.code}: ${e.message}`, loggerCtx);

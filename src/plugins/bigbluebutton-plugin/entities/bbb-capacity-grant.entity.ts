@@ -14,7 +14,13 @@ import { BbbOrganization } from "./bbb-organization.entity";
  * - 'subscription'      — written by BbbSubscriptionListener on SubscriptionRenewedEvent
  *                         (RFC-001 §4 amendment 2026-09-24: the sourceType discriminator
  *                         shipped instead of a separate RecurringCapacityGrant entity)
+ * - 'manual'            — written by the Admin createBbbCapacityGrant mutation
+ *                         (BUG-044: previously unset, so manual overrides silently
+ *                         defaulted to 'order'; backfilled where order_id IS NULL)
  * - 'internal_overhead' — auto-created per org; isUnbounded=true; never exhausted
+ *
+ * 'manual' is tenant-selectable exactly like 'order'/'subscription' (admin-granted
+ * capacity is real customer-facing allowance) — see TENANT_SELECTABLE_SOURCE_TYPES.
  */
 @Entity("bbb_capacity_grant")
 export class BbbCapacityGrant extends VendureEntity {
@@ -57,9 +63,10 @@ export class BbbCapacityGrant extends VendureEntity {
   /**
    * Source discriminator — controls billing path in consumeGrantHours().
    * 'internal_overhead' grants skip exhaustion checks and capacity alerts.
+   * 'manual' marks Admin createBbbCapacityGrant overrides (BUG-044).
    */
   @Column({ default: "order" })
-  sourceType: "order" | "subscription" | "internal_overhead";
+  sourceType: "order" | "subscription" | "manual" | "internal_overhead";
 
   /**
    * When true, grantedMinutes is ignored and the grant never exhausts.

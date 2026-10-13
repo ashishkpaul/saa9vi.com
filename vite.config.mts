@@ -1,7 +1,51 @@
 import { vendureDashboardPlugin } from '@vendure/dashboard/vite';
 import { join, resolve } from 'path';
 import { pathToFileURL } from 'url';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
+
+/**
+ * Saa9vi dashboard branding.
+ *
+ * The document title is set at runtime by the Dashboard SPA
+ * (`@vendure/dashboard@3.7.4`: `src/app/common/use-page-title.ts` holds
+ * `const DEFAULT_TITLE = 'Vendure'`, applied as `document.title` from the
+ * root route `src/app/routes/__root.tsx`). There is no config option for it,
+ * and `index.html` has no `<title>` tag to edit, so a MutationObserver-style
+ * runtime patch would fight React's own assignment and clobber the page-name
+ * prefix (`Administrators • Vendure` -> page name would be lost).
+ *
+ * Instead we rewrite the hardcoded constant at build time, preserving the
+ * `breadcrumb • brand` format (`Administrators • Saa9vi Admin`, plain
+ * `Saa9vi Admin` on pages without a breadcrumb such as login).
+ *
+ * The guard throws loudly on a Vendure upgrade instead of silently reverting
+ * to "Vendure" if the upstream file changes.
+ */
+function saa9viBranding(): Plugin {
+    const BRAND = 'Saa9vi Admin';
+    return {
+        name: 'saa9vi-branding',
+        enforce: 'pre',
+        // Rewrites the hardcoded default in the Dashboard's page-title hook.
+        transform(code, id) {
+            if (!id.includes('use-page-title')) return;
+            const needle = "const DEFAULT_TITLE = 'Vendure';";
+            // Fail loudly on a Vendure upgrade instead of silently reverting to "Vendure".
+            if (!code.includes(needle)) {
+                throw new Error(
+                    'saa9viBranding: DEFAULT_TITLE not found; update the plugin for this Vendure version',
+                );
+            }
+            return { code: code.replace(needle, `const DEFAULT_TITLE = '${BRAND}';`), map: null };
+        },
+        // Meta tags in the generated index.html.
+        transformIndexHtml(html) {
+            return html
+                .replace('content="Vendure Admin Dashboard"', 'content="Saa9vi Admin Dashboard"')
+                .replace('<meta name="author" content="Vendure" />', '<meta name="author" content="Saa9vi" />');
+        },
+    };
+}
 
 export default defineConfig({
     base: '/dashboard',
@@ -15,6 +59,7 @@ export default defineConfig({
     },
     // ─────────────────────────────────────────────────────────────────────
     plugins: [
+        saa9viBranding(),
         vendureDashboardPlugin({
             // The vendureDashboardPlugin will scan your configuration in order
             // to find any plugins which have dashboard extensions, as well as

@@ -250,7 +250,14 @@ export type BbbJoinRoomResult = {
   __typename?: 'BbbJoinRoomResult';
   /** Present only when status is active */
   joinUrl?: Maybe<Scalars['String']['output']>;
-  /** active | provisioning | failed */
+  /**
+   * active | provisioning | failed | waiting_for_trainer
+   *
+   * waiting_for_trainer = the caller is authorized but is NOT a moderator
+   * (no org_admin/trainer role) and the room has not been started yet. It is a
+   * success outcome: the join caused no provisioning — the learner waits for a
+   * trainer to start the class.
+   */
   status: Scalars['String']['output'];
 };
 
@@ -271,6 +278,18 @@ export type BbbMeetingPublicList = {
 
 export type BbbRoomPublic = {
   __typename?: 'BbbRoomPublic';
+  /**
+   * Server-driven action for the calling customer (INV-008): START | JOIN |
+   * WAIT | NONE. Derived from the SAME shared access evaluation as joinRoom
+   * plus the room state, so the storefront never re-derives role or
+   * eligibility from the clock.
+   *
+   * Populated by bbbRoomStatus only. myBbbRooms leaves it null — that list
+   * does not evaluate per-room access, and claiming an action it has not
+   * computed would be worse than admitting it is unknown (the studentCount
+   * precedent).
+   */
+  classAction?: Maybe<Scalars['String']['output']>;
   currentMeetingId?: Maybe<Scalars['ID']['output']>;
   id: Scalars['ID']['output'];
   name: Scalars['String']['output'];
@@ -2596,9 +2615,9 @@ export type MutationVoteOnReviewArgs = {
  * Live meeting-minutes allowance for the active channel's current period.
  *
  * Sourced from BbbCapacityGrant, restricted to tenant-selectable source types
- * ('order', 'subscription'): 'internal_overhead' is ops headroom and is never
- * reported as customer allowance (BUG-036 semantics, shared with the
- * provisioning gate).
+ * ('order', 'subscription', 'manual'): 'internal_overhead' is ops headroom and
+ * is never reported as customer allowance (BUG-036 semantics, shared with the
+ * provisioning gate; 'manual' added by BUG-044).
  */
 export type MyLiveUsage = {
   __typename?: 'MyLiveUsage';

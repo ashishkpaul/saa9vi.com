@@ -2,19 +2,20 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, Button, Card, Input, Label, Switch } from '@vendure/dashboard';
 import { toast } from 'sonner';
 import { useEffect, useState } from 'react';
+import { graphql } from '@/gql';
 import { AcademyPageHeader, AcademyStatusBadge, LoadingRows, useAutoProvisionTenantProfile } from '../../shared/academy-dashboard';
 
-const CREATE_PROFILE = `
+const CREATE_PROFILE = graphql(`
   mutation CreateTenantProfile($input: CreateTenantProfileInput!) {
     createTenantProfile(input: $input) { id channelId businessName contactEmail onboardingComplete }
   }
-`;
+`);
 
-const UPDATE_PROFILE = `
+const UPDATE_PROFILE = graphql(`
   mutation UpdateTenantProfile($input: UpdateTenantProfileInput!) {
     updateTenantProfile(input: $input) { id businessName tagline timezone contactEmail onboardingComplete }
   }
-`;
+`);
 
 interface TenantProfile {
   id: string; channelId: string; businessName: string;

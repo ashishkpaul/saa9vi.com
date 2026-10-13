@@ -2,7 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { RequestContext } from "@vendure/core";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbServer } from "../entities/bbb-server.entity";
-import { BbbApiService } from "./bbb-api.service";
+import { BbbApiService, BbbNotFoundError } from "./bbb-api.service";
 import { BbbEncryptionService } from "./bbb-encryption.service";
 
 const loggerCtx = "BbbJoinUrlService";
@@ -29,6 +29,10 @@ export class BbbJoinUrlService {
 
   /**
    * Validates that a meeting still exists on BBB before returning a join URL.
+   * W1: `getMeetingInfo` now throws — only `BbbNotFoundError` means gone.
+   * Unavailable/Rejected (outage, checksum) rethrows so the caller can fail
+   * the join loudly instead of issuing a URL for a dead meeting.
+   * Sends the moderator password: BBB requires it on getMeetingInfo.
    */
   async validateMeetingExistsOnBbb(
     server: BbbServer,
@@ -38,19 +42,26 @@ export class BbbJoinUrlService {
       return false;
     }
 
+    let moderatorPW: string | undefined;
+    if (meeting.encryptedModeratorPassword) {
+      try {
+        moderatorPW = this.encryptionService.decrypt(
+          meeting.encryptedModeratorPassword,
+        );
+      } catch {
+        moderatorPW = undefined;
+      }
+    }
+
     try {
-      const info = await this.bbbApiService.getMeetingInfo(
+      await this.bbbApiService.getMeetingInfo(
         server,
         meeting.bbbMeetingId,
+        moderatorPW,
       );
-      return info !== null;
+      return true;
     } catch (err: any) {
-      if (
-        err.message?.includes("[notFound]") ||
-        err.message?.includes("notFound") ||
-        ((err.response as any)?.returncode === "FAILED" &&
-          (err.response as any)?.messageKey === "notFound")
-      ) {
+      if (err instanceof BbbNotFoundError) {
         return false;
       }
       throw err;

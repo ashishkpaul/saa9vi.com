@@ -2,34 +2,35 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@vendure/dashboard';
 import { toast } from 'sonner';
 import { useMemo, useState } from 'react';
+import { graphql } from '@/gql';
 import { AcademyPageHeader, EmptyState, LoadingRows, PaginationFooter } from '../../shared/academy-dashboard';
 
-const GET_MEDIA = `
+const GET_MEDIA = graphql(`
   query GetMediaResources($options: MediaResourceListOptions) {
     mediaResources(options: $options) {
       items { id ownerType ownerId type url title displayOrder isFeatured isActive createdAt }
       totalItems
     }
   }
-`;
+`);
 
-const CREATE_MEDIA = `
+const CREATE_MEDIA = graphql(`
   mutation CreateMediaResource($input: CreateMediaResourceInput!) {
     createMediaResource(input: $input) { id type url title isActive }
   }
-`;
+`);
 
-const UPDATE_MEDIA = `
+const UPDATE_MEDIA = graphql(`
   mutation UpdateMediaResource($input: UpdateMediaResourceInput!) {
     updateMediaResource(input: $input) { id type url title displayOrder isFeatured isActive }
   }
-`;
+`);
 
-const DELETE_MEDIA = `
+const DELETE_MEDIA = graphql(`
   mutation DeleteMediaResource($id: ID!) {
     deleteMediaResource(id: $id)
   }
-`;
+`);
 
 const MEDIA_TYPES = ['image', 'video', 'document', 'audio', 'other'];
 const OWNER_TYPES = ['instructor', 'course', 'tenant', 'organization'];

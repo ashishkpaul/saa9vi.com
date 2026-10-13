@@ -2,7 +2,7 @@ import { Injectable } from "@nestjs/common";
 import {
   ConfigService,
   ID,
-  Permission,
+  ForbiddenError,
   RequestContext,
   TransactionalConnection,
   EntityNotFoundError,
@@ -12,13 +12,12 @@ import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbOrganizationMember } from "../entities/bbb-organization-member.entity";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
-import { MEETING_STATE } from "../constants";
+import { MEETING_STATE, BILLING_MODE } from "../constants";
 import { BbbChannelAccessService } from "./bbb-channel-access.service";
 import { BbbPlatformCapacityPolicyService } from "./bbb-platform-capacity-policy.service";
 
 export interface CreateBbbOrganizationInput {
   channelId: string;
-  tenantProfileId: string;
   slug: string;
   name: string;
   concurrentMeetingLimit?: number;
@@ -30,9 +29,27 @@ export interface UpdateBbbOrganizationInput {
   name?: string;
   concurrentMeetingLimit?: number;
   maxParticipantsPerMeeting?: number;
+  /** Platform-only — rejected for tenant callers by the allowlist below. */
+  maxSessionsPerOrg?: number;
   recordingEnabled?: boolean;
   suspended?: boolean;
 }
+
+/**
+ * The ONLY fields a tenant administrator may change through
+ * `updateBbbOrganization` on its own organization (S1.7 / BUG-047-H1 /
+ * SEC-008). Everything else — `suspended` and the capacity limits
+ * (`maxSessionsPerOrg`, `concurrentMeetingLimit`, `maxParticipantsPerMeeting`)
+ * — is platform-only: capacity fields are ADR-031/INV-015 policy-synced caches
+ * and `suspended` is the ADR-047 platform credit guard. Billing fields are not
+ * part of this input at all (they belong to `setBbbOrganizationBilling`,
+ * Phase 4). Allowlist, never a denylist — a new field on the input is
+ * platform-only until explicitly added here.
+ */
+export const TENANT_EDITABLE_ORG_FIELDS: readonly string[] = [
+  "name",
+  "recordingEnabled",
+];
 
 @Injectable()
 export class BbbOrganizationService {
@@ -63,13 +80,15 @@ export class BbbOrganizationService {
     const skip = Math.max(options?.skip ?? 0, 0);
     const channelId = ctx.channelId as string;
 
-    // SuperAdmin sees all organizations regardless of channel.
-    // Tenant admins see organizations on their authorized channels,
-    // checking the channels many-to-many relation (not just scalar channelId).
-    const isSuperAdmin = ctx.userHasPermissions([Permission.SuperAdmin]);
+    // Platform callers (SuperAdmin / BBBAdmin / BBBPlatformInfrastructure) see
+    // all organizations regardless of channel; tenant admins see only
+    // organizations on their authorized channel — via the SAME shared helper
+    // meetingService.findAll uses, so the two definitions cannot drift
+    // apart (Q5 / INV-029).
+    const isPlatform = this.channelAccess.isPlatformCaller(ctx);
     const repo = this.connection.getRepository(ctx, BbbOrganization);
 
-    if (isSuperAdmin) {
+    if (isPlatform) {
       const [items, totalItems] = await repo.findAndCount({
         order: { createdAt: "ASC" },
         skip,
@@ -199,6 +218,19 @@ export class BbbOrganizationService {
     ctx: RequestContext,
     input: CreateBbbOrganizationInput,
   ): Promise<BbbOrganization> {
+    // BUG-050 / INV-001 (Channel=Tenant): a tenant may provision an
+    // organization only on its own channel; platform callers (SuperAdmin /
+    // BBBAdmin / BBBPlatformInfrastructure) may target any channel (e.g.
+    // listener/system provisioning runs without a user and stays on its own
+    // channel). This also keeps the scalar `channelId` and the `channels`
+    // many-to-many assignment below (`assignToCurrentChannel` uses ctx) from
+    // drifting apart.
+    if (
+      !this.channelAccess.isPlatformCaller(ctx) &&
+      this.toInternalId(String(input.channelId)) !== String(ctx.channelId)
+    ) {
+      throw new ForbiddenError();
+    }
     const existing = await this.findByChannelId(ctx, input.channelId);
     if (existing) {
       throw new Error(
@@ -207,12 +239,18 @@ export class BbbOrganizationService {
     }
     const org = new BbbOrganization({
       channelId: this.toInternalId(input.channelId),
-      tenantProfileId: input.tenantProfileId,
       slug: input.slug,
       name: input.name,
       concurrentMeetingLimit: input.concurrentMeetingLimit ?? 5,
       maxParticipantsPerMeeting: input.maxParticipantsPerMeeting ?? 30,
       recordingEnabled: input.recordingEnabled ?? false,
+      // ADR-047 / D7: new organizations are metered (postpaid attendee-hours).
+      // 'grant' remains the DDL default so existing rows are untouched; setting
+      // it here — one testable place — is what makes new tenants metered. The
+      // rate is intentionally left null → platform default
+      // (`defaultRatePaisePerLearnerHour`) until a platform operator sets one
+      // via setBbbOrganizationBilling.
+      billingMode: BILLING_MODE.METERED,
     });
     await this.channelService.assignToCurrentChannel(org, ctx);
     const saved = await this.connection.getRepository(ctx, BbbOrganization).save(org);
@@ -274,7 +312,29 @@ export class BbbOrganizationService {
       BbbOrganization,
       id,
     );
-    Object.assign(org, input);
+    // S1.7 / BUG-047-H1 (SEC-008): allowlist, never a denylist. A tenant may
+    // change only TENANT_EDITABLE_ORG_FIELDS on its own org; any other field
+    // is rejected loudly (a silently dropped field would look applied to the
+    // caller). Platform callers keep the full input — the capacity re-sync
+    // below still applies to them (INV-015).
+    let effective: UpdateBbbOrganizationInput = input;
+    if (!this.channelAccess.isPlatformCaller(ctx)) {
+      const rejected = Object.keys(input).filter(
+        (key) => !TENANT_EDITABLE_ORG_FIELDS.includes(key),
+      );
+      if (rejected.length > 0) {
+        throw new ForbiddenError();
+      }
+      const allowed: UpdateBbbOrganizationInput = {};
+      for (const [key, value] of Object.entries(input)) {
+        if (TENANT_EDITABLE_ORG_FIELDS.includes(key)) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (allowed as any)[key] = value;
+        }
+      }
+      effective = allowed;
+    }
+    Object.assign(org, effective);
     const saved = await this.connection
       .getRepository(ctx, BbbOrganization)
       .save(org);

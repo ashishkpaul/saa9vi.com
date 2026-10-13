@@ -1,6 +1,6 @@
 import type { DeepPartial } from "@vendure/common/lib/shared-types";
-import { VendureEntity } from "@vendure/core";
-import { Column, Entity, ManyToOne, VersionColumn } from "typeorm";
+import { ID, VendureEntity } from "@vendure/core";
+import { Column, Entity, ManyToOne, RelationId, VersionColumn } from "typeorm";
 import { BbbOrganization } from "./bbb-organization.entity";
 
 export type RoomState = "Idle" | "Provisioning" | "Active" | "Failed";
@@ -13,6 +13,18 @@ export class BbbRoom extends VendureEntity {
 
   @ManyToOne(() => BbbOrganization, { nullable: false })
   organization: BbbOrganization;
+
+  /**
+   * Read-only projection of the `organization` FK column (BUG-051).
+   *
+   * `@RelationId` selects the FK without loading the relation and without
+   * declaring a second column — so the schema is unchanged (no migration) while
+   * the SDL's non-null `BbbRoom.organizationId` stops returning null. TypeORM
+   * hydrates it on every `find*`; a freshly saved instance carries the relation
+   * itself, so read BbbRoom.organizationId for reads only.
+   */
+  @RelationId((room: BbbRoom) => room.organization)
+  organizationId: ID;
 
   @Column()
   name: string;

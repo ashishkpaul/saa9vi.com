@@ -1,8 +1,9 @@
 import { DashboardRouteDefinition, Page, PageBlock, PageLayout, PageTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@vendure/dashboard';
 import { api } from '@vendure/dashboard';
 import { useQuery } from '@tanstack/react-query';
+import { graphql } from '@/gql';
 
-const GET_SESSION_ATTENDANCE = `
+const GET_SESSION_ATTENDANCE = graphql(`
     query SessionAttendance($sessionId: ID!) {
         scheduledSessionAttendance(sessionId: $sessionId) {
             id
@@ -18,7 +19,7 @@ const GET_SESSION_ATTENDANCE = `
             lastEventAt
         }
     }
-`;
+`);
 
 function formatDate(date: string | null): string {
     return date ? new Date(date).toLocaleString() : '—';
@@ -27,7 +28,7 @@ function formatDate(date: string | null): string {
 export const attendanceSessionDetail: DashboardRouteDefinition = {
     path: '/attendance/session/$id',
     loader: () => ({ breadcrumb: 'Session Attendance' }),
-    component: ({ route }: { route: any }) => <AttendanceSessionDetailPage route={route} />,
+    component: (route: any) => <AttendanceSessionDetailPage route={route} />,
 };
 
 function AttendanceSessionDetailPage({ route }: { route: any }) {

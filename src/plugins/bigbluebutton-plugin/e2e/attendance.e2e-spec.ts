@@ -22,6 +22,7 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../../test-utils/free-port';
 import { mergeConfig } from '@vendure/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getSuperadminContext } from '@vendure/testing/lib/utils/get-superadmin-context';
@@ -52,9 +53,10 @@ async function assertPostgres(): Promise<void> {
   });
 }
 
-const { server } = createTestEnvironment(
+const { server, adminClient, shopClient } = createTestEnvironment(
   mergeConfig(testConfig, {
-    apiOptions: { port: 3079 },
+    // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
+    apiOptions: { port: 0 },
     dbConnectionOptions: {
       type: 'postgres',
       host: process.env.DB_HOST ?? '127.0.0.1',
@@ -90,7 +92,7 @@ describe('SessionAttendance (3D.3e)', () => {
 
   beforeAll(async () => {
     await assertPostgres();
-    await server.init({
+    await startOnFreePort({ server, adminClient, shopClient }, {
       initialData: {
         defaultLanguage: 'en' as any,
         defaultZone: 'India',

@@ -88,14 +88,29 @@ Three structural facts constrain the answer:
    allowance. This reuses the advisory-lock-over-allocation pattern INV-025 established for
    `TenantTheme`, chosen over new DDL precisely because the schema is frozen.
 
-5. **D-7 — schedule, timezone, catch-up.** Hourly; **Saa9vi server clock** (ADR-042's rule
-   for the marketplace grace deadline, reused verbatim — there is no per-tenant timezone);
+5. **D-7 — schedule, timezone, catch-up.** Hourly; **IST (Asia/Kolkata)**
+   via the shared `src/platform/timezone.ts` helper (`IST_OFFSET_MS`), shared
+   with the billing month (`monthOf`) so the day a grant counts against and
+   the month a meeting books to can never disagree. No per-tenant timezone is
+   consulted (ADR-042's clock rule, reused verbatim — there is no per-tenant
+   timezone);
    **no backfill**. The hourly cadence bounds *how late today's grant can be*, not
    correctness — the write is idempotent, so an extra run is free and an exact-midnight cron
    buys nothing. Catch-up is a property of the write rather than a separate mechanism: the
    first run after a rollover (or after downtime) materialises the current day's grant. A
    window that has already closed is unconsumeable, so re-creating a missed past day would
    only inflate reported `includedMinutes`.
+
+   **DB-timezone interplay (checked 2026-10-05):** Vendure's production-configuration
+   *Database Timezone* section requires the database session timezone to remain
+   `UTC`/`Etc/UTC` — Vendure treats all dates & times as UTC internally, and a
+   non-UTC database timezone shifts every stored timestamp by a fixed offset
+   (`show timezone;` must answer `UTC` or `Etc/UTC`). The IST boundary logic
+   therefore lives **only** in application code (`src/platform/timezone.ts`,
+   fixed +5:30 arithmetic); the database is never asked to interpret IST.
+   Verified on the integration database: `show timezone;` → `Etc/UTC`
+   (2026-10-05). If the database is ever provisioned outside this repo, add
+   `show timezone;` to the deployment checklist.
 
 6. **D-8 — the free plan is daily-only.** Provider-free plans receive the daily grant and
    **never** a billing-period grant (§3.6: the free billing-period row is `—`); they never
@@ -165,7 +180,7 @@ Three structural facts constrain the answer:
 | Plan item | Resolution |
 |---|---|
 | **D-6** | Decision 7 — terminal `Failed` at provisioning + `MeetingFailedEvent`; no pre-enqueue check |
-| **D-7** | Decision 5 — hourly, Saa9vi server clock, idempotent write as catch-up, no backfill |
+| **D-7** | Decision 5 — hourly, IST (Asia/Kolkata) via `platform/timezone.ts`, idempotent write as catch-up, no backfill |
 | **D-8** | Decision 6 — provider-free plans are daily-only; period grants stay renewal-owned |
 | F-6 (prereq) | Decisions 1 and 3 — reuse `BbbCapacityGrant` + `sourceType='subscription'`; no second writer, no second entity |
 

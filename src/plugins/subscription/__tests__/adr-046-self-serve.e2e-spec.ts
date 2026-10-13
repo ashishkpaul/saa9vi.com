@@ -6,6 +6,7 @@ import {
   testConfig,
   registerInitializer,
 } from "@vendure/testing";
+import { startOnFreePort } from "../../../test-utils/free-port";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import gql from "graphql-tag";
 import { Logger, mergeConfig } from "@vendure/core";
@@ -151,7 +152,8 @@ const decode = (id: unknown): string => String(id).replace(/^T_/, '');
 describe("ADR-046 — tenant self-serve subscription Shop API", () => {
   const { server, adminClient, shopClient } = createTestEnvironment(
     mergeConfig(testConfig, {
-      apiOptions: { port: 3091 },
+      // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
+      apiOptions: { port: 0 },
       authOptions: { requireVerification: false },
       dbConnectionOptions: {
         type: "postgres",
@@ -200,7 +202,7 @@ describe("ADR-046 — tenant self-serve subscription Shop API", () => {
   const loggerInfo = vi.spyOn(Logger, "info");
 
   beforeAll(async () => {
-    await server.init({ initialData: E2E_INITIAL_DATA });
+    await startOnFreePort({ server, adminClient, shopClient }, { initialData: E2E_INITIAL_DATA });
 
     // This E2E exercises the Shop contract while keeping Redis/provider
     // externalities deterministic. The cooldown unit itself is covered by the

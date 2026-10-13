@@ -1,6 +1,6 @@
 // src/plugins/bigbluebutton-plugin/bigbluebutton.plugin.ts
 
-import { Inject, OnApplicationBootstrap } from "@nestjs/common";
+import { Inject, Logger, OnApplicationBootstrap } from "@nestjs/common";
 import {
   PluginCommonModule,
   RuntimeVendureConfig,
@@ -9,12 +9,13 @@ import {
 import { CustomerDeletionLog } from "../../platform/customer-deletion/entities/customer-deletion-log.entity";
 import { CustomerDeletionModule } from "../../platform/customer-deletion/customer-deletion.module";
 import { CustomerDeletionService } from "../../platform/customer-deletion/customer-deletion.service";
-
 import { BbbServer } from "./entities/bbb-server.entity";
 import { BbbOrganization } from "./entities/bbb-organization.entity";
 import { BbbMeeting } from "./entities/bbb-meeting.entity";
 import { BbbCapacityGrant } from "./entities/bbb-capacity-grant.entity";
 import { BbbUsageLedger } from "./entities/bbb-usage-ledger.entity";
+import { BbbMeetingSample } from "./entities/bbb-meeting-sample.entity";
+import { BbbMeteredUsage } from "./entities/bbb-metered-usage.entity";
 import { BbbOrganizationMember } from "./entities/bbb-organization-member.entity";
 import { BbbScheduledSession } from "./entities/bbb-scheduled-session.entity";
 import { BbbRoom } from "./entities/bbb-room.entity";
@@ -50,19 +51,30 @@ import { BbbWebhookProcessorService } from "./services/bbb-webhook-processor.ser
 import { BbbEntitlementService } from "./services/bbb-entitlement.service";
 import { BbbDeletionService } from "./services/bbb-deletion.service";
 import { BbbMembershipService } from "./services/bbb-membership.service";
+import { BbbRoomAccessService } from "./services/room-access.service";
 import { GrantReaderService } from "./services/grant-reader.service";
+import { GrantConsumptionService } from "./services/bbb-grant-consumption.service";
+import { MeetingLifecycleService } from "./services/bbb-meeting-lifecycle.service";
 import { BbbDailyAllowanceService } from "./services/bbb-daily-allowance.service";
+import { BbbMeteringService } from "./services/bbb-metering.service";
+import { BbbBillingService } from "./services/bbb-billing.service";
+import { BbbOpsAlertService } from "./services/bbb-ops-alert.service";
 import { bbbDailyAllowanceTask } from "./jobs/bbb-daily-allowance.task";
+import { bbbServerHealthTask } from "./jobs/bbb-server-health.task";
+import { bbbMeteringTask } from "./jobs/bbb-metering.task";
+import { bbbMeteringPruneTask } from "./jobs/bbb-metering-prune.task";
 import { LearningDashboardService } from "./services/learning-dashboard.service";
 import { CapacityIntelligenceService } from "./services/capacity-intelligence.service";
 import { AttendanceAnalyticsService } from "./services/attendance-analytics.service";
 import { BbbPlatformCapacityPolicyService } from "./services/bbb-platform-capacity-policy.service";
 import { BbbJoinUrlService } from "./services/bbb-join-url.service";
 import { BbbProvisioningWorkerService } from "./services/bbb-provisioning-worker.service";
+import { BBB_PROVISIONING_ENQUEUER } from "./services/bbb-provisioning-enqueuer";
 import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.listener";
 import { BbbSubscriptionListener } from "./listeners/bbb-subscription.listener";
 import { BbbSessionProvisioningListener } from "./listeners/bbb-session-provisioning.listener";
 import { BbbTenantProvisioningListener } from "./listeners/bbb-tenant-provisioning.listener";
+import { BbbCapacityAlertListener } from "./listeners/bbb-capacity-alert.listener";
 import { BbbPlanCapacityReconciliationBootstrap } from "./listeners/bbb-plan-capacity-reconciliation.bootstrap";
 
 import { PlatformTracingModule } from "../../platform/tracing/platform-tracing.module";
@@ -74,7 +86,11 @@ import { BbbShopResolver } from "./api/bbb-shop.resolver";
 import { BbbWebhookController } from "./workers/bbb-webhook.controller";
 import { bbbReconciliationTask } from "./jobs/bbb-reconciliation.task";
 import { bbbCapacityAlertTask } from "./jobs/bbb-capacity-alert.task";
-import { bbbWebhookRateLimiter, shopApiRateLimiter } from "./config/rate-limiter.middleware";
+import { BBB_WEBHOOK_RATE_LIMIT_ROUTES, bbbWebhookRateLimiter, shopApiRateLimiter } from "./config/rate-limiter.middleware";
+import { BbbHooksService } from "./services/bbb-hooks.service";
+import { BbbWebhookRetentionService } from "./services/bbb-webhook-retention.service";
+import { bbbHooksReconciliationTask } from "./jobs/bbb-hooks-reconciliation.task";
+import { bbbWebhookRetentionTask } from "./jobs/bbb-webhook-retention.task";
 import {
   bbbFulfillmentHandler,
   bbbOrderProcess,
@@ -85,6 +101,7 @@ import { BigBlueButtonPluginOptions } from "./types";
 import {
   BBB_GRANULAR_PERMISSIONS,
   BBB_PLUGIN_OPTIONS,
+  BBB_PUBLIC_BASE_URL,
   BbbAdminPermission,
 } from "./constants";
 
@@ -97,6 +114,8 @@ import {
     BbbMeeting,
     BbbCapacityGrant,
     BbbUsageLedger,
+    BbbMeetingSample,
+    BbbMeteredUsage,
     BbbOrganizationMember,
     BbbScheduledSession,
     BbbRoom,
@@ -141,16 +160,36 @@ import {
     BbbEntitlementService,
     BbbDeletionService,
     BbbMembershipService,
+    // INV-027 (BUG-045): the single room-access evaluation shared by
+    // bbbRoomStatus (preview) and joinRoom (action).
+    BbbRoomAccessService,
     GrantReaderService,
+    // S7A (Phase 7.3): the grant billing boundary — BbbMeetingService (lifecycle
+    // path) and BbbReconciliationService (recovery loop) both depend on this
+    // instead of on each other.
+    GrantConsumptionService,
+    // S7A (Phase 7.4): the shared meeting lifecycle boundary. BbbRoomService
+    // (runtime staleness) and BbbReconciliationService (force-complete /
+    // stale detection) depend on this instead of on BbbMeetingService, which
+    // removes the meeting <-> room import cycle.
+    MeetingLifecycleService,
     // Slice 6 — the single writer of daily live-allowance grants (ADR-045 /
     // INV-026). Provider-free plans get a 60-minute grant per server day; every
     // consumer of "today's allowance" reads it back from BbbCapacityGrant, so
     // there is no parallel allowance store.
     BbbDailyAllowanceService,
+    BbbMeteringService,
+    // ADR-047 Phase 4 — billing READ API (summary / metered history / platform
+    // roll-up). Money is computed only through metered-billing.policy (D2).
+    BbbBillingService,
     LearningDashboardService,
     BbbPlatformCapacityPolicyService,
     BbbJoinUrlService,
     BbbProvisioningWorkerService,
+    // S7A (Phase 7.2): enqueue-only port — BbbMeetingService depends on this
+    // token, not on the worker class, which breaks the
+    // meeting → provisioning → room → meeting cycle.
+    { provide: BBB_PROVISIONING_ENQUEUER, useExisting: BbbProvisioningWorkerService },
     CapacityIntelligenceService,
     SessionAttendanceService,
     AttendanceAnalyticsService,
@@ -158,10 +197,27 @@ import {
     BbbSubscriptionListener,
     BbbSessionProvisioningListener,
     BbbTenantProvisioningListener,
+    // Production-readiness items 4 + 6: the operator alert channel (log +
+    // OPS_ALERT_WEBHOOK_URL) and its CapacityAlertEvent consumer — before
+    // this, immediate capacity alerts reached only the Postgres audit table.
+    BbbOpsAlertService,
+    BbbCapacityAlertListener,
     // ADR-031 amendment (Decision 5): the third convergence trigger — repairs
     // any organisation whose plan-derived concurrentMeetingLimit cache missed an
     // event or predates plan-derived capacity.
     BbbPlanCapacityReconciliationBootstrap,
+    // W4: hook registration and reconciliation service.
+    BbbHooksService,
+    // Item 11: webhook event retention (prune PROCESSED/PARSE_FAILED after 90 days).
+    BbbWebhookRetentionService,
+    // W3: inject publicBaseUrl into the webhook controller so it can reconstruct
+    // the registered callback URL without trusting incoming request headers.
+    {
+      provide: BBB_PUBLIC_BASE_URL,
+      useFactory: () =>
+        (BigBlueButtonPlugin.options.publicBaseUrl ?? process.env.BBB_PUBLIC_BASE_URL ?? "")
+          .replace(/\/+$/, ""),
+    },
   ],
 
   adminApiExtensions: {
@@ -196,23 +252,67 @@ import {
         bbbCapacityAlertTask,
       ];
     }
-    // Slice 6 / D-7: the daily-allowance refresh. Idempotent, so duplicate
-    // registration or an extra run can never hand out a second allowance for
-    // the same day; the guard is the same id-dedupe every other task here uses.
+    // ADR-047 Phase 2B: the per-minute metered sampling tick. Its write is
+    // idempotent (`ON CONFLICT (meetingId, bucketMinute) DO NOTHING`), so
+    // duplicate registration or an overlapping run can never double-count
+    // minutes; the guard is the same id-dedupe every other task here uses.
+    if (!existingIds.has(bbbMeteringTask.id)) {
+      config.schedulerOptions.tasks = [
+        ...(config.schedulerOptions.tasks ?? []),
+        bbbMeteringTask,
+      ];
+    }
+    // ADR-047 Phase 2B: sample retention. Idempotent DELETE, scoped to meetings
+    // that can no longer be billed.
+    if (!existingIds.has(bbbMeteringPruneTask.id)) {
+      config.schedulerOptions.tasks = [
+        ...(config.schedulerOptions.tasks ?? []),
+        bbbMeteringPruneTask,
+      ];
+    }
     if (!existingIds.has(bbbDailyAllowanceTask.id)) {
       config.schedulerOptions.tasks = [
         ...(config.schedulerOptions.tasks ?? []),
         bbbDailyAllowanceTask,
       ];
     }
+    // Track A (2026-10-07): signed per-server health probe — the ONLY path
+    // that ever writes `healthy = true` (recovery after a failed streak or
+    // a config flag), plus proactive lastHealthCheckAt stamping.
+    if (!existingIds.has(bbbServerHealthTask.id)) {
+      config.schedulerOptions.tasks = [
+        ...(config.schedulerOptions.tasks ?? []),
+        bbbServerHealthTask,
+      ];
+    }
+    // W4: ensure BBB webhook hooks are registered and not stale on every
+    // enabled server. Runs every 5 minutes; no-op when the hook is already
+    // correct (one hooks/list call per server).
+    if (!existingIds.has(bbbHooksReconciliationTask.id)) {
+      config.schedulerOptions.tasks = [
+        ...(config.schedulerOptions.tasks ?? []),
+        bbbHooksReconciliationTask,
+      ];
+    }
+    // Item 11: daily retention of processed webhook events.
+    if (!existingIds.has(bbbWebhookRetentionTask.id)) {
+      config.schedulerOptions.tasks = [
+        ...(config.schedulerOptions.tasks ?? []),
+        bbbWebhookRetentionTask,
+      ];
+    }
     // Register rate limiters (SEC-004)
     config.apiOptions.middleware = [
       ...(config.apiOptions.middleware ?? []),
-      {
-        // Rate limit POST /bbb/webhook — 100 req/min per IP, allowlist via env
-        route: "bbb/webhook",
+      // SEC-004: webhook rate limiting — 100 req/min per IP (allowlist via
+      // BBB_WEBHOOK_ALLOWED_IPS). One entry per path in
+      // BBB_WEBHOOK_RATE_LIMIT_ROUTES; matching, including the future W3
+      // route `/bbb/webhook/<serverId>`, is pinned by
+      // bbb-webhook-ingress.spec.ts.
+      ...BBB_WEBHOOK_RATE_LIMIT_ROUTES.map((route) => ({
+        route,
         handler: bbbWebhookRateLimiter,
-      },
+      })),
       {
         // Rate limit Shop API mutations — registerForTrial (10/min), bbbJoinMeeting (10/min), registerNewTenant (5/hour)
         route: "shop-api",
@@ -239,7 +339,11 @@ import {
   compatibility: ">=3.0.0",
 })
 export class BigBlueButtonPlugin implements OnApplicationBootstrap {
-  private static initialized = false;
+  // Instance-level flag so each NestJS app (e.g. separate e2e test environments
+  // in the same process) initializes its own handlers independently.
+  // A static flag would persist across test suites and silently skip
+  // handler registration for the second and subsequent test servers.
+  private initialized = false;
   static options: BigBlueButtonPluginOptions = {};
 
   static init(
@@ -253,21 +357,28 @@ export class BigBlueButtonPlugin implements OnApplicationBootstrap {
     private readonly meetingService: BbbMeetingService,
     private readonly webhookProcessor: BbbWebhookProcessorService,
     private readonly bbbDeletionService: BbbDeletionService,
+    private readonly hooksService: BbbHooksService,
     @Inject(CustomerDeletionService)
     private readonly customerDeletionService: CustomerDeletionService,
   ) {}
 
   async onApplicationBootstrap() {
-    // Guard: prevent double-initialization when both server and worker
-    // share the same plugin instance and onApplicationBootstrap fires twice.
-    if (BigBlueButtonPlugin.initialized) return;
-    BigBlueButtonPlugin.initialized = true;
+    if (this.initialized) return;
+    this.initialized = true;
 
-    // Initialize job queues
     await this.meetingService.init();
     await this.webhookProcessor.init();
 
-    // Register customer deletion handlers
+    // W4: run hook reconciliation at startup so a freshly deployed or
+    // restarted instance re-registers any missing hooks without waiting up
+    // to 5 minutes for the scheduled task.
+    this.hooksService.ensureAllWebhooks().catch((err) =>
+      Logger.warn(
+        `W4: startup ensureAllWebhooks failed: ${(err as Error).message}`,
+        "BigBlueButtonPlugin",
+      ),
+    );
+
     this.customerDeletionService.registerChannelScopedHandler(
       'bbb-plugin',
       (ctx, customerId, channelId) =>

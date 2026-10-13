@@ -64,6 +64,12 @@ export class RazorpayCheckoutService {
       throw new RazorpayApiError(0, 'Razorpay keys are not configured');
     }
 
+    // Commit 2 (defence in depth — the resolver enforces this first):
+    // only ArrangingPayment orders may enter checkout.
+    if (order.state !== 'ArrangingPayment') {
+      throw new RazorpayApiError(0, `Order must be in ArrangingPayment state (got ${order.state})`);
+    }
+
     const razorpayOrder = await this.client.createOrder({
       amountMinor: order.totalWithTax,
       currency: order.currencyCode,

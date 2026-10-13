@@ -1,4 +1,4 @@
-import { Injectable, Inject, forwardRef, OnModuleInit } from "@nestjs/common";
+import { Inject, Injectable, OnModuleInit } from "@nestjs/common";
 import {
   EventBus,
   ID,
@@ -13,22 +13,32 @@ import * as crypto from "crypto";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
-import { BbbApiService } from "./bbb-api.service";
+import { BbbApiService, BbbUnavailableError } from "./bbb-api.service";
 import { BbbEncryptionService } from "./bbb-encryption.service";
 import { BbbServerSelectionService } from "./bbb-server-selection.service";
 import { BbbMetricsService } from "./bbb-metrics.service";
 import { BbbRoomService } from "./bbb-room.service";
+import { BbbProvisioningEnqueuer } from "./bbb-provisioning-enqueuer";
 import {
   MeetingProvisionedEvent,
   MeetingFailedEvent,
 } from "../events/bbb-events";
-import { BBB_PROVISIONING_QUEUE, MEETING_STATE } from "../constants";
+import { BBB_PLUGIN_OPTIONS, BBB_PROVISIONING_QUEUE, BILLING_MODE, MEETING_STATE } from "../constants";
 import {
   PROVISIONING_ALLOWANCE_EXHAUSTED_ERROR,
   TENANT_SELECTABLE_SOURCE_TYPES,
   grantUnavailableReason,
   hasProvisionableMinutes,
 } from "./grant-selection.policy";
+import { BbbMeteringService } from "./bbb-metering.service";
+import { recordingProvisioningParams } from "./recording-provisioning.policy";
+import { resolveLogoutUrl } from "./storefront-url";
+import type { BigBlueButtonPluginOptions } from "../types";
+import {
+  computeMonthChargePaise,
+  isMeteredOrganization,
+  monthOf,
+} from "./metered-billing.policy";
 
 const loggerCtx = "BbbProvisioningWorkerService";
 
@@ -38,7 +48,9 @@ export interface ProvisioningJobData {
 }
 
 @Injectable()
-export class BbbProvisioningWorkerService implements OnModuleInit {
+export class BbbProvisioningWorkerService
+  implements OnModuleInit, BbbProvisioningEnqueuer
+{
   private provisioningQueue: JobQueue<ProvisioningJobData>;
 
   constructor(
@@ -49,8 +61,14 @@ export class BbbProvisioningWorkerService implements OnModuleInit {
     private readonly encryptionService: BbbEncryptionService,
     private readonly metrics: BbbMetricsService,
     private readonly eventBus: EventBus,
-    @Inject(forwardRef(() => BbbRoomService))
+    private readonly meteringService: BbbMeteringService,
+    // S7A: no longer an @Inject-wrapped circular reference. BbbRoomService
+    // reaches the provisioning enqueue port (BbbProvisioningEnqueuer) directly
+    // and injects MeetingLifecycleService rather than this worker, so
+    // worker → room is one-directional.
     private readonly roomService: BbbRoomService,
+    @Inject(BBB_PLUGIN_OPTIONS)
+    private readonly options: BigBlueButtonPluginOptions,
   ) {}
 
   async onModuleInit() {
@@ -163,56 +181,65 @@ export class BbbProvisioningWorkerService implements OnModuleInit {
     }
 
     try {
-      const server = await this.serverSelectionService.selectServer(ctx);
-      if (!server) {
-        throw new Error("No healthy BBB server available");
+      // ADR-047 Phase 2B - metered orgs skip grant selection entirely (INV-028:
+      // the grant path is dormant for metered orgs). Postpaid exposure guards
+      // (suspended / spend-limit) run inside the same try so failures flow
+      // through the uniform catch below. grantId stays null for metered
+      // meetings; server selection and capacity reservation are unchanged.
+      if (isMeteredOrganization(meeting.organization)) {
+        await this.assertMeteredProvisionable(ctx, meeting);
       }
-
       // Resolve the active grant at provisioning time — immutable linkage.
       // BUG-036: selection is restricted to tenant-selectable source types
       // (`internal_overhead` is ops headroom, not an allowance) and the minutes
       // gate honours `isUnbounded` through the shared policy helper.
-      const grantRepo = this.connection.getRepository(ctx, BbbCapacityGrant);
-      const now = new Date();
-      const grant = await grantRepo
-        .createQueryBuilder("grant")
-        .where("grant.organizationId = :orgId", {
-          orgId: meeting.organization.id,
-        })
-        .andWhere("grant.exhausted = :exhausted", { exhausted: false })
-        .andWhere("grant.sourceType IN (:...sourceTypes)", {
-          sourceTypes: [...TENANT_SELECTABLE_SOURCE_TYPES],
-        })
-        .andWhere("grant.validFrom <= :now", { now })
-        .andWhere("grant.validUntil >= :now", { now })
-        .orderBy("grant.validUntil", "ASC")
-        .addOrderBy("grant.createdAt", "ASC")
-        .getOne();
-
-      if (!grant) {
-        // Distinguish "exhausted allowance" from "no allowance at all": an
-        // exhausted commercial grant is excluded from selection above, so
-        // without this probe the caller would be told nothing exists.
-        const unusableCommercialGrants = await grantRepo
+      // Skipped for metered orgs (no grant row is read or consumed).
+      // `null` is the metered-path value (the column is nullable); the grant
+      // block below only assigns on the non-metered path.
+      let grant: BbbCapacityGrant | null = null;
+      if (!isMeteredOrganization(meeting.organization)) {
+        const grantRepo = this.connection.getRepository(ctx, BbbCapacityGrant);
+        const now = new Date();
+        grant = await grantRepo
           .createQueryBuilder("grant")
           .where("grant.organizationId = :orgId", {
             orgId: meeting.organization.id,
           })
+          .andWhere("grant.exhausted = :exhausted", { exhausted: false })
           .andWhere("grant.sourceType IN (:...sourceTypes)", {
             sourceTypes: [...TENANT_SELECTABLE_SOURCE_TYPES],
           })
-          .andWhere("grant.exhausted = :exhausted", { exhausted: true })
           .andWhere("grant.validFrom <= :now", { now })
           .andWhere("grant.validUntil >= :now", { now })
-          .getCount();
+          .orderBy("grant.validUntil", "ASC")
+          .addOrderBy("grant.createdAt", "ASC")
+          .getOne();
 
-        throw new Error(grantUnavailableReason(unusableCommercialGrants > 0));
-      }
+        if (!grant) {
+          // Distinguish "exhausted allowance" from "no allowance at all": an
+          // exhausted commercial grant is excluded from selection above, so
+          // without this probe the caller would be told nothing exists.
+          const unusableCommercialGrants = await grantRepo
+            .createQueryBuilder("grant")
+            .where("grant.organizationId = :orgId", {
+              orgId: meeting.organization.id,
+            })
+            .andWhere("grant.sourceType IN (:...sourceTypes)", {
+              sourceTypes: [...TENANT_SELECTABLE_SOURCE_TYPES],
+            })
+            .andWhere("grant.exhausted = :exhausted", { exhausted: true })
+            .andWhere("grant.validFrom <= :now", { now })
+            .andWhere("grant.validUntil >= :now", { now })
+            .getCount();
 
-      // isUnbounded grants are Infinity (matching GrantReaderService), so their
-      // `grantedMinutes: -1` sentinel no longer fails this gate.
-      if (!hasProvisionableMinutes(grant)) {
-        throw new Error(PROVISIONING_ALLOWANCE_EXHAUSTED_ERROR);
+          throw new Error(grantUnavailableReason(unusableCommercialGrants > 0));
+        }
+
+        // isUnbounded grants are Infinity (matching GrantReaderService), so their
+        // `grantedMinutes: -1` sentinel no longer fails this gate.
+        if (!hasProvisionableMinutes(grant)) {
+          throw new Error(PROVISIONING_ALLOWANCE_EXHAUSTED_ERROR);
+        }
       }
 
       const bbbMeetingId = `bbb-${meeting.id}`;
@@ -222,22 +249,59 @@ export class BbbProvisioningWorkerService implements OnModuleInit {
         .replace(/-/g, "")
         .substring(0, 16);
 
-      const { internalMeetingID } = await this.bbbApiService.createMeeting(
-        server,
-        {
-          meetingID: bbbMeetingId,
-          name: meeting.title,
-          attendeePW,
-          moderatorPW,
-          record: meeting.recordingEnabled,
-          autoStartRecording: false,
-          allowStartStopRecording: true,
-          maxParticipants: meeting.organization.maxParticipantsPerMeeting,
-          logoutURL: process.env.STOREFRONT_URL
-            ? `${process.env.STOREFRONT_URL}/bbb-logout`
-            : undefined,
-        },
-      );
+      // ── Server selection + /create with connection-failure failover ──────
+      // On a connection-class failure (BbbUnavailableError: DNS, HTTP 5xx,
+      // timeout, malformed XML) the failed server is RECORDED — it is
+      // excluded from the next selection (2-min window owned by the
+      // selection service), so this loop fails over to another eligible
+      // server, and the streak counts toward N=3 consecutive failures →
+      // unhealthy + de-duplicated `bbb-server-unreachable` ops alert. When
+      // every server is excluded/unhealthy the loop ends where the tenant
+      // contract says it must: "No healthy BBB server available" (the raw
+      // connection error stays in the worker/selection logs, not in the
+      // tenant-visible failureReason). Non-connection errors
+      // (rejected/misconfigured/policy) rethrow immediately — retrying
+      // another server cannot fix a checksum or config problem.
+      let created: Awaited<ReturnType<BbbApiService["createMeeting"]>>;
+      let createdOnServerId: string;
+      for (;;) {
+        const server = await this.serverSelectionService.selectServer(ctx);
+        if (!server) {
+          throw new Error("No healthy BBB server available");
+        }
+        try {
+          created = await this.bbbApiService.createMeeting(server, {
+            meetingID: bbbMeetingId,
+            name: meeting.title,
+            attendeePW,
+            moderatorPW,
+            // Saa9vi invariant: a recording-enabled room records itself.
+            // `record` alone does not start the recording (BBB defaults
+            // autoStartRecording=false) — see recording-provisioning.policy.ts.
+            ...recordingProvisioningParams(this.options, meeting.recordingEnabled),
+            maxParticipants: meeting.organization.maxParticipantsPerMeeting,
+            logoutURL: resolveLogoutUrl(
+              this.options.storefrontUrl,
+              process.env.STOREFRONT_URL,
+            ),
+          });
+          createdOnServerId = String(server.id);
+          this.serverSelectionService.noteConnectionSuccess(createdOnServerId);
+          break;
+        } catch (err) {
+          if (err instanceof BbbUnavailableError) {
+            await this.serverSelectionService.noteConnectionFailure(
+              ctx,
+              server,
+              err,
+            );
+            continue;
+          }
+          throw err;
+        }
+      }
+      const { internalMeetingID } = created;
+      const serverId = createdOnServerId;
 
       const encryptedAttendeePW = this.encryptionService.encrypt(attendeePW);
       const encryptedModeratorPW = this.encryptionService.encrypt(moderatorPW);
@@ -247,8 +311,8 @@ export class BbbProvisioningWorkerService implements OnModuleInit {
         .update(meetingId as string, {
           bbbMeetingId,
           bbbInternalMeetingId: internalMeetingID,
-          serverId: server.id as string,
-          grantId: grant.id as string,
+          serverId,
+          grantId: grant ? (grant.id as string) : null,
           encryptedAttendeePassword: encryptedAttendeePW,
           encryptedModeratorPassword: encryptedModeratorPW,
           state: MEETING_STATE.ACTIVE,
@@ -257,7 +321,7 @@ export class BbbProvisioningWorkerService implements OnModuleInit {
 
       this.metrics.recordProvisioningSucceeded(Date.now() - startedAt);
       Logger.info(
-        `Meeting ${meetingId} provisioned → BBB meetingID: ${bbbMeetingId} (grantId: ${grant.id})`,
+        `Meeting ${meetingId} provisioned → BBB meetingID: ${bbbMeetingId} (grantId: ${grant ? String(grant.id) : 'metered'})`,
         loggerCtx,
       );
 
@@ -268,7 +332,7 @@ export class BbbProvisioningWorkerService implements OnModuleInit {
           bbbMeetingId,
           meeting.roomId ?? null,
           meeting.organization.id as string,
-          grant.id as string,
+          grant ? (grant.id as string) : null,
         ),
       );
 
@@ -304,6 +368,45 @@ export class BbbProvisioningWorkerService implements OnModuleInit {
       if (meeting.roomId) {
         await this.roomService.onMeetingFailed(ctx, meeting.roomId);
       }
+    }
+  }
+  /**
+   * ADR-047 Phase 2B - postpaid exposure guards for metered organizations.
+   *
+   * Runs INSIDE the provisioning try block so a rejection flows through the
+   * uniform catch (FAILED + failureReason + MeetingFailedEvent +
+   * roomService.onMeetingFailed). Two guards, both readable:
+   *   1. suspended orgs never provision;
+   *   2. when monthlySpendLimitPaise is set, the month-to-date metered charge
+   *      (via the SINGLE computeMonthChargePaise implementation - D2) at or
+   *      over the limit rejects the meeting.
+   */
+  private async assertMeteredProvisionable(
+    ctx: RequestContext,
+    meeting: BbbMeeting,
+  ): Promise<void> {
+    const org = meeting.organization as {
+      suspended?: boolean;
+      monthlySpendLimitPaise?: number | null;
+      id?: unknown;
+    };
+    if (org?.suspended) {
+      throw new Error(
+        "This organization is suspended. Please contact support to restore service.",
+      );
+    }
+    const limit = org?.monthlySpendLimitPaise;
+    if (limit === null || limit === undefined) return;
+    const rows = await this.meteringService.monthUsageRows(
+      ctx,
+      String(meeting.organization.id),
+      monthOf(new Date()),
+    );
+    const monthCharge = computeMonthChargePaise(rows);
+    if (monthCharge >= limit) {
+      throw new Error(
+        `Monthly spend limit reached (${limit} paise). Please contact support to raise the limit.`,
+      );
     }
   }
 }

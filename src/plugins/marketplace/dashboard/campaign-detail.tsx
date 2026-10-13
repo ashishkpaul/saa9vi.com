@@ -144,6 +144,16 @@ function CampaignDetailPage({ route }: { route: AnyRoute }) {
         }),
     });
 
+    // Derive status flags from entity.status — these are never passed through
+    // useDetailPage's return value, so they must be computed here. Without
+    // these, the PageActionBar renders `{undefined && (...)}` which silently
+    // hides the buttons for new campaigns but throws a ReferenceError when
+    // viewing an existing campaign where `creatingNewEntity` is false and
+    // the identifiers are accessed in the JSX condition (Tier 2 / finding 1).
+    const isDraft = entity?.status === 'draft';
+    const isPaused = entity?.status === 'paused';
+    const isActive = entity?.status === 'active';
+
     const { mutate: activateMutate, isPending: isActivating } = api.mutation(activateCampaignDocument);
     const { mutate: pauseMutate, isPending: isPausing } = api.mutation(pauseCampaignDocument);
 

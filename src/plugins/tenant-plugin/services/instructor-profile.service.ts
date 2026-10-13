@@ -22,7 +22,7 @@ export class InstructorProfileService {
   async findAll(ctx: RequestContext, options?: { skip?: number; take?: number }): Promise<{ items: InstructorProfile[]; totalItems: number }> {
     const take = Math.min(Math.max(options?.take ?? 25, 1), 100);
     const skip = Math.max(options?.skip ?? 0, 0);
-    const channelId = ctx.channelId as string;
+    const channelId = Number(ctx.channelId);
 
     const [items, totalItems] = await this.connection
       .getRepository(ctx, InstructorProfile)
@@ -40,7 +40,7 @@ export class InstructorProfileService {
   async findPublicByChannel(ctx: RequestContext, options?: { skip?: number; take?: number }): Promise<{ items: InstructorProfile[]; totalItems: number }> {
     const take = Math.min(Math.max(options?.take ?? 25, 1), 100);
     const skip = Math.max(options?.skip ?? 0, 0);
-    const channelId = ctx.channelId as string;
+    const channelId = Number(ctx.channelId);
 
     const [items, totalItems] = await this.connection
       .getRepository(ctx, InstructorProfile)
@@ -58,11 +58,11 @@ export class InstructorProfileService {
   async findOne(ctx: RequestContext, id: string): Promise<InstructorProfile | null> {
     return this.connection
       .getRepository(ctx, InstructorProfile)
-      .findOne({ where: { id: id as string, channelId: ctx.channelId as string }, relations: ['customer', 'createdBy'] });
+      .findOne({ where: { id: id as string, channelId: Number(ctx.channelId) }, relations: ['customer', 'createdBy'] });
   }
 
   async findPublicBySlug(ctx: RequestContext, slug: string): Promise<InstructorProfile | null> {
-    const channelId = ctx.channelId as string;
+    const channelId = Number(ctx.channelId);
     return this.connection
       .getRepository(ctx, InstructorProfile)
       .findOne({
@@ -72,7 +72,7 @@ export class InstructorProfileService {
   }
 
   async create(ctx: RequestContext, input: Partial<InstructorProfile>): Promise<InstructorProfile> {
-    const channelId = ctx.channelId as string;
+    const channelId = Number(ctx.channelId);
     if (input.slug) {
       const existing = await this.connection.getRepository(ctx, InstructorProfile).findOne({
         where: { channelId, slug: input.slug },
@@ -101,7 +101,7 @@ export class InstructorProfileService {
     try {
       this.eventBus.publish(new InstructorProfileCreatedEvent(
         String(saved.id),
-        saved.channelId,
+        String(saved.channelId),
       ));
     } catch (err) {
       // Non-fatal: event publishing failure should not break profile creation
@@ -113,7 +113,7 @@ export class InstructorProfileService {
 
   async update(ctx: RequestContext, id: string, input: Partial<InstructorProfile>): Promise<InstructorProfile> {
     const profile = await this.connection.getRepository(ctx, InstructorProfile).findOne({ where: { id: id as string } });
-    if (!profile || profile.channelId !== ctx.channelId) {
+    if (!profile || String(profile.channelId) !== String(ctx.channelId)) {
       throw new EntityNotFoundError(InstructorProfile.name, id);
     }
     Object.assign(profile, input);
@@ -134,7 +134,7 @@ export class InstructorProfileService {
     try {
       this.eventBus.publish(new InstructorProfileUpdatedEvent(
         String(saved.id),
-        saved.channelId,
+        String(saved.channelId),
         Object.keys(input),
       ));
     } catch (err) {
@@ -146,7 +146,7 @@ export class InstructorProfileService {
 
   async delete(ctx: RequestContext, id: string): Promise<void> {
     const profile = await this.connection.getRepository(ctx, InstructorProfile).findOne({ where: { id: id as string } });
-    if (!profile || profile.channelId !== ctx.channelId) {
+    if (!profile || String(profile.channelId) !== String(ctx.channelId)) {
       throw new EntityNotFoundError(InstructorProfile.name, id);
     }
     await this.connection.getRepository(ctx, InstructorProfile).delete(id);

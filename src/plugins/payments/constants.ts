@@ -28,11 +28,23 @@ export function razorpayKeySecret(): string {
 /**
  * Webhook secret for the one-time endpoint. Falls back to the subscription
  * webhook secret so a single Razorpay account can drive both endpoints.
+ *
+ * Commit 2: `||` (not `??`) so an explicitly-empty var still falls through
+ * to the fallback/empty — an empty secret fails closed downstream
+ * (verifyWebhookSignature returns missing-secret; boot guard refuses).
  */
 export function razorpayPaymentsWebhookSecret(): string {
   return (
-    process.env.RAZORPAY_PAYMENTS_WEBHOOK_SECRET ??
-    process.env.RAZORPAY_WEBHOOK_SECRET ??
+    process.env.RAZORPAY_PAYMENTS_WEBHOOK_SECRET ||
+    process.env.RAZORPAY_WEBHOOK_SECRET ||
     ''
   );
+}
+
+/**
+ * Commit 2: resolved secret for boot validation. Returns the trimmed
+ * secret; empty when neither var is set or both are blank.
+ */
+export function resolvedPaymentsWebhookSecret(): string {
+  return razorpayPaymentsWebhookSecret().trim();
 }

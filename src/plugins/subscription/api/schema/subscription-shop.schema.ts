@@ -87,9 +87,9 @@ export const shopApiExtensions = gql`
   Live meeting-minutes allowance for the active channel's current period.
 
   Sourced from BbbCapacityGrant, restricted to tenant-selectable source types
-  ('order', 'subscription'): 'internal_overhead' is ops headroom and is never
-  reported as customer allowance (BUG-036 semantics, shared with the
-  provisioning gate).
+  ('order', 'subscription', 'manual'): 'internal_overhead' is ops headroom and
+  is never reported as customer allowance (BUG-036 semantics, shared with the
+  provisioning gate; 'manual' added by BUG-044).
   """
   type MyLiveUsage {
     "The subscription period these figures belong to (NULL when provider-free)."

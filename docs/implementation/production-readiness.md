@@ -416,6 +416,39 @@ environment sets both variables (without recording secret values here)
 rather than a silent compromise, but the deployed env itself still
 needs its one-time check.
 
+### Review conclusion — 2026-10-05 (W5 follow-up): NO FINDINGS
+
+Code review of `src/platform/security/require-production-secrets.ts` and
+`src/plugins/payments/constants.ts`:
+
+- The guard requires **10** variables, not only SuperAdmin/Cookie:
+  `SUPERADMIN_PASSWORD`, `COOKIE_SECRET`, `RAZORPAY_KEY_ID`,
+  `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `REDIS_PASSWORD`,
+  `DB_PASSWORD`, `BBB_ENCRYPTION_KEY`, `BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR`,
+  `BBB_PUBLIC_BASE_URL`. Presence is tested as `!env[key]`, so an empty
+  string counts as unset (`KEY=` cannot slip past the guard).
+- Format checks cover the three values whose failure mode is silent
+  corruption rather than an auth bypass: the metered rate must be a
+  non-negative integer (blocks the ₹20/learner-hour placeholder),
+  `BBB_ENCRYPTION_KEY` must be 64 hex chars (AES-256-GCM 32 bytes), and
+  `BBB_PUBLIC_BASE_URL` must be absolute http(s) (BBB signs the
+  *registered* URL, so a relative base makes every webhook fail checksum).
+- Both entrypoints call the guard before Vendure bootstraps
+  (`src/index.ts:15`, `src/index-worker.ts:12`); `APP_ENV=dev` keeps the
+  documented dev fallbacks. Tests: `require-production-secrets.spec.ts`.
+- `payments/constants.ts` contains no secret literals:
+  `razorpayKeyId()` / `razorpayKeySecret()` / `razorpayPaymentsWebhookSecret()`
+  read `process.env` only and default to `''` (fail closed —
+  `razorpay-orders.client.ts` rejects calls without credentials); the
+  payments webhook secret falls back to the subscription webhook secret so
+  one Razorpay account drives both endpoints. Literal constants that exist
+  (`RAZORPAY_API_BASE_URL`, handler code, webhook path) are public by
+  design. Secrets are never handler config args (they would persist in the
+  DB and be Admin-API-readable) — see the file header.
+- Accepted-by-design notes (not findings): requiring Razorpay vars is
+  unconditional even for deployments that disable payments; a rate of `0`
+  is a legitimate "bill nothing" configuration.
+
 ------------------------------------------------------------------------
 
 ## P0-F --- CORS and GraphiQL
@@ -1454,6 +1487,24 @@ Priority order:
 1. Rotate and validate the production Razorpay secrets.
 2. Close the webhook perimeter/configuration controls (HTTPS, request-size/rate limits,
    proxy exposure, raw-body preservation, and secret hygiene).
+   - **W3 inbound verifier — RECORDED; implementation blocked on the W0 capture:**
+     the verifier must be algorithm-agnostic (derive the HMAC from the digest
+     length with an explicit allow-list — 40 hex chars → sha1, 64 → sha256,
+     96 → sha384, 128 → sha512), compare in constant time, and never log
+     checksums or `Authorization` headers. The body format and any bearer
+     header follow the capture (`auth2_0: true` on this server). Contract
+     recorded in the plugin README under "Pending: W3 verifier + W4 hook
+     registration".
+   - **W4 `ensureWebhook` — AMENDED; implementation blocked on the W0 capture:**
+     run every 5–10 minutes (BBB drops a hook after ~5 minutes of failed
+     retries, so a registration gap must be detected and repaired inside that
+     window), alert when a hook is missing (deduplicated ops alert), register
+     only `eventID=meeting-ended,rap-publish-ended`, and require an HTTPS
+     `BBB_PUBLIC_BASE_URL` in production — the https-only boot guard is now
+     enforced (`assertProductionSecrets` refuses plain http outside dev).
+   - Already closed: raw-body ingress probe, rate-limiter route coverage,
+     publicBaseUrl presence boot guard (W0), https-only `BBB_PUBLIC_BASE_URL`
+     (current change), `BbbServer.apiUrl` canonicalisation (current change).
 3. Close P0-K so production fails startup when PostgreSQL or Redis is unavailable instead
    of silently degrading to pg-mem or an in-process queue.
 4. Complete provider webhook/queue observability and production failure-boundary tests.
@@ -1522,3 +1573,74 @@ The launch scope therefore remains:
 with **cross-tenant marketplace purchases deferred**.
 
 **Current overall verdict: NOT READY --- verification remains open.**
+
+
+# 19. BBB encryption key runbook (DA-003)
+
+## Key storage and backup
+
+`BBB_ENCRYPTION_KEY` is a 64-char hex string (AES-256-GCM, 32 bytes). It
+encrypts every BBB server API secret and every BBB meeting attendee/moderator
+password stored in the database. **Loss of this key makes all BBB server rows
+and all stored meeting passwords permanently unreadable.** There is no
+recovery path other than re-entering every secret via the Servers UI.
+
+**Required before go-live:**
+1. Generate the key: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+2. Store it in your secrets manager (Vault, AWS Secrets Manager, etc.) as a
+   versioned secret — not just in the `.env` file.
+3. Record the key fingerprint (first 8 hex chars of sha256 of the key bytes)
+   in your secrets inventory alongside the secret name and creation date.
+   The fingerprint is logged at boot: `Encryption key loaded (fingerprint xxxxxxxx)`.
+   It appears in error messages and ops alerts but never contains key material.
+4. Back up the `.env` file (or its secrets-manager equivalent) independently
+   of the database backup. A database restore without the matching key is
+   useless for BBB operations.
+
+## Detecting a key mismatch
+
+When `BBB_ENCRYPTION_KEY` does not match the key used to encrypt a row:
+- The Servers UI shows `credentialStatus: CREDENTIAL_UNREADABLE` for affected servers.
+- An ops alert fires with kind `bbb-credential-unreadable` including the
+  current key fingerprint.
+- The health probe logs: `BBB server <id> credential unreadable (key fingerprint: xxxxxxxx)`.
+- The webhook controller returns HTTP 500 for that server's deliveries (BBB retries).
+
+**Fix for the incident case (no older key, one affected server):**
+Re-enter the secret via the Servers UI (`updateBbbServer` mutation with
+`apiSecret`). The new ciphertext is written with the current key and the
+error clears immediately.
+
+## Zero-downtime key rotation (DA-003)
+
+When you need to rotate `BBB_ENCRYPTION_KEY` (e.g., suspected compromise):
+
+1. Generate a new key (as above). Record its fingerprint.
+2. Set `BBB_ENCRYPTION_KEY_PREVIOUS` to the current key value.
+3. Set `BBB_ENCRYPTION_KEY` to the new key.
+4. Deploy. At boot, the log will confirm both keys are loaded:
+   `Previous key also loaded (fingerprint xxxxxxxx) — fallback decryption active.`
+5. Run the re-encrypt command (once implemented — see below) to re-encrypt
+   all `bbb_server.encryptedApiSecret` and `bbb_meeting.encryptedAttendeePassword`
+   / `encryptedModeratorPassword` rows with the new key.
+6. Verify `bbbServers` query returns `credentialStatus: OK` for all servers.
+7. Remove `BBB_ENCRYPTION_KEY_PREVIOUS` from the environment and redeploy.
+
+**Do not leave `BBB_ENCRYPTION_KEY_PREVIOUS` set permanently** — it extends
+the window in which a compromised old key still decrypts data.
+
+## Re-encrypt command (design, pending implementation approval)
+
+The `encryptionKeyVersion` column already exists on `bbb_server` and
+`bbb_meeting`. The re-encrypt command will:
+
+1. Load every `bbb_server` row with `encryptedApiSecret` (select:false).
+2. For each row: `decrypt(encryptedApiSecret)` (tries current key, then previous).
+3. Re-encrypt the plaintext with `encrypt()` (always uses the current key).
+4. Write the new ciphertext and increment `encryptionKeyVersion`.
+5. Repeat for `bbb_meeting.encryptedAttendeePassword` and
+   `bbb_meeting.encryptedModeratorPassword`.
+
+No schema change is required — `encryptionKeyVersion` already exists.
+The command will be a one-shot admin script (not a scheduled task).
+Implementation is pending explicit approval before code is generated.

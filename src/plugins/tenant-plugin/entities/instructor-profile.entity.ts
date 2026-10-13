@@ -13,8 +13,8 @@ export class InstructorProfile extends VendureEntity {
   channel: Channel;
 
   @Index()
-  @Column()
-  channelId: string;
+  @Column({ type: 'integer' })
+  channelId: number;
 
   @ManyToOne(() => Customer)
   @JoinColumn()

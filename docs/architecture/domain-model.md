@@ -15,7 +15,7 @@
 
 **Relationships:**
 - 1:1 with Channel (via `channelId`)
-- 1:1 with BbbOrganization (via `tenantProfileId` on BbbOrganization)
+- Linked to BbbOrganization through that channel (`channelId` 1:1, INV-001); BbbOrganization's legacy `tenantProfileId` column is nullable, never written by the create path, and is not a reference (BUG-053)
 
 **Lifecycle:**
 - Created during `registerNewTenant` or admin tenant creation
@@ -69,7 +69,7 @@
 
 **Relationships:**
 - 1:1 with Channel (unique `channelId` index)
-- References TenantProfile via `tenantProfileId` (string FK, no TypeORM relation)
+- The tenant link is `channelId` itself (Channel=Tenant); `tenantProfileId` is a legacy nullable column that is never written (BUG-053)
 
 **Lifecycle:**
 - Created automatically when tenant is provisioned
@@ -287,7 +287,7 @@ Pending → Provisioning → Active → Completed → Archived
 
 **Invariants:**
 - `(organizationId, customerId)` unique composite index
-- Membership check is Gate 1 in joinRoom auth waterfall (short-circuits entitlement)
+- Room-access source 1 in the INV-027 shared evaluation (joinRoom + bbbRoomStatus) — short-circuits the later sources
 
 ---
 
@@ -310,7 +310,7 @@ Pending → Provisioning → Active → Completed → Archived
 **Lifecycle:**
 - Created by OrderFulfillmentListener (on PaymentSettled)
 - Created by TrialRegistrationService (on trial registration)
-- Checked by joinRoom() Gate 3
+- Checked as room-access source 3 by the INV-027 shared evaluation (joinRoom + bbbRoomStatus)
 - Soft-deleted on customer deletion
 
 **Invariants:**

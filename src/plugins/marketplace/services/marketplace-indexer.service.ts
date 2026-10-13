@@ -669,7 +669,7 @@ export class MarketplaceIndexerService {
       .findOne({ where: { channelId: profile.channelId } });
 
     // ─── BUG-023: Resolve Channel.token and BbbOrganization.slug ────────────
-    let channelToken = profile.channelId;
+    let channelToken: string = String(profile.channelId);
     let academySlug = '';
     const channel = await this.connection.rawConnection
       .getRepository(Channel)
@@ -677,12 +677,12 @@ export class MarketplaceIndexerService {
     if (channel) channelToken = channel.token;
     const org = await this.connection.rawConnection
       .getRepository(BbbOrganization)
-      .findOne({ where: { channelId: profile.channelId } });
+      .findOne({ where: { channelId: String(profile.channelId) } });
     if (org) academySlug = org.slug;
 
     const doc: MarketplaceInstructorDocument = {
       id: this.toPublicId(profile.id),
-      channelId: profile.channelId,
+      channelId: String(profile.channelId),
       channelToken,
       name: profile.fullName,
       bio: profile.bio || '',

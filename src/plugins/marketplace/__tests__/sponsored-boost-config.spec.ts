@@ -5,6 +5,10 @@
  * fail-closed bounds parsing and the clamp so the bounded-bid-boost contract
  * is verifiable without ES infra (the live search query itself still needs
  * the infra-gated marketplace e2e).
+ *
+ * BUG-054 (fixed): this suite used to live under `e2e/` as
+ * `sponsored-boost-config.e2e-spec.ts`, inflating the e2e gate count with
+ * unit assertions. It now runs in the unit gate.
  */
 import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';

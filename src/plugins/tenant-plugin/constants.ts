@@ -61,10 +61,10 @@ export const TENANT_ADMIN_ROLE_PERMISSIONS: Permission[] = [
   Permission.ReadOrder,
   Permission.UpdateOrder,
   Permission.DeleteOrder,
-  Permission.CreatePaymentMethod,
+  // PaymentMethod: tenants use the platform's Razorpay method.
+  // Read-only so tenant admins can see how orders will be paid;
+  // Create/Update/Delete stay platform-only (Commit 1 hygiene).
   Permission.ReadPaymentMethod,
-  Permission.UpdatePaymentMethod,
-  Permission.DeletePaymentMethod,
   Permission.CreatePromotion,
   Permission.ReadPromotion,
   Permission.UpdatePromotion,

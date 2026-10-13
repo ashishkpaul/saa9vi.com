@@ -38,7 +38,7 @@
 - [x] **FEAT-002 schema migration** — verified already applied (`sourceType` + `isUnbounded` confirmed in DB)
 - [x] **Next.js public instructor/CMS pages** — CMS page route (`/[locale]/page/[slug]`) added; instructor page already existed
 - [x] **Email verification for tenant admins** — `verifyTenantAdmin` Shop API mutation + unverified admin creation
-- [x] **End-to-end customer deletion test** — covers Flow A + Flow B across BBB/Tenant/Reviews. **Login-handler blocker (BUG-033) resolved** (`requireVerification:false`); `leaveAcademy` mutate+Flow B login now execute. 2 further Flow A/B issues surfaced that need separate fixes: (1) Flow B fixture seeds `BbbEnrollment.roomId`/`BbbTrialRegistration.scheduledSessionId` with non-numeric ids into integer FK columns; (2) Flow A "BBB entitlements deactivated" assertion fails. Production paths are TypeScript-verified.
+- [x] **End-to-end customer deletion test** — covers Flow A + Flow B across BBB/Tenant/Reviews. **Login-handler blocker (BUG-033) resolved** (`requireVerification:false`); `leaveAcademy` mutate+Flow B login now execute. ~~2 further Flow A/B issues surfaced that need separate fixes: (1) Flow B fixture seeds `BbbEnrollment.roomId`/`BbbTrialRegistration.scheduledSessionId` with non-numeric ids into integer FK columns; (2) Flow A "BBB entitlements deactivated" assertion fails.~~ **Both issues FIXED 2026-10-03 in `d2e3035`**: (1) the Flow B fixture now seeds DB-allocated PKs (`String(seedRoom.id)` etc., never string sentinels like `room-1`), (2) the Flow A `validUntil` assertion now anchors to the deletion service's write window (`<= tenSecondsFromNow` and `< twentyDaysFromNow`) instead of racing `Date.now()`. Production paths are TypeScript-verified. **Baseline update 2026-10-05:** the customer-deletion suite passes in the full battery — the only documented failing pair left is BUG-043's two `myLiveUsage` assertions.
 - [x] **Load estimation ratios tuning** — PILOS ratios configurable via `BigBlueButtonPluginOptions` + env vars
 
 ---
@@ -269,7 +269,7 @@ Every tenant lands on a permanent **Free Basic** plan at registration (no card, 
 - [ ] §4a lint guardrail remains unimplemented. Land the mechanical channel-isolation checks before expanding storefront onboarding.
 
 **Customer-deletion e2e (Flow A/B)**
-- [ ] The BUG-033 login/auth blocker is fixed, so Flow A/B now execute. Remaining: (1) Flow B fixture persists non-numeric `roomId`/`scheduledSessionId` into integer FK columns; (2) Flow A "BBB entitlements deactivated" assertion. Production code is TypeScript-verified.
+- [x] Resolved 2026-10-03 by `d2e3035` (security(bbb): enforce organization ownership on mutations): (1) Flow B fixture seeds DB-allocated PKs instead of persisting non-numeric `roomId`/`scheduledSessionId` into integer FK columns; (2) the Flow A "BBB entitlements deactivated" `validUntil` assertion is anchored to the deletion service's write window. Verified 2026-10-05: the full battery's only failing pair is BUG-043 (see baseline note at roadmap.md:41). Production code is TypeScript-verified.
 
 **Development infrastructure verification**
 - [ ] Local PostgreSQL tunnel (`127.0.0.1:5435`) and Redis tunnel (`127.0.0.1:6385`) must be reachable before runtime verification. If either is unavailable, the application intentionally falls back to pg-mem / `DefaultJobQueuePlugin`; that fallback is suitable for development diagnostics, not production verification.

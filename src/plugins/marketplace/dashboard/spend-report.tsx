@@ -1,8 +1,9 @@
 import { Badge, Page, PageBlock, PageLayout, PageTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@vendure/dashboard';
 import { api } from '@vendure/dashboard';
 import { useQuery } from '@tanstack/react-query';
+import { graphql } from '@/gql';
 
-const GET_SPEND_REPORT = `
+const GET_SPEND_REPORT = graphql(`
     query GetSpendReport($campaignId: ID!) {
         spendReport(campaignId: $campaignId) {
             id
@@ -12,7 +13,7 @@ const GET_SPEND_REPORT = `
             orderId
         }
     }
-`;
+`);
 
 function formatPaise(paise: number): string {
     return `₹${(paise / 100).toFixed(2)}`;

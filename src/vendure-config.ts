@@ -17,6 +17,7 @@ import {
 import { AssetServerPlugin } from "@vendure/asset-server-plugin";
 import { DashboardPlugin } from "@vendure/dashboard/plugin";
 import { GraphiqlPlugin } from "@vendure/graphiql-plugin";
+import { HardenPlugin } from '@vendure/harden-plugin';
 import "dotenv/config";
 import path from "path";
 import { BullMQJobQueuePlugin } from "@vendure/job-queue-plugin/package/bullmq";
@@ -62,6 +63,11 @@ export const securityHeadersMiddleware = (req: any, res: any, next: any) => {
 };
 
 const IS_DEV = process.env.APP_ENV === "dev";
+const IS_TEST = process.env.NODE_ENV === "test";
+// Commit 1 hygiene: dummyPaymentHandler is dev/test only. Production boot
+// must fail if any PaymentMethod row still uses it (see PaymentsPlugin
+// onApplicationBootstrap guard) — tenants use the platform Razorpay method.
+const allowDummyPaymentHandler = IS_DEV || IS_TEST;
 const serverPort = 3000;
 
 export const config: VendureConfig = {
@@ -108,12 +114,31 @@ apiOptions: {
     trustProxy: 1,
 
     // Enable permissive CORS for development to allow GraphiQL/Dashboard access via AI Studio proxy
-    cors: {
-      origin: (origin: any, callback: any) => callback(null, true),
-      credentials: true,
-    },
-    adminApiPlayground: true,
-    shopApiPlayground: true,
+    // Commit 3: production uses an explicit allow-list (STOREFRONT_URL +
+    // ADMIN_URL, comma-separated supported). Dev keeps allow-all for the AI
+    // Studio proxy. credentials:true with origin:true is allow-any + cookies
+    // and must never ship to production.
+    cors: IS_DEV
+      ? {
+          origin: (origin: any, callback: any) => callback(null, true),
+          credentials: true,
+        }
+      : {
+          origin: (origin: any, callback: any) => {
+            if (!origin) return callback(null, true); // same-origin / curl
+            const allowed = `${process.env.STOREFRONT_URL ?? ''},${process.env.ADMIN_URL ?? ''}`
+              .split(',')
+              .map((s) => s.trim().replace(/\/+$/, ''))
+              .filter(Boolean);
+            if (allowed.includes(String(origin).replace(/\/+$/, ''))) {
+              return callback(null, true);
+            }
+            return callback(null, false);
+          },
+          credentials: true,
+        },
+    adminApiPlayground: IS_DEV,
+    shopApiPlayground: IS_DEV,
 
     middleware: [
       {
@@ -150,8 +175,8 @@ apiOptions: {
   authOptions: {
     tokenMethod: ["bearer", "cookie"],
     superadminCredentials: {
-      identifier: process.env.SUPERADMIN_USERNAME || "superadmin",
-      password: process.env.SUPERADMIN_PASSWORD || "superadmin",
+      identifier: process.env.SUPERADMIN_USERNAME,
+      password: process.env.SUPERADMIN_PASSWORD,
     },
     cookieOptions: {
       secret: process.env.COOKIE_SECRET || "cookie-secret-dev-fallback",
@@ -174,7 +199,12 @@ apiOptions: {
     password: process.env.DB_PASSWORD || "postgres",
   },
   paymentOptions: {
-    paymentMethodHandlers: [dummyPaymentHandler],
+    // Commit 1: dummy stays registered for dev/test only (e2e suites create
+    // their own dummy method rows; see tenant-plugin/e2e/fixtures).
+    // In production the array is empty here — PaymentsPlugin appends the
+    // Razorpay handler, and its bootstrap guard refuses to start if any
+    // PaymentMethod row uses the dummy handler code.
+    paymentMethodHandlers: allowDummyPaymentHandler ? [dummyPaymentHandler] : [],
   },
   // When adding or altering custom field definitions, the database will
   // need to be updated. See the "Migrations" section in README.md.
@@ -183,9 +213,14 @@ apiOptions: {
     // MarketplaceIndexerPlugin reads these to join Product → BbbScheduledSession
     // and Product → InstructorProfile when building the platform-level ES indices.
     // Must be set in BbbScheduledSessionService.create() when productVariantId is provided.
+    // readonly:true + public:false → not writable via any GraphQL API (Admin or Shop),
+    // still readable via Admin API output type, writable only via plugin TypeScript
+    // (TransactionalConnection Product repository save). Same pattern as the
+    // readonly Order fields in MarketplaceIndexerPlugin and Customer.status below.
+    // No DB migration: readonly does not change column type/nullability.
     Product: [
-      { name: 'bbbSessionId',        type: 'string' as const, nullable: true, public: false },
-      { name: 'instructorProfileId', type: 'string' as const, nullable: true, public: false },
+      { name: 'bbbSessionId',        type: 'string' as const, nullable: true, public: false, readonly: true },
+      { name: 'instructorProfileId', type: 'string' as const, nullable: true, public: false, readonly: true },
     ],
     // Customer status field for platform-wide suspension (INV-014)
     Customer: [
@@ -196,14 +231,15 @@ apiOptions: {
     Page: [],
   },
   plugins: [
-    GraphiqlPlugin.init(),
+    ...(IS_DEV || process.env.NODE_ENV === 'test' ? [GraphiqlPlugin.init()] : []),
     AssetServerPlugin.init({
       route: "assets",
       assetUploadDir: path.join(__dirname, "../static/assets"),
-      // For local dev, the correct value for assetUrlPrefix should
-      // be guessed correctly, but for production it will usually need
-      // to be set manually to match your production url.
-      assetUrlPrefix: IS_DEV ? undefined : "http://localhost:3000/assets/",
+      // Commit 3: production serves assets from ASSET_URL_PREFIX (CDN/origin).
+      // The old inverted fallback handed production a localhost URL; dev keeps
+      // the auto-guess. Boot refuses without it outside dev (see
+      // assertProductionSecrets).
+      assetUrlPrefix: IS_DEV ? undefined : process.env.ASSET_URL_PREFIX,
     }),
     DefaultSchedulerPlugin.init(),
     ...(process.env.REDIS_HOST
@@ -226,33 +262,62 @@ apiOptions: {
         ]
       : [DefaultJobQueuePlugin.init({})]),
     DefaultSearchPlugin.init({ bufferUpdates: false, indexStockStatus: true }),
-    EmailPlugin.init({
-      devMode: true,
-      outputPath: path.join(__dirname, "../static/email/test-emails"),
-      route: "mailbox",
-      handlers: [
-        ...customerEmailHandlers,
-        ...sellerEmailHandlers,
-      ],
-      templateLoader: new ChannelBasedTemplateLoader(
-        path.join(__dirname, "../static/email/templates"),
-      ),
-      globalTemplateVars: {
-        fromAddress: process.env.EMAIL_FROM_ADDRESS || '"Saa9vi" <noreply@saa9vi.com>',
-        verifyEmailAddressUrl: IS_DEV
-          ? "http://localhost:8080/verify"
-          : (process.env.STOREFRONT_URL ? `${process.env.STOREFRONT_URL}/verify` : "https://www.saa9vi.com/verify"),
-        passwordResetUrl: IS_DEV
-          ? "http://localhost:8080/password-reset"
-          : (process.env.STOREFRONT_URL ? `${process.env.STOREFRONT_URL}/password-reset` : "https://www.saa9vi.com/password-reset"),
-        changeEmailAddressUrl: IS_DEV
-          ? "http://localhost:8080/verify-email-address-change"
-          : (process.env.STOREFRONT_URL ? `${process.env.STOREFRONT_URL}/verify-email-address-change` : "https://www.saa9vi.com/verify-email-address-change"),
-      },
-    }),
+    EmailPlugin.init(
+      IS_DEV || process.env.NODE_ENV === 'test'
+        ? {
+            devMode: true,
+            outputPath: path.join(__dirname, "../static/email/test-emails"),
+            route: "mailbox",
+            handlers: [
+              ...customerEmailHandlers,
+              ...sellerEmailHandlers,
+            ],
+            templateLoader: new ChannelBasedTemplateLoader(
+              path.join(__dirname, "../static/email/templates"),
+            ),
+            globalTemplateVars: {
+              fromAddress: process.env.EMAIL_FROM_ADDRESS || '"Saa9vi" <noreply@saa9vi.com>',
+              verifyEmailAddressUrl: "https://storefront.meeting.lan/verify",
+              passwordResetUrl: "https://storefront.meeting.lan/password-reset",
+              changeEmailAddressUrl: "https://storefront.meeting.lan/verify-email-address-change",
+            },
+          }
+        : {
+            // Commit 3: production sends real mail over SMTP (env transport).
+            // Boot refuses without SMTP_HOST outside dev. No mailbox route,
+            // no file output — the devMode mailbox must never be public.
+            transport: {
+              type: 'smtp',
+              host: process.env.SMTP_HOST,
+              port: Number(process.env.SMTP_PORT ?? 587),
+              auth: {
+                user: process.env.SMTP_USER,
+                pass: process.env.SMTP_PASS,
+              },
+            },
+            handlers: [
+              ...customerEmailHandlers,
+              ...sellerEmailHandlers,
+            ],
+            templateLoader: new ChannelBasedTemplateLoader(
+              path.join(__dirname, "../static/email/templates"),
+            ),
+            globalTemplateVars: {
+              fromAddress: process.env.EMAIL_FROM_ADDRESS || '"Saa9vi" <noreply@saa9vi.com>',
+              verifyEmailAddressUrl: process.env.STOREFRONT_URL ? `${process.env.STOREFRONT_URL}/verify` : "https://www.saa9vi.com/verify",
+              passwordResetUrl: process.env.STOREFRONT_URL ? `${process.env.STOREFRONT_URL}/password-reset` : "https://www.saa9vi.com/password-reset",
+              changeEmailAddressUrl: process.env.STOREFRONT_URL ? `${process.env.STOREFRONT_URL}/verify-email-address-change` : "https://www.saa9vi.com/verify-email-address-change",
+            },
+          },
+    ),
     DashboardPlugin.init({
       route: "dashboard",
       appDir: path.join(__dirname, "../dist/dashboard"),
+    }),
+
+    HardenPlugin.init({
+      maxQueryComplexity: 500,
+      apiMode: IS_DEV ? 'dev' : 'prod',
     }),
 
     TenantPlugin,
@@ -263,12 +328,62 @@ apiOptions: {
       meetingIdPrefix: "bbb",
       attendeeJoinUrlTtlSeconds: 86400,
 
+      // ─── ADR-047 / Q2 metered rate (production-readiness item 1) ────────
+      // Explicit platform rate in paise per learner-hour for `metered` orgs
+      // that have no per-org rate. UNSET (dev) → the clearly-marked ₹20
+      // PLACEHOLDER still applies; non-dev boot REFUSES to start without it
+      // (assertProductionSecrets), so no production customer can ever be
+      // billed a price nobody approved.
+      defaultRatePaisePerLearnerHour:
+        process.env.BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR != null &&
+        process.env.BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR !== ""
+          ? Number(process.env.BBB_DEFAULT_RATE_PAISE_PER_LEARNER_HOUR)
+          : undefined,
+
+      // ─── Public callback base (W3/W4 webhooks) ─────────────────────
+      // Base for the BBB hook callback (`publicBaseUrl +
+      // /bbb/webhook/<serverId>`). UNSET is fine in dev; non-dev boot
+      // REFUSES without it (assertProductionSecrets /
+      // BBB_PUBLIC_BASE_URL) and requires https:// (W4) because BBB
+      // signs the REGISTERED URL — a guessed base fails every webhook
+      // verification, a plaintext base exposes the auth material.
+      publicBaseUrl: process.env.BBB_PUBLIC_BASE_URL || undefined,
+      // Commit 3.5 — checksum algorithm.
+      //
+      // Default sha256 (verified live 2026-10-09, re-verified post-rotation
+      // 2026-10-09: in-process probe scripts/bbb/checksum-probe.ts signed
+      // getMeetings + hooks/list with BOTH sha256 and sha1 against
+      // meeting.saa9vi.com — all four returned HTTP 200 +
+      // <returncode>SUCCESS</returncode> on both runs). The server accepts
+      // the full BBB 3.0 set (sha1/256/384/512); sha256 is the modern
+      // default. The 1a8a38a 'sha1 … confirmed from hookChecksumAlgorithm
+      // in default.yml' note described the bbb-webhooks VERIFY side, not
+      // an outbound restriction — the probe proves outbound sha256
+      // verifies. Post-rotation SUCCESS also confirms the new secret
+      // decrypts (BBB_ENCRYPTION_KEY in sync, no CREDENTIAL_UNREADABLE).
+      //
+      // Code paths using THIS option: BbbApiService.buildChecksum (all
+      // outbound API calls incl. getMeetings/create/join) and
+      // BbbHooksService.ensureWebhook (hooks/create). Inbound webhook
+      // verification is INDEPENDENT (workers/bbb-webhook-auth.ts infers
+      // sha1/256/384/512 from the digest hex length). Override per server
+      // when Commit 4 lands (nullable BbbServer.checksumAlgorithm).
+      checksumAlgorithm: 'sha256',
+
       // ─── Scalability tuning from .env ──────────────────────────
       lockTtlSeconds: Number(process.env.BBB_LOCK_TTL_SECONDS ?? 30),
       lockHeartbeatIntervalMs: Number(
         process.env.BBB_LOCK_HEARTBEAT_INTERVAL_MS ?? 10000,
       ),
-      roomLockStrict: process.env.BBB_ROOM_LOCK_STRICT === "true",
+      // Production-readiness item 3: fail-CLOSED locking outside dev. An
+      // explicit BBB_ROOM_LOCK_STRICT value always wins; otherwise a non-dev
+      // deployment defaults to strict so a Redis blip can no longer let two
+      // concurrent `bbbStartRoom` calls double-provision the same room.
+      // E2E/dev never route through this file's plugin init without APP_ENV=dev.
+      roomLockStrict:
+        process.env.BBB_ROOM_LOCK_STRICT != null
+          ? process.env.BBB_ROOM_LOCK_STRICT === "true"
+          : !IS_DEV,
       provisionDebounceMs: Number(
         process.env.BBB_PROVISION_DEBOUNCE_MS ?? 15000,
       ),

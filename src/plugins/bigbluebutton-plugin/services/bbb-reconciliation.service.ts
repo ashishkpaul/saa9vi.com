@@ -1,4 +1,4 @@
-import { Inject, Injectable, forwardRef } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import {
   EventBus,
   Logger,
@@ -6,17 +6,28 @@ import {
   RequestContextService,
   TransactionalConnection,
 } from "@vendure/core";
-import { EntityManager } from "typeorm";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
+import { BbbMeetingSample } from "../entities/bbb-meeting-sample.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbUsageLedger } from "../entities/bbb-usage-ledger.entity";
 import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbServerService } from "./bbb-server.service";
-import { BbbApiService } from "./bbb-api.service";
-import { BbbMeetingService } from "./bbb-meeting.service";
-import { GrantReaderService } from "./grant-reader.service";
 import {
-  GrantConsumedEvent,
+  BbbApiService,
+  BbbMisconfiguredError,
+  BbbNotFoundError,
+  BbbRejectedError,
+  BbbUnavailableError,
+} from "./bbb-api.service";
+import { BbbServer } from "../entities/bbb-server.entity";
+import { BbbEncryptionService } from "./bbb-encryption.service";
+import { BbbOpsAlertService } from "./bbb-ops-alert.service";
+import { BbbMetricsService } from "./bbb-metrics.service";
+import { GrantConsumptionService } from "./bbb-grant-consumption.service";
+import { MeetingLifecycleService } from "./bbb-meeting-lifecycle.service";
+import { BbbMeteringService } from "./bbb-metering.service";
+import { isMeteredOrganization } from "./metered-billing.policy";
+import {
   CapacityExhaustedEvent,
   MeetingCompletedEvent,
 } from "../events/bbb-events";
@@ -33,10 +44,13 @@ export class BbbReconciliationService {
     private readonly ctxService: RequestContextService,
     private readonly serverService: BbbServerService,
     private readonly bbbApiService: BbbApiService,
-    @Inject(forwardRef(() => BbbMeetingService))
-    private readonly meetingService: BbbMeetingService,
+    private readonly lifecycleService: MeetingLifecycleService,
+    private readonly meteringService: BbbMeteringService,
     private readonly eventBus: EventBus,
-    private readonly grantReader: GrantReaderService,
+    private readonly grantConsumption: GrantConsumptionService,
+    private readonly encryptionService: BbbEncryptionService,
+    private readonly opsAlert: BbbOpsAlertService,
+    private readonly metrics: BbbMetricsService,
     @Inject(BBB_PLUGIN_OPTIONS)
     private readonly options: BigBlueButtonPluginOptions,
   ) {}
@@ -56,11 +70,6 @@ export class BbbReconciliationService {
     return 3;
   }
 
-  /** Minimum meeting duration (ms) before billing is applied */
-  private get fairBillingMinDurationMs(): number {
-    return this.options.fairBillingMinDurationMs ?? 120_000; // 2 min
-  }
-
   /** Maximum meeting duration (ms) before billing is capped and meeting force-completed */
   private get maxMeetingDurationMs(): number {
     return this.options.maxMeetingDurationMs ?? 24 * 60 * 60 * 1000; // 24 hours
@@ -75,9 +84,13 @@ export class BbbReconciliationService {
 
   async reconcileActiveMeetings(): Promise<number> {
     const ctx = await this.ctxService.create({ apiType: "admin" });
+    // W5: the organization must be joined — billingMode decides metered vs
+    // grant behaviour on a confirmed remote end, and the billing-ceiling
+    // branch reads meeting.organization for CapacityExhaustedEvent.
     const activeMeetings = await this.connection
       .getRepository(ctx, BbbMeeting)
       .createQueryBuilder("meeting")
+      .leftJoinAndSelect("meeting.organization", "organization")
       .where("meeting.state = :state", { state: MEETING_STATE.ACTIVE })
       .getMany();
 
@@ -104,9 +117,15 @@ export class BbbReconciliationService {
       if (meetingAgeMs > this.maxMeetingDurationMs) {
         const capReason = `Exceeded maxMeetingDurationMs (${Math.round(meetingAgeMs / 3600000)}h active)`;
         const organization = meeting.organization;
-        const grant = await this.connection
-          .getRepository(ctx, BbbCapacityGrant)
-          .findOne({ where: { id: meeting.grantId as string } });
+        // W5: metered meetings carry grantId = null. A lookup keyed on a null
+        // id must never run (it can match an arbitrary row) and a metered
+        // meeting must never publish a grant event — skip the grant lookup
+        // entirely and let the `organization && guard` below decide.
+        const grant = meeting.grantId
+          ? await this.connection
+              .getRepository(ctx, BbbCapacityGrant)
+              .findOne({ where: { id: meeting.grantId } })
+          : null;
         await this.connection
           .getRepository(ctx, BbbMeeting)
           .update(meeting.id as string, {
@@ -115,8 +134,18 @@ export class BbbReconciliationService {
             lastReconciledAt: new Date(),
             reconciliationAttemptCount: (meeting.reconciliationAttemptCount ?? 0) + 1,
           });
-        await this.meetingService.completeMeetingLifecycle(ctx, meeting.id, {
+        // Follow-up: the meeting ENDED (for billing) at the ceiling —
+        // provisionedAt + maxMeetingDurationMs — not when this pass happened
+        // to run. Passing that as completedAt makes usage book to the month
+        // the meeting actually ended in (same rule as reconcile-remote-gone,
+        // W5-9/W5-10); the branch condition (age > ceiling) guarantees it is
+        // ≤ now.
+        await this.lifecycleService.completeMeetingLifecycle(ctx, meeting.id, {
           source: "reconciliation",
+          completedAt: new Date(
+            (meeting.provisionedAt ?? meeting.createdAt).getTime() +
+              this.maxMeetingDurationMs,
+          ),
         });
         reconciled++;
         Logger.warn(
@@ -146,32 +175,232 @@ export class BbbReconciliationService {
       );
       if (!server) continue;
 
-      const info = await this.bbbApiService.getMeetingInfo(
-        server,
-        meeting.bbbMeetingId,
-      );
-
-      // getMeetingInfo returns null when the meeting has been fully destroyed
-      // on BBB. isMeetingRunning() returns false for meetings with no joiners
-      // yet (hasUserJoined=false), so we must NOT use it here — it would
-      // prematurely complete perfectly valid meetings that are waiting for
-      // their first participant to join.
-      if (info === null) {
-        // Meeting is permanently unreachable on BBB — mark as STALE instead
-        // of completing, so no BbbUsageLedger is written.
-        await this.meetingService.markMeetingStale(
-          ctx,
-          meeting,
-          "BBB getMeetingInfo returned null — meeting destroyed or expired",
-        );
-        reconciled++;
-        Logger.info(
-          `Reconciled meeting ${meeting.id}: marked as Stale (BBB missing)`,
+      // W1/W5: only a CONFIRMED remote end acts — BbbNotFoundError, or a
+      // successful getMeetingInfo carrying endTime > 0 (BBB keeps ended
+      // meetings queryable for a while, so a missed end event must complete
+      // here instead of leaving the meeting ACTIVE until BBB purges it).
+      // Unavailable (outage) / Rejected (bad checksum) mean "cannot prove it
+      // is gone" → skip this pass, never stale, never forfeit billing.
+      // `running === false` alone is NEVER a verdict (it is false before the
+      // first participant joins). BBB requires the moderator password on
+      // getMeetingInfo (API-Mate capture) — the load below skips the meeting
+      // when it is missing.
+      let moderatorPW: string | undefined;
+      try {
+        const withSecrets = await this.connection
+          .getRepository(ctx, BbbMeeting)
+          .createQueryBuilder("meeting")
+          .addSelect("meeting.encryptedModeratorPassword")
+          .where("meeting.id = :id", { id: meeting.id as string })
+          .getOne();
+        if (withSecrets?.encryptedModeratorPassword) {
+          moderatorPW = this.encryptionService.decrypt(
+            withSecrets.encryptedModeratorPassword,
+          );
+        }
+      } catch {
+        moderatorPW = undefined;
+      }
+      if (!moderatorPW) {
+        // W5: a missing/undecryptable moderator password on the meeting row
+        // is a PER-MEETING data problem. Sending the call anyway would be
+        // unauthenticated — BBB rejects it (BbbRejectedError) and
+        // flagServerConfigProblem() would mark the whole SERVER unhealthy
+        // because of ONE bad row. Skip this meeting only: warning, no API
+        // call, server health untouched.
+        Logger.warn(
+          `Reconcile skipped for meeting ${meeting.id}: no decryptable moderator password on the meeting row (per-meeting data problem)`,
           loggerCtx,
         );
+        continue;
       }
+      let confirmedEnd = false;
+      let confirmedEndTimeSec = 0;
+      try {
+        const info = await this.bbbApiService.getMeetingInfo(
+          server,
+          meeting.bbbMeetingId,
+          moderatorPW,
+        );
+        if (Number(info?.endTime ?? 0) > 0) {
+          confirmedEnd = true;
+          confirmedEndTimeSec = Number(info.endTime);
+        }
+      } catch (err) {
+        if (err instanceof BbbNotFoundError) {
+          confirmedEnd = true;
+        } else {
+          // Transient outage or config rejection — skip this pass.
+          // Misconfigured/Rejected also flags the server unhealthy + a
+          // de-duplicated ops alert (spend-alert style): a bad checksum or a
+          // missing secret will otherwise fail every meeting, every pass.
+          if (
+            err instanceof BbbMisconfiguredError ||
+            err instanceof BbbRejectedError
+          ) {
+            await this.flagServerConfigProblem(ctx, server, err);
+          }
+          Logger.warn(
+            `Reconcile skipped for meeting ${meeting.id}: ${(err as Error).message}`,
+            loggerCtx,
+          );
+        }
+      }
+      if (!confirmedEnd) continue;
+
+      // ─── CONFIRMED REMOTE END (W5) ─────────────────────────────────
+      reconciled++;
+      if (!isMeteredOrganization(meeting.organization)) {
+        // Grant mode is unchanged: confirmed gone → STALE, never billed
+        // (markMeetingStale writes no ledger and no metered usage row).
+        await this.lifecycleService.markMeetingStale(
+          ctx,
+          meeting,
+          "BBB confirms the meeting ended remotely — grant mode, no billing",
+        );
+        Logger.info(
+          `Reconciled meeting ${meeting.id}: marked as Stale (grant mode, remote end confirmed)`,
+          loggerCtx,
+        );
+        continue;
+      }
+
+      // Metered mode: the samples ARE the bill (INV-028). With ≥1 sample the
+      // meeting completes through the shared lifecycle so the frozen usage
+      // row, the room reset and MeetingCompletedEvent all stay consistent
+      // with webhook completions.
+      const sampleCount = await this.connection
+        .getRepository(ctx, BbbMeetingSample)
+        .createQueryBuilder("sample")
+        .where("sample.meetingId = :meetingId", {
+          meetingId: String(meeting.id),
+        })
+        .getCount();
+
+      if (sampleCount === 0) {
+        // Zero samples can mean metering was BROKEN, not that nobody joined.
+        // Stale the meeting (nothing would ever bill) but raise a per-meeting
+        // ops alert so the gap cannot hide behind a clean terminal state.
+        await this.lifecycleService.markMeetingStale(
+          ctx,
+          meeting,
+          "BBB confirms the meeting ended remotely but zero metering samples exist — metering gap suspected",
+        );
+        this.opsAlert.notify(
+          "bbb-metering-zero-samples",
+          `meeting-${meeting.id}`,
+          `Metered meeting ${meeting.id} ended on BBB with ZERO metering samples (server ${meeting.serverId}) — metering may be broken`,
+          {
+            meetingId: String(meeting.id),
+            serverId: meeting.serverId,
+            sampleCount: 0,
+          },
+        );
+        Logger.warn(
+          `Reconciled meeting ${meeting.id}: Stale + zero-sample alert (metering gap suspected)`,
+          loggerCtx,
+        );
+        continue;
+      }
+
+      const completedAt = await this.computeReconciledCompletedAt(
+        ctx,
+        meeting,
+        confirmedEndTimeSec,
+      );
+      await this.lifecycleService.completeMeetingLifecycle(ctx, meeting.id, {
+        source: "reconcile-remote-gone",
+        completedAt,
+      });
+      this.metrics.recordReconcileRemoteGoneCompletion();
+      // De-duplicated per server for 1 h (BbbOpsAlertService): a server whose
+      // webhooks are systematically missing must not spam once per meeting.
+      this.opsAlert.notify(
+        "bbb-webhook-missed",
+        `server-${meeting.serverId}`,
+        `Meeting ${meeting.id} ended on BBB without a webhook — completed by reconciliation (reconcile-remote-gone)`,
+        {
+          meetingId: String(meeting.id),
+          serverId: meeting.serverId,
+          completedAt: completedAt.toISOString(),
+        },
+      );
+      Logger.info(
+        `Reconciled meeting ${meeting.id}: remote end confirmed → COMPLETED via reconcile-remote-gone (completedAt=${completedAt.toISOString()}, samples=${sampleCount})`,
+        loggerCtx,
+      );
     }
     return reconciled;
+  }
+
+  /**
+   * W5 — the authoritative completion time for a reconciliation-discovered
+   * remote end:
+   *
+   * - BBB's own `endTime` when the success path gave us one;
+   * - otherwise the last metering sample + 1 minute (the sampler covers whole
+   *   minutes, so the meeting ended within that minute at the latest);
+   * - clamped to [provisionedAt, now] so a clock-skewed endTime can never
+   *   book usage before the meeting existed or in the future.
+   *
+   * billMeteredMeeting() derives `periodMonth` from the PERSISTED
+   * completedAt — completing hours/days later with `new Date()` would book
+   * the usage (and the fair-billing duration) into the wrong month.
+   */
+  private async computeReconciledCompletedAt(
+    ctx: RequestContext,
+    meeting: BbbMeeting,
+    endTimeSec: number,
+  ): Promise<Date> {
+    const now = new Date();
+    const lowerBound = (meeting.provisionedAt ?? meeting.createdAt).getTime();
+    let candidateMs: number;
+    if (endTimeSec > 0) {
+      candidateMs = endTimeSec * 1000;
+    } else {
+      const lastSample = await this.connection
+        .getRepository(ctx, BbbMeetingSample)
+        .createQueryBuilder("sample")
+        .where("sample.meetingId = :meetingId", {
+          meetingId: String(meeting.id),
+        })
+        .orderBy("sample.bucketMinute", "DESC")
+        .getOne();
+      candidateMs = lastSample
+        ? lastSample.bucketMinute.getTime() + 60_000
+        : now.getTime();
+    }
+    return new Date(
+      Math.min(Math.max(candidateMs, lowerBound), now.getTime()),
+    );
+  }
+
+  /**
+   * Gate-2: a checksum/auth rejection or a missing/undecryptable secret is a
+   * per-server config problem, not a per-meeting verdict. Mark the server
+   * unhealthy (selection excludes it) and raise a de-duplicated ops alert —
+   * `BbbOpsAlertService.notify` dedupes per (kind, key) for one hour, so one
+   * bad server cannot spam once per meeting per pass. Best-effort: alerting
+   * must never break the reconciliation pass.
+   */
+  private async flagServerConfigProblem(
+    ctx: RequestContext,
+    server: { id?: unknown; name?: string },
+    err: BbbMisconfiguredError | BbbRejectedError,
+  ): Promise<void> {
+    const serverId = String(server?.id ?? "unknown");
+    try {
+      await this.serverService.markHealthy(ctx, serverId as never, false);
+    } catch {
+      // Selection exclusion is advisory — the skip above already protected
+      // this pass. Never let the health write kill reconciliation.
+    }
+    this.opsAlert.notify(
+      "bbb-server-config",
+      `server-${serverId}`,
+      `BBB server "${server?.name ?? serverId}" misconfigured: ${err.message}`.substring(0, 300),
+      { serverId, messageKey: (err as { messageKey?: string }).messageKey ?? "unknown" },
+    );
   }
 
   // ─── 2. Reconcile Stuck Provisioning ─────────────────────────────────────────
@@ -217,168 +446,22 @@ export class BbbReconciliationService {
     return reconciled;
   }
 
-  // ─── 3. Consume Grant Minutes (Transactional) ────────────────────────────────
+  // ─── 3. Consume Grant Minutes (delegated) ─────────────────────────────────
+  // S7A (Phase 7.3): the economic operation now lives in
+  // GrantConsumptionService (fair-duration guard, duration/cap math,
+  // GrantReaderService resolution, idempotent ledger insert — INV-002 —
+  // atomic CAS grant update, internal-overhead branch, GrantConsumedEvent).
+  // This method remains as a thin delegation for the recovery loop below and
+  // existing characterization callers; behavior is unchanged.
 
   async consumeGrantHours(
     ctx: RequestContext,
     meeting: BbbMeeting,
   ): Promise<void> {
-    if (!meeting.provisionedAt) {
-      Logger.warn(
-        `Meeting ${meeting.id} has no provisionedAt — cannot bill consumption`,
-        loggerCtx,
-      );
-      return;
-    }
-
-    if (!meeting.grantId) {
-      Logger.warn(
-        `Meeting ${meeting.id} has no grantId stored — was it provisioned before the grantId column existed?`,
-        loggerCtx,
-      );
-      return;
-    }
-
-    const provisionedAt = meeting.provisionedAt;
-    const endedAt = meeting.completedAt ?? new Date();
-    const durationMs = endedAt.getTime() - provisionedAt.getTime();
-
-    // Fair billing guard: skip billing for micro-sessions under threshold.
-    if (durationMs < this.fairBillingMinDurationMs) {
-      Logger.info(
-        `Meeting ${meeting.id} lasted less than fair billing threshold (${Math.round(durationMs / 1000)}s). Skipping billing.`,
-        loggerCtx,
-      );
-      return;
-    }
-
-    // Billing ceiling: cap duration if the meeting was force-completed.
-    const effectiveDurationMs = meeting.billingCapped
-      ? Math.min(durationMs, this.maxMeetingDurationMs)
-      : durationMs;
-
-    // Round up to nearest minute; minimum 1 minute.
-    const durationMinutes = Math.max(1, Math.ceil(effectiveDurationMs / (1000 * 60)));
-
-    // Resolve grant via GrantReaderService (RFC-001 Q-009 seam)
-    const grantEntity = await this.grantReader.resolveEntityForMeeting(
-      meeting.grantId as string,
-    );
-
-    if (!grantEntity) {
-      Logger.warn(
-        `Meeting ${meeting.id}: stored grantId ${meeting.grantId} not found`,
-        loggerCtx,
-      );
-      return;
-    }
-
-    const sourceType = grantEntity.sourceType;
-
-    // Transactional: ledger + grant update must succeed or fail together.
-    // IDEMPOTENCY (INV-002): the database INSERT itself is the idempotency
-    // decision — INSERT ... ON CONFLICT (meetingId, grantId) DO NOTHING
-    // (via .orIgnore()) + RETURNING tells us whether this worker won the
-    // right to bill. Check-then-insert is prohibited: two concurrent workers
-    // could both pass a findOne() guard and race past it.
-    let billingWon = false;
-    let committed: {
-      consumedMinutes: number;
-      grantedMinutes: number;
-      exhausted: boolean;
-    } | null = null;
-
-    await this.connection.rawConnection.transaction(
-      async (em: EntityManager) => {
-        const insertResult = await em
-          .createQueryBuilder()
-          .insert()
-          .into(BbbUsageLedger)
-          .values({
-            meeting: { id: meeting.id as any },
-            grant: { id: grantEntity.id as any },
-            consumedMinutes: durationMinutes,
-            startedAt: provisionedAt,
-            completedAt: endedAt,
-          })
-          .orIgnore()
-          .returning("id")
-          .execute();
-
-        if (!insertResult.raw?.length) {
-          // Lost the insert race: another worker already billed this
-          // (meeting, grant) pair. No economic side effect is allowed.
-          Logger.warn(
-            `Meeting ${meeting.id}: billing ledger row already exists (insert-on-conflict lost race). Skipping duplicate.`,
-            loggerCtx,
-          );
-          return;
-        }
-        billingWon = true;
-
-        // internal_overhead grants: write ledger row only, skip exhaustion logic
-        if (sourceType === "internal_overhead") {
-          return;
-        }
-
-        // Atomic increment on minutes columns; RETURNING gives the committed
-        // post-increment values so downstream events never see stale data.
-        const updateResult = await em
-          .getRepository(BbbCapacityGrant)
-          .createQueryBuilder()
-          .update()
-          .set({
-            consumedMinutes: () => `"consumedMinutes" + :increment`,
-            exhausted: () =>
-              `CASE WHEN ("consumedMinutes" + :increment) >= "grantedMinutes" THEN TRUE ELSE FALSE END`,
-          })
-          .where("id = :id", { id: grantEntity.id as string })
-          .setParameters({ increment: durationMinutes })
-          .returning(["consumedMinutes", "grantedMinutes", "exhausted"])
-          .execute();
-
-        const row = (updateResult.raw?.[0] ?? {}) as Record<string, any>;
-        committed = {
-          consumedMinutes: Number(row.consumedMinutes ?? 0),
-          grantedMinutes: Number(row.grantedMinutes ?? 0),
-          exhausted: Boolean(row.exhausted),
-        };
-      },
-    );
-
-    if (!billingWon) {
-      return;
-    }
-
-    const committedState = committed as {
-      consumedMinutes: number;
-      grantedMinutes: number;
-      exhausted: boolean;
-    } | null;
-    const committedConsumed =
-      committedState?.consumedMinutes ?? grantEntity.consumedMinutes + durationMinutes;
-    const committedGranted = committedState?.grantedMinutes ?? grantEntity.grantedMinutes;
-    Logger.info(
-      `Billed meeting ${meeting.id}: ${durationMinutes}min consumed${meeting.billingCapped ? " (CAPPED)" : ""} (${committedConsumed}/${committedGranted}min)`,
-      loggerCtx,
-    );
-
-    // internal_overhead grants don't participate in quota alerts
-    if (sourceType === "internal_overhead") {
-      return;
-    }
-
-    const remainingMinutes = committedGranted - committedConsumed;
-    this.eventBus.publish(
-      new GrantConsumedEvent(
-        grantEntity.id as string,
-        meeting.id as string,
-        (grantEntity.organization?.id as string) ?? "",
-        durationMinutes,
-        Math.max(0, remainingMinutes),
-      ),
-    );
+    await this.grantConsumption.consumeGrantHours(ctx, meeting);
   }
+
+
 
   // ─── 4. Reconcile Pending Billing (COMPLETED without ledger row) ────────────
   // Recovery loop: if billing failed after a meeting reached COMPLETED (e.g.
@@ -431,6 +514,52 @@ export class BbbReconciliationService {
       } catch (err: any) {
         Logger.error(
           `[reconcilePendingBilling] Billing recovery failed for meeting ${meeting.id}: ${err.message} ` +
+            `(MeetingCompletedEvent not re-published; session remains LIVE until recovery succeeds)`,
+          loggerCtx,
+        );
+      }
+    }
+    return billed;
+  }
+
+  /**
+   * ADR-047 Phase 2B — metered recovery scan.
+   *
+   * COMPLETED meetings of metered orgs with no `BbbMeteredUsage` row (crashed
+   * between completion and billing, or billed zero-row write failed) are
+   * billed, then their `MeetingCompletedEvent` is re-published so the linked
+   * session can leave LIVE — mirrors the grant recovery above.
+   */
+  async reconcilePendingMeteredBilling(): Promise<number> {
+    const ctx = await this.ctxService.create({ apiType: "admin" });
+    const meetingIds = await this.meteringService.findUnbilledCompletedMeetings();
+    let billed = 0;
+    for (const meetingId of meetingIds) {
+      try {
+        const usageId = await this.meteringService.billMeteredMeeting(ctx, meetingId);
+        if (!usageId) continue;
+        billed++;
+        Logger.info(
+          `[reconcilePendingMeteredBilling] Recovered metered billing for completed meeting ${meetingId}`,
+          loggerCtx,
+        );
+        const meeting = await this.connection
+          .getRepository(ctx, BbbMeeting)
+          .findOne({ where: { id: meetingId }, relations: ["organization"] });
+        if (!meeting) continue;
+        this.eventBus.publish(
+          new MeetingCompletedEvent(
+            ctx,
+            meeting.id as string,
+            meeting.roomId ?? null,
+            (meeting.organization as { id?: unknown })?.id as string,
+            "reconciliation",
+            0,
+          ),
+        );
+      } catch (err: any) {
+        Logger.error(
+          `[reconcilePendingMeteredBilling] Recovery failed for meeting ${meetingId}: ${err.message} ` +
             `(MeetingCompletedEvent not re-published; session remains LIVE until recovery succeeds)`,
           loggerCtx,
         );
@@ -574,5 +703,318 @@ export class BbbReconciliationService {
       cleaned++;
     }
     return cleaned;
+  }
+
+  // ─── 6. W8 — Repair Recording URLs (missed rap-publish-ended webhooks) ──────
+  // The `rap-publish-ended` webhook is the normal writer of `bbbRecordingId`
+  // + `recordingUrl` (BbbMeetingService.handleWebhookEvent). If that delivery
+  // is dropped — BBB retries for a few minutes then gives up — the recording
+  // exists on BBB but the meeting row never gets its playback link. This pass
+  // is the pull-side repair: `getRecordings` for completed, recording-enabled
+  // meetings whose `recordingUrl` is still NULL, backfilled from BBB's own
+  // answer (never invented — the URL only ever comes from the BBB response).
+  //
+  // Safety properties (W1/W5 rules, mirrored from the metering sampler):
+  //  - BOUNDED: 72 h window, ≤ 20 candidates per pass (oldest completedAt
+  //    first) — the rest is picked up by the next 5-min tick;
+  //  - TYPED errors per meeting: notFound → nothing to repair (silent);
+  //    unavailable → transient skip + de-duplicated ops alert, server health
+  //    untouched; rejected/misconfigured → flagServerConfigProblem (the
+  //    per-server config family) — getRecordings authenticates with the API
+  //    secret only, so a rejection IS a server-level problem (unlike
+  //    getMeetingInfo, whose moderator-password is a per-meeting concern);
+  //  - no meeting-state, billing, or health side effects on the happy path;
+  //    a failed pass repairs nothing and kills nothing.
+  // Wire-up: the `bbb-reconciliation` scheduled task (6th pass).
+  // runBbbReconciliation() deliberately stays at the original five passes —
+  // its GraphQL result shape (BbbReconciliationResult) is unchanged.
+
+  /** Only completed meetings from the last 72 h are repair candidates. */
+  private static readonly RECORDING_REPAIR_WINDOW_MS = 72 * 60 * 60 * 1000;
+
+  /** Hard cap per pass — oldest completed first; the rest wait for the next tick. */
+  private static readonly RECORDING_REPAIR_BATCH = 20;
+
+  async repairRecordings(): Promise<number> {
+    const ctx = await this.ctxService.create({ apiType: "admin" });
+    const cutoff = new Date(
+      Date.now() - BbbReconciliationService.RECORDING_REPAIR_WINDOW_MS,
+    );
+
+    let candidates: BbbMeeting[];
+    try {
+      candidates = await this.connection
+        .getRepository(ctx, BbbMeeting)
+        .createQueryBuilder("meeting")
+        .where("meeting.state = :state", { state: MEETING_STATE.COMPLETED })
+        .andWhere("meeting.recordingEnabled = true")
+        .andWhere("meeting.recordingUrl IS NULL")
+        .andWhere("meeting.bbbMeetingId IS NOT NULL")
+        .andWhere("meeting.serverId IS NOT NULL")
+        .andWhere("meeting.completedAt >= :cutoff", { cutoff })
+        .orderBy("meeting.completedAt", "ASC")
+        .limit(BbbReconciliationService.RECORDING_REPAIR_BATCH)
+        .getMany();
+    } catch (err) {
+      // Candidate loading is infrastructure, not a per-meeting verdict —
+      // alert once per pass (deduped) and let the task record the failure.
+      this.opsAlert.notify(
+        "bbb-recording-repair",
+        "pass",
+        `Recording repair pass failed to load candidates: ${(err as Error).message}`,
+      );
+      throw err;
+    }
+
+    let repaired = 0;
+    const serverCache = new Map<string, BbbServer | null>();
+    for (const meeting of candidates) {
+      const serverId = String(meeting.serverId);
+      if (!serverCache.has(serverId)) {
+        try {
+          // findByIdWithSecret: encryptedApiSecret is select:false — every
+          // adapter call decrypts it (same rule as the metering sampler).
+          serverCache.set(
+            serverId,
+            await this.serverService.findByIdWithSecret(ctx, serverId),
+          );
+        } catch (err) {
+          Logger.warn(
+            `Recording repair: server ${serverId} load failed: ${(err as Error).message}`,
+            loggerCtx,
+          );
+          continue;
+        }
+      }
+      const server = serverCache.get(serverId) ?? null;
+      if (!server) {
+        Logger.warn(
+          `Recording repair: server ${serverId} not found for meeting ${meeting.id}`,
+          loggerCtx,
+        );
+        continue;
+      }
+
+      try {
+        const recordings = await this.bbbApiService.getRecordings(
+          server,
+          meeting.bbbMeetingId,
+        );
+        const recording = recordings.find(
+          (r) => r.meetingID === meeting.bbbMeetingId,
+        );
+        if (!recording) {
+          // BBB answered SUCCESS with no recording row for this meeting —
+          // nothing exists to repair yet; the candidate filter keeps the
+          // row eligible for the next pass.
+          continue;
+        }
+        if (!recording.playbackUrl) {
+          // Recording exists but is not published yet (no playback URL):
+          // link the recordID now for traceability; recordingUrl stays NULL
+          // so the row remains a candidate until the playback URL appears.
+          if (
+            recording.recordID &&
+            meeting.bbbRecordingId !== recording.recordID
+          ) {
+            await this.connection
+              .getRepository(ctx, BbbMeeting)
+              .update(meeting.id as string, {
+                bbbRecordingId: recording.recordID,
+              });
+          }
+          continue;
+        }
+        await this.connection
+          .getRepository(ctx, BbbMeeting)
+          .update(meeting.id as string, {
+            bbbRecordingId: recording.recordID,
+            recordingUrl: recording.playbackUrl,
+          });
+        repaired++;
+        Logger.info(
+          `Recording repaired for meeting ${meeting.id}: ${recording.recordID}`,
+          loggerCtx,
+        );
+      } catch (err) {
+        if (err instanceof BbbNotFoundError) {
+          // No recording for this meeting on BBB — normal, not a failure.
+          Logger.info(
+            `Recording repair skipped for meeting ${meeting.id}: no recording on BBB`,
+            loggerCtx,
+          );
+        } else if (err instanceof BbbUnavailableError) {
+          // Transient (timeout/HTTP 5xx/malformed XML): retry next pass.
+          // De-duplicated per server for 1 h so an outage alerts once.
+          Logger.warn(
+            `Recording repair skipped for meeting ${meeting.id}: ${(err as Error).message}`,
+            loggerCtx,
+          );
+          this.opsAlert.notify(
+            "bbb-recording-repair",
+            `server-${serverId}`,
+            `getRecordings unavailable during recording repair (server ${serverId}) — will retry next pass`,
+            {
+              serverId,
+              meetingId: String(meeting.id),
+              messageKey: err.messageKey,
+            },
+          );
+        } else if (
+          err instanceof BbbMisconfiguredError ||
+          err instanceof BbbRejectedError
+        ) {
+          await this.flagServerConfigProblem(ctx, server, err);
+        } else {
+          Logger.error(
+            `Recording repair failed for meeting ${meeting.id}: ${(err as Error).message}`,
+            loggerCtx,
+          );
+          this.opsAlert.notify(
+            "bbb-recording-repair",
+            `server-${serverId}`,
+            `Recording repair failed for meeting ${meeting.id} (server ${serverId}): ${(err as Error).message}`.substring(
+              0,
+              300,
+            ),
+            { serverId, meetingId: String(meeting.id) },
+          );
+        }
+      }
+    }
+    if (candidates.length > 0) {
+      Logger.info(
+        `Recording repair: candidates=${candidates.length} repaired=${repaired}`,
+        loggerCtx,
+      );
+    }
+    return repaired;
+  }
+
+  // ─── 7. Report-only orphan scan (unknown remote meetings; NEVER auto-ends) ──
+  // getMeetings is the server-side census: every meeting BBB knows about.
+  // Anything on a server with no local row — matched by bbbMeetingId, or by
+  // the `bbb-<meeting.id>` derivation used at provisioning — is an ORPHAN:
+  // evidence of a meeting our FSM never saw (created out-of-band via
+  // API-Mate / another integration, or leaked from a lost provisioning
+  // write).
+  //
+  // REPORT-ONLY, by design: this pass NEVER calls endMeeting and NEVER
+  // writes meeting/room state. It surfaces the orphan (Logger.warn +
+  // de-duplicated ops alert, keyed per server+meeting for 1 h) so an
+  // operator decides — the meeting FSM owns termination, and guessing here
+  // could end a live session someone else started.
+  //
+  // Matching is driven by the REMOTE list (small): one IN-query per server
+  // against bbbMeetingId / derived local id — no full-table scan. Typed W1
+  // error handling mirrors repairRecordings().
+
+  async scanOrphanMeetings(): Promise<number> {
+    const ctx = await this.ctxService.create({ apiType: "admin" });
+    const servers = await this.connection
+      .getRepository(ctx, BbbServer)
+      .createQueryBuilder("server")
+      .addSelect("server.encryptedApiSecret")
+      .where("server.enabled = :enabled", { enabled: true })
+      .getMany();
+
+    let orphans = 0;
+    for (const server of servers) {
+      const serverId = String(server.id);
+      try {
+        const remote = await this.bbbApiService.getMeetings(server);
+        if (remote.length === 0) continue;
+        const bbbIds = remote.map((r) => r.meetingID).filter(Boolean);
+        if (bbbIds.length === 0) continue;
+        const localIds = bbbIds
+          .filter((id) => id.startsWith("bbb-"))
+          .map((id) => id.slice("bbb-".length));
+        const qb = this.connection
+          .getRepository(ctx, BbbMeeting)
+          .createQueryBuilder("meeting")
+          .select("meeting.id")
+          .addSelect("meeting.bbbMeetingId")
+          .where("meeting.bbbMeetingId IN (:...bbbIds)", { bbbIds });
+        // Only add the localIds clause when there are actual IDs to match —
+        // an empty array with orWhere would pass [""] which Postgres
+        // rejects with "invalid input syntax for type integer".
+        if (localIds.length > 0) {
+          qb.orWhere("meeting.id IN (:...localIds)", { localIds });
+        }
+        const known = await qb.getMany();
+        const knownBbbIds = new Set(
+          known
+            .map((k) => k.bbbMeetingId)
+            .filter((v): v is string => Boolean(v)),
+        );
+        const knownLocalIds = new Set(known.map((k) => k.id));
+
+        for (const r of remote) {
+          const derived = r.meetingID.startsWith("bbb-")
+            ? r.meetingID.slice("bbb-".length)
+            : null;
+          if (
+            knownBbbIds.has(r.meetingID) ||
+            (derived !== null && knownLocalIds.has(derived))
+          ) {
+            continue; // ours — known locally
+          }
+          orphans++;
+          Logger.warn(
+            `Orphan remote meeting on server ${serverId}: meetingID=${r.meetingID} running=${r.running} participants=${r.participantCount} — no local row; REPORT-ONLY (not ended)`,
+            loggerCtx,
+          );
+          this.opsAlert.notify(
+            "bbb-orphan-meeting",
+            `${serverId}:${r.meetingID}`,
+            `BBB server "${server.name ?? serverId}" hosts unknown meeting ${r.meetingID} (running=${r.running}, participants=${r.participantCount}) — no local row; reported only, never auto-ended`,
+            {
+              serverId,
+              meetingID: r.meetingID,
+              running: r.running,
+              participantCount: r.participantCount,
+            },
+          );
+        }
+      } catch (err) {
+        if (err instanceof BbbNotFoundError) {
+          Logger.info(
+            `Orphan scan skipped for server ${serverId}: census not found`,
+            loggerCtx,
+          );
+        } else if (err instanceof BbbUnavailableError) {
+          Logger.warn(
+            `Orphan scan skipped for server ${serverId}: ${(err as Error).message}`,
+            loggerCtx,
+          );
+          this.opsAlert.notify(
+            "bbb-orphan-scan",
+            `server-${serverId}`,
+            `getMeetings unavailable during orphan scan (server ${serverId}) — will retry next pass`,
+            { serverId, messageKey: err.messageKey },
+          );
+        } else if (
+          err instanceof BbbMisconfiguredError ||
+          err instanceof BbbRejectedError
+        ) {
+          await this.flagServerConfigProblem(ctx, server, err);
+        } else {
+          Logger.error(
+            `Orphan scan failed for server ${serverId}: ${(err as Error).message}`,
+            loggerCtx,
+          );
+          this.opsAlert.notify(
+            "bbb-orphan-scan",
+            `server-${serverId}`,
+            `Orphan scan failed on server ${serverId}: ${(err as Error).message}`.substring(
+              0,
+              300,
+            ),
+            { serverId },
+          );
+        }
+      }
+    }
+    return orphans;
   }
 }

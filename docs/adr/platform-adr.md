@@ -148,7 +148,7 @@ Every entity that is tenant-scoped **must** implement `ChannelAware` and be pers
 
 All access to paid content — live sessions, recorded courses, workshops, coaching packages — is gated through a single `Entitlement` entity with a uniform `hasAccess(ctx, customerId, type, resourceId)` interface.
 
-**Current status:** `BbbEntitlement` entity and `BbbEntitlementService` are live. The entity supports `bbb_session` and `bbb_room` types with scalar `channelId` (non-ChannelAware). The service provides idempotent `create()`, `hasAccess()`, and `delete()` methods. No admin UI yet. `BbbEnrollment` remains as the legacy room-access path.
+**Current status:** `BbbEntitlement` entity and `BbbEntitlementService` are live. The entity supports `bbb_session` and `bbb_room` types with scalar `channelId` (non-ChannelAware). **Multi-row semantics since 2026-10-06** (BUG-057, `33c7c96`): `create()` is idempotent under `pg_advisory_xact_lock` on the natural key — it returns an existing unexpired row, else INSERTs a new one (a revoked row is never reactivated; it keeps its stamps as history); `hasAccess()` is **ANY**-live across all rows of `(channelId, customerId, type, resourceId)`; `delete()` **revokes by deactivating every unexpired row** in one schema-qualified UPDATE with first-writer-wins stamps. Admin UI exists (`/bbb/entitlements`, Revoked badge + re-grant). `BbbEnrollment` remains as the legacy room-access path.
 
 **Rejection criterion:** Any new entity named `*Enrollment` or `*Access` that is not `BbbEnrollment` backward-compatibility is rejected.
 
@@ -285,8 +285,8 @@ Every GraphQL document issued by a Dashboard route must validate against the Adm
 
 Plugins share the NestJS DI container. Cross-plugin injection is permitted with these constraints:
 
-1. Direction must be downward: `TenantPlugin` may not import from `BigBlueButtonPlugin`. `BigBlueButtonPlugin` may import from `TenantPlugin` (e.g., to verify `tenantProfileId` on org create).
-2. Cross-plugin FK references use string IDs, never TypeORM relation decorators across plugin boundaries. `BbbOrganization.tenantProfileId: string` references `TenantProfile.id` without a `@ManyToOne` FK.
+1. Direction must be downward: `TenantPlugin` may not import from `BigBlueButtonPlugin`. `BigBlueButtonPlugin` may import from `TenantPlugin` when it needs a tenant-side fact (e.g., consuming the `TenantRegisteredEvent` while provisioning an organization for the new tenant's channel). The Admin `CreateBbbOrganizationInput` carries no `tenantProfileId` and neither does the service input — the tenant link is the channel itself (Channel=Tenant), and the `BbbOrganization.tenantProfileId` column is legacy NULL-filler (BUG-053), not a verified reference.
+2. Cross-plugin FK references use string IDs, never TypeORM relation decorators across plugin boundaries. `BbbOrganization.tenantProfileId: string` is a legacy nullable column kept only so no migration is needed (BUG-053) — it is never written through the service and must not be read as a tenant reference; the tenant link is `channelId`.
 3. If circular dependency appears, extract the shared contract to a `SharedModule`.
 
 ---
@@ -406,13 +406,13 @@ export class BbbEntitlement extends VendureEntity {
 - No `sourceOrderLineId` or `sourceSubscriptionId` yet — Phase 2
 - No admin UI or expiry cron yet — Phase 1.5
 
-**Uniform access check:** `BbbEntitlementService.hasAccess()` — checks `customerId`, `type`, `resourceId`, and `validFrom`/`validUntil` window (code-verified).
+**Uniform access check:** `BbbEntitlementService.hasAccess()` — **ANY** started+unexpired row across **all** rows of the natural key `(channelId, customerId, type, resourceId)` (unexpired = `validUntil` null or future); the key may legally hold several rows (grant → revoke → re-grant history), a revoke deactivates every unexpired row, and only a fresh INSERT (advisory-lock-guarded `create()`) restores access (code-verified 2026-10-06, BUG-057).
 
 **Integration points (all code-verified):**
 1. `BbbOrderFulfillmentListener` creates Entitlement for session purchases ✅
 2. `TrialRegistrationService.register()` creates Entitlement for trial registrations ✅
 3. `BbbMeetingService.getJoinUrl()` checks Entitlement for session-based attendees (membership fallback) ✅
-4. `BbbMeetingService.joinRoom()` Gate 3 checks `BbbEntitlement { type: 'bbb_room' }` for room access ✅ (legacy `BbbEnrollment` read paths in `bbbRoomStatus`, `myBbbRooms`, `myBbbEnrollments` not yet migrated — see BUG-022)
+4. `BbbMeetingService.joinRoom()` Gate 3 checks `BbbEntitlement { type: 'bbb_room' }` for room access ✅ (BUG-022 fixed — the shop read paths now merge `BbbEntitlement`; residual preview-vs-join authorization divergence tracked as BUG-045, resolved by INV-027's single shared room-access evaluation)
 
 ### AC-002: Commerce Loop (Checkout → Access) ✅ Fixed
 
@@ -432,7 +432,7 @@ Student adds BbbScheduledSession to cart
       → if granted: attendee join URL
 ```
 
-**Current status:** ✅ Dual-path fulfillment code-verified. `BbbOrderFulfillmentListener` uses `TransactionalConnection` to look up `BbbScheduledSession` by `productVariantId` first; room products create `BbbEntitlement { type: 'bbb_room' }`. A legacy parallel path (`bbbFulfillmentHandler`) also writes `BbbEnrollment` + `BbbCapacityGrant` via the classic Vendure FulfillmentHandler — this is redundant and creates a read/write mismatch (see BUG-022) since `bbbRoomStatus`, `myBbbRooms`, and `myBbbEnrollments` still read from `BbbEnrollment` only.
+**Current status:** ✅ Dual-path fulfillment code-verified (re-verified 2026-09-30). `BbbOrderFulfillmentListener` uses `TransactionalConnection` to look up `BbbScheduledSession` by `productVariantId` first; room products create `BbbEntitlement { type: 'bbb_room' }`. The parallel path (`bbbFulfillmentHandler`, classic Vendure FulfillmentHandler) writes `BbbEntitlement` + `BbbCapacityGrant` — **not** `BbbEnrollment` (this sentence previously claimed `BbbEnrollment`; corrected 2026-09-30). No production writer creates `BbbEnrollment` anymore except the Admin `createBbbEnrollment` mutation. BUG-022's read mismatch is fixed (all three shop reads merge `BbbEntitlement`); the residual preview-vs-join authorization divergence is tracked as BUG-045 / INV-027.
 
 ### AC-003: Trial Session Funnel (Zero-Price Entitlement) ✅ Fixed
 
@@ -716,7 +716,8 @@ Both `BbbServer.encryptedApiSecret` and `BbbMeeting.encryptedAttendeePassword` /
 
 ```typescript
 /**
- * Operator-configured maximum virtual load score for this server's hardware spec.
+ * Operator-configured maximum virtual load value (same units as currentLoad)
+ * for this server's hardware spec.
  * Used by CapacityIntelligenceService for pool-level headroom calculations.
  *
  * Not used by BbbServerSelectionService — that service continues to use
@@ -939,6 +940,8 @@ The `CapacityIntelligenceService` warns operators when forecast load approaches 
 **Operational consequence:** The 15-minute alert job and the `poolCapacityDashboard` query provide the operator sufficient warning to add a server before saturation. `BbbServerSelectionService` continues to use `currentLoad < maxLoad` as the admission filter — this is the soft ceiling, not a block. Once all servers are above `maxLoad`, new provisioning jobs will queue and retry (up to `BBB_MAX_AUTO_RETRIES`), giving the operator a window to act.
 
 **Rejection criterion:** Any code path that throws an error or returns an access-denied response solely because pool capacity is high is rejected. Capacity is a signal for operators, not a gate for students.
+
+**Delivery amendment (2026-10-02, production-readiness review item 6, P1-3):** an `urgency: 'immediate'` warning must reach a channel an operator actually sees during an incident — not only the `BbbCapacityAlertLog` row. `CapacityAlertEvent` therefore requires at least one registered subscriber that emits the ops-alert channel (`BbbCapacityAlertListener` → `BbbOpsAlertService`: `Logger.warn` always, plus an optional `OPS_ALERT_WEBHOOK_URL` POST). Until this amendment the 15-minute `bbbCapacityAlertTask` published the event and *nobody consumed it*, so an immediate alert lived only in Postgres. The wiring is enforced structurally by `AdrChecker.capacityAlertHasSubscriber()` in `npm run verify:invariants`; the canonical text lives in `docs/architecture/invariants.md` (INV-012). Removing/unregistering that subscriber (reducing immediate alerts back to table-only) is now part of the rejected set.
 
 ---
 
@@ -1555,7 +1558,7 @@ Caddy upstream health check polls `/health` every 10 seconds.
 | BUG-019 | High | `LoadSimulationPlugin` / `load-simulation.plugin.ts` | `runLoadTest` is exposed on the public Shop API via `shopApiExtensions`, creating a DoS vector — any unauthenticated caller can trigger a sustained load test against the platform | ✅ Fixed — moved to `adminApiExtensions`, `@Allow(Permission.SuperAdmin)` applied to resolver |
 | BUG-020 | Medium | `CausalMapper` / `bbb-admin.schema.ts` | `SIMULATE_BBB_WEBHOOK_MUTATION` is referenced in `CausalMapper` but `simulateBbbWebhook` resolver does not exist in `BbbAdminResolver` — load tests silently fail on every `BbbWebhookEvent` lifecycle step | ✅ Fixed — `BbbWebhookEvent` step returns `isPending: true` in `CausalMapper`; skipped cleanly by `LoadOrchestrator` until resolver is implemented |
 | BUG-021 | High | `TenantProfileService.create()` | `channelOrToken` parameter passed as raw `Channel` entity object to `RequestContextService.create()` instead of `channel.token` string — causes `TypeError: channelOrToken.startsWith is not a function` on tenant profile creation | ✅ Fixed — resolved `Channel` entity to `channel.token` string before passing to `RequestContextService.create()` |
-| BUG-022 | P0 | `bbb-shop.resolver.ts` | `bbbRoomStatus`, `myBbbRooms`, and `myBbbEnrollments` read from `BbbEnrollment` only, while `BbbOrderFulfillmentListener` writes `BbbEntitlement` for room purchases. A paying customer's room never appears in their dashboard and `bbbRoomStatus` throws `ForbiddenError`, even though `bbbJoinRoom` would work. | ⚠️ Pending — add `entitlementService.hasAccess(ctx, customerId, "bbb_room", id)` checks to `bbbRoomStatus` and `myBbbRooms`; deprecate `myBbbEnrollments` in favor of `myLearningDashboard` |
+| BUG-022 | P0 | `bbb-shop.resolver.ts` | `bbbRoomStatus`, `myBbbRooms`, and `myBbbEnrollments` read from `BbbEnrollment` only, while `BbbOrderFulfillmentListener` writes `BbbEntitlement` for room purchases. A paying customer's room never appears in their dashboard and `bbbRoomStatus` throws `ForbiddenError`, even though `bbbJoinRoom` would work. | ✅ Fixed — all three methods now read `BbbEntitlement` alongside `BbbEnrollment` (code-verified 2026-09-30); `myBbbEnrollments` deprecated in the shop schema. Residual preview-vs-join authorization divergence tracked as BUG-045 / INV-027 |
 | BUG-023 | P1 | `marketplace-indexer.service.ts` | `academySlug` hardcoded to `''`, `channelToken` set to raw `channelId` instead of `Channel.token`, `customDomain` not indexed. Marketplace search results have no usable redirect URL. | ⚠️ Pending — fetch `BbbOrganization.slug` from session.organization relation, query `Channel.token` by channelId, index `TenantProfile.customDomain` |
 | BUG-024 | P2 | `TenantRegistrationService` | `ShippingMethod`/`StockLocation`/`PaymentMethod` not auto-provisioned for new channels. A freshly registered tenant has zero working payment methods and shipping configurations. | ⚠️ Pending — extend `TenantRegistrationService` to auto-provision default `ShippingMethod`, `StockLocation`, and `PaymentMethod` for new channels |
 
@@ -1688,7 +1691,7 @@ Note: `CapacityExhaustedEvent` (BUG-013 / BB-004) is now implemented and publish
 8. ✅ End-to-end customer deletion flow tested across all three plugins — `customer-deletion.e2e-spec.ts`
 9. ✅ Load estimation ratios configurable via `BigBlueButtonPluginOptions` + env vars (CI-001)
 10. ⚠️ BUG-017 remediation — add `ChannelAware` to `ProductReview` — deferred (not a Phase 1.5 blocker; tracked separately)
-11. ⚠️ **BUG-022 (P0)** — `bbbRoomStatus`, `myBbbRooms`, `myBbbEnrollments` read mismatch — deferred (tracked separately)
+11. ✅ **BUG-022 (P0)** — `bbbRoomStatus`, `myBbbRooms`, `myBbbEnrollments` read mismatch — Fixed (all three read `BbbEntitlement` alongside `BbbEnrollment`; code-verified 2026-09-30). Residual preview/join divergence tracked as BUG-045 / INV-027
 12. ⚠️ **BUG-023 (P1)** — Marketplace indexer redirect fields — deferred (tracked separately)
 13. ⚠️ **BUG-024 (P2)** — Auto-provision `PaymentMethod` — ✅ Done (included in item 7)
 
@@ -1720,7 +1723,7 @@ Deliverables:
 *Discovery Layer*
 
 - `MarketplaceIndexerPlugin` — event-driven BullMQ jobs subscribed to `ProductVariantEvent` and `InstructorProfileUpdatedEvent`; writes `saa9vi_marketplace_sessions` and `saa9vi_marketplace_instructors` Elasticsearch indices (platform-level, not per-tenant). `BbbScheduledSession.productVariantId` is the bridge — the plugin reads `Product.customFields.bbbSessionId` to join to BBB session data.
-- **Required `Product` custom fields** (add to `vendure-config.ts` before Phase 3): `bbbSessionId: string` and `instructorProfileId: string` (both nullable, non-public). Set in `BbbScheduledSessionService.create()` when a `productVariantId` is provided.
+- **Required `Product` custom fields** (add to `vendure-config.ts` before Phase 3): `bbbSessionId: string` and `instructorProfileId: string` (both nullable, non-public, readonly). Set in `BbbScheduledSessionService.create()` when a `productVariantId` is provided.
 - **Default channel isolation (DL-027):** Vendure assigns new products to both the default channel and the tenant channel by default. Session products must be restricted to the **tenant channel only** — the default channel must never become an accidental cross-tenant product listing. The marketplace ES index is the correct discovery surface.
 - `MarketplaceSearchResolver` (Shop API, no channel context) — public discovery queries
 - `MarketplaceAcademyPage` — aggregated view: `TenantProfile` + public sessions + review rating
@@ -1801,6 +1804,7 @@ Deliverables:
 | DL-028 | `TenantRegistrationLog` uses append-only pattern (INV-004) — PENDING → COMPLETED/FAILED transition only, rows never updated after final status | Registration is a critical platform operation. Append-only logging provides an immutable audit trail for every tenant creation attempt, enabling retrospective analysis of registration failures and abuse patterns. The pattern mirrors `BbbWebhookEvent` (DL-005) and `BbbUsageLedger` (DL-004). | Mutable `TenantRegistrationLog` (loses audit trail on failure); no log at all (no observability into registration failures) |
 | DL-029 | `TenantProfileService.create()` resolves `Channel` entity to `channel.token` string before passing to `RequestContextService.create()` | `RequestContextService.create()` expects a `channelToken: string` parameter. Passing a raw `Channel` entity object causes `TypeError: channelOrToken.startsWith is not a function` because the method calls `.startsWith()` on the first argument. The fix resolves the entity to its `.token` string property before the call. | Passing `Channel` entity directly (crashes with TypeError); refactoring `RequestContextService.create()` to accept both types (adds complexity to a Vendure core method) |
 | DL-030 | `CommissionLedger` always writes a row per marketplace order, even at 0% rate ($0 rows). Env var is `MARKETPLACE_COMMISSION_PERCENT` (not `PLATFORM_FEE_PERCENT`). | Three-stream revenue model has three separate control mechanisms. Stream 2 (marketplace commission) is the only one where "the event happened but the rate is zero" is a recurring state worth recording. Writing $0 rows preserves complete `orderSource = 'marketplace'` GMV history so future rate changes have full historical data. The env var name must be unambiguous about which stream it controls — `PLATFORM_FEE_PERCENT` would incorrectly imply it also controls Stream 1 (tenant billing) or Stream 3 (advertising). | `PLATFORM_FEE_PERCENT` (ambiguous — reads like it controls all three streams); not writing $0 rows (loses GMV history when rate is turned up later); applying $0-row pattern to Stream 1 or 3 (incorrect — absence of rows in those streams correctly means no usage/no ad spend) |
+| DL-031 | Tenant-tier Dashboard screens resolve their organization from the channel context (new `bbbMyOrganization` Admin query) and must **not** render a client-side organization picker. Platform-tier screens that intentionally browse across tenants (Organizations, Servers, Live Meetings) keep `bbbOrganizations` + picker. | Channel = Tenant (INV-001 / DL-001): `BbbOrganization` is 1:1 with a Vendure `Channel`, and the backend keys every BBB read and write on `ctx.channelId` (`BbbChannelAccessService`). A client-side picker is therefore not a filter but a lie: it can display organization B while the server still evaluates channel A, so entitlements, capacity and ledger rows rendered under B are evaluated against A. The concrete failure is a stale picker value (persisted in `localStorage`) surviving a channel switch, which silently shows one tenant's screen while the server keeps answering for the other. Resolving the organization server-side from `ctx.channelId` removes the mismatch class entirely and shrinks the API surface the client can address. Vendure's native channel switcher is channel-token based and needs `ReadSettings \| ReadChannel`, which tenant admins deliberately lack — that is why a custom picker existed at all; it is retained only where cross-tenant browsing is legitimate (Platform tier). `bbbMyOrganization` returns `null` when the active channel has no organization, so screens render an explicit "not bound to an organization" state instead of an empty table. One declaration is recorded as a shrink-only deviation (ratcheted in `dashboard-query-state.spec.ts` section D): `MembershipsList` has no registered route in the BBB dashboard extension (unrouted legacy component). `LiveMeetingsList` is classified platform tier rather than a deviation — it is the platform "Live meetings" screen, whose job is showing what is running across every tenant at once, which cannot be derived from the caller's own channel (recorded 2026-10-01, BUG-055). `MeetingsList`'s creation-target picker has since been removed outright, so its former deviation entry was deleted rather than left stale (same date). | Keep the per-page picker and validate the picked organization against the channel after fetch (mismatch window remains, and every screen must re-implement the check); grant tenant admins `ReadSettings`/`ReadChannel` so the native channel switcher works (widens the tenant blast radius to platform settings); accept `organizationId` from the client and trust it (the server must still ignore it for tenant tier, making the argument decorative) |
 
 ---
 

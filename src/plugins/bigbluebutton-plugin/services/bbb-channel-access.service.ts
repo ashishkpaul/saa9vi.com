@@ -13,12 +13,15 @@ import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
-import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
 import { BbbOrganizationMember } from "../entities/bbb-organization-member.entity";
 import { BbbOrganizationMembership } from "../entities/bbb-organization-membership.entity";
 import { BbbProductAccess } from "../entities/bbb-product-access.entity";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
+import {
+  BbbAdminPermission,
+  BbbPlatformInfrastructurePermission,
+} from "../constants";
 
 /**
  * Centralized channel-ownership guard for all BBB entities.
@@ -71,6 +74,26 @@ export class BbbChannelAccessService {
    */
   private isSuperAdmin(ctx: RequestContext): boolean {
     return ctx.userHasPermissions([Permission.SuperAdmin]);
+  }
+
+  /**
+   * Platform-tier caller: SuperAdmin, or a holder of either platform BBB
+   * permission (ADR-033 — `BBBPlatformInfrastructure` is Portal/SuperAdmin-only
+   * and tenant roles never hold `BBBAdmin`; see BUG-029 /
+   * TENANT_ADMIN_ROLE_PERMISSIONS).
+   *
+   * This is the single definition of "platform" for list-read visibility
+   * (`meetingService.findAll`, `orgService.findAll`), the organization-update
+   * allowlist, and the organization-create channel guard — so the call sites
+   * cannot drift apart (Q5 / INV-029). `RequestContext.userHasPermissions` is
+   * OR (any-of) semantics.
+   */
+  isPlatformCaller(ctx: RequestContext): boolean {
+    return ctx.userHasPermissions([
+      BbbAdminPermission.Permission,
+      BbbPlatformInfrastructurePermission.Permission,
+      Permission.SuperAdmin,
+    ]);
   }
 
   /**
@@ -261,46 +284,6 @@ export class BbbChannelAccessService {
     }
 
     return entitlement;
-  }
-
-  /**
-   * Assert that the active user can access the given capacity grant.
-   * BbbCapacityGrant is organization-owned — resolve through organization.
-   */
-  async assertCapacityGrantAccess(
-    ctx: RequestContext,
-    grantId: ID,
-  ): Promise<BbbCapacityGrant | undefined> {
-    if (this.isSuperAdmin(ctx)) return undefined;
-
-    const channelId = ctx.channelId as string;
-    const grant = await this.connection
-      .getRepository(ctx, BbbCapacityGrant)
-      .findOne({
-        where: { id: grantId as string },
-        relations: ["organization"],
-      });
-
-    if (!grant) {
-      throw new ForbiddenError();
-    }
-
-    if (grant.organization) {
-      if (String(grant.organization.channelId) !== String(channelId)) {
-        throw new ForbiddenError();
-      }
-    } else {
-      const org = await this.connection
-        .getRepository(ctx, BbbOrganization)
-        .findOne({
-          where: { id: (grant as any).organizationId as string },
-        });
-      if (!org || String(org.channelId) !== String(channelId)) {
-        throw new ForbiddenError();
-      }
-    }
-
-    return grant;
   }
 
   /**

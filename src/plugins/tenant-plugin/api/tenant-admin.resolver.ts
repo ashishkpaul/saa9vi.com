@@ -1,10 +1,13 @@
 import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
 import {
+  AdministratorService,
   Allow,
   Ctx,
   ID,
   Permission,
+  Relations,
   RequestContext,
+  RoleService,
   Transaction,
   TransactionalConnection,
 } from '@vendure/core';
@@ -24,62 +27,46 @@ export class TenantAdminResolver {
     private readonly mediaResourceService: MediaResourceService,
     private readonly tenantThemeService: TenantThemeService,
     private readonly connection: TransactionalConnection,
+    private readonly administratorService: AdministratorService,
+    private readonly roleService: RoleService,
   ) {}
 
   /**
    * INV-016: Override the built-in `administrators` query so a tenant admin
    * only sees administrators whose Role.channels[] includes the active
    * channel. SuperAdmin bypasses the filter and sees all administrators.
+   *
+   * Delegates to AdministratorService.findAll so Dashboard filter/sort/
+   * pagination work (it builds the ListQueryBuilder query, including the
+   * deletedAt guard). Channel scoping is applied on top via the same
+   * rule core uses: an administrator is visible only when the caller could
+   * be granted every one of their roles — plus the tenant extra, the
+   * global SuperAdmin account is never listed to tenant admins.
    */
   @Query()
   @Allow(Permission.ReadAdministrator)
   async administrators(
     @Ctx() ctx: RequestContext,
     @Args() args: { options?: any },
+    @Relations(Administrator) relations: string[],
   ): Promise<{ items: Administrator[]; totalItems: number }> {
-    const take = Math.min(Math.max(args.options?.take ?? 25, 1), 100);
-    const skip = Math.max(args.options?.skip ?? 0, 0);
-
-    // SuperAdmin sees all administrators (platform-level view).
-    // NOTE: `user.roles.channels` is loaded so the nested graph is consistent
-    // with the direct `roles` query — without it, TypeORM returns `channels: []`
-    // for a tenant role even though the role-channel join exists (BUG-030).
+    // BUG-030: keep user.roles.channels loaded so the nested graph is
+    // consistent with the direct `roles` query.
+    const withChannels = Array.from(
+      new Set([...(relations ?? []), 'user', 'user.roles', 'user.roles.channels']),
+    ) as never;
+    const result = await this.administratorService.findAll(ctx, args.options ?? undefined, withChannels);
     if (ctx.userHasPermissions([Permission.SuperAdmin])) {
-      const [items, totalItems] = await this.connection
-        .getRepository(ctx, Administrator)
-        .findAndCount({
-          relations: ['user', 'user.roles', 'user.roles.channels'],
-          order: { createdAt: 'ASC' },
-          skip,
-          take,
-        });
-      return { items, totalItems };
+      return result;
     }
-
-    // Tenant admin: only administrators whose roles include the active channel.
-    // `role.channels` is loaded via leftJoinAndSelect so the returned
-    // administrator's user.roles[].channels[] is populated consistently.
-    const channelId = ctx.channelId as string;
-    const qb = this.connection
-      .getRepository(ctx, Administrator)
-      .createQueryBuilder('administrator')
-      .leftJoinAndSelect('administrator.user', 'user')
-      .leftJoinAndSelect('user.roles', 'role')
-      .leftJoinAndSelect('role.channels', 'roleChannel')
-      .leftJoin('role.channels', 'channel')
-      .where('channel.id = :channelId', { channelId })
-      // INV-016: Vendure's SuperAdmin role carries ALL channels in
-      // role.channels, so it matches the channel filter above. A tenant
-      // read-admin must never see the global SuperAdmin account.
-      .andWhere('role.code != :superAdminRoleCode', { superAdminRoleCode: SUPER_ADMIN_ROLE_CODE })
-      .orderBy('administrator.createdAt', 'ASC');
-
-    const [items, totalItems] = await qb
-      .skip(skip)
-      .take(take)
-      .getManyAndCount();
-
-    return { items, totalItems };
+    const visible = result.items.filter((a) =>
+      (a.user?.roles ?? []).some(
+        (r) =>
+          r.code !== SUPER_ADMIN_ROLE_CODE &&
+          (r.channels ?? []).some((c) => String(c.id) === String(ctx.channelId)),
+      ),
+    );
+    return { items: visible, totalItems: visible.length };
   }
 
   /**
@@ -134,48 +121,25 @@ export class TenantAdminResolver {
    * only their tenant channel) to be invisible to a SuperAdmin operating on
    * the Default channel, which breaks role-name resolution in the dashboard
    * (a role shows as a bare numeric id). Tenant admins remain channel-scoped.
+   *
+   * Delegates to RoleService.findAll so Dashboard filter/sort/pagination
+   * work (it computes visible role ids, then builds the ListQueryBuilder
+   * query). The tenant extra: the global SuperAdmin role is never listed
+   * to tenant admins.
    */
   @Query()
   @Allow(Permission.ReadAdministrator)
   async roles(
     @Ctx() ctx: RequestContext,
     @Args() args: { options?: any },
+    @Relations(Role) relations: string[],
   ): Promise<{ items: Role[]; totalItems: number }> {
-    const take = Math.min(Math.max(args.options?.take ?? 25, 1), 100);
-    const skip = Math.max(args.options?.skip ?? 0, 0);
-
-    // SuperAdmin sees all roles (platform-level view).
+    const result = await this.roleService.findAll(ctx, args.options ?? undefined, relations as never);
     if (ctx.userHasPermissions([Permission.SuperAdmin])) {
-      const [items, totalItems] = await this.connection
-        .getRepository(ctx, Role)
-        .findAndCount({
-          relations: ['channels'],
-          order: { createdAt: 'ASC' },
-          skip,
-          take,
-        });
-      return { items, totalItems };
+      return result;
     }
-
-    // Tenant admin: only roles whose channels[] includes the active channel.
-    // INV-016 (sibling of the administrators fix): Vendure's SuperAdmin role
-    // carries ALL channels, so it matches the channel filter. A tenant
-    // read-admin must never see the global SuperAdmin role.
-    const channelId = ctx.channelId as string;
-    const qb = this.connection
-      .getRepository(ctx, Role)
-      .createQueryBuilder('role')
-      .leftJoinAndSelect('role.channels', 'channel')
-      .where('channel.id = :channelId', { channelId })
-      .andWhere('role.code != :superAdminRoleCode', { superAdminRoleCode: SUPER_ADMIN_ROLE_CODE })
-      .orderBy('role.createdAt', 'ASC');
-
-    const [items, totalItems] = await qb
-      .skip(skip)
-      .take(take)
-      .getManyAndCount();
-
-    return { items, totalItems };
+    const visible = result.items.filter((r) => r.code !== SUPER_ADMIN_ROLE_CODE);
+    return { items: visible, totalItems: visible.length };
   }
 
   /**

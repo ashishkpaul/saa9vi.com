@@ -1,4 +1,4 @@
-import { Inject, Injectable, forwardRef } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import {
   ID,
   Logger,
@@ -8,15 +8,23 @@ import {
 import { BbbRoom, RoomState } from "../entities/bbb-room.entity";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
+import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
+import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
+import { In } from "typeorm";
+import {
+  isEntitlementValid,
+  isEnrollmentValid,
+} from "./room-access.policy";
 import { MEETING_STATE } from "../constants";
 import { BBB_PLUGIN_OPTIONS } from "../constants";
 import { BbbRoomLockService } from "./bbb-room-lock.service";
 import { BbbPlatformCapacityPolicyService } from "./bbb-platform-capacity-policy.service";
 import { BbbServerService } from "./bbb-server.service";
-import { BbbApiService } from "./bbb-api.service";
+import { BbbApiService, BbbNotFoundError } from "./bbb-api.service";
 import { BbbMetricsService } from "./bbb-metrics.service";
 import { BbbChannelAccessService } from "./bbb-channel-access.service";
-import { BbbMeetingService } from "./bbb-meeting.service";
+import { MeetingLifecycleService } from "./bbb-meeting-lifecycle.service";
+import { BbbEncryptionService } from "./bbb-encryption.service";
 import { RoomActivatedEvent } from "../events/bbb-events";
 import { EventBus } from "@vendure/core";
 import type { BigBlueButtonPluginOptions } from "../types";
@@ -35,6 +43,14 @@ export interface CreateRoomInput {
 
 export type JoinRoomStatus = "active" | "provisioning" | "failed";
 
+/**
+ * A room as the card/detail READ surface returns it (Phase 5.4): the entity plus
+ * the computed, never-persisted `studentCount`. Producer surfaces that cannot
+ * batch a count (mutations, nested relations) leave the field null in the SDL
+ * instead of claiming zero.
+ */
+export type BbbRoomCard = BbbRoom & { studentCount: number };
+
 export interface RequestProvisioningResult {
   status: JoinRoomStatus;
   /** Present only when status === 'active' */
@@ -52,8 +68,8 @@ export class BbbRoomService {
     private readonly eventBus: EventBus,
     private readonly channelAccess: BbbChannelAccessService,
     private readonly capacityPolicyService: BbbPlatformCapacityPolicyService,
-    @Inject(forwardRef(() => BbbMeetingService))
-    private readonly meetingService: BbbMeetingService,
+    private readonly lifecycleService: MeetingLifecycleService,
+    private readonly encryptionService: BbbEncryptionService,
     @Inject(BBB_PLUGIN_OPTIONS)
     private readonly options: BigBlueButtonPluginOptions,
   ) {}
@@ -169,6 +185,97 @@ export class BbbRoomService {
     });
   }
 
+  // ─── Room card reads (Phase 5.4) ───────────────────────────────────────────
+  //
+  // The tenant Rooms screen and the room detail read through these two methods
+  // so the card stats arrive with the page: two extra queries for the whole
+  // list, never one per room. `findAll`/`findById` stay untouched — they serve
+  // the provisioning hot paths (joinRoom, the worker) where a count would be
+  // pure overhead.
+
+  /**
+   * Room list + student counts, for `bbbRooms`.
+   */
+  async findAllCards(
+    ctx: RequestContext,
+    orgId: ID,
+    options?: { skip?: number; take?: number },
+  ): Promise<{ items: BbbRoomCard[]; totalItems: number }> {
+    const page = await this.findAll(ctx, orgId, options);
+    return {
+      items: await this.withStudentCounts(ctx, page.items),
+      totalItems: page.totalItems,
+    };
+  }
+
+  /**
+   * Single room + student count, for `bbbRoom`.
+   */
+  async findCard(ctx: RequestContext, id: ID): Promise<BbbRoomCard | null> {
+    const room = await this.findById(ctx, id);
+    if (!room) return null;
+    const [card] = await this.withStudentCounts(ctx, [room]);
+    return card;
+  }
+
+  /**
+   * Phase 5.4 — attach `studentCount` to a page of rooms with **two** queries.
+   *
+   * `studentCount` is the number of DISTINCT customers holding EITHER an active
+   * enrollment for the room OR a valid `bbb_room` entitlement for it, so a
+   * person who has both is counted once (a card counts people, not rows). The
+   * validity windows come from the shared INV-027 helpers
+   * (`isEnrollmentValid` / `isEntitlementValid`) rather than being re-invented
+   * here — the count must agree with what the room would actually admit.
+   *
+   * `trainerCount` is deliberately NOT computed: D5 keeps trainers org-wide (no
+   * trainer-room ACL), so the number is an organization-level fact the People
+   * tab already owns; the card shows it from there.
+   */
+  private async withStudentCounts(
+    ctx: RequestContext,
+    rooms: BbbRoom[],
+  ): Promise<BbbRoomCard[]> {
+    if (rooms.length === 0) return [];
+    const roomIds = rooms.map((room) => String(room.id));
+    const now = new Date();
+
+    const [enrollments, entitlements] = await Promise.all([
+      this.connection.getRepository(ctx, BbbEnrollment).find({
+        where: { roomId: In(roomIds), active: true },
+      }),
+      this.connection.getRepository(ctx, BbbEntitlement).find({
+        where: { type: "bbb_room", resourceId: In(roomIds) },
+      }),
+    ]);
+
+    const studentsByRoom = new Map<string, Set<string>>();
+    const addStudent = (roomId: string, customerId: string) => {
+      let set = studentsByRoom.get(roomId);
+      if (!set) {
+        set = new Set<string>();
+        studentsByRoom.set(roomId, set);
+      }
+      set.add(customerId);
+    };
+    for (const enrollment of enrollments) {
+      if (isEnrollmentValid(enrollment, now)) {
+        addStudent(String(enrollment.roomId), String(enrollment.customerId));
+      }
+    }
+    for (const entitlement of entitlements) {
+      if (isEntitlementValid(entitlement, now)) {
+        addStudent(String(entitlement.resourceId), String(entitlement.customerId));
+      }
+    }
+
+    return rooms.map((room) =>
+      Object.assign(room, {
+        studentCount: studentsByRoom.get(String(room.id))?.size ?? 0,
+      }),
+    );
+  }
+
   private lifecyclePrefix(
     roomId: ID | string,
     meetingId?: string | null,
@@ -199,6 +306,14 @@ export class BbbRoomService {
     return result;
   }
 
+  /**
+   * W1: existence check via `getMeetingInfo` — success (even with zero
+   * participants) means the BBB meeting is still valid. Only a CONFIRMED
+   * `BbbNotFoundError` returns false. `Unavailable`/`Rejected` (outage, bad
+   * checksum) returns TRUE — we cannot prove it is gone, and returning false
+   * here completes the DB meeting while the BBB meeting is still live
+   * (split class, metering stopped for the old one).
+   */
   private async validateRuntimeMeeting(
     ctx: RequestContext,
     room: BbbRoom,
@@ -232,14 +347,45 @@ export class BbbRoomService {
       return false;
     }
 
-    const stillRunning = await this.bbbApiService.isMeetingRunning(
-      server,
-      meeting.bbbMeetingId,
-    );
+    // Load the moderator password — BBB requires it on getMeetingInfo. If
+    // the meeting row lacks it, fall back to a password-less probe.
+    let moderatorPW: string | undefined;
+    try {
+      const withSecrets = await this.connection
+        .getRepository(ctx, BbbMeeting)
+        .createQueryBuilder("meeting")
+        .addSelect("meeting.encryptedModeratorPassword")
+        .where("meeting.id = :id", { id: meeting.id as string })
+        .getOne();
+      const enc = (withSecrets as BbbMeeting | null)?.encryptedModeratorPassword;
+      if (enc) {
+        try {
+          moderatorPW = this.encryptionService.decrypt(enc);
+        } catch {
+          moderatorPW = undefined;
+        }
+      }
+    } catch {
+      moderatorPW = undefined;
+    }
 
-    if (!stillRunning) {
-      this.metrics.recordRuntimeValidationFailed();
-      return false;
+    try {
+      await this.bbbApiService.getMeetingInfo(
+        server,
+        meeting.bbbMeetingId,
+        moderatorPW,
+      );
+    } catch (err) {
+      if (err instanceof BbbNotFoundError) {
+        this.metrics.recordRuntimeValidationFailed();
+        return false;
+      }
+      // Outage / config rejection — assume still valid.
+      Logger.warn(
+        `${prefix} runtime validation ambiguous (${(err as Error).message}) — treating as still valid`,
+        loggerCtx,
+      );
+      return true;
     }
 
     await this.connection
@@ -491,7 +637,7 @@ export class BbbRoomService {
       // Wrapping it in another transaction would create a nested transaction
       // anti-pattern that TypeORM handles poorly (the inner transaction gets
       // a separate connection from the pool, breaking isolation).
-      await this.meetingService.completeMeetingLifecycle(
+      await this.lifecycleService.completeMeetingLifecycle(
         ctx,
         existingMeeting.id,
         {

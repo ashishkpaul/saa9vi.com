@@ -28,7 +28,16 @@ export class RazorpayShopResolver {
   ): Promise<CheckoutOrderHandle> {
     let order: Order | undefined | null;
 
+    // Commit 2 correction: login is REQUIRED. Guest checkout is rejected —
+    // ownership is proven by activeUserId only (session-order matching would
+    // let any anonymous caller with an orderId attempt checkout).
+    if (!ctx.activeUserId) {
+      throw new UserInputError('Login required to start Razorpay checkout');
+    }
+
     if (orderId) {
+      // Commit 2: scope the lookup to the active channel — a caller must not
+      // be able to mint a Razorpay order against another tenant's order.
       order = await this.connection.getRepository(ctx, Order).findOne({
         where: { id: orderId },
         relations: { channels: true, customer: { user: true } },
@@ -36,18 +45,20 @@ export class RazorpayShopResolver {
       if (!order) {
         throw new UserInputError('Order not found');
       }
-      // Ensure caller is the owner of this order
+      const inChannel = (order.channels ?? []).some(
+        (c) => String(c.id) === String(ctx.channelId),
+      );
+      if (!inChannel) {
+        throw new UserInputError('Order not found');
+      }
+      // Ownership: the order's customer user must be the caller.
       if (
-        ctx.activeUserId &&
         order.customer?.user?.id &&
         String(order.customer.user.id) !== String(ctx.activeUserId)
       ) {
         throw new UserInputError('Not authorized for this order');
       }
     } else {
-      if (!ctx.activeUserId) {
-        throw new UserInputError('No active user or orderId provided');
-      }
       order = await this.orderService.getActiveOrderForUser(ctx, ctx.activeUserId);
       if (!order) {
         throw new UserInputError('No active order found');
@@ -56,6 +67,12 @@ export class RazorpayShopResolver {
 
     if (order.totalWithTax <= 0) {
       throw new UserInputError('Order total must be greater than zero');
+    }
+
+    // Commit 2: only ArrangingPayment orders may enter checkout. Anything
+    // else (AddingItems, Settled, Cancelled…) is a stale or replayed call.
+    if (order.state !== 'ArrangingPayment') {
+      throw new UserInputError(`Order must be in ArrangingPayment state (got ${order.state})`);
     }
 
     return this.checkoutService.createCheckoutOrder(ctx, order);

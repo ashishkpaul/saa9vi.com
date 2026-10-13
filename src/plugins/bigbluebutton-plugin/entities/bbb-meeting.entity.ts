@@ -80,9 +80,16 @@ export class BbbMeeting extends VendureEntity {
    * that was active WHEN the meeting was provisioned, not when it ended.
    * This eliminates the race condition of org-level grant changes during
    * a meeting's lifetime.
+   *
+   * `null` for metered orgs (ADR-047 Phase 2B): metered meetings carry no grant
+   * linkage at all — they are billed from BbbMeteredUsage instead.
+   *
+   * `type` is explicit because TypeORM cannot infer a Postgres type from a
+   * union TS type (`string | null` reflects as `Object`) — same reason
+   * `attendeeJoinUrl` and `BbbMeteredUsage.roomId` declare it.
    */
-  @Column({ nullable: true })
-  grantId: string;
+  @Column({ type: "varchar", nullable: true })
+  grantId: string | null;
 
   // ─── Deprecated: kept for backward compatibility ────────────────────────
 
@@ -148,6 +155,27 @@ export class BbbMeeting extends VendureEntity {
   /** Number of reconciliation attempts (for detecting stuck meetings). */
   @Column({ default: 0 })
   reconciliationAttemptCount: number;
+
+  // ─── Audit trail (W5 follow-up, approved 2026-10-05) ────────────────────────
+  // New rows only — NO backfill: rows written before the migration keep null.
+
+  /**
+   * User whose request created / launched this meeting (ctx.activeUserId at
+   * insert). null = system origin: queue-driven provisioning, auto room start,
+   * or webhook-created rows. Stamped once at insert; the queue flipping the
+   * state to Active does not overwrite it.
+   */
+  @Column({ type: "varchar", nullable: true })
+  startedByUserId: string | null;
+
+  /**
+   * User whose request performed the completion that ended this meeting
+   * (ctx.activeUserId inside completeMeetingLifecycle). null = system
+   * completion (webhook / reconciliation). Stamped once, on the first
+   * transition to Completed — later completions are idempotent no-ops.
+   */
+  @Column({ type: "varchar", nullable: true })
+  endedByUserId: string | null;
 
   // ─── BBB Plugin Manifests ───────────────────────────────────────────────
 

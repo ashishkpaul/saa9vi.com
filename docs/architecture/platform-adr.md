@@ -935,3 +935,205 @@ ephemeral `authorizationUrl` (for provider-wired upgrades needing e-mandate/UPI 
 
 **Implementation note:** `SubscriptionService` exposes the invocation-scoped provider authorization URL through a typed operation result. The Shop resolver never reads persisted `subscription.providerShortUrl` to populate `authorizationUrl`.
 **Migrations required:** none.
+
+---
+
+## ADR-047: Attendee-Hour (Metered) Billing Is a Second Append-Only Billing Fact
+
+**Status:** Accepted (2026-09-30)  
+**Full record:** `docs/architecture/adr-047-bbb-attendee-hour-billing.md`
+
+**Core decision:** BBB billing gains a second, mutually exclusive mode. `BbbOrganization.billingMode`
+(`'grant' | 'metered'`, DDL default `'grant'`) selects between the shipped pre-purchased-grant model
+and a **postpaid, metered** model charged as `rate × billable learner-hours`, where
+`billable learners = max(0, participantCount − moderatorCount)` sampled once per minute.
+The grant system is dormant — not removed — for `metered` orgs.
+
+**Key decisions:**
+- **New fact table, not a widened one** — `BbbMeteredUsage`, one row per completed metered meeting,
+  `UNIQUE(meetingId)`, `INSERT … ON CONFLICT DO NOTHING RETURNING` (INV-002). `BbbUsageLedger.grant`
+  stays non-nullable: making it nullable would defeat `ON CONFLICT` through Postgres NULL-distinctness.
+- **No money column** — exact `learnerMinutes` + snapshotted `ratePaisePerHour` are stored; money is
+  rounded **once per month** by one pure helper (`metered-billing.policy.ts#computeMonthChargePaise`)
+  shared by summaries and the spend-limit guard, so the rounding rule cannot drift.
+- **A zero-charge row is still written** (no learners / under fair-billing threshold) — provable
+  billing and a terminating recovery scan, deliberately unlike the grant path's re-scanned gap.
+- **Sampling, not webhooks** — a per-minute task samples `getMeetingInfo` into prunable
+  `BbbMeetingSample` (`UNIQUE(meetingId, bucketMinute)`), bounded concurrency, per-meeting error
+  isolation, sample-gap logging (under-billing is customer-favourable and made *visible*).
+- **Provisioning gate skipped for metered orgs** — no grant selection, `grantId = null`
+  (`MeetingProvisionedEvent.grantId` widens to `string | null`); capacity reservation and server
+  selection unchanged; failure still lands terminal `FAILED` + `MeetingFailedEvent`.
+- **Postpaid guards are platform-only** — `billingMode`, `ratePaisePerLearnerHour`,
+  `monthlySpendLimitPaise` and `suspended` are settable only through the new
+  `BBBPlatformInfrastructure`-gated `setBbbOrganizationBilling`, never through
+  `UpdateBbbOrganizationInput` (BUG-047 — a tenant must not be able to clear its own suspension).
+- **Tenant billing reads take no organization argument** — org always derived from `ctx.channelId`
+  (extends D3/INV-001 to all tenant-tier reads; BUG-046 fixes the one existing violation).
+- **`periodMonth char(7)` snapshotted at write time** — no timezone math in queries.
+- **`BbbScheduledSession.roomId` nullable** — sessions name their room; existing rows stay NULL.
+
+**Key additions:** `services/metered-billing.policy.ts` (pure), `services/bbb-metering.service.ts`,
+`jobs/bbb-metering.task.ts`, entities `BbbMeetingSample` / `BbbMeteredUsage`,
+`MeteredUsageRecordedEvent`, `bbbBillingSummary` / `bbbMeteredMeetings` /
+`setBbbOrganizationBilling`, `MeteredBillingChecker`. INV-028 + INV-029 added to
+`invariants.md`; SEC-008 added to `security.md`.
+
+**Migrations required:** yes, additive only, via `npx vendure migrate` — three
+`bbb_organization` columns, `bbb_meeting_sample`, `bbb_metered_usage`,
+`bbb_scheduled_session.roomId`. No drops, no re-types, grant tables untouched.
+
+**Resolved 2026-09-30 (plan §7 answered — not assumed by this ADR):** `createBbbCapacityGrant`
+and `deleteBbbOrganization` are retargeted to `BBBPlatformInfrastructure`, and the missing channel
+assert on `bbbCapacityGrants` (BUG-049) is fixed with `assertOrganizationAccess`; the
+`Capacity Grants` and `Trial Registrations` nav gates became platform-only in the same change.
+H1 (the four billing controls on `updateBbbOrganization`, including `suspended`) remains Phase 4.
+
+**Plan of record:** `docs/implementation/bbb-attendee-hour-billing-plan.md` (Phases 0–6).
+
+
+---
+
+## ADR-048: Mutation Ownership Assertion Is Non-Optional for All BBB Mutations
+
+**Status:** Accepted (2026-10-03)
+
+**Context:** ADR-032 established `BbbChannelAccessService` and wired the guard into every read
+surface (six admin `@Query` handlers — `bbbOrganizationMembers`, `bbbOrganizationMember`,
+`bbbOrgMemberships`, `bbbEnrollmentsByRoom`, `bbbTrialRegistrationsBySession`,
+`bbbCapacityGrants`). However, the corresponding mutation surfaces (`addBbbMember`,
+`updateBbbMember`, `removeBbbMember`, `createBbbOrgMembership`, `updateBbbOrgMembership`,
+`removeBbbOrgMembership`, `createBbbProductAccess`, `deleteBbbProductAccess`,
+`createBbbEnrollment`, `deactivateBbbEnrollment`, `createBbbEntitlement`, `deleteBbbEntitlement`,
+`createBbbCapacityGrant`, `deleteBbbRoom`, `createBbbMeeting`, `updateBbbRoom`) delegated to
+service methods without first asserting channel ownership in the resolver. A tenant admin who
+knew a foreign-channel resource ID could therefore mutate that resource. This is an
+authorization gap, not a defense-in-depth advisory.
+
+**Decision:** Every BBB `@Mutation` resolver method that accepts a resource ID as a caller-supplied
+GraphQL argument, or that creates a resource owned by a caller-supplied organization, **must** call
+the appropriate `BbbChannelAccessService.assert*Access` (or `assertOrganizationAccess`) guard
+**before** delegating to the service. The guard must come first — before any write is attempted —
+so that the authorization failure is a clean `ForbiddenError` rather than a partially-written row.
+
+For `updateBbbRoom`, the channel assert moves **above** the `maxParticipants` clamp and the
+`getRepository.update` call, eliminating the read-then-write window where a foreign-channel room
+could be loaded and mutated.
+
+For `createBbbMeeting`, the guard runs against the input `organizationId` so a tenant cannot mint
+a meeting into a foreign channel's organization.
+
+For `createBbbEntitlement`, the `channelId` is stamped from `ctx.channelId` at write time — a
+channel check is already implicit. The guard is documented as redundant-but-present for auditability.
+
+For `deleteBbbEntitlement`, `assertEntitlementAccess` is called before the `delete` call.
+
+For `deleteBbbRoom`, `assertRoomAccess` is called before the `delete` call.
+
+**Shrink-only ratchet (invariant checker):**
+
+Implemented as `assertionCoverage()` in `src/platform/invariants/adr.checker.ts`
+(registered via `AdrChecker.check()`; `AdrChecker` is already wired into
+`src/platform/invariants/cli.ts`). Two clauses:
+
+```
+Clause 1 (no dead guards):
+  ∀ assert*Access function declared in bbb-channel-access.service.ts
+    ⇒ ∃ ≥1 production call site (comment-stripped `name(` occurrence) in
+      src/**, excluding tests, the defining service, and src/platform/**
+      (invariant checkers mention the names in regexes — they are not callers).
+
+Clause 2 (no unasserted tenant mutation):
+  ∀ @Mutation in bbb-admin.resolver.ts whose @Allow does NOT include
+    BbbPlatformInfrastructurePermission.Permission
+    and whose body references a caller-supplied resource id
+    (@Args id/roomId/sessionId/organizationId/registrationId/templateId/
+     failedMeetingId/meetingId, or input.organizationId/roomId/resourceId/
+     channelId/sessionId)
+    ⇒ body contains `channelAccess.assert…(`, OR the method is a named,
+      verified entry in SERVICE_GUARD_ALLOWLIST.
+```
+
+**Allowlist (shrink-only; each entry verified on every run):** eight mutations
+whose ownership guard is load-bearing in the delegated service and cannot be
+asserted in the resolver *before* the delegation without loading the target row
+first — `createBbbScheduledSession`, `updateBbbScheduledSession`,
+`cancelBbbScheduledSession`, `publishBbbScheduledSession`,
+`createBbbSessionTemplate`, `deleteBbbSessionTemplate`,
+`createSessionsFromTemplate` (all guarded in `bbb-scheduled-session.service.ts`,
+e2e-covered by S5/S7) and `createBbbOrganization` (BUG-050's channel-targeting
+guard in `BbbOrganizationService.create`). The checker re-reads the mapped
+service method on every run and fails if the guard pattern is gone, fails on
+stale allowlist entries no flagged mutation uses, and fails if the list grows
+past `ALLOWLIST_MAX = 8` — so the list can only shrink, and a service-guard
+deletion turns the run red immediately.
+
+**Exemptions (documented, not silent):** platform-gated mutations
+(`@Allow(…, BBBPlatformInfrastructurePermission.Permission)` — servers,
+platform capacity policies, `setBbbOrganizationBilling`) are acts of the
+platform tier; their tenancy boundary is the permission itself (ADR-033), and
+the two channel-scoped platform mutations (`createBbbCapacityGrant`,
+`deleteBbbOrganization`) still carry explicit asserts as defence in depth.
+
+**Amendments recorded with the implementation (2026-10-03):**
+
+1. Clause 1 as originally drafted ("call site in `bbb-admin.resolver.ts` or
+   `bbb-shop.resolver.ts`") was too narrow: `assertSessionAccess` and friends
+   are deliberately called from *services* (e.g. `bbb-scheduled-session.service.ts`),
+   and the trial-registration guard is service-level by design. The clause now
+   reads "≥1 production call site anywhere outside tests" — the property that
+   matters is *a dead guard cannot exist*, not *where the caller lives*.
+2. `assertCapacityGrantAccess` was **deleted**: no query or mutation accepts a
+   grant id (`bbbCapacityGrants` reads by `organizationId` and asserts
+   `assertOrganizationAccess`; minting is platform-gated), so the guard had
+   zero call sites and zero surfaces to protect. A guard for a surface that
+   does not exist is exactly the false-coverage smell clause 1 exists to catch.
+   If a by-id grant surface is ever added, the guard (and its call site) must
+   return together — clause 1 fails the moment a new `assert*Access` appears
+   uncalled.
+3. `assertTrialRegistrationAccess` gained its call sites in this change:
+   `updateBbbTrialRegistrationStatus` and `convertTrialToEnrollment` assert in
+   the resolver before delegating (the service-level
+   `TrialRegistrationService.assertRegistrationAccess` remains as defence in
+   depth).
+4. Nine bare-id tenant mutations gained resolver-body asserts so clause 2 holds
+   without growing the allowlist: `retryBbbMeeting`, `updateBbbMeeting`,
+   `deleteBbbMeeting`, `endBbbMeeting`, `resetBbbRoom`, `bbbStartRoom`,
+   `updateBbbOrganization`, `updateBbbTrialRegistrationStatus`,
+   `convertTrialToEnrollment` (SOURCE registration only — see below). Each is
+   a redundant second gate — the service it delegates to already asserts —
+   which is the intent: the resolver boundary is where a future refactor
+   cannot silently drop the check without this invariant noticing. A tenth
+   surface, the `bbbProductAccessByRoom` read, gained `assertRoomAccess` for
+   INV-029 read parity (clause 2 covers `@Mutation` only, but the audit that
+   built the clause found it unguarded).
+5. `convertTrialToEnrollment` deliberately asserts ONLY the source
+   registration in the resolver. Asserting the target room up-front would
+   convert the service's EntityNotFoundError contract ("another tenant's room
+   OR no room at all → not a room of this organization", S5-pinned) into
+   ForbiddenError and leak room existence across tenants. The target-room org
+   check stays load-bearing in `TrialRegistrationService.convertToEnrollment`
+   (verified by the S5 D5-mirror negative test, not by this ratchet).
+
+This ratchet can only shrink (number of asserted mutations can only grow or stay equal on each
+commit; the allowlist can only shrink or stay equal). Removing an assert without replacing it with a stronger mechanism fails the invariant.
+The checker is run as part of the standard gate sequence before push (`npm run verify:invariants`).
+
+**Consequences:**
+
+- All 16 mutation gaps identified in the Phase 4 task list are closed.
+- `updateBbbRoom` is the only mutation where the assert **must** precede an existing read — the
+  `room` object loaded for `maxParticipants` clamping was the source of the assert order risk.
+- The `adr.checker.ts` ratchet means the coverage cannot regress silently on future mutations.
+- No schema change, no migration.
+- See INV-029 in `docs/architecture/invariants.md`.
+
+**Alternatives Rejected:**
+
+- Relying on service-layer guards alone (services are not consistently gated — they were designed
+  for internal worker/webhook use too, where the context is not a tenant admin).
+- Adding a NestJS guard decorator (would require a custom decorator factory and still not cover
+  worker paths that bypass the resolver, adding complexity without coverage).
+- Trusting `@Allow` permission checks as the ownership gate (permission checks verify role, not
+  tenancy; a tenant admin with `BBBManageRooms` can hold the permission while operating on a
+  foreign channel's room).

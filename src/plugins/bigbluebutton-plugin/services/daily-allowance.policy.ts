@@ -21,6 +21,7 @@
  */
 
 import { GrantSourceType } from "./grant-selection.policy";
+import { IST_OFFSET_MS } from "../../../platform/timezone";
 
 /**
  * The frozen Free Basic daily runway — 60 minutes per server day
@@ -79,19 +80,24 @@ export interface DailyAllowanceWindow {
 }
 
 /**
- * Local midnight for the server's own clock.
+ * IST midnight for the platform clock.
  *
- * D-7 fixes the timezone to the **Saa9vi server clock**, reusing ADR-042's rule
- * for the marketplace grace deadline ("evaluated using the Saa9vi server clock
- * only"). No per-tenant timezone is consulted, so the boundary a tenant sees is
- * the boundary the platform enforces — and the same clock that computes the
- * window evaluates `validFrom <= now AND validUntil >= now` in the read model
- * and in the provisioning gate.
+ * D-7 fixes the timezone to **IST (Asia/Kolkata)**, sharing `IST_OFFSET_MS`
+ * with the billing month (`monthOf`) so the day a grant counts against and
+ * the month a meeting books to can never disagree. No per-tenant timezone is
+ * consulted, so the boundary a tenant sees is the boundary the platform
+ * enforces — and the same clock that computes the window evaluates
+ * `validFrom <= now AND validUntil >= now` in the read model and in the
+ * provisioning gate.
+ *
+ * IST has no DST, so the fixed +5:30 offset is exact. New rows only: grant
+ * `validFrom` is written at grant time and existing rows are never rewritten.
  */
 export function startOfServerDay(at: Date): Date {
-  const start = new Date(at.getTime());
-  start.setHours(0, 0, 0, 0);
-  return start;
+  // Shift into IST wall time, truncate to the wall-clock date, shift back.
+  const shifted = new Date(at.getTime() + IST_OFFSET_MS);
+  shifted.setUTCHours(0, 0, 0, 0);
+  return new Date(shifted.getTime() - IST_OFFSET_MS);
 }
 
 /**

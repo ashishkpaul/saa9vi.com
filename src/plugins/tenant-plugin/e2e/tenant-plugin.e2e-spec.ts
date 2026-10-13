@@ -47,6 +47,7 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../../test-utils/free-port';
 import { SchemaPostgresInitializer } from './schema-postgres-initializer';
 import { verifyTenantAdminViaApi } from './fixtures/verify-tenant-admin';
 import {
@@ -500,7 +501,8 @@ function stripIdPrefix(value: string | null | undefined): string {
 describe('TenantPlugin', () => {
   const { server, adminClient, shopClient } = createTestEnvironment(
     mergeConfig(testConfig, {
-      apiOptions: { port: 3070 },
+      // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
+      apiOptions: { port: 0 },
       authOptions: {
         // BUG-033 root-cause fix: registerNewTenant creates admins with
         // user.verified=false (tenant-registration.service.ts), and testConfig
@@ -562,7 +564,7 @@ describe('TenantPlugin', () => {
   // ── Bootstrap ────────────────────────────────────────────────────────────
 
   beforeAll(async () => {
-    await server.init({
+    await startOnFreePort({ server, adminClient, shopClient }, {
       initialData: E2E_INITIAL_DATA,
       productsCsvPath: path.join(__dirname, 'fixtures/e2e-products.csv'),
       customerCount: 2,

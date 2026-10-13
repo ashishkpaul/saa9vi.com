@@ -1,10 +1,90 @@
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable, Optional } from "@nestjs/common";
 import { Logger } from "@vendure/core";
 import * as crypto from "crypto";
 import { trace, SpanStatusCode } from "@opentelemetry/api";
 import { parseStringPromise } from "xml2js";
 import { BbbEncryptionService } from "./bbb-encryption.service";
 import { BbbServer } from "../entities/bbb-server.entity";
+import { normalizeBbbApiUrl } from "../shared/bbb-api-url";
+import { BBB_PLUGIN_OPTIONS } from "../constants";
+import type { BigBlueButtonPluginOptions } from "../types";
+
+/**
+ * Typed BBB API errors (W1).
+ *
+ * `getMeetingInfo()` used to return `null` for EVERY failure (timeout, DNS,
+ * HTTP 5xx, bad checksum, real notFound) and reconciliation treated `null` as
+ * "meeting destroyed" — a transient BBB outage during the reconciliation pass
+ * therefore terminated live meetings AND forfeited their billing. These types
+ * let callers distinguish "proven gone" from "cannot prove it is gone".
+ */
+export class BbbNotFoundError extends Error {
+  readonly messageKey = "notFound";
+  constructor(meetingID: string) {
+    super(`BBB meeting not found: ${meetingID}`);
+    this.name = "BbbNotFoundError";
+  }
+}
+
+/** Transient transport failure (timeout, DNS, HTTP 5xx, malformed XML). */
+export class BbbUnavailableError extends Error {
+  readonly messageKey = "unavailable";
+  constructor(
+    method: string,
+    readonly reason: string,
+  ) {
+    super(`BBB ${method} unavailable: ${reason}`);
+    this.name = "BbbUnavailableError";
+  }
+}
+
+/**
+ * BBB explicitly rejected the call (checksum/auth/other FAILED) — a
+ * configuration problem. Log and flag the server unhealthy, never treat as
+ * "gone".
+ */
+export class BbbRejectedError extends Error {
+  constructor(
+    method: string,
+    readonly messageKey: string,
+    readonly detail: string,
+  ) {
+    super(`BBB ${method} rejected [${messageKey}]: ${detail}`);
+    this.name = "BbbRejectedError";
+  }
+}
+
+/**
+ * Server record loaded without its secret (`encryptedApiSecret` is
+ * `select:false`) or secret undecryptable (wrong `BBB_ENCRYPTION_KEY`).
+ * A per-meeting config error — callers in per-meeting loops MUST catch it and
+ * skip that meeting, never stale/complete it and never kill the pass.
+ */
+export class BbbMisconfiguredError extends Error {
+  readonly messageKey = "misconfigured";
+  constructor(reason: string) {
+    super(`BBB misconfigured: ${reason}`);
+    this.name = "BbbMisconfiguredError";
+  }
+}
+
+/**
+ * Build a sanitized `BbbRejectedError` from a BBB FAILED response — carries
+ * only method + messageKey + truncated message, never the signed URL.
+ */
+export function bbbRejected(
+  method: string,
+  messageKey: string | undefined,
+  message: string | undefined,
+): BbbRejectedError | BbbNotFoundError {
+  const key = messageKey ?? "unknown";
+  const detail = String(message ?? "request rejected").substring(0, 200);
+  if (key === "notFound") {
+    // Meeting id is passed via message elsewhere; keep detail short.
+    return new BbbNotFoundError(detail);
+  }
+  return new BbbRejectedError(method, key, detail);
+}
 
 const loggerCtx = "BbbApiService";
 
@@ -56,25 +136,56 @@ export interface BbbRecording {
 }
 
 /**
+ * One entry of the server-side census (`getMeetings`) — the report-only
+ * orphan scanner's read-only view of what BBB currently knows about.
+ * Passwords are deliberately NOT part of this shape: the raw XML carries
+ * attendeePW/moderatorPW, and the scanner only ever logs meetingID /
+ * running / counts (W2 extends to data we choose not to keep).
+ */
+export interface BbbRemoteMeeting {
+  meetingID: string;
+  internalMeetingID: string;
+  name: string;
+  running: boolean;
+  participantCount: number;
+  moderatorCount: number;
+  hasBeenForciblyEnded: boolean;
+}
+
+/**
  * Thin adapter for the BigBlueButton API.
  *
- * Checksum contract:
- *   checksum = SHA256(methodName + queryString + apiSecret)
+ * Checksum contract (W7):
+ *   checksum = hex( <algorithm>(methodName + queryString + apiSecret) )
  *
- * Algorithm note: this adapter signs with **SHA-256**, so the connected BBB
- * server must have SHA-256 enabled in its accepted checksum algorithms — treat
- * that as a deployment requirement of this integration, not as a property of
- * BBB in general. BBB's accepted algorithm set is a server-side configuration
- * (its published API documentation still uses SHA-1 in the canonical example),
- * so do not read "BBB uses SHA-256" into this code: verify against the actually
- * deployed BBB version before declaring provider compatibility complete — see
- * `docs/implementation/production-readiness.md` §11.
+ * Algorithm note: the algorithm is the `checksumAlgorithm` plugin option —
+ * default **SHA-256**, `sha1` for legacy servers. BBB's accepted set is a
+ * server-side configuration advertised via `supportedChecksumAlgorithms`
+ * (W0: `bbb-conf --version` on the deployed server); BBB's published API
+ * documentation still uses SHA-1 in the canonical example, so do not read
+ * "BBB uses SHA-256" into this code: set the option from the DEPLOYED
+ * server's answer before declaring provider compatibility complete — see
+ * `docs/implementation/production-readiness.md` §11. Unknown values fall
+ * back to SHA-256 (a signature BBB can never verify is never a surprise).
  *
  * Reference: https://docs.bigbluebutton.org/development/api
  */
 @Injectable()
 export class BbbApiService {
-  constructor(private readonly encryptionService: BbbEncryptionService) {}
+  private readonly checksumAlgorithm: "sha1" | "sha256";
+
+  constructor(
+    private readonly encryptionService: BbbEncryptionService,
+    @Optional()
+    @Inject(BBB_PLUGIN_OPTIONS)
+    options?: BigBlueButtonPluginOptions,
+  ) {
+    // W7: allow-list only — anything unknown (a typo'd config value) falls
+    // back to the frozen default rather than producing a signature BBB can
+    // never verify.
+    this.checksumAlgorithm =
+      options?.checksumAlgorithm === "sha1" ? "sha1" : "sha256";
+  }
 
   // ─── Checksum ────────────────────────────────────────────────────────────────
 
@@ -85,7 +196,7 @@ export class BbbApiService {
   ): string {
     const queryString = new URLSearchParams(params).toString();
     return crypto
-      .createHash("sha256")
+      .createHash(this.checksumAlgorithm)
       .update(methodName + queryString + apiSecret)
       .digest("hex");
   }
@@ -98,48 +209,119 @@ export class BbbApiService {
   ): string {
     const checksum = this.buildChecksum(methodName, params, apiSecret);
     const qs = new URLSearchParams({ ...params, checksum }).toString();
-    const baseUrl = server.apiUrl.replace(/\/$/, "");
+    const baseUrl = normalizeBbbApiUrl(server.apiUrl);
     return `${baseUrl}/api/${methodName}?${qs}`;
   }
 
-  private async callApi(url: string): Promise<Record<string, unknown>> {
+  private async callApi(
+    url: string,
+    describe: { method: string; serverHost: string },
+  ): Promise<Record<string, unknown>> {
     // 1. Add an explicit AbortController to fail fast
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second hard timeout (increased from 4s)
 
+    // W2: errors carry method + host + status/messageKey ONLY — never the
+    // signed URL (which embeds attendeePW/moderatorPW + checksum).
+    const { method, serverHost } = describe;
     try {
       const res = await fetch(url, { signal: controller.signal });
       if (!res.ok) {
-        throw new Error(`BBB API HTTP error ${res.status}: ${url}`);
+        throw new BbbUnavailableError(
+          method,
+          `HTTP ${res.status} from ${serverHost}`,
+        );
       }
-      const xml = await res.text();
-      const parsed = await parseStringPromise(xml, { explicitArray: false });
+      let parsed: any;
+      try {
+        const xml = await res.text();
+        parsed = await parseStringPromise(xml, { explicitArray: false });
+      } catch {
+        throw new BbbUnavailableError(
+          method,
+          `malformed XML response from ${serverHost}`,
+        );
+      }
       const response = parsed?.response;
 
       if (!response) {
-        throw new Error(
-          `BBB API returned unexpected XML: ${xml.substring(0, 200)}`,
+        throw new BbbUnavailableError(
+          method,
+          `unexpected XML envelope from ${serverHost}`,
         );
       }
       if (response.returncode !== "SUCCESS") {
-        throw new Error(
-          `BBB API error [${response.messageKey}]: ${response.message}`,
+        throw bbbRejected(
+          method,
+          response.messageKey as string | undefined,
+          response.message as string | undefined,
         );
       }
       return response;
     } catch (err: any) {
-      if (err.name === "AbortError") {
-        throw new Error(
-          `BBB API connection timed out after 10 seconds. Server unreachable: ${url}`,
-        );
+      if (err instanceof BbbNotFoundError) throw err;
+      if (err instanceof BbbRejectedError) throw err;
+      if (err instanceof BbbUnavailableError) throw err;
+      if (err?.name === "AbortError") {
+        throw new BbbUnavailableError(method, `timed out after 10s (${serverHost})`);
       }
-      throw err;
+      // Network/DNS/fetch-level failure — sanitize (node fetch errors can
+      // embed the URL, which carries passwords + checksum).
+      throw new BbbUnavailableError(method, `request failed (${serverHost})`);
     } finally {
       clearTimeout(timeoutId);
     }
   }
   private decryptSecret(server: BbbServer): string {
-    return this.encryptionService.decrypt(server.encryptedApiSecret);
+    // Gate-2 audit: a server loaded via `findById` (no `.addSelect`) carries
+    // `encryptedApiSecret === undefined` (select:false). Previously `decrypt`
+    // threw a raw TypeError deep in the checksum step; now it is a typed
+    // config error the per-meeting loops catch and skip on.
+    if (!server?.encryptedApiSecret) {
+      throw new BbbMisconfiguredError(
+        `server ${server?.id ?? "?"} loaded without encryptedApiSecret (use findByIdWithSecret/selectServer)`,
+      );
+    }
+    try {
+      return this.encryptionService.decrypt(server.encryptedApiSecret);
+    } catch (err) {
+      throw new BbbMisconfiguredError(
+        `server ${server?.id ?? "?"} secret undecryptable: ${(err as Error).message}`.substring(0, 200),
+      );
+    }
+  }
+
+  private serverHost(server: BbbServer): string {
+    try {
+      return new URL(normalizeBbbApiUrl(server.apiUrl)).host;
+    } catch {
+      return "bbb-server";
+    }
+  }
+
+  /**
+   * W2: record only a sanitized summary on the span — never the signed URL
+   * (passwords + checksum) and never the raw error (node fetch errors can
+   * embed the URL).
+   */
+  private noteSpanError(span: any, err: unknown): void {
+    const e = err as
+      | BbbNotFoundError
+      | BbbUnavailableError
+      | BbbRejectedError
+      | Error;
+    const messageKey =
+      (e as BbbNotFoundError).messageKey ??
+      (e as BbbRejectedError).messageKey ??
+      "unknown";
+    span.setStatus({
+      code: SpanStatusCode.ERROR,
+      message: `${e.name ?? "Error"} [${messageKey}]`,
+    });
+    span.recordException({
+      name: e.name ?? "Error",
+      message: `${e.name ?? "Error"} [${messageKey}]: ${(e as Error).message}`.substring(0, 300),
+    } as Error);
   }
 
   // ─── API Methods ─────────────────────────────────────────────────────────────
@@ -162,18 +344,17 @@ export class BbbApiService {
         }
         const url = this.buildApiUrl(server, secret, "create", strParams);
         Logger.debug(`createMeeting → ${params.meetingID}`, loggerCtx);
-        const response = await this.callApi(url);
+        const response = await this.callApi(url, {
+          method: "create",
+          serverHost: this.serverHost(server),
+        });
         span.setStatus({ code: SpanStatusCode.OK });
         return {
           internalMeetingID: response.internalMeetingID as string,
           meetingID: response.meetingID as string,
         };
       } catch (err) {
-        span.setStatus({
-          code: SpanStatusCode.ERROR,
-          message: (err as Error).message,
-        });
-        span.recordException(err as Error);
+        this.noteSpanError(span, err);
         throw err;
       } finally {
         span.end();
@@ -198,40 +379,51 @@ export class BbbApiService {
     if (params.userID) strParams.userID = params.userID;
     if (params.createTime) strParams.createTime = String(params.createTime);
     if (params.logoutURL) strParams.logoutURL = params.logoutURL;
-    const baseUrl = server.apiUrl.replace(/\/$/, "");
+    const baseUrl = normalizeBbbApiUrl(server.apiUrl);
     const checksum = this.buildChecksum("join", strParams, secret);
     const qs = new URLSearchParams({ ...strParams, checksum }).toString();
     return `${baseUrl}/api/join?${qs}`;
   }
 
-  async isMeetingRunning(
-    server: BbbServer,
-    meetingID: string,
-  ): Promise<boolean> {
-    const secret = this.decryptSecret(server);
-    const params = { meetingID };
-    const url = this.buildApiUrl(server, secret, "isMeetingRunning", params);
-    try {
-      const response = await this.callApi(url);
-      return response.running === "true";
-    } catch {
-      return false;
-    }
-  }
-
+  /**
+   * Existence check, NOT a "running" check: success means the BBB meeting
+   * record exists (even with zero participants). W1: throws typed errors —
+   * only `BbbNotFoundError` means "proven gone"; `BbbUnavailableError` /
+   * `BbbRejectedError` mean "cannot prove it is gone" and callers MUST skip,
+   * never stale/complete. Removed `isMeetingRunning` (W1.3): `running` is
+   * false until the first participant joins, so it caused split-class
+   * re-provisioning on API blips.
+   *
+   * Why the third parameter: the API-Mate capture you provided shows
+   * `getMeetingInfo` WITH the moderator password —
+   * `.../getMeetingInfo?meetingID=...&password=mp&checksum=...` — and the old
+   * password-less call never matched a real server request. Every caller that
+   * can load the meeting secret supplies it (reconciliation, room runtime,
+   * both join validators, and — since the W5 follow-up — metering, which
+   * side-decrypts the meeting password and skips the meeting as a counted
+   * gap when the row has none, instead of probing unauthenticated).
+   */
   async getMeetingInfo(
     server: BbbServer,
     meetingID: string,
-  ): Promise<BbbMeetingInfo | null> {
+    moderatorPW?: string,
+  ): Promise<BbbMeetingInfo> {
     const tracer = trace.getTracer("bbb-api");
     return tracer.startActiveSpan("bbb.getMeetingInfo", async (span) => {
       span.setAttribute("bbb.server", server.apiUrl);
       span.setAttribute("bbb.meetingId", meetingID);
       try {
         const secret = this.decryptSecret(server);
-        const params = { meetingID };
+        const params: Record<string, string> = { meetingID };
+        // BBB requires the moderator password on getMeetingInfo (see
+        // API-Mate capture). Omitted only for callers that cannot load the
+        // meeting secret (metering, which uses findById without secrets).
+        if (moderatorPW) params.password = moderatorPW;
         const url = this.buildApiUrl(server, secret, "getMeetingInfo", params);
-        const response = await this.callApi(url);
+        const response = await this.callApi(url, {
+          method: "getMeetingInfo",
+          serverHost: this.serverHost(server),
+        });
         span.setStatus({ code: SpanStatusCode.OK });
         return {
           meetingID: response.meetingID as string,
@@ -244,12 +436,8 @@ export class BbbApiService {
           endTime: Number(response.endTime ?? 0),
         };
       } catch (err) {
-        span.setStatus({
-          code: SpanStatusCode.ERROR,
-          message: (err as Error).message ?? "getMeetingInfo failed",
-        });
-        span.recordException(err as Error);
-        return null;
+        this.noteSpanError(span, err);
+        throw err;
       } finally {
         span.end();
       }
@@ -268,15 +456,14 @@ export class BbbApiService {
         const secret = this.decryptSecret(server);
         const params = { meetingID, password: moderatorPW };
         const url = this.buildApiUrl(server, secret, "end", params);
-        await this.callApi(url);
+        await this.callApi(url, {
+          method: "end",
+          serverHost: this.serverHost(server),
+        });
         span.setStatus({ code: SpanStatusCode.OK });
         Logger.info(`Meeting ended: ${meetingID}`, loggerCtx);
       } catch (err) {
-        span.setStatus({
-          code: SpanStatusCode.ERROR,
-          message: (err as Error).message,
-        });
-        span.recordException(err as Error);
+        this.noteSpanError(span, err);
         throw err;
       } finally {
         span.end();
@@ -284,6 +471,11 @@ export class BbbApiService {
     });
   }
 
+  /**
+   * W1.4: no longer swallows errors — callers decide (metering skips the
+   * sample; recording-repair logs and retries later). Errors are the same
+   * typed W1 errors (sanitized, no URLs).
+   */
   async getRecordings(
     server: BbbServer,
     meetingID?: string,
@@ -292,10 +484,12 @@ export class BbbApiService {
     const params: Record<string, string> = {};
     if (meetingID) params.meetingID = meetingID;
     const url = this.buildApiUrl(server, secret, "getRecordings", params);
-    try {
-      const response = await this.callApi(url);
-      const recordings = response.recordings as Record<string, unknown>;
-      if (!recordings || recordings.recording === undefined) return [];
+    const response = await this.callApi(url, {
+      method: "getRecordings",
+      serverHost: this.serverHost(server),
+    });
+    const recordings = response.recordings as Record<string, unknown>;
+    if (!recordings || recordings.recording === undefined) return [];
       const list = Array.isArray(recordings.recording)
         ? recordings.recording
         : [recordings.recording];
@@ -317,9 +511,43 @@ export class BbbApiService {
             )?.url as string)
           : undefined,
       }));
-    } catch (err) {
-      Logger.warn(`getRecordings failed: ${(err as Error).message}`, loggerCtx);
-      return [];
-    }
+  }
+
+  /**
+   * Server-side census for the report-only orphan scanner: every meeting
+   * BBB currently knows about, mapped read-only (see BbbRemoteMeeting —
+   * passwords are dropped at parse time). Typed W1 errors like every other
+   * call; this method NEVER issues `end` or any other write — the scanner
+   * built on it is report-only by construction.
+   */
+  async getMeetings(server: BbbServer): Promise<BbbRemoteMeeting[]> {
+    const secret = this.decryptSecret(server);
+    const url = this.buildApiUrl(server, secret, "getMeetings", {});
+    const response = await this.callApi(url, {
+      method: "getMeetings",
+      serverHost: this.serverHost(server),
+    });
+    const meetings = response.meetings as
+      | Record<string, unknown>
+      | string
+      | undefined;
+    // xml2js (explicitArray:false): empty <meetings></meetings> → "" (falsy),
+    // a single <meeting> → object, several → array.
+    if (!meetings || typeof meetings !== "object") return [];
+    const raw = (meetings as Record<string, unknown>).meeting as
+      | Record<string, unknown>
+      | Record<string, unknown>[]
+      | undefined;
+    if (raw === undefined) return [];
+    const list = Array.isArray(raw) ? raw : [raw];
+    return list.map((m) => ({
+      meetingID: (m.meetingID as string) ?? "",
+      internalMeetingID: (m.internalMeetingID as string) ?? "",
+      name: (m.name as string) ?? "",
+      running: m.running === "true",
+      participantCount: Number(m.participantCount ?? 0),
+      moderatorCount: Number(m.moderatorCount ?? 0),
+      hasBeenForciblyEnded: m.hasBeenForciblyEnded === "true",
+    }));
   }
 }

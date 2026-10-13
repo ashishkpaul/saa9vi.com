@@ -77,7 +77,18 @@ export class LearningDashboardService {
 
     // 2. For session-type entitlements, fetch the linked BbbScheduledSession
     const sessionEntitlements = entitlements.filter((e) => e.type === "bbb_session");
-    const sessionIds = [...new Set(sessionEntitlements.map((e) => e.resourceId))];
+    // W5 follow-up 2/5: the natural key can hold MULTIPLE rows (revoke →
+    // re-grant INSERTs a new one), so raw rows would render the SAME session
+    // twice. One course per session; hasAccess below is ANY-live, so the
+    // choice of which duplicate row represents the session is irrelevant to
+    // canJoin.
+    const seenSessionIds = new Set<string>();
+    const uniqueSessionEntitlements = sessionEntitlements.filter((e) => {
+      if (seenSessionIds.has(e.resourceId)) return false;
+      seenSessionIds.add(e.resourceId);
+      return true;
+    });
+    const sessionIds = [...seenSessionIds];
 
     const sessions = sessionIds.length
       ? await this.connection
@@ -120,7 +131,7 @@ export class LearningDashboardService {
     // 4. Build the dashboard response
     const courses: LearningCourse[] = [];
 
-    for (const entitlement of sessionEntitlements) {
+    for (const entitlement of uniqueSessionEntitlements) {
       const session = sessionMap.get(entitlement.resourceId);
       if (!session) continue;
 

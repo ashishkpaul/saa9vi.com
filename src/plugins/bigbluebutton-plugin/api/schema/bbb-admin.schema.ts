@@ -13,6 +13,18 @@ export const adminApiExtensions = gql`
     maxLoad: Int!
     capacity: Int!
     lastHealthCheckAt: DateTime
+    """
+    Whether the stored API secret can be decrypted with the current key.
+
+    OK                   — secret decrypts successfully.
+    CREDENTIAL_UNREADABLE — GCM authentication failed on all available keys.
+                            Re-enter the secret in the Servers UI. This
+                            happens when BBB_ENCRYPTION_KEY was rotated
+                            without re-encrypting existing rows.
+    UNKNOWN              — secret column not loaded (internal, should not
+                            appear in normal dashboard queries).
+    """
+    credentialStatus: String!
   }
 
   type BbbOrganization {
@@ -36,6 +48,18 @@ export const adminApiExtensions = gql`
     maxSessionsPerOrg: Int!
     recordingEnabled: Boolean!
     suspended: Boolean!
+    """
+    'grant' or 'metered' (ADR-047). Writable ONLY through the platform-gated
+    setBbbOrganizationBilling — never through updateBbbOrganization.
+    """
+    billingMode: String!
+    """
+    Per-org learner-hour rate in paise; null → platform default (plugin option,
+    else the clearly marked placeholder). Platform-writable only.
+    """
+    ratePaisePerLearnerHour: Int
+    "Postpaid ceiling in paise; null = unlimited. Platform-writable only."
+    monthlySpendLimitPaise: Int
   }
 
   type BbbMeeting {
@@ -48,6 +72,18 @@ export const adminApiExtensions = gql`
     recordingEnabled: Boolean!
     provisionedAt: DateTime
     completedAt: DateTime
+    """
+    W5 audit trail (new rows only, no backfill): user whose request created or
+    launched this meeting. Null = system origin (queue provisioning, auto
+    room start, webhook).
+    """
+    startedByUserId: ID
+    """
+    W5 audit trail (new rows only, no backfill): user whose request performed
+    the completion that ended this meeting. Null = system completion
+    (webhook / reconciliation).
+    """
+    endedByUserId: ID
     failureReason: String
     retryCount: Int!
     billingCapped: Boolean!
@@ -74,6 +110,11 @@ export const adminApiExtensions = gql`
     validFrom: DateTime!
     validUntil: DateTime!
     exhausted: Boolean!
+    """
+    Source discriminator: order | subscription | manual | internal_overhead
+    (BUG-044: 'manual' = Admin createBbbCapacityGrant override).
+    """
+    sourceType: String!
   }
 
   type BbbCapacityGrantList {
@@ -102,6 +143,14 @@ export const adminApiExtensions = gql`
     currentMeetingId: ID
     retryCount: Int!
     lastProvisionRequestedAt: DateTime
+    """
+    Phase 5.4 — DISTINCT customers with an active enrollment OR a valid
+    bbb_room entitlement for this room. Computed on the room list and
+    single-room reads (batched — no N+1) from the shared INV-027 validity
+    windows; null on results that do not compute it (room mutations, nested
+    relations) rather than a misleading 0.
+    """
+    studentCount: Int
   }
 
   # ─── Product Access (enrollment mapping) ────────────────────────────────────
@@ -221,6 +270,8 @@ export const adminApiExtensions = gql`
     visibility: String!
     maxAttendees: Int
     subjectTags: [String!]
+    """Room this session belongs to. null for legacy sessions created before the room-centric model (ADR-047/D5)."""
+    roomId: ID
   }
 
   """
@@ -252,6 +303,22 @@ export const adminApiExtensions = gql`
     totalItems: Int!
   }
 
+  type BbbRoomStartResult {
+    """'active' | 'starting' | 'failed' | 'unavailable' (see bbbStartRoom)."""
+    status: String!
+    """A **moderator** join URL — present only when status = 'active'."""
+    joinUrl: String
+    currentMeetingId: ID
+    """The room's state when the call returned (drives the card badge)."""
+    roomState: String!
+    """
+    Tenant-safe reason when status = 'failed' or 'unavailable' (A22/S4.2):
+    suspended orgs and spend-cap orgs get "Your account is paused — contact
+    support". Never a raw internal failureReason.
+    """
+    message: String
+  }
+
   type BbbRoomList {
     items: [BbbRoom!]!
     totalItems: Int!
@@ -262,6 +329,14 @@ export const adminApiExtensions = gql`
     totalItems: Int!
   }
 
+  type BbbReconciliationResult {
+    provisioningFixed: Int!
+    activeReconciled: Int!
+    roomsReconciled: Int!
+    billingRecovered: Int!
+    meteredRecovered: Int!
+  }
+
   # ─── Queries ─────────────────────────────────────────────────────────────────
 
   extend type Query {
@@ -270,8 +345,18 @@ export const adminApiExtensions = gql`
     bbbOrganizations(options: BbbOrganizationListOptions): BbbOrganizationList!
     poolCapacityDashboard: PoolCapacityDashboard!
     bbbOrganization(id: ID!): BbbOrganization
+    """
+    The organization bound to the active channel (Channel = Tenant, INV-001).
+    Resolved server-side from the request context channelId — the same value
+    BbbChannelAccessService enforces — so tenant screens never need a
+    client-side organization selector and can never display another tenant's
+    organization. Returns null when the active channel has no organization.
+    Platform-tier cross-tenant browsing uses bbbOrganizations.
+    """
+    bbbMyOrganization: BbbOrganization
     bbbMeetings(
       organizationId: ID
+      roomId: ID
       options: BbbMeetingListOptions
     ): BbbMeetingList!
     bbbMeeting(id: ID!): BbbMeeting
@@ -332,6 +417,14 @@ export const adminApiExtensions = gql`
     updateBbbMeeting(id: ID!, input: UpdateBbbMeetingInput!): BbbMeeting!
     deleteBbbMeeting(id: ID!): Boolean!
     endBbbMeeting(id: ID!): BbbMeeting!
+    """
+    On-demand BBB reconciliation (SuperAdmin only). Runs the same five passes
+    as the scheduled bbb-reconciliation task (stuck provisioning, active
+    meetings, rooms, grant billing, metered billing) and returns per-pass
+    counts. Use instead of raw SQL when meetings/rooms drift from the BBB
+    server.
+    """
+    runBbbReconciliation: BbbReconciliationResult!
     deleteBbbServer(id: ID!): Boolean!
     deleteBbbOrganization(id: ID!): Boolean!
     createBbbCapacityGrant(
@@ -341,6 +434,25 @@ export const adminApiExtensions = gql`
     updateBbbRoom(id: ID!, input: UpdateBbbRoomInput!): BbbRoom!
     deleteBbbRoom(id: ID!): Boolean!
     resetBbbRoom(id: ID!): BbbRoom!
+    """
+    A22 (Phase 5) — the dashboard's "Start class" action: provisions the room if
+    needed and returns a moderator join URL.
+
+    Authorizes BEFORE provisioning (INV-027): the room must belong to the caller's
+    channel, and a caller whose linked customer is not a moderator-capable member
+    of the owning organization is refused with no meeting created. Status is
+    'active' (joinUrl present), 'starting' (provisioning in flight — call again,
+    idempotent), 'failed' (room Failed beyond its retry budget; reset it) or
+    'unavailable' (org suspended or spend-capped; message is tenant-safe).
+    moderatorName defaults to the caller's administrator name, then the room
+    name. waitMs (max 20000) bounds how long the call waits for the room to go
+    live before answering 'starting'.
+    """
+    bbbStartRoom(
+      roomId: ID!
+      moderatorName: String
+      waitMs: Int
+    ): BbbRoomStartResult!
     createBbbScheduledSession(
       input: CreateBbbScheduledSessionInput!
     ): BbbScheduledSession!
@@ -515,6 +627,8 @@ export const adminApiExtensions = gql`
     subjectTags: [String!]
     isTrial: Boolean
     visibility: String
+    """Optional room linkage; the room must belong to the same organization (ADR-047/D5)."""
+    roomId: ID
   }
 
   input UpdateBbbScheduledSessionInput {
@@ -524,6 +638,8 @@ export const adminApiExtensions = gql`
     subjectTags: [String!]
     visibility: String
     isTrial: Boolean
+    """Optional room linkage; pass null to detach (room must belong to the same organization)."""
+    roomId: ID
   }
 
   input CreateBbbSessionTemplateInput {
@@ -565,6 +681,18 @@ export const adminApiExtensions = gql`
   input BbbEntitlementListOptions {
     skip: Int
     take: Int
+    """
+      Exact-match customerId probe used by the entitlements screen's
+      Filter by Customer ID box. This custom list input does not inherit
+      Vendure's generic filter argument, so the field is declared here — the
+      previous client-side filter key was rejected by variable coercion (the
+      whole query failed and the screen rendered the failure as an empty list).
+    """
+    filter: BbbEntitlementFilter
+  }
+
+  input BbbEntitlementFilter {
+    customerId: String
   }
 
   input CreateBbbEntitlementInput {
@@ -789,5 +917,141 @@ export const adminApiExtensions = gql`
 
     "Delete a policy row by id. Portal infrastructure only."
     deletePlatformCapacityPolicy(id: ID!): Boolean!
+  }
+
+  # ─── Metered billing reads + platform billing control (ADR-047 Phase 4) ──
+
+  """
+  Tenant monthly billing summary. The organization is derived from the caller's
+  channel (D3) — there is no organizationId argument. totalChargePaise is
+  computed once per month via computeMonthChargePaise (D2, half-up to the paisa).
+  """
+  type BbbBillingSummary {
+    month: String!
+    """
+    Effective rate for display: per-org ratePaisePerLearnerHour override, else
+    the defaultRatePaisePerLearnerHour plugin option, else the clearly marked
+    placeholder default.
+    """
+    ratePaisePerHour: Int!
+    totalLearnerMinutes: Int!
+    totalChargePaise: Int!
+    "null = unlimited."
+    spendLimitPaise: Int
+    spendLimitReached: Boolean!
+    byRoom: [BbbBillingRoomRow!]!
+  }
+
+  type BbbBillingRoomRow {
+    roomId: ID
+    roomName: String
+    learnerMinutes: Int!
+    chargePaise: Int!
+  }
+
+  """
+  One billed meeting of a month, joined to its meeting row for title/recording.
+  recordingUrl is whatever the rap-publish-ended webhook stored — null until BBB
+  reports a playback URL (never invented).
+  """
+  type BbbMeteredMeeting {
+    id: ID!
+    title: String!
+    roomId: ID
+    roomName: String
+    startedAt: DateTime!
+    completedAt: DateTime!
+    peakLearners: Int!
+    peakModerators: Int!
+    learnerMinutes: Int!
+    chargePaise: Int!
+    billingCapped: Boolean!
+    recordingUrl: String
+  }
+
+  type BbbMeteredMeetingList {
+    items: [BbbMeteredMeeting!]!
+    totalItems: Int!
+  }
+
+  """
+  One published recording for a room — the Room Recordings read model.
+
+  Minimal projection over BbbMeeting: only columns the entity actually has
+  (no startedAt / duration are invented, and nothing is derived from a billing
+  table). recordingUrl is whatever the rap-publish-ended webhook stored —
+  never invented — and is always non-null in a returned row.
+  """
+  type BbbRoomRecording {
+    id: ID!
+    title: String!
+    roomId: ID
+    completedAt: DateTime!
+    recordingUrl: String!
+  }
+
+  type BbbRoomRecordingList {
+    items: [BbbRoomRecording!]!
+    totalItems: Int!
+  }
+
+  "Platform-wide roll-up across tenants (platform tier only)."
+  type BbbPlatformBillingSummary {
+    month: String!
+    totalLearnerMinutes: Int!
+    totalChargePaise: Int!
+    byOrganization: [BbbPlatformBillingOrganizationRow!]!
+  }
+
+  type BbbPlatformBillingOrganizationRow {
+    organizationId: ID!
+    organizationName: String!
+    learnerMinutes: Int!
+    chargePaise: Int!
+  }
+
+  extend type Query {
+    """
+    Tenant billing summary for a month (YYYY-MM; defaults to the current UTC
+    month). Organization from ctx.channelId — D3: no organizationId argument.
+    """
+    bbbBillingSummary(month: String): BbbBillingSummary!
+    """
+    Tenant billed meeting history for a month with per-meeting charge shares
+    and recordingUrl. Organization from ctx.channelId — D3: no organizationId.
+    """
+    bbbMeteredMeetings(month: String, skip: Int, take: Int): BbbMeteredMeetingList!
+    """
+    Room Recordings for a month (YYYY-MM; defaults to the current IST month).
+
+    Read straight from BbbMeeting where a recordingUrl is stored, NOT from
+    metered usage — so GRANT-billed rooms appear too. Organization is derived
+    from ctx.channelId (D3): no organizationId argument. The month is the IST
+    calendar month of completedAt, matching the billing period key.
+    """
+    bbbRoomRecordings(month: String, skip: Int, take: Int): BbbRoomRecordingList!
+    """
+    Platform-wide metered roll-up across all tenants. Platform tier only
+    (BBBAdmin / BBBPlatformInfrastructure) — never a tenant-held permission.
+    """
+    bbbPlatformBillingSummary(month: String): BbbPlatformBillingSummary!
+  }
+
+  extend type Mutation {
+    """
+    The ONLY way to change billingMode / ratePaisePerLearnerHour /
+    monthlySpendLimitPaise / suspended (ADR-047 H1) — those fields never appear
+    on updateBbbOrganization. Platform tier only (BBBAdmin /
+    BBBPlatformInfrastructure). Full replace: rate null clears the per-org
+    override back to the platform default; monthlySpendLimitPaise null clears
+    the ceiling to unlimited.
+    """
+    setBbbOrganizationBilling(
+      organizationId: ID!
+      billingMode: String!
+      ratePaisePerLearnerHour: Int
+      monthlySpendLimitPaise: Int
+      suspended: Boolean!
+    ): BbbOrganization!
   }
 `;

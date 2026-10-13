@@ -16,8 +16,8 @@
  * place and cannot drift again.
  */
 
-/** Mirrors `BbbCapacityGrant.sourceType` (FEAT-002 / ADR §8A OP-005). */
-export type GrantSourceType = "order" | "subscription" | "internal_overhead";
+/** Mirrors `BbbCapacityGrant.sourceType` (FEAT-002 / ADR §8A OP-005 + BUG-044 'manual'). */
+export type GrantSourceType = "order" | "subscription" | "manual" | "internal_overhead";
 
 /**
  * `internal_overhead` capacity is ops/internal headroom, never a
@@ -25,10 +25,16 @@ export type GrantSourceType = "order" | "subscription" | "internal_overhead";
  * provisioning. A tenant with no commercial grant must get the accurate
  * "no grant exists yet" outcome instead of silently borrowing overhead
  * capacity (and then failing on the `-1` sentinel).
+ *
+ * 'manual' IS selectable: an Admin override is real customer-facing capacity
+ * (BUG-044). It behaved as selectable while it masqueraded as 'order', so
+ * admitting it here preserves provisioning and `myLiveUsage` behavior for
+ * orgs whose only grant is a manual override.
  */
 export const TENANT_SELECTABLE_SOURCE_TYPES: readonly GrantSourceType[] = [
   "order",
   "subscription",
+  "manual",
 ];
 
 export interface GrantMinutesLike {

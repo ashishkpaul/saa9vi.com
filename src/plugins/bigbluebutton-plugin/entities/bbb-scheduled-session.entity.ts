@@ -72,6 +72,19 @@ export class BbbScheduledSession extends VendureEntity {
   @Column({ type: "varchar", nullable: true })
   channelId: string | null;
 
+  /**
+   * Room this session belongs to (ADR-047 / D5) — the room-centric IA makes the
+   * room the primary resource and the session a consequence of using it.
+   *
+   * Deliberately **nullable**: sessions created before the room-centric model
+   * have no room, and backfilling them is explicitly out of scope (§5). Legacy
+   * rows stay NULL and surface on the tenant dashboard; mandatory-ness is a
+   * later PR.
+   */
+  @Index()
+  @Column({ type: "varchar", nullable: true })
+  roomId: string | null;
+
   /** Slug unique within organization (replaces global unique) */
   @Column({ type: "varchar", nullable: true })
   slug: string | null;

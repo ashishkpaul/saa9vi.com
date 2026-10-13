@@ -105,12 +105,21 @@ export class BbbWebhookProcessorService {
       return;
     }
 
+    if (!event.eventType || !event.payload) {
+      Logger.warn(
+        `Webhook event ${eventId} has no eventType or payload (PARSE_FAILED?), skipping`,
+        loggerCtx,
+      );
+      return;
+    }
+
     try {
       await this.meetingService.handleWebhookEvent(
         ctx,
         event.eventType,
         event.payload,
         eventId,
+        event.serverId ?? null,
       );
 
       event.status = "PROCESSED";

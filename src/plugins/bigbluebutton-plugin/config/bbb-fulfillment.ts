@@ -230,9 +230,11 @@ const BBB_FULFILLMENT_HANDLER_CODE = "bbb-access-fulfillment";
  *      an error here must never surface as a failed checkout. It is logged at
  *      error level and can be retried (Admin fulfillment / reconciliation); the
  *      grant's absence is visible in the capacity ledger.
- *   4. NO HIDDEN POLICY: handler arguments are left empty so the handler's
- *      declared defaults (10h / 30d → 600 minutes) remain the single source of
- *      truth for how much capacity a purchase grants.
+ *   4. NO HIDDEN POLICY: the fulfilment's arguments are passed EXPLICITLY at the
+ *      createFulfillment call below (grantedHours 10 / validityDays 30 → 600
+ *      minutes) rather than relying on handler defaults. Changing the handler's
+ *      declared defaults alone therefore does NOT change what an automatic
+ *      purchase grants — this call site is the effective policy.
  */
 async function autoFulfillBbbOrder(ctx: RequestContext, order: Order): Promise<void> {
   try {

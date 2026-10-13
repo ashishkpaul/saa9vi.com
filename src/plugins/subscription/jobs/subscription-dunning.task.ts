@@ -1,6 +1,7 @@
 import { ScheduledTask, TransactionalConnection } from "@vendure/core";
 import { Logger } from "@nestjs/common";
 import { SubscriptionRenewalQueueService } from "../services/subscription-renewal-queue.service";
+import { OrganizationSubscription } from "../entities/organization-subscription.entity";
 
 const loggerCtx = "SubscriptionDunningTask";
 
@@ -52,7 +53,11 @@ export const subscriptionDunningTask = new ScheduledTask({
         const now = new Date();
         const retryThreshold = new Date(now.getTime() - retryIntervalDays * 86400000);
 
-        const rawRepo = connection.rawConnection.getRepository("organization_subscription");
+        // Entity-class repository (not the "organization_subscription" string
+        // literal): string names bypass TypeORM metadata, so a schema-isolated
+        // deployment would resolve through search_path instead of the
+        // connection's schema (the tablePath lesson from the BBB audit).
+        const rawRepo = connection.rawConnection.getRepository(OrganizationSubscription);
 
         // Find past_due subscriptions due for a retry
         const dueForRetry = await rawRepo

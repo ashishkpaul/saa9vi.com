@@ -3,66 +3,62 @@ import { api, Badge, Button, Card, Input, Label, Select, SelectContent, SelectIt
 import { toast } from 'sonner';
 import { useDebounce } from '@uidotdev/usehooks';
 import { useEffect, useState } from 'react';
+import { graphql } from '@/gql';
+import { useCurrentOrganization } from '../../shared/useCurrentOrganization';
 
-const GET_ORGS = `
-  query GetBbbOrganizationsForStaff {
-    bbbOrganizations { items { id name slug } totalItems }
-  }
-`;
-
-const GET_MEMBERS = `
+const GET_MEMBERS = graphql(`
   query GetBbbOrganizationStaff($organizationId: ID!, $options: BbbOrganizationMemberListOptions) {
     bbbOrganizationMembers(organizationId: $organizationId, options: $options) {
       items { id customerId customerName customerEmail role active createdAt updatedAt }
       totalItems
     }
   }
-`;
+`);
 
-const SEARCH_CUSTOMERS = `
+const SEARCH_CUSTOMERS = graphql(`
   query SearchCustomersForBbb($term: String!) {
     customers(options: { filter: { emailAddress: { contains: $term } }, take: 10 }) {
       items { id firstName lastName emailAddress }
     }
   }
-`;
+`);
 
-const ADD_MEMBER = `
+const ADD_MEMBER = graphql(`
   mutation AddBbbStaffMember($input: AddBbbMemberInput!) {
     addBbbMember(input: $input) { id customerId role active }
   }
-`;
+`);
 
-const UPDATE_MEMBER = `
+const UPDATE_MEMBER = graphql(`
   mutation UpdateBbbStaffMember($id: ID!, $input: UpdateBbbMemberInput!) {
     updateBbbMember(id: $id, input: $input) { id customerId role active }
   }
-`;
+`);
 
-const REMOVE_MEMBER = `
+const REMOVE_MEMBER = graphql(`
   mutation RemoveBbbStaffMember($id: ID!) {
     removeBbbMember(id: $id) { id active }
   }
-`;
+`);
 
 interface Member { id: string; customerId: string; customerName?: string; customerEmail?: string; role: string; active: boolean; }
 
 export function MembersList() {
   const qc = useQueryClient();
-  const [selectedOrgId, setSelectedOrgId] = useState('');
   const [customerSearch, setCustomerSearch] = useState('');
   const debouncedSearch = useDebounce(customerSearch, 300);
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
   const [customers, setCustomers] = useState<any[]>([]);
   const [newRole, setNewRole] = useState('trainer');
 
-  const orgsQuery = useQuery<any>({ queryKey: ['bbbOrgsForMembers'], queryFn: () => api.query(GET_ORGS) });
-  const organizations = orgsQuery.data?.bbbOrganizations?.items ?? [];
+  // Channel = Tenant (INV-001): the organization is resolved server-side from
+  // the active channel — a client-side picker could disagree with ctx.channelId.
+  const { organizationId, label, isLoading: orgLoading } = useCurrentOrganization();
 
   const membersQuery = useQuery<{ bbbOrganizationMembers: { items: Member[]; totalItems: number } }>({
-    queryKey: ['bbbMembers', selectedOrgId],
-    queryFn: () => api.query(GET_MEMBERS, { organizationId: selectedOrgId, options: {} }),
-    enabled: !!selectedOrgId,
+    queryKey: ['bbbMembers', organizationId],
+    queryFn: () => api.query(GET_MEMBERS, { organizationId, options: {} }),
+    enabled: !!organizationId,
   });
   const members = membersQuery.data?.bbbOrganizationMembers?.items ?? [];
 
@@ -85,12 +81,6 @@ export function MembersList() {
   });
 
   useEffect(() => {
-    if (organizations.length > 0 && !selectedOrgId) {
-      setSelectedOrgId(organizations[0].id);
-    }
-  }, [organizations]);
-
-  useEffect(() => {
     let cancelled = false;
     async function runSearch() {
       setSelectedCustomer(null);
@@ -107,15 +97,12 @@ export function MembersList() {
       <h1 className="text-2xl font-bold mb-4">Organization Staff</h1>
       <div className="max-w-xs mb-6">
         <Label>Organization</Label>
-        <Select value={selectedOrgId} onValueChange={(v) => { setSelectedOrgId(v); }}>
-          <SelectTrigger><SelectValue placeholder="-- Select organization --" /></SelectTrigger>
-          <SelectContent>
-            {organizations.map((o: any) => <SelectItem key={o.id} value={o.id}>{o.name} ({o.slug})</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {orgLoading ? 'Loading…' : label || 'No organization is bound to this channel'}
+        </p>
       </div>
 
-      {selectedOrgId && (
+      {organizationId && (
         <>
           <Card className="mb-6 p-4">
             <h3 className="font-semibold mb-3">Add Staff Member</h3>
@@ -157,7 +144,7 @@ export function MembersList() {
                   </SelectContent>
                 </Select>
               </div>
-              <Button onClick={() => addMutation.mutate({ organizationId: selectedOrgId, customerId: selectedCustomer.id, role: newRole })} disabled={!selectedCustomer || addMutation.isPending}>
+              <Button onClick={() => addMutation.mutate({ organizationId, customerId: selectedCustomer.id, role: newRole })} disabled={!selectedCustomer || addMutation.isPending}>
                 {addMutation.isPending ? 'Adding...' : 'Add Staff Member'}
               </Button>
             </div>

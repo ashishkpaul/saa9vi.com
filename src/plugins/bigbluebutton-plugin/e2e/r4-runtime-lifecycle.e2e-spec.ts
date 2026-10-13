@@ -55,6 +55,7 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../../test-utils/free-port';
 import {
   Channel,
   DefaultLogger,
@@ -86,6 +87,7 @@ import { BbbScheduledSession } from '../entities/bbb-scheduled-session.entity';
 import { BbbServer } from '../entities/bbb-server.entity';
 import { BbbProvisioningWorkerService } from '../services/bbb-provisioning-worker.service';
 import { BbbMeetingService } from '../services/bbb-meeting.service';
+import { MeetingLifecycleService } from '../services/bbb-meeting-lifecycle.service';
 import { BbbApiService } from '../services/bbb-api.service';
 import { BbbReconciliationService } from '../services/bbb-reconciliation.service';
 import { BbbEntitlementService } from '../services/bbb-entitlement.service';
@@ -114,7 +116,8 @@ export const R4_SCHEMA = 'e2e_r4_lifecycle';
 
 const { server, adminClient, shopClient } = createTestEnvironment(
   mergeConfig(testConfig, {
-    apiOptions: { port: 3092 },
+    // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
+    apiOptions: { port: 0 },
     logger: new DefaultLogger({ level: LogLevel.Warn }),
     authOptions: { requireVerification: false },
     dbConnectionOptions: {
@@ -400,6 +403,29 @@ const CREATE_BBB_ORGANIZATION = gql`
       channelId
       slug
       name
+      billingMode
+    }
+  }
+`;
+
+/**
+ * Platform-gated billing-mode switch (ADR-047). `createBbbOrganization`
+ * deliberately defaults new orgs to `metered` (D7), so this is the ONLY way to
+ * put the R4 fixture org back on the legacy grant path R4 exists to prove.
+ */
+const SET_BBB_ORGANIZATION_BILLING = gql`
+  mutation SetBbbOrganizationBilling(
+    $organizationId: ID!
+    $billingMode: String!
+    $suspended: Boolean!
+  ) {
+    setBbbOrganizationBilling(
+      organizationId: $organizationId
+      billingMode: $billingMode
+      suspended: $suspended
+    ) {
+      id
+      billingMode
     }
   }
 `;
@@ -670,7 +696,30 @@ async function createOrganization(
     },
   });
   if (!org.createBbbOrganization?.id) fail('createBbbOrganization', org);
-  return { id: decode(org.createBbbOrganization.id), channelId };
+  const organizationId = org.createBbbOrganization.id;
+
+  // R4 IS the legacy grant path evidence: order-grant selection at provisioning
+  // (R4-04), immutable grant linkage on the ledger (R4-08), consumption
+  // accounting + replay idempotency (R4-09), and cross-tenant grant isolation
+  // (R4-10). ADR-047 / D7 makes `createBbbOrganization` return a `metered` org
+  // by design (and `create()` is the single place that does it), so a
+  // freshly-created fixture org has NO capacity grant and R4-04/08/09/10 were
+  // asserting a grant binding against an org the grant path never touches.
+  // Pin the fixture org to `grant` explicitly so the path under test is
+  // actually the one that runs.
+  const billing: any = await adminClient.query(SET_BBB_ORGANIZATION_BILLING, {
+    organizationId,
+    billingMode: 'grant',
+    suspended: false,
+  });
+  // `adminClient.query` resolves to the UNWRAPPED `data` payload (see the
+  // CREATE_BBB_ORGANIZATION call above), not to `{ data, errors }`.
+  const appliedMode = billing?.setBbbOrganizationBilling?.billingMode;
+  if (appliedMode !== 'grant') {
+    fail('setBbbOrganizationBilling(grant)', billing);
+  }
+
+  return { id: decode(organizationId), channelId };
 }
 
 /**
@@ -884,13 +933,21 @@ async function installStubbedBbbTransport(): Promise<void> {
   // generation keep working — only the two outbound HTTP hops are replaced.
   const real: any = server.app.get(BbbApiService);
   const stubbed: any = Object.create(real);
+  // "Test connection" (create/enable probe) runs inside BbbServerService,
+  // which holds its OWN reference to the singleton — patch getMeetings on
+  // the real instance too, or createBbbServer would probe localhost:1999
+  // for real and refuse. Read-only and harmless if the health/orphan tasks
+  // ever tick mid-run.
+  real.getMeetings = async () => [];
   stubbed.createMeeting = async () => ({
     internalMeetingID: `r4-internal-${Date.now()}`,
     meetingID: `r4-${Date.now()}`,
   });
   // validateMeetingExistsOnBbb() treats a truthy info as "still exists".
-  // The real getMeetingInfo() returns null on ANY error, which blocks join-URL
-  // generation entirely with no BBB container present (bbb-api.service.ts:246-252).
+  // The real getMeetingInfo() THROWS typed errors (W1: BbbNotFoundError =
+  // proven gone, BbbUnavailableError/BbbRejectedError/BbbMisconfiguredError =
+  // skip) on failure, which blocks join-URL generation entirely with no BBB
+  // container present — hence the truthy stub below.
   stubbed.getMeetingInfo = async () => ({
     meetingID: 'r4-meeting',
     internalMeetingID: 'r4-internal-meeting',
@@ -1021,7 +1078,7 @@ describe('Slice 10 — R4 runtime lifecycle evidence', () => {
 
     beforeAll(async () => {
       await assertPostgres();
-      await server.init({
+      await startOnFreePort({ server, adminClient, shopClient }, {
         initialData: E2E_INITIAL_DATA,
         customerCount: 0,
       });
@@ -1059,6 +1116,12 @@ describe('Slice 10 — R4 runtime lifecycle evidence', () => {
       }
 
       // One enabled/healthy BBB server so provisioning can select a target.
+      // The "Test connection" probe (create/enable gate) runs inside
+      // BbbServerService against ITS reference to the singleton, and this
+      // beforeAll runs before installStubbedBbbTransport (R4-04) — patch
+      // getMeetings here or createBbbServer would really dial localhost:1999
+      // and refuse. Read-only; the full transport install inherits it.
+      (server.app.get(BbbApiService) as any).getMeetings = async () => [];
       const srv: any = await adminClient.query(CREATE_BBB_SERVER, {
         input: {
           name: `R4 Server ${Date.now()}`,
@@ -1371,12 +1434,12 @@ describe('Slice 10 — R4 runtime lifecycle evidence', () => {
     // ═══ R4-08 — usage ledger ══════════════════════════════════════════════
     it('R4-08: completion writes exactly ONE immutable usage-ledger fact bound to the "order" grant', async () => {
       const ctx = await getSuperadminContext(server.app);
-      const meetingService = server.app.get(BbbMeetingService);
+      const lifecycleService = server.app.get(MeetingLifecycleService);
 
       // Service-layer fixture (§3.2 carve-out) — see backdateProvisionedAt().
       await backdateProvisionedAt(meetingId, 10);
 
-      const completed = await meetingService.completeMeetingLifecycle(
+      const completed = await lifecycleService.completeMeetingLifecycle(
         ctx,
         meetingId,
         { source: 'manual' },
@@ -1427,14 +1490,14 @@ describe('Slice 10 — R4 runtime lifecycle evidence', () => {
     // ═══ R4-09 — replay / idempotency (mandatory) ══════════════════════════
     it('R4-09: replaying the same (meetingId, grantId) never double-bills', async () => {
       const ctx = await getSuperadminContext(server.app);
-      const meetingService = server.app.get(BbbMeetingService);
+      const lifecycleService = server.app.get(MeetingLifecycleService);
       const recon = server.app.get(BbbReconciliationService);
 
       const before = (await reloadGrant(orderGrantId)).consumedMinutes;
       expect(before).toBeGreaterThan(0);
 
       // (a) SEQUENTIAL replay of the whole completion path.
-      await meetingService.completeMeetingLifecycle(ctx, meetingId, {
+      await lifecycleService.completeMeetingLifecycle(ctx, meetingId, {
         source: 'manual',
       });
       expect(await ledgerRowsFor(meetingId)).toHaveLength(1);

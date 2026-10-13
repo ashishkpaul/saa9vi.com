@@ -28,6 +28,18 @@ export const shopApiExtensions = gql`
     name: String!
     state: String!
     currentMeetingId: ID
+    """
+    Server-driven action for the calling customer (INV-008): START | JOIN |
+    WAIT | NONE. Derived from the SAME shared access evaluation as joinRoom
+    plus the room state, so the storefront never re-derives role or
+    eligibility from the clock.
+
+    Populated by bbbRoomStatus only. myBbbRooms leaves it null — that list
+    does not evaluate per-room access, and claiming an action it has not
+    computed would be worse than admitting it is unknown (the studentCount
+    precedent).
+    """
+    classAction: String
   }
 
   type BbbEnrollmentPublic {
@@ -43,7 +55,12 @@ export const shopApiExtensions = gql`
 
   type BbbJoinRoomResult {
     """
-    active | provisioning | failed
+    active | provisioning | failed | waiting_for_trainer
+
+    waiting_for_trainer = the caller is authorized but is NOT a moderator
+    (no org_admin/trainer role) and the room has not been started yet. It is a
+    success outcome: the join caused no provisioning — the learner waits for a
+    trainer to start the class.
     """
     status: String!
     """

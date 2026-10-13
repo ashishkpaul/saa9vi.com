@@ -20,6 +20,9 @@
  *   G3-E  Persisted grant linkage + cross-org isolation: billing consumes
  *         the meeting's stored grantId (Grant A), never another org's
  *         current grant (Grant B).
+ *   G3-F  Sub-threshold (fair-billing) meetings write an idempotent
+ *         ZERO-minute ledger row, so `reconcilePendingBilling` never
+ *         revisits them — no grant movement, no repeated MeetingCompletedEvent.
  *
  * Fixtures are created through Vendure services/TransactionalConnection
  * inside the test environment (the sanctioned service-layer path). No
@@ -34,9 +37,11 @@ import {
   registerInitializer,
   testConfig,
 } from '@vendure/testing';
+import { startOnFreePort } from '../../../test-utils/free-port';
 import {
   ChannelService,
   CurrencyCode,
+  EventBus,
   LanguageCode,
   mergeConfig,
   TransactionalConnection,
@@ -54,7 +59,8 @@ import { BbbCapacityGrant } from '../entities/bbb-capacity-grant.entity';
 import { BbbUsageLedger } from '../entities/bbb-usage-ledger.entity';
 import { BbbScheduledSession } from '../entities/bbb-scheduled-session.entity';
 import { BbbReconciliationService } from '../services/bbb-reconciliation.service';
-import { BbbMeetingService } from '../services/bbb-meeting.service';
+import { MeetingLifecycleService } from '../services/bbb-meeting-lifecycle.service';
+import { MeetingCompletedEvent } from '../events/bbb-events';
 import { MEETING_STATE } from '../constants';
 
 registerInitializer('postgres', new SchemaPostgresInitializer());
@@ -71,9 +77,10 @@ async function assertPostgres(): Promise<void> {
   });
 }
 
-const { server } = createTestEnvironment(
+const { server, adminClient, shopClient } = createTestEnvironment(
   mergeConfig(testConfig, {
-    apiOptions: { port: 3090 },
+    // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
+    apiOptions: { port: 0 },
     dbConnectionOptions: {
       type: 'postgres',
       host: process.env.DB_HOST ?? '127.0.0.1',
@@ -109,14 +116,14 @@ describe('Gate 3 — usage ledger billing invariants', () => {
   let ctx: any;
   let connection: TransactionalConnection;
   let recon: BbbReconciliationService;
-  let meetingService: BbbMeetingService;
+  let lifecycleService: MeetingLifecycleService;
   let org: BbbOrganization;
   let orgB: BbbOrganization;
 
   d('billing lifecycle', () => {
     beforeAll(async () => {
       await assertPostgres();
-      await server.init({
+      await startOnFreePort({ server, adminClient, shopClient }, {
         initialData: {
           defaultLanguage: 'en' as any,
           defaultZone: 'India',
@@ -132,7 +139,7 @@ describe('Gate 3 — usage ledger billing invariants', () => {
       ctx = await getSuperadminContext(server.app);
       connection = server.app.get(TransactionalConnection);
       recon = server.app.get(BbbReconciliationService);
-      meetingService = server.app.get(BbbMeetingService);
+      lifecycleService = server.app.get(MeetingLifecycleService);
 
       const orgRepo = connection.getRepository(ctx, BbbOrganization);
       org = await orgRepo.save(
@@ -307,7 +314,7 @@ describe('Gate 3 — usage ledger billing invariants', () => {
         withSession: true,
       });
 
-      const completed = await meetingService.completeMeetingLifecycle(
+      const completed = await lifecycleService.completeMeetingLifecycle(
         ctx,
         meeting.id as string,
         { source: 'webhook' },
@@ -340,13 +347,13 @@ describe('Gate 3 — usage ledger billing invariants', () => {
       const grant = await freshGrant(org);
       const meeting = await makeActiveMeeting({ grant, minutesAgo: 5, org });
 
-      await meetingService.completeMeetingLifecycle(ctx, meeting.id as string, {
+      await lifecycleService.completeMeetingLifecycle(ctx, meeting.id as string, {
         source: 'webhook',
       });
       const grantAfterFirst = await reloadGrant(grant.id as string);
 
       // Duplicate delivery of the same logical completion.
-      const again = await meetingService.completeMeetingLifecycle(
+      const again = await lifecycleService.completeMeetingLifecycle(
         ctx,
         meeting.id as string,
         { source: 'webhook' },
@@ -458,6 +465,86 @@ describe('Gate 3 — usage ledger billing invariants', () => {
       expect((await reloadGrant(grantA.id as string)).consumedMinutes).toBe(expected);
       expect((await reloadGrant(grantB.id as string)).consumedMinutes).toBe(0);
     }, 30000);
+
+    // ── G3-F ──────────────────────────────────────────────────────────────
+    it('G3-F: a sub-threshold meeting writes an idempotent ZERO-minute ledger row so reconciliation never revisits it', async () => {
+      const grant = await freshGrant(org);
+      const meeting = await makeActiveMeeting({
+        grant,
+        minutesAgo: 1,
+        org,
+        withSession: true,
+      });
+
+      // Pin the duration far below fairBillingMinDurationMs (120 s) so the
+      // test cannot drift over the threshold while it runs.
+      await connection
+        .getRepository(ctx, BbbMeeting)
+        .update(meeting.id as string, {
+          provisionedAt: new Date(Date.now() - 5_000),
+        });
+      await forceComplete(meeting.id as string);
+
+      // The precondition this case exists for: a forced completion performs no
+      // billing, so the meeting starts with NO ledger row at all.
+      expect(await ledgerCount(meeting.id as string)).toBe(0);
+      expect((await reloadGrant(grant.id as string)).consumedMinutes).toBe(0);
+
+      const eventBus = server.app.get(EventBus);
+      const seen: string[] = [];
+      const subscription = eventBus
+        .ofType(MeetingCompletedEvent)
+        .subscribe((e: MeetingCompletedEvent) => {
+          if (String(e.meetingId) === String(meeting.id)) {
+            seen.push(e.source);
+          }
+        });
+
+      try {
+        // First recovery pass — the meeting is billed as a ZERO-minute FACT.
+        await recon.reconcilePendingBilling();
+        await waitFor(async () => (await ledgerCount(meeting.id as string)) === 1);
+
+        const ledger = await getLedger(meeting.id as string);
+        // The table accepts 0 (integer NOT NULL DEFAULT 0, no CHECK).
+        expect(ledger.consumedMinutes).toBe(0);
+        expect(String(ledger.grant.id)).toBe(String(grant.id));
+
+        // No grant movement for a meeting that consumed nothing.
+        const afterFirst = await reloadGrant(grant.id as string);
+        expect(afterFirst.consumedMinutes).toBe(0);
+        expect(afterFirst.exhausted).toBe(false);
+
+        // The recovery pass re-establishes the suppressed lifecycle fact.
+        await waitFor(
+          async () => (await sessionStatus(meeting.id as string)) === 'FINISHED',
+        );
+        const eventsAfterFirstPass = seen.length;
+        expect(eventsAfterFirstPass).toBeGreaterThanOrEqual(1);
+
+        // Second recovery pass: `ledger.id IS NULL` no longer matches, so the
+        // meeting is NEVER revisited — no re-bill, no re-published event.
+        await recon.reconcilePendingBilling();
+        await new Promise((r) => setTimeout(r, 500));
+        expect(await ledgerCount(meeting.id as string)).toBe(1);
+        expect((await getLedger(meeting.id as string)).consumedMinutes).toBe(0);
+        expect(seen.length).toBe(eventsAfterFirstPass);
+        expect((await reloadGrant(grant.id as string)).consumedMinutes).toBe(0);
+
+        // INV-002: replaying the billing operation itself is still idempotent —
+        // the row is inserted ON CONFLICT DO NOTHING, not check-then-insert.
+        const persisted = await connection
+          .getRepository(ctx, BbbMeeting)
+          .findOneOrFail({ where: { id: meeting.id as string } });
+        await recon.consumeGrantHours(ctx, persisted);
+        await recon.consumeGrantHours(ctx, persisted);
+        expect(await ledgerCount(meeting.id as string)).toBe(1);
+        expect((await getLedger(meeting.id as string)).consumedMinutes).toBe(0);
+        expect((await reloadGrant(grant.id as string)).consumedMinutes).toBe(0);
+      } finally {
+        subscription.unsubscribe();
+      }
+    }, 40000);
   });
 });
 

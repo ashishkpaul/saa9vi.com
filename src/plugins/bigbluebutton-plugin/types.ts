@@ -130,6 +130,97 @@ export interface BigBlueButtonPluginOptions {
    */
   provisioningJobBackoffMs?: number;
 
+  /**
+   * Platform default learner-hour rate in paise for `metered` organizations
+   * (ADR-047 / D2).
+   *
+   * Used only when the organization has no `ratePaisePerLearnerHour`. This is a
+   * plugin option on purpose: `BbbPlatformCapacityPolicy` documents itself as a
+   * *capacity* policy (ADR-031) and must not absorb pricing.
+   *
+   * @default `DEFAULT_RATE_PLACEHOLDER_PAISE_PER_LEARNER_HOUR` (constants.ts) —
+   * a clearly marked PLACEHOLDER (2000 paise = ₹20.00/learner-hour, Q2) applied
+   * only when this option is omitted. Set an explicit value (including `0`,
+   * which means "configured — bill nothing") to override the placeholder; a
+   * per-org `ratePaisePerLearnerHour` overrides both.
+   */
+  defaultRatePaisePerLearnerHour?: number;
+
+  // ─── Recording (BBB /create flags) ─────────────────────────────────────────
+
+  /**
+   * When the room has `recordingEnabled`, also pass `autoStartRecording=true`
+   * to BBB `/create` so recording begins automatically when the first
+   * participant joins.
+   *
+   * BBB's own default for `autoStartRecording` is `false`, so `record=true`
+   * alone only ENABLES recording — without this the trainer must press Record
+   * manually. `allowStartStopRecording` stays `true` regardless, so a
+   * moderator can still pause/restart a recording that auto-started.
+   *
+   * Effective value: `(this option ?? true) && meeting.recordingEnabled` — a
+   * room with recording disabled never records, whatever this is set to.
+   *
+   * @default true
+   */
+  autoStartRecording?: boolean;
+
+
+  // ─── BBB protocol (W7) ──────────────────────────────────────────────────
+
+  /**
+   * Checksum algorithm the adapter signs BBB API requests with:
+   * `checksum = hex( <algorithm>(methodName + queryString + apiSecret) )`.
+   *
+   * BBB servers advertise the set they accept via `supportedChecksumAlgorithms`
+   * (W0: `bbb-conf --version` on the deployed server). Default `sha256`;
+   * `sha1` is the legacy algorithm BBB's own API docs still show in the
+   * canonical example. Unknown values fall back to `sha256`.
+   *
+   * @default 'sha256'
+   */
+  checksumAlgorithm?: "sha256" | "sha1";
+
+  // ─── Public callback base (W3/W4 webhooks) ─────────────────────────────
+
+  /**
+   * Publicly reachable base URL of this Saa9vi instance (scheme + host; a
+   * trailing slash is tolerated and normalised at use).
+   *
+   * W3/W4: BBB hook registration builds the callback as
+   * `publicBaseUrl + /bbb/webhook/<serverId>`, and BBB signs the URL that
+   * was REGISTERED — so webhook verification reconstructs the exact string
+   * from this option, never from the incoming request's host/scheme (a
+   * reverse proxy rewrites both). Changing it after hooks are registered
+   * requires re-registering them on the BBB server.
+   *
+   * REQUIRED in any non-dev deployment: boot refuses without it
+   * (`assertProductionSecrets` / `BBB_PUBLIC_BASE_URL`), so hook
+   * registration can never use a guessed URL. Non-dev must be `https://`
+   * (W4 amendment; plain http is refused at boot — the registered callback
+   * carries the auth material W3 verifies).
+   *
+   * @default undefined (dev only)
+   */
+  publicBaseUrl?: string;
+
+  // ─── Tenant provisioning (ADR-047 Phase 3) ──────────────────────────────
+
+  /**
+   * Room names created for every newly provisioned `BbbOrganization` as part of
+   * tenant registration, so a fresh tenant lands in a working academy instead
+   * of an empty room list (Phase 3).
+   *
+   * Seeding is idempotent: it runs only while the organization has ZERO rooms
+   * (`BbbTenantProvisioningListener.seedDefaultRooms`), so a re-delivered
+   * `TenantRegisteredEvent` never duplicates them, and a seeding failure is
+   * logged without failing organization provisioning.
+   *
+   * @default `DEFAULT_SEEDED_ROOM_NAMES` (constants.ts) — `["Main Classroom"]`.
+   * An explicit `[]` disables seeding (a deliberate opt-out, not a fallback).
+   */
+  defaultRooms?: string[];
+
   // ─── Capacity Intelligence Load Estimation (CI-001) ──────────────────────
 
   /**
