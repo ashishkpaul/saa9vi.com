@@ -4,6 +4,7 @@ import {
   Allow,
   Ctx,
   ID,
+  ListQueryBuilder,
   Permission,
   Relations,
   RequestContext,
@@ -11,6 +12,7 @@ import {
   Transaction,
   TransactionalConnection,
 } from '@vendure/core';
+import { IsNull } from 'typeorm';
 import { SUPER_ADMIN_ROLE_CODE } from '@vendure/common/lib/shared-constants';
 import { TenantProfileService } from '../services/tenant-profile.service';
 import { InstructorProfileService } from '../services/instructor-profile.service';
@@ -29,6 +31,7 @@ export class TenantAdminResolver {
     private readonly connection: TransactionalConnection,
     private readonly administratorService: AdministratorService,
     private readonly roleService: RoleService,
+    private readonly listQueryBuilder: ListQueryBuilder,
   ) {}
 
   /**
@@ -36,12 +39,24 @@ export class TenantAdminResolver {
    * only sees administrators whose Role.channels[] includes the active
    * channel. SuperAdmin bypasses the filter and sees all administrators.
    *
-   * Delegates to AdministratorService.findAll so Dashboard filter/sort/
-   * pagination work (it builds the ListQueryBuilder query, including the
-   * deletedAt guard). Channel scoping is applied on top via the same
-   * rule core uses: an administrator is visible only when the caller could
-   * be granted every one of their roles — plus the tenant extra, the
-   * global SuperAdmin account is never listed to tenant admins.
+   * SuperAdmin keeps delegating to AdministratorService.findAll (it applies
+   * Dashboard filter/sort/pagination via ListQueryBuilder, and no visibility
+   * restriction is applied to a SuperAdmin caller).
+   *
+   * Non-SuperAdmin callers must NOT go through findAll: since Vendure 3.7.3
+   * findAll applies restrictToVisibleAdministrators — core's grant-based rule
+   * which hides an administrator as soon as they hold a Role the caller could
+   * not be granted — which drops the tenant-admin row for a channel-scoped
+   * read-admin before the INV-016 channel filter can ever see it (regression
+   * introduced when 1107159 delegated the list to the core service). The
+   * INV-016 contract splits the two concerns: the administrator ROW follows
+   * channel scoping (this query), while Role DETAILS stay hidden from the
+   * read-admin via core's 3.7.3 `User.roles` @ResolveField filter (anti-
+   * enumeration, asserted in the e2e suite). So we build the same
+   * ListQueryBuilder query directly — Dashboard filter/sort/pagination keep
+   * working (the whole point of 1107159) — plus the tenant extras: the
+   * global SuperAdmin account and cross-channel administrators are never
+   * listed to a tenant-scoped caller.
    */
   @Query()
   @Allow(Permission.ReadAdministrator)
@@ -55,18 +70,32 @@ export class TenantAdminResolver {
     const withChannels = Array.from(
       new Set([...(relations ?? []), 'user', 'user.roles', 'user.roles.channels']),
     ) as never;
-    const result = await this.administratorService.findAll(ctx, args.options ?? undefined, withChannels);
+
     if (ctx.userHasPermissions([Permission.SuperAdmin])) {
-      return result;
+      return this.administratorService.findAll(ctx, args.options ?? undefined, withChannels);
     }
-    const visible = result.items.filter((a) =>
-      (a.user?.roles ?? []).some(
-        (r) =>
-          r.code !== SUPER_ADMIN_ROLE_CODE &&
-          (r.channels ?? []).some((c) => String(c.id) === String(ctx.channelId)),
-      ),
-    );
-    return { items: visible, totalItems: visible.length };
+
+    // INV-016 tenant-scoped listing: the channel filter is applied to the
+    // query (not to its result) so that totalItems, sorting, filtering and
+    // pagination all operate over the visible administrators only.
+    // Vendure's SuperAdmin role carries ALL channels, so it would match the
+    // channel filter below — hence the explicit SuperAdmin-role exclusion to
+    // keep the global SuperAdmin account hidden from tenant-scoped callers.
+    const channelId = ctx.channelId as string;
+    const qb = this.listQueryBuilder.build(Administrator, args.options ?? undefined, {
+      relations: withChannels,
+      where: { deletedAt: IsNull() },
+      ctx,
+    });
+    qb.leftJoin('administrator.user', 'inv016User')
+      .leftJoin('inv016User.roles', 'inv016Role')
+      .leftJoin('inv016Role.channels', 'inv016Channel')
+      .andWhere('inv016Channel.id = :inv016ChannelId', { inv016ChannelId: channelId })
+      .andWhere('inv016Role.code != :inv016SuperAdminRoleCode', {
+        inv016SuperAdminRoleCode: SUPER_ADMIN_ROLE_CODE,
+      });
+    const [items, totalItems] = await qb.getManyAndCount();
+    return { items, totalItems };
   }
 
   /**

@@ -163,14 +163,9 @@ apiOptions: {
       },
     ],
 
-    // The following options are useful in development mode,
-    // but are best turned off for production for security reasons.
-    ...(IS_DEV
-      ? {
-          adminApiDebug: true,
-          shopApiDebug: true,
-        }
-      : {}),
+    // adminApiDebug / shopApiDebug were removed in Vendure 3.8: Apollo Server 5
+    // dropped them, so they are deprecated no-ops and have been deleted here.
+    // Playground options above now serve GraphiQL in dev.
   },
   authOptions: {
     tokenMethod: ["bearer", "cookie"],

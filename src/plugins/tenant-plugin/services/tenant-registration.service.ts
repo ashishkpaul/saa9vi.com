@@ -199,22 +199,18 @@ export class TenantRegistrationService {
       const channel = channelResult;
       Logger.debug(`Channel created: code=${channel.code} id=${channel.id}`, loggerCtx);
 
-      // Stock Vendure's ChannelResolver.createChannel() additionally assigns the
-      // SuperAdmin and Customer roles to the new channel after ChannelService.create().
-      // Since we call the service directly, we must replicate that step — otherwise:
+      // Vendure 3.8: ChannelService.create() now assigns the SuperAdmin and
+      // Customer roles to the new channel itself (assignDefaultRolesToChannel),
+      // so the manual replication of ChannelResolver.createChannel()'s role
+      // assignment previously done here is no longer needed. Those join rows
+      // still matter for:
       //   1. AuthService builds CurrentUser.channels from role.channels, so the
-      //      platform SuperAdmin's dashboard channel switcher never shows this
+      //      platform SuperAdmin's dashboard channel switcher must show this
       //      tenant channel (Settings → Channels still lists it, as that is an
       //      unfiltered list query).
       //   2. Cross-channel service calls scoped to this channel (e.g.
-      //      assignStockLocationsToChannel during auto-provisioning below) can
-      //      fail permission validation because the SuperAdmin role has no join
-      //      row for the channel.
-      const superAdminRole = await this.roleService.getSuperAdminRole(superAdminCtx);
-      const customerRole = await this.roleService.getCustomerRole(superAdminCtx);
-      await this.roleService.assignRoleToChannel(superAdminCtx, superAdminRole.id, channel.id);
-      await this.roleService.assignRoleToChannel(superAdminCtx, customerRole.id, channel.id);
-      Logger.debug(`SuperAdmin and Customer roles assigned to channel ${channel.code}`, loggerCtx);
+      //      assignStockLocationsToChannel during auto-provisioning below)
+      //      require the SuperAdmin role to hold a join row for the channel.
 
       // 3. Role — channel-scoped, restricted to this one Channel.
       // Note: We create the role without channelIds first because the superadmin context
