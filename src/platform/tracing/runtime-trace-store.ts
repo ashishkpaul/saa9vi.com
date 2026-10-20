@@ -68,6 +68,20 @@ export class RuntimeTraceStore {
     return this.store.filter(e => e.status === status);
   }
 
+  /**
+   * All execution traces currently held, one per correlationId with events.
+   * Used by RuntimeCausalityValidator; empty store ⇒ empty array (the caller
+   * must treat "no traces" as NOT verified — see the validator).
+   */
+  getAllTraces(): ExecutionTrace[] {
+    const result: ExecutionTrace[] = [];
+    for (const correlationId of this.traces.keys()) {
+      const trace = this.getTrace(correlationId);
+      if (trace) result.push(trace);
+    }
+    return result;
+  }
+
   clear(): void {
     this.traces.clear();
     this.store = [];

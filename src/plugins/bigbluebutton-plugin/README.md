@@ -339,7 +339,6 @@ Unique index on `(roomId, customerId)` — the admin upsert re-activates an exis
 |-------|-------|
 | `channelId` | Unique — one organization per Channel (INV-001) |
 | `ownerUserId` | Vendure User that owns the organization (org transfer / co-admin flows) |
-| `tenantProfileId` | **Legacy nullable, never written** — the tenant link is `channelId` (Channel=Tenant); see BUG-053 |
 | `slug`, `name` | Unique slug, display name |
 | `concurrentMeetingLimit` | Enforcement surface for simultaneous live meetings. Defaults to 5; overwritten by plan-derived capacity **only** when the policy source is `plan` or `channel-override` (ADR-031) |
 | `maxParticipantsPerMeeting` | Room participant ceiling |

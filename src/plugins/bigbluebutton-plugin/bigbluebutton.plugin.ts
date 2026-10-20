@@ -78,9 +78,6 @@ import { BbbCapacityAlertListener } from "./listeners/bbb-capacity-alert.listene
 import { BbbPlanCapacityReconciliationBootstrap } from "./listeners/bbb-plan-capacity-reconciliation.bootstrap";
 
 import { PlatformTracingModule } from "../../platform/tracing/platform-tracing.module";
-import { CorrelationInterceptor } from "../../platform/tracing/correlation-interceptor";
-import { BullMQTracer } from "../../platform/tracing/bullmq-tracer";
-import { WebhookRecorder } from "../../platform/tracing/webhook-recorder";
 import { BbbAdminResolver } from "./api/bbb-admin.resolver";
 import { BbbShopResolver } from "./api/bbb-shop.resolver";
 import { BbbWebhookController } from "./workers/bbb-webhook.controller";
@@ -139,11 +136,8 @@ import {
       provide: BBB_PLUGIN_OPTIONS,
       useFactory: () => BigBlueButtonPlugin.options,
     },
-    CorrelationInterceptor,
     BbbChannelAccessService,
     BbbEncryptionService,
-    BullMQTracer,
-    WebhookRecorder,
     BbbApiService,
     BbbServerService,
     BbbOrganizationService,

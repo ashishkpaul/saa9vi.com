@@ -15,7 +15,7 @@
 
 **Relationships:**
 - 1:1 with Channel (via `channelId`)
-- Linked to BbbOrganization through that channel (`channelId` 1:1, INV-001); BbbOrganization's legacy `tenantProfileId` column is nullable, never written by the create path, and is not a reference (BUG-053)
+- Linked to BbbOrganization through that channel (`channelId` 1:1, INV-001); BbbOrganization's former legacy `tenantProfileId` column was removed by migration `1792501186478-DropBbbOrganizationTenantProfileId` (BUG-053, resolved 2026-10-20)
 
 **Lifecycle:**
 - Created during `registerNewTenant` or admin tenant creation
@@ -69,7 +69,7 @@
 
 **Relationships:**
 - 1:1 with Channel (unique `channelId` index)
-- The tenant link is `channelId` itself (Channel=Tenant); `tenantProfileId` is a legacy nullable column that is never written (BUG-053)
+- The tenant link is `channelId` itself (Channel=Tenant); the legacy `tenantProfileId` column was removed by migration `1792501186478-DropBbbOrganizationTenantProfileId` (BUG-053, resolved 2026-10-20)
 
 **Lifecycle:**
 - Created automatically when tenant is provisioned

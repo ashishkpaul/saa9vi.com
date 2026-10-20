@@ -8,8 +8,6 @@ import {
   ConfigService,
   EventBus,
   ID,
-  NativeAuthenticationMethod,
-  PasswordCipher,
   PaymentMethodService,
   RequestContext,
   RequestContextService,
@@ -106,7 +104,6 @@ export class TenantRegistrationService {
     private readonly tenantProfileService: TenantProfileService,
     private readonly configService: ConfigService,
     private readonly requestContextService: RequestContextService,
-    private readonly passwordCipher: PasswordCipher,
     private readonly shippingMethodService: ShippingMethodService,
     private readonly paymentMethodService: PaymentMethodService,
     private readonly stockLocationService: StockLocationService,
@@ -241,85 +238,66 @@ export class TenantRegistrationService {
       Logger.debug('Channel assigned to role', loggerCtx);
 
       // 4. Administrator — the tenant's own dashboard login.
-      // We use direct repository access to bypass the administratorService.create()
-      // permission check (checkActiveUserCanGrantRoles) which validates that the
-      // active user has the required permissions on the role's channels. Since the
-      // role is scoped to the new channel (which the superadmin doesn't have access
-      // to yet), the check would fail. Using repository access is safe here because
-      // we're operating under the superAdminCtx.
       //
-      // NOTE: This manual path duplicates framework internals (password hashing,
-      // user.verified, event publishing, etc.). It was kept because the original
-      // swap to administratorService.create()/roleService.create() with channelIds
-      // failed due to Vendure's checkActiveUserCanGrantRoles validation — the
-      // superadmin doesn't have access to the newly-created channel yet. If a
-      // future Vendure upgrade changes what Administrator creation requires,
-      // this code will need updating. The e2e test suite (27 tests) serves as
-      // the safety net for any such refactor.
+      // Framework path (Vendure 3.8): AdministratorService.create() performs the
+      // duplicate-email check (with framework email normalization), password
+      // hashing, NativeAuthenticationMethod persistence, Administrator
+      // persistence and AdministratorEvent publishing — replacing the manual
+      // repository-based creation that duplicated those framework internals.
+      //
+      // roleIds is deliberately EMPTY: RoleService.activeUserHasPermissionsOfRoles
+      // passes vacuously for an empty role list, whereas passing the new tenant
+      // role here would fail because the superAdminCtx does not yet hold access
+      // to the role's (new) channel. The role is assigned below via the
+      // established repository workaround (kept per the execution plan, Phase 1.4).
+      //
+      // Email verification (Phase 1.5 / BUG-033 / GHSA-wr5h-x3x6-4h23): Vendure's
+      // UserService.createAdminUser() hardcodes verified=true, so the supported
+      // UserService.setVerificationToken() call runs immediately afterwards —
+      // it sets the verification token AND flips verified back to false — all
+      // inside one transaction, so the unverified state is atomic with creation
+      // (fail-closed: a crash rolls back the whole administrator). The
+      // AccountRegistrationEvent is published only after commit, so a
+      // rolled-back registration can never trigger a verification email. The
+      // admin cannot log in until the link is clicked (login is refused while a
+      // pending token exists, even with requireVerification=false — 3.7.3
+      // GHSA-wr5h-x3x6-4h23 gate).
       Logger.debug(`About to create administrator with email: ${input.emailAddress}`, loggerCtx);
-      let administrator;
+      let administrator: Administrator;
       try {
-        // Create User first (via repository to bypass permission checks).
-        // Email verification (Phase 1.5): the user is created UNVERIFIED and
-        // a verification token is set. The AccountRegistrationEvent is published
-        // so the EmailPlugin sends the verification email. The admin cannot log
-        // in until they click the verification link (mirrors the
-        // registerCustomerAccount / verifyCustomerAccount pattern).
-        const user = new User();
-        user.identifier = input.emailAddress;
-        user.verified = false;
-        const savedUser = await this.connection.getRepository(superAdminCtx, User).save(user);
-        Logger.debug(`User created with id: ${savedUser.id}`, loggerCtx);
-
-        // Add native authentication method with password
-        const hashedPassword = await this.passwordCipher.hash(input.password);
-        const nativeAuthMethod = new NativeAuthenticationMethod({
-          identifier: input.emailAddress,
-          passwordHash: hashedPassword,
+        administrator = await this.connection.withTransaction(superAdminCtx, async (txCtx) => {
+          const created = await this.administratorService.create(txCtx, {
+            firstName: input.firstName,
+            lastName: input.lastName,
+            emailAddress: input.emailAddress,
+            password: input.password,
+            roleIds: [],
+          });
+          // `created.user` carries authenticationMethods (set by
+          // createAdminUser), which setVerificationToken requires via
+          // getNativeAuthenticationMethod().
+          await this.userService.setVerificationToken(txCtx, created.user);
+          Logger.debug('Verification token set; user flipped to unverified', loggerCtx);
+          // Kept workaround: the supported role-assignment paths validate that
+          // the active user holds access to the role's channels, which the
+          // superadmin does not for the brand-new tenant channel.
+          if (role) {
+            created.user.roles = [role];
+            await this.connection.getRepository(txCtx, User).save(created.user);
+            Logger.debug('Role assigned to user', loggerCtx);
+          }
+          return created;
         });
-        nativeAuthMethod.user = savedUser as any;
-        await this.connection.getRepository(superAdminCtx, NativeAuthenticationMethod).save(nativeAuthMethod);
-        Logger.debug('Native authentication method added', loggerCtx);
-
-        // Assign role to user (via repository to bypass permission checks)
-        const userRepo = this.connection.getRepository(superAdminCtx, User);
-        const userWithRoles = await userRepo.findOne({
-          where: { id: savedUser.id },
-          relations: ['roles', 'authenticationMethods'],
-        });
-        if (userWithRoles && role) {
-          userWithRoles.roles = [role];
-          await userRepo.save(userWithRoles);
-          Logger.debug('Role assigned to user', loggerCtx);
-        }
-
-        // Set verification token and publish AccountRegistrationEvent so the
-        // EmailPlugin sends the verification email (Phase 1.5 blocker).
-        const userWithAuth = await userRepo.findOne({
-          where: { id: savedUser.id },
-          relations: ['authenticationMethods'],
-        });
-        if (userWithAuth) {
-          await this.userService.setVerificationToken(superAdminCtx, userWithAuth);
-          this.eventBus.publish(new AccountRegistrationEvent(superAdminCtx, userWithAuth));
-          Logger.debug('Verification token set and AccountRegistrationEvent published', loggerCtx);
-        }
-
-        // Create Administrator (via repository to bypass permission checks)
-        const adminRepo = this.connection.getRepository(superAdminCtx, Administrator);
-        administrator = adminRepo.create({
-          firstName: input.firstName,
-          lastName: input.lastName,
-          emailAddress: input.emailAddress,
-          user: savedUser,
-        });
-        administrator = await adminRepo.save(administrator);
         Logger.debug(`Administrator created with id: ${administrator?.id}`, loggerCtx);
-
       } catch (e: any) {
         Logger.debug(`Administrator creation failed: ${e?.message}`, loggerCtx);
         throw e;
       }
+
+      // Published after commit (see above) so the EmailPlugin only sends the
+      // verification email for a fully persisted, unverified administrator.
+      this.eventBus.publish(new AccountRegistrationEvent(superAdminCtx, administrator.user));
+      Logger.debug('AccountRegistrationEvent published', loggerCtx);
 
       // 5. TenantProfile — channel assignment is done inside via assignToChannels.
       Logger.debug(`About to create TenantProfile for channel: ${channel.id}`, loggerCtx);
@@ -382,9 +360,14 @@ export class TenantRegistrationService {
   }
 
   private async assertEmailNotTaken(ctx: RequestContext, emailAddress: string): Promise<void> {
+    // Mirror Vendure's normalizeEmailAddress (trim + lowercase) so this
+    // fail-fast check cannot miss a case-variant duplicate that
+    // AdministratorService.create()'s checkForDuplicateEmailAddress would only
+    // reject after the Seller/Channel were already provisioned.
+    const identifier = emailAddress.trim().toLowerCase();
     const existing = await this.connection
       .getRepository(ctx, User)
-      .findOne({ where: { identifier: emailAddress } });
+      .findOne({ where: { identifier } });
     if (existing) {
       throw new UserInputError('An account with these details could not be created');
     }
