@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Configuration
+# Configuration (Using native Linux paths)
 SRC_DIR="./src"
 PLUGINS_DIR="$SRC_DIR/plugins"
 DOMAIN_DIR="$SRC_DIR/domain"
@@ -8,7 +8,7 @@ ES9_CONFIG_DIR="$SRC_DIR/es9-config"
 CONFIG_DIR="$SRC_DIR/config"
 PLATFORM_DIR="$SRC_DIR/platform"
 SCRIPTS_DIR="./scripts"
-OUTPUT_BASE_DIR="/mnt/256G/projects/vendure/edu/saanvi.com"
+OUTPUT_BASE_DIR="/home/ashish/backup"
 
 # Prompt user for .md file exclusion
 read -p "Exclude .md files? (y/n): " exclude_md_choice
@@ -45,13 +45,13 @@ is_excluded() {
     # Exclude generated TypeScript files in any plugin root
     [[ "$file" == ./src/plugins/*/generated-*-types.ts ]] && return 0
 
-    # ----- NEW: Exclude any gql directory (e.g. ./src/plugins/*/gql/) -----
+    # Exclude any gql directory (e.g. ./src/plugins/*/gql/)
     [[ "$file" == *"/gql/"* ]] && return 0
 
-    # ----- NEW: Exclude any e2e directory (e.g. ./src/plugins/*/e2e/) -----
+    # Exclude any e2e directory (e.g. ./src/plugins/*/e2e/)
     [[ "$file" == *"/e2e/"* ]] && return 0
 
-    # (Optional) Explicitly exclude the specific file – already covered by /gql/
+    # Explicitly exclude specific file
     [[ "$file" == "./src/plugins/reviews/ui/gql/gql.ts" ]] && return 0
 
     return 1
