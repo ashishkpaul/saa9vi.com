@@ -85,13 +85,11 @@ export interface RegisterTenantResult {
  *   REMAINING — see docs/implementation/integration-gaps-worklist.md before
  *     treating self-serve onboarding as production-complete:
  *     - Storefront reachability: registration creates the Channel and
- *       TenantProfile, and TenantProfileService.create() seeds
- *       {tenantSlug}.{TENANT_PLATFORM_DOMAIN} → Channel.token through
- *       DomainChannelResolverService, so the platform hostname resolves from
- *       day one (B-2 IMPLEMENTED 2026-09-15, G2 acceptance passed). The
- *       authoritative hostname-contract record (B-1) remains open.
- *     - Production custom-domain routing via Caddy/TLS remains open (B-5/G10;
- *       roadmap "Tenant storefront onboarding" + "Custom domain routing" items).
+     *       TenantProfile but does not provision a Saa9vi-hosted seller subdomain.
+     *       Sellers must use the central marketplace profile and, for a standalone
+     *       storefront, a verified seller-owned custom domain.
+     *     - Production custom-domain routing via Caddy/TLS remains a deployment
+     *       verification item (B-5/G10; roadmap "Custom domain routing").
  */
 @Injectable()
 export class TenantRegistrationService {

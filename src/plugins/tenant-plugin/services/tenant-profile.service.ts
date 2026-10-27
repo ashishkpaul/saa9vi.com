@@ -1,19 +1,40 @@
 import { Injectable } from '@nestjs/common';
-import { EventBus, IllegalOperationError, RequestContext, TransactionalConnection, ChannelService, Logger } from '@vendure/core';
+import { EventBus, IllegalOperationError, RequestContext, TransactionalConnection, ChannelService } from '@vendure/core';
 import { ID } from '@vendure/common/lib/shared-types';
 import { TenantProfile } from '../entities/tenant-profile.entity';
 import { DomainChannelResolverService } from './domain-channel-resolver.service';
 import { TenantProfileUpdatedEvent, TenantRegisteredEvent } from '../events/tenant-events';
 
-const loggerCtx = 'TenantProfileService';
+const SAA9VI_ROOT_DOMAIN = 'saa9vi.com';
 
 /**
- * Platform domain under which tenant subdomains are provisioned
- * ({tenantSlug}.{TENANT_PLATFORM_DOMAIN}). Overridable so local/e2e
- * environments can use a different domain without code changes.
+ * The seller customDomain field is only for a seller-owned domain. Saa9vi
+ * platform hosts must be configured separately and must never be assigned to
+ * a seller Channel through the custom-domain mapping path.
  */
-export const TENANT_PLATFORM_DOMAIN =
-  process.env.TENANT_PLATFORM_DOMAIN || 'saa9vi.com';
+function assertSellerOwnedCustomDomain(domain: string | null | undefined): void {
+  if (!domain) return;
+
+  let hostname: string;
+  try {
+    const trimmed = domain.trim();
+    const url = new URL(
+      /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`,
+    );
+    hostname = url.hostname.toLowerCase().replace(/\.$/, '');
+  } catch {
+    throw new IllegalOperationError('Seller custom domain must be a valid hostname.');
+  }
+
+  if (
+    hostname === SAA9VI_ROOT_DOMAIN ||
+    hostname.endsWith(`.${SAA9VI_ROOT_DOMAIN}`)
+  ) {
+    throw new IllegalOperationError(
+      'Seller custom domains must not use saa9vi.com or any of its subdomains.',
+    );
+  }
+}
 
 @Injectable()
 export class TenantProfileService {
@@ -56,15 +77,12 @@ export class TenantProfileService {
   }
 
   /**
-   * Platform-Global uniqueness lookup (the ONE sanctioned channel-bypassing
-   * read in this service). tenantSlug backs the hostname
-   * `{tenantSlug}.{TENANT_PLATFORM_DOMAIN}`, which must not collide across
-   * channels, so the check cannot be channel-scoped. The unique index on
-   * tenantSlug is the ultimate database guard; the preliminary lookup only
-   * picks a good candidate — actual allocation is concurrency-safe via the
-   * retry loop in create() (B-2.1).
+   * Platform-global uniqueness lookup for tenantSlug. The slug remains a
+   * stable internal/marketplace identifier and must be unique across channels.
+   * The unique index is the ultimate database guard; this lookup selects a
+   * candidate and the retry loop in create() handles registration races.
    */
-  private platformSlugRepo(ctx: RequestContext) {
+  private tenantSlugRepo(ctx: RequestContext) {
     return this.connection.rawConnection.getRepository(TenantProfile);
   }
 
@@ -136,7 +154,7 @@ export class TenantProfileService {
     base: string,
     startSuffix = 2,
   ): Promise<string> {
-    const repo = this.platformSlugRepo(ctx);
+    const repo = this.tenantSlugRepo(ctx);
     let candidate = base;
     for (let i = startSuffix; i <= 999; i++) {
       const clash = await repo.findOne({ where: { tenantSlug: candidate } });
@@ -151,7 +169,7 @@ export class TenantProfileService {
   /** Validate/normalize an explicitly supplied slug and reject collisions. */
   private async assertSlugAvailable(ctx: RequestContext, slug: string): Promise<string> {
     const normalized = this.slugify(slug);
-    const clash = await this.platformSlugRepo(ctx).findOne({
+    const clash = await this.tenantSlugRepo(ctx).findOne({
       where: { tenantSlug: normalized },
     });
     if (clash) {
@@ -165,17 +183,16 @@ export class TenantProfileService {
     if (!channelId) {
       throw new Error('channelId is required');
     }
+    assertSellerOwnedCustomDomain(input.customDomain);
     const existing = await this.findByChannelId(ctx, channelId);
     if (existing) {
       throw new Error(`TenantProfile already exists for channel ${channelId}`);
     }
     const profile = new TenantProfile({ ...input, channelId });
 
-    // G1/B-2: resolve the tenant slug. Explicitly supplied slugs are
-    // validated and must be free (they are never silently renamed); otherwise
-    // a deterministic unique slug is derived from businessName. This must
-    // happen before save so the unique index and the hostname mapping both
-    // see the final value.
+    // Resolve the tenant slug used as a stable internal/marketplace identifier.
+    // Explicitly supplied slugs are validated; otherwise a deterministic unique
+    // slug is derived from businessName before the profile is saved.
     if (input.tenantSlug) {
       profile.tenantSlug = await this.assertSlugAvailable(ctx, input.tenantSlug);
     } else {
@@ -212,51 +229,33 @@ export class TenantProfileService {
       }
     }
 
-    // ─── G1/B-2: seed the platform subdomain hostname mapping ───────────────
-    // {tenantSlug}.{TENANT_PLATFORM_DOMAIN} → Channel.token via the SAME
-    // DomainChannelResolverService mapping (one mechanism, one writer — see
-    // docs/implementation/g1-hostname-contract-decision.md). Done after save
-    // so a failed Redis write cannot roll back the profile (the resolver is
-    // non-throwing and logs failures). A failed seed is NOT auto-repaired by
-    // an ordinary re-save: recovery happens via
-    // TenantProfileService.ensureTenantHostnameMapping(), which update()
-    // invokes on every profile save (B-2.2); a scheduled reconciliation job
-    // for the 7-day TTL is a separately tracked decision.
-    if (saved.tenantSlug) {
-      const channel = await this.connection.getRepository(ctx, 'Channel').findOne({ where: { id: channelId } });
-      if (channel) {
-        const hostname = `${saved.tenantSlug}.${TENANT_PLATFORM_DOMAIN}`;
-        await this.domainResolver.setMapping(hostname, (channel as any).token);
-        Logger.info(`Provisioned tenant hostname mapping: ${hostname} → channel ${channelId}`, loggerCtx);
-        // Notify BBB consumers to auto-provision BbbOrganization with
-        // slug === tenantSlug (single slug source of truth, G1 decision).
-        this.eventBus.publish(
-          new TenantRegisteredEvent(
-            ctx,
-            String(saved.id),
-            String(channelId),
-            saved.tenantSlug,
-            saved.businessName,
-          ),
-        );
-      } else {
-        Logger.warn(`Channel ${channelId} not found; tenant hostname mapping not seeded`, loggerCtx);
-      }
-    }
+    // Notify academy-provisioning consumers independently of hostname routing.
+    // create() always derives/validates tenantSlug before persistence. BBB uses
+    // the slug to provision the organization's identity/default rooms, and the
+    // subscription plugin provisions the free plan. No Saa9vi seller-hostname
+    // mapping is created or required for this event.
+    this.eventBus.publish(
+      new TenantRegisteredEvent(
+        ctx,
+        String(saved.id),
+        String(channelId),
+        saved.tenantSlug,
+        saved.businessName,
+      ),
+    );
 
     return saved;
   }
 
   async update(ctx: RequestContext, channelId: ID, input: Partial<TenantProfile>): Promise<TenantProfile> {
     const profile = await this.findByChannelIdOrThrow(ctx, channelId);
-    // tenantSlug is IMMUTABLE (G1 decision): any attempt to change it is an
-    // explicit application error (B-2.3) — not a silent discard. Rename
-    // semantics would break the provisioned hostname mapping and any
-    // externally captured {tenantSlug} URLs, so callers must be told, not
-    // quietly ignored.
+    assertSellerOwnedCustomDomain(input.customDomain);
+    // tenantSlug is immutable because it is a stable internal/marketplace
+    // identifier. Reject rename attempts explicitly rather than silently
+    // discarding them or changing existing references.
     if (input.tenantSlug && input.tenantSlug !== profile.tenantSlug) {
       throw new IllegalOperationError(
-        `tenantSlug is immutable (G1 decision): "${profile.tenantSlug}" cannot be renamed to "${input.tenantSlug}"`,
+        `tenantSlug is immutable: "${profile.tenantSlug}" cannot be renamed to "${input.tenantSlug}"`,
       );
     }
     delete input.tenantSlug;
@@ -285,37 +284,6 @@ export class TenantProfileService {
       new TenantProfileUpdatedEvent(String(saved.id), String(channelId), updatedFields),
     );
 
-    // B-2.2: re-affirm the platform hostname mapping on every profile save.
-    // Idempotent — if registration's seed write failed (Redis briefly
-    // unavailable), any subsequent profile save repairs it. The 7-day TTL
-    // re-affirmation architecture is a separately tracked decision (G1 doc),
-    // but this gives update-path recovery without a new mechanism.
-    await this.ensureTenantHostnameMapping(ctx, channelId);
-
     return saved;
-  }
-
-  /**
-   * B-2.2: guarantee `channel-token:{tenantSlug}.{TENANT_PLATFORM_DOMAIN}` →
-   * Channel.token exists via the single existing mapping writer
-   * (DomainChannelResolverService). Idempotent and safe to call from any
-   * lifecycle point (update, future reconciliation job). No-op when the
-   * profile has no tenantSlug (legacy profiles).
-   */
-  async ensureTenantHostnameMapping(ctx: RequestContext, channelId: ID): Promise<void> {
-    const profile = await this.findByChannelId(ctx, channelId);
-    if (!profile?.tenantSlug) {
-      return;
-    }
-    const channel = await this.connection
-      .getRepository(ctx, 'Channel')
-      .findOne({ where: { id: channelId } });
-    if (!channel) {
-      Logger.warn(`ensureTenantHostnameMapping: channel ${channelId} not found`, loggerCtx);
-      return;
-    }
-    const hostname = `${profile.tenantSlug}.${TENANT_PLATFORM_DOMAIN}`;
-    await this.domainResolver.setMapping(hostname, (channel as any).token);
-    Logger.debug(`Ensured tenant hostname mapping: ${hostname} → channel ${channelId}`, loggerCtx);
   }
 }

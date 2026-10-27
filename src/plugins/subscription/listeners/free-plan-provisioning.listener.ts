@@ -16,7 +16,7 @@ import { FreePlanProvisioningService } from "../services/free-plan-provisioning.
  *
  * Subscribes to the SAME seam the BBB plugin uses to provision a tenant's
  * BbbOrganization — `TenantProfileService.create()` publishes
- * `TenantRegisteredEvent` once the profile and hostname mapping exist — so the
+ * `TenantRegisteredEvent` once the profile exists — independent of hostname routing — so the
  * subscription plugin owns its own entity without the tenant plugin depending on
  * it (.clinerules §1: event-driven, no tight coupling; the BBB plugin already
  * imports this event across plugin boundaries).

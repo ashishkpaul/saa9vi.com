@@ -1,6 +1,8 @@
 # Cline Implementation Tasks — Current Integration Gaps
 
 > **Status:** Implementation worklist
+
+> **Domain policy update (2026-10-27):** Saa9vi-hosted seller subdomains such as `{tenantSlug}.saa9vi.com` are retired. Keep `tenantSlug` as an internal/marketplace slug for current consumers, but do not write or refresh Redis mappings for seller subdomains. Preserve verified seller-owned custom-domain routing. See `docs/implementation/g1-hostname-contract-decision.md` §13; its earlier hostname-contract sections are historical.
 > **Purpose:** Define only the remaining implementation work after the backend, BBB, Razorpay, marketplace, and storefront audits.
 > **Rule:** Do not reimplement functionality already present in the repository. Every task begins with direct code inspection and evidence capture.
 >
@@ -52,41 +54,37 @@ Do not implement a feature merely because an old roadmap or action plan mentions
 
 # Track B — Multi-Tenant Storefront Reachability & Isolation
 
-## B-1 — Establish tenant hostname contract
+## B-1 — Seller storefront domain policy
 
 **Priority:** P1
-**Status:** Confirmed architectural gap; implementation required.
+**Status:** Decision made 2026-10-27 — platform-hosted seller subdomains retired.
 
 ### Objective
 
-A newly registered tenant must have a deterministic, reachable storefront hostname.
+A seller's standalone storefront must use an explicitly configured and verified seller-owned custom domain. Every seller may still have a central marketplace profile on Saa9vi; Saa9vi does not provision `{tenantSlug}.saa9vi.com` storefront hosts.
 
 Trace:
 
 ```text
-registerNewTenant() → Channel creation → TenantProfile creation → hostname assignment
-→ domain/channel mapping → reverse proxy → Next.js → correct Vendure Channel
+registerNewTenant() → Seller/Channel/TenantProfile → verified customDomain
+→ existing domain/channel mapping → reverse proxy → Next.js → correct Vendure Channel
 ```
 
-### Cline must first inspect
+### Required behavior
 
-```text
-src/plugins/tenant-plugin/ (tenant-registration.service.ts, tenant-profile.service.ts)
-deploy/Caddyfile, deploy/nginx/
-edu-frontend: src/lib/vendure/channel.ts, src/app/api/resolve-channel/
-```
-
-### Required decision
-
-Determine and document the authoritative hostname contract. Preferred model to evaluate: `{academySlug}.saa9vi.com` for platform-managed subdomains, with `customDomain` reserved for explicitly configured domains. Do not create two independent hostname-resolution mechanisms unless the architecture requires it.
+- Do not create or refresh Redis mappings for generated seller subdomains.
+- Keep `tenantSlug` for internal/marketplace and BigBlueButton organization identity.
+- Preserve seller-owned custom-domain mapping and unknown-host/header-spoofing protections.
+- Keep platform-owned hosts (marketplace, admin, API) explicitly configured and independent of any seller's Channel.
+- Remove only confirmed legacy Redis keys for generated seller subdomains; do not bulk-delete `channel-token:*`.
 
 ### Acceptance criteria
 
-A tenant created through the supported GraphQL registration flow has a documented hostname contract and can be reached without manual DB or Redis modification.
+New registration creates no `channel-token:{tenantSlug}.saa9vi.com` mapping; verified custom domains resolve to their own Channel; unknown seller hosts do not render a storefront; BBB organization and free-plan provisioning continue.
 
-## B-2 — Implement tenant hostname provisioning
+## B-2 — Historical implementation of tenant hostname provisioning
 
-**Status:** IMPLEMENTED 2026-09-15 — **G2 acceptance PASSED at the Vendure layer** (live stack; see §G2 acceptance below). Build/migration/code-review verified; hostname→Channel resolution proven for four tenants. Next.js `resolve-channel` consumer and production Caddy/TLS remain unverified (out of B-2 scope).
+**Status:** HISTORICAL — implementation completed and tested in September 2026, then retired by the domain-policy decision dated 2026-10-27. The original G2/G3 hostname acceptance results below prove the former behavior only; they are not the current product requirement. Do not restore the generated subdomain writer, hostname refresh method, wildcard seller routing, or a subdomain reconciliation job.
 Audit fixes applied same day (B-2.1–B-2.4): (1) tenantSlug allocation is **platform-global** —
 collision checks use `connection.rawConnection` (documented as the one sanctioned channel-bypassing
 read) and save is **concurrency-safe** (unique-violation → next `-N` suffix → retry; explicit slugs
@@ -110,7 +108,7 @@ finishes. G2 acceptance must tolerate this ordering (poll/assert after a short d
 `registerNewTenant` intentionally carries no `@Transaction()` decorator, so slug-retry saves
 autocommit (with SAVEPOINT fallback if a transactional caller is ever introduced).
 
-### G2 acceptance — PASSED 2026-09-15 (Vendure layer, live stack)
+### Historical G2 acceptance — PASSED 2026-09-15 (Vendure layer; seller subdomains now retired)
 
 Executed against the running server (`npm run start`, built `dist`) with Postgres + Redis:
 four tenants registered via the supported `registerNewTenant` Shop-API mutation (two pairs sharing
@@ -134,7 +132,7 @@ Not covered by this run (explicitly out of B-2 scope): Next.js `/api/resolve-cha
 same Redis map; storefront not part of this stack), Caddy wildcard/on-demand TLS (G10), and the
 7-day TTL re-affirmation strategy (separate operational decision).
 
-### G3 pre-flight — storefront hostname chain verified 2026-09-16 (meeting.lan)
+### Historical G3 pre-flight — platform subdomain chain verified 2026-09-16 (meeting.lan; behavior retired)
 
 The Next.js link of the chain was exercised against the local `meeting.lan` stack
 (nginx wildcard TLS → Next.js :3001 → `/api/resolve-channel` → Redis :6479) with **fresh tenants

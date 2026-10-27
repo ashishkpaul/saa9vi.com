@@ -31,9 +31,9 @@ function getRedis(): Redis | null {
  * Express middleware that resolves the incoming hostname to a channel token
  * via Redis, and sets the X-Vendure-Token header on the request.
  *
- * This enables custom domain tenants (e.g. mehta.saa9vi.com) to be routed
- * to the correct channel without requiring the storefront to explicitly
- * pass the channel token.
+ * This enables seller-owned custom domains (e.g. www.academy.example.com)
+ * to be routed to the correct channel without requiring the storefront to
+ * explicitly pass the channel token. Saa9vi-hosted seller subdomains are retired.
  *
  * The middleware is non-blocking — if Redis is unavailable or the domain
  * is not found, the request passes through unmodified (the default channel
