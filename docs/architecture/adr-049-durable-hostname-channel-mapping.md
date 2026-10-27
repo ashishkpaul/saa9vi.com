@@ -1,3 +1,5 @@
+> **SUPERSEDED — 2026-10-27:** This proposal's recommendation to assign/reconcile `{tenantSlug}.saa9vi.com` hostnames is retired and must not be implemented. Saa9vi will not provide seller subdomains. Keep `tenantSlug` for internal/marketplace and BigBlueButton organization identity, and preserve the verified seller-owned `TenantProfile.customDomain` mapping path. This retirement does not authorize deleting platform-owned host routing keys or every `channel-token:*` key: any platform front-door hostname still in use must be reviewed and configured independently of a seller's lifecycle, never mapped to an arbitrary seller. The incident narrative and proposed steps below are historical context only.
+
 # ADR-049: Durable Hostname→Channel Mapping for Legacy Tenants (No Manual Redis/DB Writes)
 
 **Status:** Proposed (2026-10-12, rev.2 — corrects the rev.1 TTL/backfill errors
@@ -83,3 +85,8 @@ code-owned mapping exists for either.
 **Consequences:** The hand-set key is the documented interim until §§2–4 land.
 The 7-day TTL is now load-bearing for the platform host — the §3 job is
 P0, not follow-up.
+
+
+## Retirement status — 2026-10-27
+
+The proposed slug-hostname writer/reconciliation job and any manual or permanent Redis key intended to provide seller storefronts at `{tenantSlug}.saa9vi.com` are canceled. Do not add `assignInitialTenantSlug` or a reconciliation job for seller subdomains. Keep domain resolution for explicitly verified seller-owned custom domains. Inventory any legacy generated seller-subdomain keys separately and remove only keys positively identified as such. If `storefront.saa9vi.com` or another platform-owned host remains active, determine its intended platform-level behavior separately; it must not inherit an arbitrary tenant's channel token.
