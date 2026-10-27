@@ -55,9 +55,9 @@ export class TenantShopResolver {
    * Administrator. SEC-003/SEC-004 are implemented — `rate-limiter.middleware.ts`
    * throttles registerNewTenant (5/hour per IP) and the Administrator is created
    * unverified (verification email via AccountRegistrationEvent; login blocked
-   * until verified). Remaining onboarding caveats (hostname contract, production
-   * custom-domain routing) are tracked in TenantRegistrationService and
-   * docs/implementation/integration-gaps-worklist.md.
+   * until verified). Seller subdomains under saa9vi.com are retired; standalone
+   * storefront reachability depends on verified seller-owned custom-domain
+   * routing, tracked in TenantRegistrationService and the implementation worklist.
    */
   @Mutation()
   @Allow(Permission.Public)
