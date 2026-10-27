@@ -19,11 +19,12 @@ export class TenantProfile extends VendureEntity implements ChannelAware {
   businessName: string;
 
   /**
-   * Platform hostname slug (G1 decision, docs/implementation/g1-hostname-contract-decision.md):
-   * the tenant's storefront is reachable at `{tenantSlug}.{TENANT_PLATFORM_DOMAIN}`.
-   * Derived at registration from businessName, unique, and IMMUTABLE after
-   * provisioning (no rename semantics exist). Nullable only because the column
-   * post-dates existing profiles; every newly registered tenant has one.
+   * Internal slug used for tenant identity and central marketplace routes
+   * (e.g. /sellers/{tenantSlug}). Derived at registration from businessName,
+   * unique, and IMMUTABLE after provisioning (no rename semantics exist).
+   * Nullable only because the column post-dates existing profiles; every
+   * newly registered tenant has one. This is NOT a hostname — no
+   * {tenantSlug}.saa9vi.com mapping is provisioned from it.
    * This is the single slug source of truth — BbbOrganization.slug is
    * synchronized FROM this value, never independent (TenantRegisteredEvent).
    */

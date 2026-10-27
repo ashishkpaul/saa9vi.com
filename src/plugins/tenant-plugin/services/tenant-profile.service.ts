@@ -7,14 +7,6 @@ import { TenantProfileUpdatedEvent, TenantRegisteredEvent } from '../events/tena
 
 const loggerCtx = 'TenantProfileService';
 
-/**
- * Platform domain under which tenant subdomains are provisioned
- * ({tenantSlug}.{TENANT_PLATFORM_DOMAIN}). Overridable so local/e2e
- * environments can use a different domain without code changes.
- */
-export const TENANT_PLATFORM_DOMAIN =
-  process.env.TENANT_PLATFORM_DOMAIN || 'saa9vi.com';
-
 @Injectable()
 export class TenantProfileService {
   constructor(
@@ -57,12 +49,11 @@ export class TenantProfileService {
 
   /**
    * Platform-Global uniqueness lookup (the ONE sanctioned channel-bypassing
-   * read in this service). tenantSlug backs the hostname
-   * `{tenantSlug}.{TENANT_PLATFORM_DOMAIN}`, which must not collide across
-   * channels, so the check cannot be channel-scoped. The unique index on
-   * tenantSlug is the ultimate database guard; the preliminary lookup only
-   * picks a good candidate — actual allocation is concurrency-safe via the
-   * retry loop in create() (B-2.1).
+   * read in this service). tenantSlug is an internal slug used for tenant
+   * identity and central marketplace routes — it is not a hostname. The
+   * unique index on tenantSlug is the ultimate database guard; the
+   * preliminary lookup only picks a good candidate — actual allocation is
+   * concurrency-safe via the retry loop in create() (B-2.1).
    */
   private platformSlugRepo(ctx: RequestContext) {
     return this.connection.rawConnection.getRepository(TenantProfile);
@@ -160,6 +151,32 @@ export class TenantProfileService {
     return normalized;
   }
 
+  /**
+   * Reject Saa9vi platform hostnames as seller custom domains. Prevents a
+   * seller from recreating the retired {tenantSlug}.saa9vi.com feature by
+   * setting it as their customDomain. Normalizes URL-form inputs so that
+   * e.g. https://www.saa9vi.com/ is caught as well as a bare domain.
+   */
+  private rejectPlatformHostname(customDomain: string): void {
+    const host = this.normalizeHostname(customDomain);
+    if (!host) return;
+    const platformDomain = 'saa9vi.com';
+    if (host === platformDomain || host.endsWith(`.${platformDomain}`)) {
+      throw new IllegalOperationError(
+        `customDomain "${customDomain}" is a Saa9vi platform hostname. Seller storefronts must use their own verified domain, not a ${platformDomain} subdomain.`,
+      );
+    }
+  }
+
+  /** Normalize an arbitrary custom-domain string to a bare hostname. */
+  private normalizeHostname(customDomain: string): string {
+    let host = customDomain.trim().toLowerCase();
+    host = host.replace(/^https?:\/\//i, '');
+    host = host.split('/')[0].split('?')[0].split('#')[0].split(':')[0];
+    host = host.replace(/\.$/, '');
+    return host;
+  }
+
   async create(ctx: RequestContext, input: Partial<TenantProfile>): Promise<TenantProfile> {
     const channelId = input.channelId || ctx.channelId as ID;
     if (!channelId) {
@@ -204,44 +221,33 @@ export class TenantProfileService {
     // RequestContext needed (fixes BUG-021 / root cause from TP-004).
     await this.channelService.assignToChannels(ctx, TenantProfile, saved.id, [channelId]);
 
-    // Sync custom domain to Redis if set
-    if (saved.customDomain) {
-      const channel = await this.connection.getRepository(ctx, 'Channel').findOne({ where: { id: channelId } });
-      if (channel) {
-        await this.domainResolver.setMapping(saved.customDomain, (channel as any).token);
-      }
+    // Resolve the channel once; needed for both the custom-domain mapping
+    // and the registration event.
+    const channel = await this.connection.getRepository(ctx, 'Channel').findOne({ where: { id: channelId } });
+
+    // Sync custom domain to Redis if set. Seller-owned custom domains are
+    // preserved; Saa9vi platform hostnames are rejected so no seller can
+    // recreate a retired platform subdomain through the custom-domain field.
+    if (saved.customDomain && channel) {
+      this.rejectPlatformHostname(saved.customDomain);
+      await this.domainResolver.setMapping(saved.customDomain, (channel as any).token);
     }
 
-    // ─── G1/B-2: seed the platform subdomain hostname mapping ───────────────
-    // {tenantSlug}.{TENANT_PLATFORM_DOMAIN} → Channel.token via the SAME
-    // DomainChannelResolverService mapping (one mechanism, one writer — see
-    // docs/implementation/g1-hostname-contract-decision.md). Done after save
-    // so a failed Redis write cannot roll back the profile (the resolver is
-    // non-throwing and logs failures). A failed seed is NOT auto-repaired by
-    // an ordinary re-save: recovery happens via
-    // TenantProfileService.ensureTenantHostnameMapping(), which update()
-    // invokes on every profile save (B-2.2); a scheduled reconciliation job
-    // for the 7-day TTL is a separately tracked decision.
-    if (saved.tenantSlug) {
-      const channel = await this.connection.getRepository(ctx, 'Channel').findOne({ where: { id: channelId } });
-      if (channel) {
-        const hostname = `${saved.tenantSlug}.${TENANT_PLATFORM_DOMAIN}`;
-        await this.domainResolver.setMapping(hostname, (channel as any).token);
-        Logger.info(`Provisioned tenant hostname mapping: ${hostname} → channel ${channelId}`, loggerCtx);
-        // Notify BBB consumers to auto-provision BbbOrganization with
-        // slug === tenantSlug (single slug source of truth, G1 decision).
-        this.eventBus.publish(
-          new TenantRegisteredEvent(
-            ctx,
-            String(saved.id),
-            String(channelId),
-            saved.tenantSlug,
-            saved.businessName,
-          ),
-        );
-      } else {
-        Logger.warn(`Channel ${channelId} not found; tenant hostname mapping not seeded`, loggerCtx);
-      }
+    // Publish the tenant-registration event unconditionally so downstream
+    // consumers (BigBlueButton organisation provisioning, free-plan
+    // activation, marketplace reindex) continue to run. This is decoupled
+    // from any hostname mapping: no {tenantSlug}.saa9vi.com mapping is
+    // created or refreshed here.
+    if (channel) {
+      this.eventBus.publish(
+        new TenantRegisteredEvent(
+          ctx,
+          String(saved.id),
+          String(channelId),
+          saved.tenantSlug,
+          saved.businessName,
+        ),
+      );
     }
 
     return saved;
@@ -265,13 +271,16 @@ export class TenantProfileService {
     Object.assign(profile, input);
     const saved = await this.connection.getRepository(ctx, TenantProfile).save(profile);
 
-    // Sync custom domain changes to Redis
+    // Sync custom domain changes to Redis. Reject Saa9vi platform hostnames
+    // so the retired seller-subdomain feature cannot be recreated through a
+    // custom-domain change.
     const newDomain = saved.customDomain;
     if (oldDomain !== newDomain) {
       if (oldDomain) {
         await this.domainResolver.removeMapping(oldDomain);
       }
       if (newDomain) {
+        this.rejectPlatformHostname(newDomain);
         const channel = await this.connection.getRepository(ctx, 'Channel').findOne({ where: { id: channelId } });
         if (channel) {
           await this.domainResolver.setMapping(newDomain, (channel as any).token);
@@ -285,37 +294,6 @@ export class TenantProfileService {
       new TenantProfileUpdatedEvent(String(saved.id), String(channelId), updatedFields),
     );
 
-    // B-2.2: re-affirm the platform hostname mapping on every profile save.
-    // Idempotent — if registration's seed write failed (Redis briefly
-    // unavailable), any subsequent profile save repairs it. The 7-day TTL
-    // re-affirmation architecture is a separately tracked decision (G1 doc),
-    // but this gives update-path recovery without a new mechanism.
-    await this.ensureTenantHostnameMapping(ctx, channelId);
-
     return saved;
-  }
-
-  /**
-   * B-2.2: guarantee `channel-token:{tenantSlug}.{TENANT_PLATFORM_DOMAIN}` →
-   * Channel.token exists via the single existing mapping writer
-   * (DomainChannelResolverService). Idempotent and safe to call from any
-   * lifecycle point (update, future reconciliation job). No-op when the
-   * profile has no tenantSlug (legacy profiles).
-   */
-  async ensureTenantHostnameMapping(ctx: RequestContext, channelId: ID): Promise<void> {
-    const profile = await this.findByChannelId(ctx, channelId);
-    if (!profile?.tenantSlug) {
-      return;
-    }
-    const channel = await this.connection
-      .getRepository(ctx, 'Channel')
-      .findOne({ where: { id: channelId } });
-    if (!channel) {
-      Logger.warn(`ensureTenantHostnameMapping: channel ${channelId} not found`, loggerCtx);
-      return;
-    }
-    const hostname = `${profile.tenantSlug}.${TENANT_PLATFORM_DOMAIN}`;
-    await this.domainResolver.setMapping(hostname, (channel as any).token);
-    Logger.debug(`Ensured tenant hostname mapping: ${hostname} → channel ${channelId}`, loggerCtx);
   }
 }

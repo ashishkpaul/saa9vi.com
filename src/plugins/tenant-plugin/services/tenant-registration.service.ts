@@ -85,11 +85,10 @@ export interface RegisterTenantResult {
  *   REMAINING — see docs/implementation/integration-gaps-worklist.md before
  *     treating self-serve onboarding as production-complete:
  *     - Storefront reachability: registration creates the Channel and
- *       TenantProfile, and TenantProfileService.create() seeds
- *       {tenantSlug}.{TENANT_PLATFORM_DOMAIN} → Channel.token through
- *       DomainChannelResolverService, so the platform hostname resolves from
- *       day one (B-2 IMPLEMENTED 2026-09-15, G2 acceptance passed). The
- *       authoritative hostname-contract record (B-1) remains open.
+ *       TenantProfile. No {tenantSlug}.saa9vi.com hostname mapping is
+ *       provisioned; sellers must use their own verified custom domain as
+ *       their storefront hostname. The authoritative hostname-contract
+ *       record (B-1) remains open.
  *     - Production custom-domain routing via Caddy/TLS remains open (B-5/G10;
  *       roadmap "Tenant storefront onboarding" + "Custom domain routing" items).
  */
