@@ -248,7 +248,7 @@
 
 **Status:** Active
 
-**Decision:** A single shared Next.js storefront serves all tenants. Tenant identity is resolved from hostname.
+**Decision:** A single shared Next.js storefront serves all tenants. Seller-owned storefront domains are explicitly configured and verified, then resolved to the appropriate Vendure Channel. Saa9vi does not provision seller storefront subdomains under `saa9vi.com`; the central marketplace and other platform-owned hosts remain separately configured and must not be coupled to an individual seller's Channel.
 
 **Rationale:** Eliminates per-tenant code deployments; backend plugin evolution is decoupled from storefront deployments; matches Shopify/Kajabi/Teachable operating model at scale.
 
