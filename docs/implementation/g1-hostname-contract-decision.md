@@ -1,3 +1,5 @@
+> **SUPERSEDED — 2026-10-27:** The accepted platform seller-subdomain contract in this historical record is retired. Saa9vi must **not** provision or refresh `{tenantSlug}.saa9vi.com` hostnames or create Redis mappings for them. Keep `tenantSlug` as a stable internal/marketplace slug because BBB organization provisioning and marketplace projections depend on it. Preserve only the explicit, verified seller-owned `TenantProfile.customDomain` mapping path. Do not deploy wildcard/on-demand TLS or catch-all proxy routing for Saa9vi-hosted seller storefronts. Sections below record historical decisions and must not be treated as current implementation instructions.
+
 # G1 — Tenant Hostname Contract: Inspection & Architectural Decision
 
 > **Status:** Decision record (Gate G1 of `integration-gaps-worklist.md`)
@@ -97,3 +99,19 @@ B-2 was implemented and accepted after this decision record was written:
 * Header correction made during G2: the Vendure channel-token header is `vendure-token` (the pre-B-2 snapshot above says `X-Vendure-Token`; the corrected name is authoritative and recorded in `integration-gaps-worklist.md`).
 
 Sections 1–4 above remain as the historical pre-B-2 inspection snapshot and should not be read as the current state.
+
+
+## 13. Superseding decision — retire platform seller subdomains (2026-10-27)
+
+**Decision:** Saa9vi-hosted seller storefront hostnames such as `apex-academy.saa9vi.com` are retired and must not be recreated.
+
+- Keep `TenantProfile.tenantSlug` as a stable internal/marketplace slug while current BBB and marketplace consumers depend on it.
+- Remove the `TENANT_PLATFORM_DOMAIN` constant and generated seller-hostname Redis writes from `TenantProfileService.create()`; remove `ensureTenantHostnameMapping()` and its update-path call.
+- Continue publishing `TenantRegisteredEvent` for academy/BBB provisioning and free-plan provisioning; event publication must not depend on a hostname mapping or a hostname-specific configuration.
+- Preserve custom-domain mapping writes and old-domain removal in `TenantProfileService.create()/update()`.
+- Do not remove `DomainChannelResolverService`, the Next.js `/api/resolve-channel` endpoint, or proxy header-overwrite/unknown-host denial protections; they remain part of custom-domain isolation.
+- Remove seller-subdomain wildcard DNS/TLS/proxy setup where present. Explicitly configured seller-owned domains remain supported.
+- Inventory and remove only confirmed legacy Redis keys for generated Saa9vi seller hostnames. Never delete all `channel-token:*` keys or custom-domain mappings.
+- No database migration is required for this removal while `tenantSlug` and its unique index are retained.
+
+**Acceptance:** new seller registration creates no `channel-token:{tenantSlug}.saa9vi.com` mapping; BBB organization provisioning and free-plan provisioning still run; verified custom domains still resolve to the correct Channel; retired seller subdomains are not routed to a storefront.
