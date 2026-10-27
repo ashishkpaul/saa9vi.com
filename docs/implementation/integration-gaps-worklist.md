@@ -1,6 +1,8 @@
 # Cline Implementation Tasks — Current Integration Gaps
 
 > **Status:** Implementation worklist
+
+> **Domain policy update (2026-10-27):** Saa9vi-hosted seller subdomains such as `{tenantSlug}.saa9vi.com` are retired. Keep `tenantSlug` as an internal/marketplace slug for current consumers, but do not write or refresh Redis mappings for seller subdomains. Preserve verified seller-owned custom-domain routing. See `docs/implementation/g1-hostname-contract-decision.md` §13; its earlier hostname-contract sections are historical.
 > **Purpose:** Define only the remaining implementation work after the backend, BBB, Razorpay, marketplace, and storefront audits.
 > **Rule:** Do not reimplement functionality already present in the repository. Every task begins with direct code inspection and evidence capture.
 >
