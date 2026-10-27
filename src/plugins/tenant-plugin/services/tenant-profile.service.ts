@@ -16,17 +16,20 @@ const SAA9VI_ROOT_DOMAIN = 'saa9vi.com';
 function assertSellerOwnedCustomDomain(domain: string | null | undefined): void {
   if (!domain) return;
 
-  const rawHostname = domain
-    .trim()
-    .toLowerCase()
-    .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
-    .split(/[/?#]/, 1)[0]
-    .replace(/:\d+$/, '')
-    .replace(/\.$/, '');
+  let hostname: string;
+  try {
+    const trimmed = domain.trim();
+    const url = new URL(
+      /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`,
+    );
+    hostname = url.hostname.toLowerCase().replace(/\.$/, '');
+  } catch {
+    throw new IllegalOperationError('Seller custom domain must be a valid hostname.');
+  }
 
   if (
-    rawHostname === SAA9VI_ROOT_DOMAIN ||
-    rawHostname.endsWith(`.${SAA9VI_ROOT_DOMAIN}`)
+    hostname === SAA9VI_ROOT_DOMAIN ||
+    hostname.endsWith(`.${SAA9VI_ROOT_DOMAIN}`)
   ) {
     throw new IllegalOperationError(
       'Seller custom domains must not use saa9vi.com or any of its subdomains.',
