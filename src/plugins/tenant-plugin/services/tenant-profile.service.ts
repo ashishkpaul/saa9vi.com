@@ -1,11 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { EventBus, IllegalOperationError, RequestContext, TransactionalConnection, ChannelService, Logger } from '@vendure/core';
+import { EventBus, IllegalOperationError, RequestContext, TransactionalConnection, ChannelService } from '@vendure/core';
 import { ID } from '@vendure/common/lib/shared-types';
 import { TenantProfile } from '../entities/tenant-profile.entity';
 import { DomainChannelResolverService } from './domain-channel-resolver.service';
 import { TenantProfileUpdatedEvent, TenantRegisteredEvent } from '../events/tenant-events';
 
-const loggerCtx = 'TenantProfileService';
 const SAA9VI_ROOT_DOMAIN = 'saa9vi.com';
 
 /**
