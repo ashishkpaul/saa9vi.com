@@ -6,6 +6,33 @@ import { DomainChannelResolverService } from './domain-channel-resolver.service'
 import { TenantProfileUpdatedEvent, TenantRegisteredEvent } from '../events/tenant-events';
 
 const loggerCtx = 'TenantProfileService';
+const SAA9VI_ROOT_DOMAIN = 'saa9vi.com';
+
+/**
+ * The seller customDomain field is only for a seller-owned domain. Saa9vi
+ * platform hosts must be configured separately and must never be assigned to
+ * a seller Channel through the custom-domain mapping path.
+ */
+function assertSellerOwnedCustomDomain(domain: string | null | undefined): void {
+  if (!domain) return;
+
+  const rawHostname = domain
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
+    .split(/[/?#]/, 1)[0]
+    .replace(/:\\d+$/, '')
+    .replace(/\.$/, '');
+
+  if (
+    rawHostname === SAA9VI_ROOT_DOMAIN ||
+    rawHostname.endsWith(`.${SAA9VI_ROOT_DOMAIN}`)
+  ) {
+    throw new IllegalOperationError(
+      'Seller custom domains must not use saa9vi.com or any of its subdomains.',
+    );
+  }
+}
 
 @Injectable()
 export class TenantProfileService {
@@ -154,6 +181,7 @@ export class TenantProfileService {
     if (!channelId) {
       throw new Error('channelId is required');
     }
+    assertSellerOwnedCustomDomain(input.customDomain);
     const existing = await this.findByChannelId(ctx, channelId);
     if (existing) {
       throw new Error(`TenantProfile already exists for channel ${channelId}`);
@@ -225,6 +253,7 @@ export class TenantProfileService {
 
   async update(ctx: RequestContext, channelId: ID, input: Partial<TenantProfile>): Promise<TenantProfile> {
     const profile = await this.findByChannelIdOrThrow(ctx, channelId);
+    assertSellerOwnedCustomDomain(input.customDomain);
     // tenantSlug is immutable because it is a stable internal/marketplace
     // identifier. Reject rename attempts explicitly rather than silently
     // discarding them or changing existing references.
