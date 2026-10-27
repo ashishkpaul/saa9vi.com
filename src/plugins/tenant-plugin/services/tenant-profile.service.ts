@@ -259,7 +259,6 @@ export class TenantProfileService {
       new TenantProfileUpdatedEvent(String(saved.id), String(channelId), updatedFields),
     );
 
-    // No platform-hostname mapping is refreshed here. Custom-domain changes
-    // remain handled above via DomainChannelResolverService.
+    return saved;
   }
 }
