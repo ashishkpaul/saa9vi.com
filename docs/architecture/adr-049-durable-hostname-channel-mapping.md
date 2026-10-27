@@ -1,17 +1,20 @@
 # ADR-049: Durable Hostname→Channel Mapping for Legacy Tenants (No Manual Redis/DB Writes)
 
-**Status:** Proposed (2026-10-12, rev.2 — corrects the rev.1 TTL/backfill errors
-found in review against `tenant-profile.service.ts` / `domain-channel-resolver.service.ts`)
+**Status:** Superseded (2026-10-28) — the `{tenantSlug}.saa9vi.com` platform-subdomain
+hostname feature is retired. This ADR's proposed items (§§2–4: `assignInitialTenantSlug`,
+reconciliation job, platform-default host record) related to durable slug hostnames are
+**moot**: no slug hostname mapping is created or re-affirmed. `tenantSlug` is retained as an
+internal identity slug only.
 
-**Implementation status (2026-10-13 review):** PARTIAL — one item from §7
-shipped on this branch, remainder proposed:
-- SHIPPED: `bbbProductVariantSearch` channel scoping
-  (`bbb-admin.resolver.ts` via `BbbChannelAccessService.isPlatformCaller`) +
-  `bbb-permission-tiers.e2e-spec.ts` + `tenant-role-bbb-boundary.spec.ts` +
-  `test:e2e:bbb-tiers` npm script.
-- PROPOSED (not yet implemented): §§2–4 (`assignInitialTenantSlug`,
-  reconciliation job, platform-default host record). The hand-set Redis key
-  remains the documented interim until those land.
+**Implementation status (2026-10-28 review):** NOT IMPLEMENTED — superseded by the
+platform-subdomain retirement. `ensureTenantHostnameMapping()` was removed from
+`TenantProfileService`; no slug hostname mapping is created at registration or on profile
+update.
+
+> The hand-set Redis key `channel-token:storefront.saa9vi.com → tok_apex-academy_p0p0ik`
+> (TTL `-1`) referenced below is a **platform-owned** mapping, not a seller subdomain. It is
+> out of scope for the seller-subdomain retirement and must be evaluated separately before
+> any cleanup.
 
 **Context:** Incident 2026-10-12 — `storefront.saa9vi.com/en/account/rooms` showed
 "This classroom cannot be opened right now" for the Apex instructor. Root cause
@@ -28,12 +31,13 @@ G1/B-2 slug contract: `tenantSlug` and `customDomain` are both empty, so no
 code-owned mapping exists for either.
 
 **Corrections to rev.1 (verified in code):**
-- `update()` re-affirms ONLY `{tenantSlug}.{domain}` (`ensureTenantHostnameMapping`,
-  `tenant-profile.service.ts:288-293,305-320`). `customDomain` keys are written
-  ONLY on value change (`:268-280`). "Ordinary save renews everything" is false.
+- `ensureTenantHostnameMapping()` was **removed** from `TenantProfileService` with the
+  platform-subdomain retirement (2026-10-28). No slug hostname mapping is re-affirmed on
+  profile `update()`. `customDomain` keys are still written ONLY on value change.
+  "Ordinary save renews everything" is false.
 - `update()` CANNOT backfill an empty slug: `input.tenantSlug !== profile.tenantSlug`
-  (empty) always throws `IllegalOperationError` (`:257-262`), and the ensure-method
-  early-returns without a slug (`:307-309`).
+  (empty) always throws `IllegalOperationError`. Slug immutability is preserved
+  (tenantSlug is an internal identity slug, not a hostname).
 - `setMapping` TTL is `EX 86400*7` (`domain-channel-resolver.service.ts:75-80`).
 
 **Decision:**
@@ -44,17 +48,13 @@ code-owned mapping exists for either.
    `psql` UPDATE/INSERT on mapping state). Enforced by a CI grep ban on
    `redis-cli *SET channel-token` and direct `UPDATE tenant_profile … customDomain|tenantSlug`
    in scripts.
-2. **New `assignInitialTenantSlug(ctx, channelId, requestedSlug?)` method on
-   `TenantProfileService`.** Set-if-empty ONLY (throws if a slug already exists —
-   immutability intact once set); reuses the existing `slugify` + uniqueness/suffix
-   path and adds a reserved-word guard; then calls `ensureTenantHostnameMapping()`.
-   No schema change → no migration (Vendure CLI rule respected). Legacy profiles
-   (channels 14, 15) are repaired through this method, never through `update()`.
-3. **Reconciliation job (decided here, not deferred).** Startup + interval well
-   under 7 days (e.g. every 6h): for every profile, re-write the slug hostname
-   AND the `customDomain` key via `setMapping` only. Either extend
-   `ensureTenantHostnameMapping` to also re-write `customDomain`, or have the job
-   call both paths — but "ordinary save re-affirms" is NOT the renewal story.
+2. **`assignInitialTenantSlug` proposed item — MOOT.** The `assignInitialTenantSlug`
+   method that called `ensureTenantHostnameMapping()` is no longer relevant: no slug
+   hostname mapping is created. `tenantSlug` is still allocated at registration
+   (slugified `businessName`, uniqueness retry) as an internal identity slug.
+3. **Reconciliation job — MOOT.** The startup/interval job that re-wrote the slug hostname
+   via `ensureTenantHostnameMapping()` is superseded by the platform-subdomain retirement.
+   No slug hostname mapping is created or re-affirmed.
    Alternative accepted: persistent (no-TTL) DB-backed keys, since the DB is the
    source of truth; if TTL is kept, the job interval stays well under it.
 4. **Shared-storefront host is an explicit platform default, not tenant data.**

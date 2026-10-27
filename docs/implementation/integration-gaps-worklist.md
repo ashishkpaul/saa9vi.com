@@ -90,18 +90,22 @@ A tenant created through the supported GraphQL registration flow has a documente
 Audit fixes applied same day (B-2.1–B-2.4): (1) tenantSlug allocation is **platform-global** —
 collision checks use `connection.rawConnection` (documented as the one sanctioned channel-bypassing
 read) and save is **concurrency-safe** (unique-violation → next `-N` suffix → retry; explicit slugs
-never auto-renamed); (2) failed Redis seed is recoverable via `ensureTenantHostnameMapping()`
-invoked on every profile save; (3) `tenantSlug` mutation now **throws** (`IllegalOperationError`)
+never auto-renamed); (2) **the `ensureTenantHostnameMapping()` re-affirmation path was removed**
+with the platform-subdomain retirement (2026-10-28) — no hostname mapping is written at
+registration or on profile save; (3) `tenantSlug` mutation now **throws** (`IllegalOperationError`)
 instead of being silently discarded; (4) G1 doc amended — TTL re-affirmation explicitly deferred
 from B-2 as a separate operational decision.
 
 Implemented per the G1 decision (`docs/implementation/g1-hostname-contract-decision.md`):
 `TenantProfile.tenantSlug` (unique, immutable, derived from businessName) + migration
-`1789484583008-add-tenant-slug.ts` (Vendure CLI-generated); hostname mapping seeded at registration
-via the existing `DomainChannelResolverService.setMapping()` (`channel-token:{tenantSlug}.{TENANT_PLATFORM_DOMAIN}` → Channel.token, one writer, no new resolver); `TenantRegisteredEvent` consumed by
-`BbbTenantProvisioningListener` to auto-provision `BbbOrganization.slug === tenantSlug` in a
-channel-scoped ctx. Redis TTL (7-day expiry vs persistent Channel) deliberately unchanged —
-separate operational decision required (see G1 doc §Impacts).
+`1789484583008-add-tenant-slug.ts` (Vendure CLI-generated); **the `{tenantSlug}.saa9vi.com`
+platform-subdomain hostname mapping has been retired** (2026-10-28). `tenantSlug` is retained
+as an internal identity slug (central marketplace routes, `BbbOrganization.slug` sync,
+marketplace `academySlug` derivation) but is **not** a hostname. `TenantRegisteredEvent`
+is still consumed by `BbbTenantProvisioningListener` to auto-provision
+`BbbOrganization.slug === tenantSlug` in a channel-scoped ctx. Redis TTL (7-day expiry vs
+persistent Channel) deliberately unchanged — separate operational decision required
+(see G1 doc §Impacts).
 **Consistency model:** the registration mutation commits tenant identity (Seller/Channel/
 TenantProfile); the Redis hostname mapping is written inline but is not atomic with it, and
 `BbbOrganization` provisioning is **asynchronous and eventually consistent** via
@@ -142,7 +146,7 @@ created only through `registerNewTenant`** — no manual PostgreSQL or Redis wri
 
 | Assertion | Result |
 |---|---|
-| `TENANT_PLATFORM_DOMAIN` respected at registration | ✅ registering with `.env` = `meeting.lan` produced `channel-token:g3-tenant-a.meeting.lan` → `tok_g3-tenant-a_vufbkz`, `g3-tenant-b.meeting.lan` → `tok_g3-tenant-b_iw8l6l` |
+| Platform-subdomain hostname mapping retired at registration | ✅ `registerNewTenant` with `.env` = `meeting.lan` writes **no** `channel-token:*.meeting.lan` key; only `customDomain` mappings are written |
 | Existing G2 fixtures untouched | ✅ `*.saa9vi.com` keys and rows unchanged |
 | Resolution through nginx HTTPS | ✅ `https://g3-tenant-{a,b}.meeting.lan/api/resolve-channel?hostname=…` returned each tenant's own token; unknown hostname → `null` |
 | Not a default-channel echo | ✅ asking host A for hostname B returned **B**'s token |

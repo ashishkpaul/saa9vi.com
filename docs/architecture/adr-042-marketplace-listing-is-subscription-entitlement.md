@@ -33,7 +33,7 @@
 
 The Saa9vi marketplace (`marketplace.saa9vi.com`) surfaces tenant academies and their sessions to learners. A tenant can reach learners through two surfaces:
 
-1. **Tenant storefront** — `{tenantSlug}.saa9vi.com` or their `customDomain`
+1. **Tenant storefront** — the seller's verified `customDomain` (e.g. `www.apexacademy.in`). Saa9vi no longer provisions a `{tenantSlug}.saa9vi.com` platform subdomain.
 2. **Marketplace listing** — the shared discovery surface at `marketplace.saa9vi.com`
 
 These are independent capabilities. A tenant can have a working storefront without a marketplace listing and vice versa.

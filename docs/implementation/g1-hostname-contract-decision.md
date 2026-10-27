@@ -55,8 +55,6 @@ Custom domain:       TenantProfile.customDomain (explicitly configured, existing
 ## 6. Impact on Redis mapping
 
 * Registration (B-2) must call `DomainChannelResolverService.setMapping('{tenantSlug}.saa9vi.com', channel.token)` — the **existing** mechanism, same prefix, same TTL/refresh semantics. No new mapping store, no second resolution mechanism.
-* Subdomain mappings and customDomain mappings coexist in one map; deletion/teardown must remove both (`removeMapping`).
-* Note the 7-day TTL: refreshed on profile update. **Re-affirmation was explicitly deferred from B-2** (amended 2026-09-15 during implementation): registration seeds the mapping, and `TenantProfileService.ensureTenantHostnameMapping()` (invoked on every `TenantProfileService.update()` save — not on arbitrary repository-level saves elsewhere) provides update-path recovery — but the scheduled re-affirmation/reconciliation strategy for idle tenants is a **separate operational decision**, tracked in `integration-gaps-worklist.md`, not a B-2 deliverable.
 
 ## 7. Impact on Caddy/TLS
 
@@ -71,29 +69,42 @@ Custom domain:       TenantProfile.customDomain (explicitly configured, existing
 
 None — the existing `customDomain` create/update/delete Redis sync is preserved as-is. Custom domains ride the same map and the same Caddy on-demand-TLS flow (with per-tenant CA validation in production, G10).
 
-## 10. Architectural decision
+## 10. Architectural decision — SUPERSEDED
 
-**ACCEPTED (this record):** the platform hostname contract is `{tenantSlug}.saa9vi.com`, derived from a new unique `TenantProfile.tenantSlug`, seeded into the **existing** `DomainChannelResolverService` Redis map at registration; `customDomain` continues as the explicit-configuration override; `BbbOrganization.slug` is synchronized from `tenantSlug` (not independent). There is exactly **one** hostname→channel resolution mechanism (Redis `channel-token:` map) and exactly **one** writer (`DomainChannelResolverService`). This satisfies INV-001 (Channel = tenant identity) and keeps channel resolution out of template/storefront code.
+**Status:** The `{tenantSlug}.saa9vi.com` platform-subdomain hostname contract is **retired** (2026-10-28). Saa9vi no longer provisions a platform-hosted seller storefront. Sellers use their own verified custom domain (`TenantProfile.customDomain`) as their storefront hostname.
 
-## 11. B-2 authorization
+The `TenantProfile.tenantSlug` column and its unique index are **retained**, but `tenantSlug` is now an **internal identity slug** used for:
+- Central marketplace routes (e.g. `/sellers/{tenantSlug}`)
+- `BbbOrganization.slug` synchronization (via `TenantRegisteredEvent`)
+- Marketplace `academySlug` derivation
 
-**AUTHORIZED**, scoped as:
+`tenantSlug` is **not** a hostname. No `{tenantSlug}.saa9vi.com` mapping is created or refreshed at registration or on profile update.
 
-1. Add unique `TenantProfile.tenantSlug` via **Vendure CLI migration** (`npx vendure migrate`).
-2. Derive + persist `tenantSlug` at registration (slugified `businessName`, uniqueness retry) and seed the subdomain Redis mapping via `DomainChannelResolverService`.
-3. Sync `BbbOrganization.slug` from `tenantSlug` (org auto-provision or reconciliation step).
-4. Registration acceptance test: Tenant A/B via GraphQL → `channel-token:{slug}.saa9vi.com` present in Redis → `resolve-channel?hostname=` returns the correct tokens. No manual Redis/DB writes.
-5. ~~Mapping-TTL re-affirmation strategy decided during B-2.~~ **Amended 2026-09-15:** TTL re-affirmation was explicitly deferred from B-2 and is tracked as a separate operational decision (see the TTL note above). B-2 delivers the registration seed plus update-path recovery only.
-6. Caddy wildcard/on-demand TLS and B-6 fail-closed behavior are explicitly **out of B-2 scope** (G10 / B-6). **B-6 has since been closed in the frontend edge (2026-09-24)**; only the Caddy wildcard/on-demand-TLS work (G10) remains here.
+`DomainChannelResolverService` remains the **single writer** of the Redis `channel-token:` map, now used exclusively for **seller-owned custom domains**. Unknown public hostnames are denied `403` at the proxy (B-6, frontend edge, closed 2026-09-24).
 
-## 12. Post-B-2 implementation status (2026-09-15)
+The `{tenantSlug}.saa9vi.com` platform hostname contract above is **superseded**; sellers must connect their own verified domain rather than receiving a platform subdomain.
 
-B-2 was implemented and accepted after this decision record was written:
+## 11. B-2 authorization — RETIRED
 
-* `TenantProfile.tenantSlug` is now generated at registration (deterministic slug, platform-global uniqueness with concurrency-safe suffix retry, immutable after provisioning) and persisted via Vendure CLI migration.
-* The platform hostname `{tenantSlug}.{TENANT_PLATFORM_DOMAIN}` is seeded into the **existing** `DomainChannelResolverService` Redis mapping at registration, with update-path mapping recovery.
-* `BbbOrganization.slug` is synchronized from `tenantSlug` via `TenantRegisteredEvent` → BBB provisioning listener (single consumer, async).
-* **G2 hostname→Channel resolution passed** for Tenant A and Tenant B (distinct hostnames → distinct Channel tokens, via GraphQL registration only — no manual Redis/DB writes).
-* Header correction made during G2: the Vendure channel-token header is `vendure-token` (the pre-B-2 snapshot above says `X-Vendure-Token`; the corrected name is authoritative and recorded in `integration-gaps-worklist.md`).
+The B-2 work that seeded `{tenantSlug}.saa9vi.com` into Redis at registration and re-affirmed it via `ensureTenantHostnameMapping()` on every profile save has been removed:
+
+* `TENANT_PLATFORM_DOMAIN` constant removed from `TenantProfileService`.
+* Generated seller-subdomain Redis mapping removed from `TenantProfileService.create()`.
+* `ensureTenantHostnameMapping()` and its `update()` call removed.
+* `TenantRegisteredEvent` is still published unconditionally after profile creation (decoupled from any hostname mapping) so BigBlueButton organization provisioning and free-plan activation continue to work.
+* `rejectPlatformHostname()` added to `create()` and `update()` so a seller cannot set `customDomain` to `saa9vi.com` or any `*.saa9vi.com` subdomain and recreate the retired feature.
+
+No schema migration was required: `tenantSlug` and its unique index are retained.
+
+## 12. Post-retirement status (2026-10-28)
+
+The platform-subdomain feature is retired:
+
+* `TenantProfile.tenantSlug` continues to be generated at registration (deterministic slug, platform-global uniqueness, immutable after provisioning) — retained as an internal slug, **not** a hostname.
+* No `{tenantSlug}.saa9vi.com` mapping is seeded into Redis at registration or re-affirmed on profile update.
+* `BbbOrganization.slug` continues to be synchronized from `tenantSlug` via `TenantRegisteredEvent` → BBB provisioning listener (unchanged).
+* Seller-owned `customDomain` → Redis mapping via `DomainChannelResolverService` is preserved and now the **only** hostname→channel mapping written at registration/update.
+* `TENANT_PLATFORM_DOMAIN`, `ensureTenantHostnameMapping()`, and the subdomain seeding block have been removed from `TenantProfileService`.
+* Regression tests added: `src/plugins/tenant-plugin/__tests__/tenant-profile-service-no-hosted-subdomain.spec.ts` (8 tests).
 
 Sections 1–4 above remain as the historical pre-B-2 inspection snapshot and should not be read as the current state.
