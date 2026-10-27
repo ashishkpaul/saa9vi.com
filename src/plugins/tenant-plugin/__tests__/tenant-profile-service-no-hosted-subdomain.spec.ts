@@ -133,4 +133,42 @@ describe('TenantProfileService — retired Saa9vi-hosted seller subdomains', () 
       TenantProfileUpdatedEvent,
     );
   });
+
+  it('rejects saa9vi.com hosts in the seller custom-domain field during creation', async () => {
+    const h = makeHarness();
+
+    await expect(
+      h.service.create(ctx, {
+        channelId: 'channel-1' as any,
+        businessName: 'Apex Academy',
+        contactEmail: 'admin@apexacademy.example',
+        timezone: 'Asia/Kolkata',
+        customDomain: 'apex-academy.saa9vi.com',
+      }),
+    ).rejects.toThrow(/must not use saa9vi\.com/);
+
+    expect(h.profileRepo.save).not.toHaveBeenCalled();
+    expect(h.domainResolver.setMapping).not.toHaveBeenCalled();
+  });
+
+  it('rejects saa9vi.com hosts when updating a seller custom domain', async () => {
+    const existing = new TenantProfile({
+      id: 'tenant-profile-1' as any,
+      channelId: 'channel-1' as any,
+      businessName: 'Apex Academy',
+      tenantSlug: 'apex-academy',
+      customDomain: 'www.apexacademy.example',
+    });
+    const h = makeHarness(existing);
+
+    await expect(
+      h.service.update(ctx, 'channel-1' as any, {
+        customDomain: 'www.saa9vi.com',
+      }),
+    ).rejects.toThrow(/must not use saa9vi\.com/);
+
+    expect(h.profileRepo.save).not.toHaveBeenCalled();
+    expect(h.domainResolver.setMapping).not.toHaveBeenCalled();
+    expect(h.domainResolver.removeMapping).not.toHaveBeenCalled();
+  });
 });
