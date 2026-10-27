@@ -228,25 +228,19 @@ export class TenantProfileService {
     }
 
     // Notify academy-provisioning consumers independently of hostname routing.
-    // BigBlueButton provisions the organization's slug/rooms, and subscription
-    // provisioning activates the tenant's free plan. tenantSlug is retained as
-    // an internal identity; no Saa9vi seller-hostname mapping is created.
-    if (saved.tenantSlug) {
-      this.eventBus.publish(
-        new TenantRegisteredEvent(
-          ctx,
-          String(saved.id),
-          String(channelId),
-          saved.tenantSlug,
-          saved.businessName,
-        ),
-      );
-    } else {
-      Logger.warn(
-        `TenantProfile ${saved.id} has no tenantSlug; academy provisioning event was not published`,
-        loggerCtx,
-      );
-    }
+    // create() always derives/validates tenantSlug before persistence. BBB uses
+    // the slug to provision the organization's identity/default rooms, and the
+    // subscription plugin provisions the free plan. No Saa9vi seller-hostname
+    // mapping is created or required for this event.
+    this.eventBus.publish(
+      new TenantRegisteredEvent(
+        ctx,
+        String(saved.id),
+        String(channelId),
+        saved.tenantSlug,
+        saved.businessName,
+      ),
+    );
 
     return saved;
   }
