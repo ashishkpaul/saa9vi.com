@@ -21,7 +21,7 @@ function assertSellerOwnedCustomDomain(domain: string | null | undefined): void 
     .toLowerCase()
     .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
     .split(/[/?#]/, 1)[0]
-    .replace(/:\\d+$/, '')
+    .replace(/:\d+$/, '')
     .replace(/\.$/, '');
 
   if (
