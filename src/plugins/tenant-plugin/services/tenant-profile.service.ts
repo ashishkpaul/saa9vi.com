@@ -230,7 +230,7 @@ export class TenantProfileService {
     // discarding them or changing existing references.
     if (input.tenantSlug && input.tenantSlug !== profile.tenantSlug) {
       throw new IllegalOperationError(
-        `tenantSlug is immutable (G1 decision): "${profile.tenantSlug}" cannot be renamed to "${input.tenantSlug}"`,
+        `tenantSlug is immutable: "${profile.tenantSlug}" cannot be renamed to "${input.tenantSlug}"`,
       );
     }
     delete input.tenantSlug;
