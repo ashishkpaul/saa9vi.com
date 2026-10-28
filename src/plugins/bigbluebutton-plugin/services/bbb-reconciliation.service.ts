@@ -265,10 +265,13 @@ export class BbbReconciliationService {
         continue;
       }
 
-      // Metered mode: the samples ARE the bill (INV-028). With ≥1 sample the
-      // meeting completes through the shared lifecycle so the frozen usage
-      // row, the room reset and MeetingCompletedEvent all stay consistent
-      // with webhook completions.
+      // Metered mode: BBB confirmed the remote end → COMPLETE the meeting
+      // lifecycle regardless of sample count. Zero samples is a metering gap
+      // (billing cannot be finalized for those minutes) but is NOT a reason
+      // to withhold the terminal lifecycle state. The samples ARE the bill
+      // (INV-028) — with zero samples, billMeteredMeeting simply freezes
+      // nothing ($0 usage), which is the correct outcome when metering failed
+      // to capture samples for a meeting that BBB says has ended.
       const sampleCount = await this.connection
         .getRepository(ctx, BbbMeetingSample)
         .createQueryBuilder("sample")
@@ -279,13 +282,9 @@ export class BbbReconciliationService {
 
       if (sampleCount === 0) {
         // Zero samples can mean metering was BROKEN, not that nobody joined.
-        // Stale the meeting (nothing would ever bill) but raise a per-meeting
-        // ops alert so the gap cannot hide behind a clean terminal state.
-        await this.lifecycleService.markMeetingStale(
-          ctx,
-          meeting,
-          "BBB confirms the meeting ended remotely but zero metering samples exist — metering gap suspected",
-        );
+        // Raise a per-meeting ops alert so the gap cannot hide, but still
+        // complete the meeting lifecycle so the room resets, billing is
+        // finalized (freezes nothing), and MeetingCompletedEvent publishes.
         this.opsAlert.notify(
           "bbb-metering-zero-samples",
           `meeting-${meeting.id}`,
@@ -297,10 +296,9 @@ export class BbbReconciliationService {
           },
         );
         Logger.warn(
-          `Reconciled meeting ${meeting.id}: Stale + zero-sample alert (metering gap suspected)`,
+          `Reconciled meeting ${meeting.id}: remote end confirmed → COMPLETED (zero-sample metering gap alerted, samples=${sampleCount})`,
           loggerCtx,
         );
-        continue;
       }
 
       const completedAt = await this.computeReconciledCompletedAt(

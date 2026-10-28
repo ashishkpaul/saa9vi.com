@@ -36,8 +36,9 @@
  *         derives from completedAt (last sample + 1 min, clamped), room
  *         reset, exactly one MeetingCompletedEvent, webhook-missed alert,
  *         metric counter bumped
- *   W5-2 confirmed notFound + 0 samples → STALE, zero usage rows, ops alert
- *         (zero samples may mean broken metering, not an empty room)
+ *   W5-2 confirmed notFound + 0 samples → COMPLETED via reconcile-remote-gone,
+ *         zero usage rows, ops alert (zero samples may mean broken metering,
+ *         not an empty room — the meeting still ended on BBB)
  *   W5-3 getMeetingInfo success with endTime > 0 → same confirmed end
  *   W5-4 outage / misconfigured / rejected → meetings untouched (never act)
  *   W5-5 double reconcile + late webhook + billing replay → exactly one
@@ -826,7 +827,7 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
       expect(String(missed[0][1])).toBe(`server-${meeting.serverId}`);
     });
 
-    it('W5-2: confirmed notFound with zero samples stales and raises a metering-gap alert', async () => {
+    it('W5-2: confirmed notFound with zero samples completes and raises a metering-gap alert', async () => {
       setReconcileApi(apiThrowing(new BbbNotFoundError('w5-2-gone')));
       opsNotifySpy.mockClear();
       const metricBefore = remoteGoneCompletions();
@@ -842,12 +843,18 @@ describe('S7A — completeMeetingLifecycle characterization', () => {
       const reconciled = await reconciliationService.reconcileActiveMeetings();
 
       expect(reconciled).toBe(1);
-      expect((await reloadMeeting(id)).state).toBe(MEETING_STATE.STALE);
-      expect(await usageRows(id)).toHaveLength(0);
+      expect((await reloadMeeting(id)).state).toBe(MEETING_STATE.COMPLETED);
+      // Zero samples still produces a usage row (0 learner-minutes) — the
+      // meeting is completed and billed ($0), but the metering gap is
+      // visibly flagged by the bbb-metering-zero-samples alert and a
+      // warning log inside billMeteredMeeting. Never silently dropped.
+      const usage = await usageRows(id);
+      expect(usage).toHaveLength(1);
+      expect(usage[0].learnerMinutes).toBe(0);
       expect(await ledgerCount(id)).toBe(0);
-      expect(completedFor(id)).toHaveLength(0);
+      expect(completedFor(id)).toHaveLength(1);
       // Zero samples may mean broken metering — never a silent stale.
-      expect(remoteGoneCompletions()).toBe(metricBefore);
+      expect(remoteGoneCompletions()).toBe(metricBefore + 1);
       const gapAlerts = alertsOfKind('bbb-metering-zero-samples');
       expect(gapAlerts).toHaveLength(1);
       expect(String(gapAlerts[0][1])).toBe(`meeting-${id}`);
