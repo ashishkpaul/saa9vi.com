@@ -202,3 +202,20 @@ Today provisioning passes `meeting.organization.maxParticipantsPerMeeting` to BB
 ## Final report (required format)
 
 Branch/HEAD; commands actually run with observed results; pre-existing failures vs new; the migration file generated; the two Phase 0 empirical checks marked **open** unless the owner supplied results; any deviation from this plan and why; `maxConcurrentParticipants` noted as still unenforced; final menu-to-permission matrix and any backend permission gaps; confirmation that metered billing still uses learner-minutes and moderator-only metered usage remains zero variable charge.
+
+### Empirical check results (supplied by owner, 2026-10-29)
+
+**Participant-count semantics (live BBB via curl `getMeetings`, server https://meeting.saa9vi.com/bigbluebutton/):**
+
+| Meeting | participantCount | moderatorCount | Attendees |
+|---|---|---|---|
+| Room - 1 | 4 | 1 | 1 MODERATOR + 3 VIEWER |
+| cb8vcm | 2 | 1 | 1 MODERATOR + 1 VIEWER |
+| Main Classroom (Vendure-started) | 1 | 1 | 1 MODERATOR |
+
+**Conclusion:** `participantCount` **includes** moderators (it is a total attendee count); `moderatorCount` reports moderators separately. Both code paths are consistent:
+
+- Load policy (`computeServerLoad`) uses `participantCount` alone → moderator counts toward load (conservative/safe).
+- Billing (`learnerCountFrom(participantCount, moderatorCount) = max(0, p − m)`) → moderator-only meeting ("Main Classroom": p=1, m=1) yields **0 billable learners**, confirming moderator-only metered usage remains zero variable charge.
+
+No change to `bbb-server-load.service.ts`, `server-load.policy.ts`, `metered-billing.policy.ts`, or `bbb-metering.service.ts` is required.
