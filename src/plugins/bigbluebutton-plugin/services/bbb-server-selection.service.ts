@@ -1,5 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
-import { Inject } from "@nestjs/common";
+import { Injectable, Inject, forwardRef, Logger } from "@nestjs/common";
 import { RequestContext, TransactionalConnection } from "@vendure/core";
 import { BBB_PLUGIN_OPTIONS } from "../constants";
 import { BbbServer } from "../entities/bbb-server.entity";
@@ -48,6 +47,7 @@ export class BbbServerSelectionService {
 
   constructor(
     private readonly connection: TransactionalConnection,
+    @Inject(forwardRef(() => BbbServerService))
     private readonly serverService: BbbServerService,
     private readonly opsAlert: BbbOpsAlertService,
     @Inject(BBB_PLUGIN_OPTIONS)

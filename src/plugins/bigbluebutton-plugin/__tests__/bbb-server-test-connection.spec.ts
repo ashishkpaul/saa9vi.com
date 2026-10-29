@@ -69,6 +69,7 @@ function harness(opts: {
     api as never,
     {} as never, // opsAlert — unused by the connection test
     { ensureWebhook: vi.fn(async () => {}) } as never, // hooksService
+    { selectServer: vi.fn(async () => null) } as never, // selectionService (unused on this path)
   );
   return { service, save, api, row, encryption };
 }

@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Inject, forwardRef } from "@nestjs/common";
 import {
   ID,
   Logger,
@@ -18,6 +18,7 @@ import {
 } from "./bbb-api.service";
 import { BbbOpsAlertService } from "./bbb-ops-alert.service";
 import { BbbHooksService } from "./bbb-hooks.service";
+import { BbbServerSelectionService } from "./bbb-server-selection.service";
 import { normalizeBbbApiUrl } from "../shared/bbb-api-url";
 
 const loggerCtx = "BbbServerService";
@@ -58,6 +59,8 @@ export class BbbServerService {
     private readonly bbbApiService: BbbApiService,
     private readonly opsAlert: BbbOpsAlertService,
     private readonly hooksService: BbbHooksService,
+    @Inject(forwardRef(() => BbbServerSelectionService))
+    private readonly selectionService: BbbServerSelectionService,
   ) {}
 
   async findAll(
@@ -100,18 +103,12 @@ export class BbbServerService {
 
   /**
    * @deprecated Use BbbServerSelectionService.selectServer() instead.
-   * Kept for backward compatibility — delegates to the selection service.
+   * Kept for backward compatibility — delegates to the canonical selection
+   * service so there is a single INV-012-safe path: soft-threshold overflow
+   * (never returns null while a healthy non-excluded server exists).
    */
   async selectBestServer(ctx: RequestContext): Promise<BbbServer | null> {
-    return this.connection
-      .getRepository(ctx, BbbServer)
-      .createQueryBuilder("server")
-      .addSelect("server.encryptedApiSecret")
-      .where("server.enabled = :enabled", { enabled: true })
-      .andWhere("server.healthy = :healthy", { healthy: true })
-      .andWhere("server.currentLoad < server.maxLoad")
-      .orderBy("server.currentLoad", "ASC")
-      .getOne();
+    return this.selectionService.selectServer(ctx);
   }
 
   async create(

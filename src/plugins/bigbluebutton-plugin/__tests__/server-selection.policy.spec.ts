@@ -160,5 +160,33 @@ describe("pickBestServer", () => {
     expect(pick?.id).toBe("fresh");
   });
 
+  it("INV-012: load alone never causes selection to return no server", () => {
+    // Every candidate is above maxLoad; some measurements are stale/unknown.
+    // Healthy non-excluded servers exist, so selection must still return a
+    // server (overflow) — load alone must never yield null.
+    const servers = [
+      serverRow("s1", { currentLoad: 200, maxLoad: 100, loadUpdatedAt: null }),
+      serverRow("s2", { currentLoad: 150, maxLoad: 100, loadUpdatedAt: new Date(nowMs(10)) }),
+      serverRow("s3", { currentLoad: 110, maxLoad: 100, loadUpdatedAt: new Date(nowMs(1)) }),
+    ];
+    const ranked = rankServers(servers, opts);
+    const { pick, overflow } = pickBestServer(ranked, opts);
+    expect(pick).toBeNull();
+    expect(overflow).not.toBeNull();
+  });
+
+  it("all servers over maxLoad -> overflow is the least-utilised server", () => {
+    const servers = [
+      serverRow("s1", { currentLoad: 120, maxLoad: 100, loadUpdatedAt: new Date(nowMs(1)) }),
+      serverRow("s2", { currentLoad: 150, maxLoad: 100, loadUpdatedAt: new Date(nowMs(1)) }),
+      serverRow("s3", { currentLoad: 110, maxLoad: 100, loadUpdatedAt: new Date(nowMs(1)) }),
+    ];
+    const ranked = rankServers(servers, opts);
+    const { pick, overflow } = pickBestServer(ranked, opts);
+    expect(pick).toBeNull();
+    expect(overflow?.id).toBe("s3"); // 110/100 = 1.1 is the lowest utilisation
+    expect(overflow?.currentLoad).toBe(110);
+  });
+
 });
 });
