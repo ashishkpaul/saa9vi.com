@@ -12,12 +12,15 @@ import {
 import * as crypto from "crypto";
 import { BbbMeeting } from "../entities/bbb-meeting.entity";
 import { BbbOrganization } from "../entities/bbb-organization.entity";
+import { BbbRoom } from "../entities/bbb-room.entity";
 import { BbbCapacityGrant } from "../entities/bbb-capacity-grant.entity";
 import { BbbApiService, BbbUnavailableError } from "./bbb-api.service";
 import { BbbEncryptionService } from "./bbb-encryption.service";
+import { BbbServerLoadService } from "./bbb-server-load.service";
 import { BbbServerSelectionService } from "./bbb-server-selection.service";
 import { BbbMetricsService } from "./bbb-metrics.service";
 import { BbbRoomService } from "./bbb-room.service";
+import { getOrCreateMaxParticipants } from "./bbb-meeting.max-participants.policy";
 import { BbbProvisioningEnqueuer } from "./bbb-provisioning-enqueuer";
 import {
   MeetingProvisionedEvent,
@@ -58,6 +61,7 @@ export class BbbProvisioningWorkerService
     private readonly jobQueueService: JobQueueService,
     private readonly bbbApiService: BbbApiService,
     private readonly serverSelectionService: BbbServerSelectionService,
+    private readonly bbbServerLoadService: BbbServerLoadService,
     private readonly encryptionService: BbbEncryptionService,
     private readonly metrics: BbbMetricsService,
     private readonly eventBus: EventBus,
@@ -155,6 +159,16 @@ export class BbbProvisioningWorkerService
         loggerCtx,
       );
       return;
+    }
+
+    // Phase 4 — honour the per-room participant limit. Load the room only
+    // when meeting.roomId is set; room-less meetings keep the org value.
+    let room: BbbRoom | null = null;
+    if (meeting.roomId) {
+      room =
+        (await this.connection
+          .getRepository(ctx, BbbRoom)
+          .findOne({ where: { id: meeting.roomId } })) ?? null;
     }
 
     if (meeting.state !== MEETING_STATE.PENDING) {
@@ -279,7 +293,7 @@ export class BbbProvisioningWorkerService
             // `record` alone does not start the recording (BBB defaults
             // autoStartRecording=false) — see recording-provisioning.policy.ts.
             ...recordingProvisioningParams(this.options, meeting.recordingEnabled),
-            maxParticipants: meeting.organization.maxParticipantsPerMeeting,
+            maxParticipants: getOrCreateMaxParticipants(room, meeting.organization),
             logoutURL: resolveLogoutUrl(
               this.options.storefrontUrl,
               process.env.STOREFRONT_URL,
@@ -287,6 +301,10 @@ export class BbbProvisioningWorkerService
           });
           createdOnServerId = String(server.id);
           this.serverSelectionService.noteConnectionSuccess(createdOnServerId);
+          await this.bbbServerLoadService.noteMeetingCreated(
+            ctx,
+            createdOnServerId,
+          );
           break;
         } catch (err) {
           if (err instanceof BbbUnavailableError) {

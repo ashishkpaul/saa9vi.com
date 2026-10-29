@@ -47,21 +47,16 @@ export class BbbServer extends VendureEntity {
   enabled: boolean;
 
   /**
-   * Selection load value — an OPAQUE integer input to server selection.
+   * Selection load value — an OPAQUE integer input to server selection,
+   * measured in attendees.
    *
-   * Relabelled 2026-10-07 from the earlier "load score" wording, which
-   * claimed `BbbReconciliationService.reconcileServerLoad()` maintained a
-   * composite score from active meetings and participants — that method
-   * has never existed in code (BUG-014 doc drift). Verified reality:
-   * written only at insert (default 0), with NO runtime updater.
-   * Consequences today: every enabled+healthy server ties at 0, so
-   * `BbbServerSelectionService` picks randomly among them (its min-load
-   * jitter), and CapacityIntelligenceService's
-   * `loadPercent = currentLoad / capacity × 100` reads 0.
+   * Written only by `BbbServerLoadService` (its 1-minute poll) and the
+   * create-time increment (`noteMeetingCreated`). Never written by the
+   * health probe or selection service. Default 0 at insert.
    *
    * Intentionally opaque to `BbbServerSelectionService` — it only filters
-   * (`currentLoad < maxLoad`) and sorts by this column, so a future
-   * composite updater can land without touching the selection algorithm.
+   * (`currentLoad < maxLoad`) and sorts by this column, so the load
+   * calculation can evolve without touching the selection algorithm.
    */
   @Column({ default: 0 })
   currentLoad: number;
@@ -74,6 +69,18 @@ export class BbbServer extends VendureEntity {
    */
   @Column({ default: 100 })
   maxLoad: number;
+
+  /** Number of live (non-breakout) meetings BBB reports on this server. Refreshed by `BbbServerLoadService.refreshAll()`. */
+  @Column({ default: 0 })
+  liveMeetings: number;
+
+  /** Total live participants across this server's meetings. Refreshed by `BbbServerLoadService.refreshAll()`. */
+  @Column({ default: 0 })
+  liveParticipants: number;
+
+  /** When `currentLoad` / `liveMeetings` / `liveParticipants` were last measured. Null means never polled (stale). */
+  @Column({ type: "timestamp with time zone", nullable: true })
+  loadUpdatedAt: Date | null;
 
   @Column({ default: true })
   healthy: boolean;

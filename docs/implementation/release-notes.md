@@ -411,3 +411,16 @@
 - BBB integration architecture
 - CMS architecture
 - Tenant and academy layer
+
+## ADR-050 — 2026-10-29
+
+### Changed
+
+- BBB server pool now uses measured load: `BbbServer.currentLoad` (attendees) is polled every minute and ranked by utilisation `currentLoad / maxLoad`.
+- `maxLoad` is a soft threshold (INV-012): servers under it are preferred; if none, the least-utilised healthy server is still selected (overflow) and a deduplicated `bbb-pool-saturated` ops alert fires.
+- Per-room participant limit is honoured at provisioning (`min(room.maxParticipants ?? org value, org value)`).
+- Learner-hour billing retained; moderator-only metered meetings carry zero variable charge.
+
+### Operator note
+
+- Set `maxLoad` per server to reflect its hardware capacity (default 100). It is a soft threshold, not a hard ceiling; meetings are never rejected solely for load.

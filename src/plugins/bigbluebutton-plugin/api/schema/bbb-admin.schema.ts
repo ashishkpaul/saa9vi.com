@@ -12,6 +12,9 @@ export const adminApiExtensions = gql`
     currentLoad: Int!
     maxLoad: Int!
     capacity: Int!
+    liveMeetings: Int!
+    liveParticipants: Int!
+    loadUpdatedAt: DateTime
     lastHealthCheckAt: DateTime
     """
     Whether the stored API secret can be decrypted with the current key.

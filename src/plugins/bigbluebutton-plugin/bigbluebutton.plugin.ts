@@ -61,6 +61,7 @@ import { BbbBillingService } from "./services/bbb-billing.service";
 import { BbbOpsAlertService } from "./services/bbb-ops-alert.service";
 import { bbbDailyAllowanceTask } from "./jobs/bbb-daily-allowance.task";
 import { bbbServerHealthTask } from "./jobs/bbb-server-health.task";
+import { bbbServerLoadTask } from "./jobs/bbb-server-load.task";
 import { bbbMeteringTask } from "./jobs/bbb-metering.task";
 import { bbbMeteringPruneTask } from "./jobs/bbb-metering-prune.task";
 import { LearningDashboardService } from "./services/learning-dashboard.service";
@@ -69,6 +70,7 @@ import { AttendanceAnalyticsService } from "./services/attendance-analytics.serv
 import { BbbPlatformCapacityPolicyService } from "./services/bbb-platform-capacity-policy.service";
 import { BbbJoinUrlService } from "./services/bbb-join-url.service";
 import { BbbProvisioningWorkerService } from "./services/bbb-provisioning-worker.service";
+import { BbbServerLoadService } from "./services/bbb-server-load.service";
 import { BBB_PROVISIONING_ENQUEUER } from "./services/bbb-provisioning-enqueuer";
 import { BbbOrderFulfillmentListener } from "./listeners/order-fulfillment.listener";
 import { BbbSubscriptionListener } from "./listeners/bbb-subscription.listener";
@@ -185,6 +187,7 @@ import {
     // meeting → provisioning → room → meeting cycle.
     { provide: BBB_PROVISIONING_ENQUEUER, useExisting: BbbProvisioningWorkerService },
     CapacityIntelligenceService,
+    BbbServerLoadService,
     SessionAttendanceService,
     AttendanceAnalyticsService,
     BbbOrderFulfillmentListener,
@@ -277,6 +280,14 @@ import {
       config.schedulerOptions.tasks = [
         ...(config.schedulerOptions.tasks ?? []),
         bbbServerHealthTask,
+      ];
+    }
+    // Phase 2: 1-minute measured-load poll — runs 5x as often as the health
+    // probe, never writes `healthy`, never raises alerts (advisory only).
+    if (!existingIds.has(bbbServerLoadTask.id)) {
+      config.schedulerOptions.tasks = [
+        ...(config.schedulerOptions.tasks ?? []),
+        bbbServerLoadTask,
       ];
     }
     // W4: ensure BBB webhook hooks are registered and not stale on every

@@ -47,6 +47,13 @@ import { sessionDetail } from './routes/sessions/SessionDetail';
 // /bbb/staff, /bbb/sessions and /bbb/sessions/$id. MembershipsList stays
 // unrouted, as it was before this change.
 
+// Phase 6 (permission-aware nav): granular BBBManage* permissions are
+// tenant-scoped in BbbChannelAccessService (isPlatformCaller = BBBAdmin |
+// BBBPlatformInfrastructure | SuperAdmin). They cannot express a cross-tenant
+// platform scope, so the cross-tenant BBB Platform items below keep the
+// platform gate (BBBAdmin | BBBPlatformInfrastructure) — an authorization-model
+// gap, not a weakening. Servers/Capacity move under BBB Settings (still the
+// same platform gate).
 const PLATFORM_PERMISSIONS = ['BBBAdmin', 'BBBPlatformInfrastructure'];
 
 export default defineDashboardExtension({
@@ -64,6 +71,13 @@ export default defineDashboardExtension({
             icon: CloudIcon,
             placement: 'top',
             order: 101,
+        },
+        {
+            id: 'bbb-settings',
+            title: 'BBB Settings',
+            icon: ServerIcon,
+            placement: 'top',
+            order: 102,
         },
     ],
     routes: [
@@ -161,7 +175,7 @@ export default defineDashboardExtension({
             path: '/bbb/servers',
             component: () => <ServersList />,
             navMenuItem: {
-                sectionId: 'bbb-platform',
+                sectionId: 'bbb-settings',
                 title: 'Servers',
                 icon: ServerIcon,
                 id: 'bbb-servers',
@@ -176,7 +190,7 @@ export default defineDashboardExtension({
             path: '/bbb/plans',
             component: () => <PlansList />,
             navMenuItem: {
-                sectionId: 'bbb-platform',
+                sectionId: 'bbb-settings',
                 title: 'Capacity',
                 icon: CreditCardIcon,
                 id: 'bbb-plans',

@@ -150,6 +150,12 @@ export interface BbbRemoteMeeting {
   participantCount: number;
   moderatorCount: number;
   hasBeenForciblyEnded: boolean;
+  /** Milliseconds since epoch when the meeting was created (0 when unknown). */
+  createTime: number;
+  /** True for breakout rooms, which are excluded from load calculations. */
+  isBreakout: boolean;
+  /** Number of video streams in the meeting (0 when unknown). */
+  videoCount: number;
 }
 
 /**
@@ -548,6 +554,9 @@ export class BbbApiService {
       participantCount: Number(m.participantCount ?? 0),
       moderatorCount: Number(m.moderatorCount ?? 0),
       hasBeenForciblyEnded: m.hasBeenForciblyEnded === "true",
+      createTime: Number(m.createTime ?? 0),
+      isBreakout: m.isBreakout === "true",
+      videoCount: Number(m.videoCount ?? 0),
     }));
   }
 }

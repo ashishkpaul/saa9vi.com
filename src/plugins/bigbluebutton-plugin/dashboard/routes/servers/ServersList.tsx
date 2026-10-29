@@ -16,6 +16,9 @@ const GET_SERVERS = graphql(`
         credentialStatus
         currentLoad
         maxLoad
+        liveMeetings
+        liveParticipants
+        loadUpdatedAt
         lastHealthCheckAt
       }
       totalItems
@@ -35,6 +38,24 @@ const CREATE_SERVER = graphql(`
     }
   }
 `);
+
+function isStale(loadUpdatedAt: string | null): boolean {
+  if (!loadUpdatedAt) return true;
+  const ms = new Date(loadUpdatedAt).getTime();
+  if (Number.isNaN(ms)) return true;
+  return Date.now() - ms > 5 * 60 * 1000;
+}
+
+function formatRelative(loadUpdatedAt: string): string {
+  const ms = new Date(loadUpdatedAt).getTime();
+  if (Number.isNaN(ms)) return loadUpdatedAt;
+  const diffSec = Math.round((Date.now() - ms) / 1000);
+  if (diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.round(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.round(diffMin / 60);
+  return `${diffHr}h ago`;
+}
 
 const UPDATE_SERVER = graphql(`
   mutation UpdateBbbServer($id: ID!, $input: UpdateBbbServerInput!) {
@@ -66,6 +87,9 @@ interface BbbServer {
   credentialStatus: string;
   currentLoad: number;
   maxLoad: number;
+  liveMeetings: number;
+  liveParticipants: number;
+  loadUpdatedAt: string | null;
   lastHealthCheckAt: string | null;
 }
 
@@ -98,7 +122,7 @@ export function ServersList() {
   const [editApiSecret, setEditApiSecret] = useState('');
   const [editMaxLoad, setEditMaxLoad] = useState(50);
 
-  const { data, isLoading, isError } = useQuery<ServersResponse>({
+  const { data, isLoading, isError } = useQuery<any>({
     queryKey: ['bbbServers', page],
     queryFn: () =>
       api.query(GET_SERVERS, {
@@ -110,7 +134,7 @@ export function ServersList() {
     placeholderData: (prev) => prev,
   });
 
-  const servers = data?.bbbServers?.items ?? [];
+  const servers = (data?.bbbServers?.items ?? []) as BbbServer[];
   const totalItems = data?.bbbServers?.totalItems ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
 
@@ -311,9 +335,24 @@ export function ServersList() {
                         <Badge variant="warning">Unknown</Badge>
                       )}
                     </TableCell>
-                    <TableCell>
-                      {server.currentLoad} / {server.maxLoad}
-                    </TableCell>
+<TableCell>
+  <div className="space-y-1">
+    <div>
+      {server.currentLoad} / {server.maxLoad} attendees
+    </div>
+    <div className="text-xs text-muted-foreground">
+      {server.liveMeetings} meetings · {server.liveParticipants} participants
+    </div>
+    <div className="text-xs text-muted-foreground flex items-center gap-1">
+      {server.loadUpdatedAt
+        ? `updated ${formatRelative(server.loadUpdatedAt)}`
+        : 'never updated'}
+      {isStale(server.loadUpdatedAt) && (
+        <Badge variant="warning">stale</Badge>
+      )}
+    </div>
+  </div>
+</TableCell>
                     <TableCell>
                       <Badge variant={server.enabled ? 'success' : 'warning'}>
                         {server.enabled ? 'Enabled' : 'Disabled'}

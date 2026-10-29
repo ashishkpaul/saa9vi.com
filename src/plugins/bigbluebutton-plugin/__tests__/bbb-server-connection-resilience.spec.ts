@@ -95,6 +95,7 @@ function buildSelection(rows: any[]) {
     connection as never,
     serverService as never,
     opsAlert as never,
+    { loadStaleAfterMinutes: 5 } as never,
   );
   return { svc, serverService, opsAlert, lastParams };
 }
@@ -192,11 +193,18 @@ function buildWorker(opts: {
       updates.push({ id, data });
     }),
   };
-  const connection = {
+  const qbStub: any = {};
+  const serverRepo = {
+    createQueryBuilder: () => ({
+      addSelect: () => qbStub,
+      where: () => qbStub,
+      andWhere: () => qbStub,
+      getMany: async () => opts.selectResults,
+    }),
+  };
+  const connectionStub: any = {
     getRepository: (_c: unknown, entity: unknown) =>
-      entity === (BbbMeeting as unknown)
-        ? meetingRepo
-        : { createQueryBuilder: () => ({}) },
+      entity === (BbbMeeting as unknown) ? meetingRepo : serverRepo,
     withTransaction: async (_c: unknown, fn: any) => fn(_c),
     rawConnection: { options: {}, query: async () => [] },
   };
@@ -214,11 +222,16 @@ function buildWorker(opts: {
     recordProvisioningSucceeded: vi.fn(),
   };
   const eventBus = { publish: vi.fn() };
+  // Server load service for noteMeetingCreated — stubbed, errors swallowed.
+  const bbbServerLoadService = {
+    noteMeetingCreated: vi.fn(async () => {}),
+  };
   const worker = new BbbProvisioningWorkerService(
-    connection as never,
+    connectionStub as never,
     {} as never, // jobQueueService — only used by enqueue/onModuleInit
     bbbApi as never,
     selection as never,
+    bbbServerLoadService as never,
     { encrypt: (v: string) => `enc:${v}` } as never,
     metrics as never,
     eventBus as never,
@@ -226,9 +239,7 @@ function buildWorker(opts: {
     {} as never, // roomService — roomId null keeps every room hook idle
     {} as never, // options — {} means autoStartRecording falls back to its default
   );
-  vi.spyOn(worker as any, "reserveProvisioningCapacity").mockResolvedValue(
-    true,
-  );
+  vi.spyOn(worker as any, "reserveProvisioningCapacity").mockResolvedValue(true);
   return { worker, selection, bbbApi, updates, metrics, eventBus };
 }
 

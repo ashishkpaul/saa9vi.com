@@ -254,4 +254,23 @@ export interface BigBlueButtonPluginOptions {
    * @default 1
    */
   listenerWeight?: number;
+
+  // ─── Server Load Policy (Phase 1) ───────────────────────────────────────
+
+  /** Minimum attendees assumed for a brand-new meeting still in its join buffer.
+   * Used by `computeServerLoad` so a burst of new meetings doesn't under-report load.
+   * @default 15
+   */
+  loadMinUserCount?: number;
+
+  /** Meetings younger than this many minutes count as "new" and use `max(participantCount, loadMinUserCount)`.
+   * @default 15
+   */
+  loadJoinBufferMinutes?: number;
+
+  /** A server's load is considered stale if `loadUpdatedAt` is older than this many minutes.
+   * Stale servers are ranked below fresh ones in utilisation-based selection.
+   * @default 5
+   */
+  loadStaleAfterMinutes?: number;
 }

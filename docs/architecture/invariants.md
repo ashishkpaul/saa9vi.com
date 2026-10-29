@@ -544,3 +544,11 @@ applies no channel filter) is fixed in Phase 5 of
 checker and the fix have a documented rule to converge on.
 
 
+
+## INV-031: `BbbServer.currentLoad` Is Measured, Not Assumed (ADR-050)
+
+**Rule:** `BbbServer.currentLoad` is a measured value in attendees, written only by `BbbServerLoadService` (its 1-minute poll) and the create-time increment (`noteMeetingCreated`). Selection never refuses a meeting solely for load.
+
+**Rationale:** The native pool ranks servers by utilisation. If any other code path writes `currentLoad`, or any selection path returns no server while a healthy non-excluded server exists, load ceases to be a measured, trustworthy signal and the pool degrades to random selection again.
+
+**Rejection criterion:** any other writer of `currentLoad`, or any selection path that returns no server while a healthy non-excluded server exists.

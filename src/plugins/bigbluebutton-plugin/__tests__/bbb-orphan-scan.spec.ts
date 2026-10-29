@@ -314,6 +314,9 @@ describe("Report-only orphan scan (real service + real adapter, faked fetch)", (
       participantCount: 3,
       moderatorCount: 1,
       hasBeenForciblyEnded: false,
+      createTime: 0,
+      isBreakout: false,
+      videoCount: 0,
     });
     expect(list[0]).not.toHaveProperty("attendeePW");
     expect(list[0]).not.toHaveProperty("moderatorPW");

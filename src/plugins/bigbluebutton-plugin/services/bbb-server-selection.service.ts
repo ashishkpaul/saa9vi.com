@@ -1,8 +1,12 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { Inject } from "@nestjs/common";
 import { RequestContext, TransactionalConnection } from "@vendure/core";
+import { BBB_PLUGIN_OPTIONS } from "../constants";
 import { BbbServer } from "../entities/bbb-server.entity";
 import { BbbServerService } from "./bbb-server.service";
 import { BbbOpsAlertService } from "./bbb-ops-alert.service";
+import { rankServers, pickBestServer, type ServerSelectionOpts } from "./server-selection.policy";
+import type { BigBlueButtonPluginOptions } from "../types";
 
 const loggerCtx = "BbbServerSelectionService";
 
@@ -46,6 +50,8 @@ export class BbbServerSelectionService {
     private readonly connection: TransactionalConnection,
     private readonly serverService: BbbServerService,
     private readonly opsAlert: BbbOpsAlertService,
+    @Inject(BBB_PLUGIN_OPTIONS)
+    private readonly options: BigBlueButtonPluginOptions,
   ) {}
 
   /**
@@ -65,23 +71,59 @@ export class BbbServerSelectionService {
       .createQueryBuilder("server")
       .addSelect("server.encryptedApiSecret")
       .where("server.enabled = :enabled", { enabled: true })
-      .andWhere("server.healthy = :healthy", { healthy: true })
-      .andWhere("server.currentLoad < server.maxLoad");
+      .andWhere("server.healthy = :healthy", { healthy: true });
     if (excludedIds.length > 0) {
       qb = qb.andWhere("server.id NOT IN (:...excludedIds)", { excludedIds });
     }
-    const candidates = await qb.orderBy("server.currentLoad", "ASC").getMany();
+    const candidates = await qb.getMany();
 
     if (candidates.length === 0) {
       Logger.warn("No healthy BBB servers available for selection", loggerCtx);
       return null;
     }
 
-    // Jitter: if multiple servers share the minimum load, pick randomly
-    // among them to avoid thundering-herd when loads are equal.
-    const minLoad = candidates[0].currentLoad;
-    const tied = candidates.filter((s) => s.currentLoad === minLoad);
-    return tied[Math.floor(Math.random() * tied.length)];
+    const selectionOpts: ServerSelectionOpts = {
+      nowMs: Date.now(),
+      loadStaleAfterMinutes:
+        this.options.loadStaleAfterMinutes ?? 5,
+    };
+
+    // Rank: under-capacity first → fresh before stale → utilisation ascending.
+    // Exact ties preserve input order (stable sort).
+    const ranked = rankServers(candidates, selectionOpts);
+
+    // Choose from under-capacity candidates, applying jitter among ties.
+    const { pick, overflow } = pickBestServer(ranked, selectionOpts);
+
+    if (pick) {
+      return pick;
+    }
+
+    // No under-capacity candidate — overflow path (INV-012: never return null).
+    if (overflow) {
+      Logger.warn(
+        `No server below maxLoad; overflow select on least-utilised server ${overflow.id} (pool saturated)`,
+        loggerCtx,
+      );
+      this.opsAlert.notify(
+        "bbb-pool-saturated",
+        "pool",
+        `No BBB server below maxLoad; overflow-selecting server ${overflow.id} (currentLoad=${overflow.currentLoad}, maxLoad=${overflow.maxLoad})`,
+        {
+          servers: ranked.map((r) => ({
+            serverId: r.server.id,
+            name: r.server.name,
+            currentLoad: r.server.currentLoad,
+            maxLoad: r.server.maxLoad,
+            isUnderMaxLoad: r.isUnderMaxLoad,
+            isFresh: r.isFresh,
+          })),
+        },
+      );
+      return overflow;
+    }
+
+    return null;
   }
 
   /**

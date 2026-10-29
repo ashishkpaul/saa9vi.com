@@ -80,10 +80,16 @@ export class CapacityIntelligenceService {
         .andWhere("meeting.state = :state", { state: "Active" })
         .getCount();
 
-      // BbbMeeting entity does not have attendeeCount — participant tracking
-      // is done via BbbUsageLedger. We use 0 as a placeholder; the live
-      // participant count can be added when BBB webhook provides it.
-      const activeParticipants = 0;
+      // Measured live participants from the per-server load poll. Stale load is
+      // treated as unknown (0) — never as a hard gate (INV-012).
+      const staleAfterMinutes = this.options.loadStaleAfterMinutes ?? 5;
+      const loadUpdatedAtMs = server.loadUpdatedAt instanceof Date
+        ? server.loadUpdatedAt.getTime()
+        : 0;
+      const isFresh =
+        loadUpdatedAtMs > 0 &&
+        loadUpdatedAtMs > Date.now() - staleAfterMinutes * 60 * 1000;
+      const activeParticipants = isFresh ? (server.liveParticipants ?? 0) : 0;
 
       const loadPercent =
         server.capacity > 0 ? (server.currentLoad / server.capacity) * 100 : 0;
