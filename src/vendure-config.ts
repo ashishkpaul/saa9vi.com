@@ -139,6 +139,7 @@ apiOptions: {
         },
     adminApiPlayground: IS_DEV,
     shopApiPlayground: IS_DEV,
+    introspection: true,
 
     middleware: [
       {
