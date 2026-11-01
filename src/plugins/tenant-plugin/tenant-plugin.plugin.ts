@@ -13,6 +13,8 @@ import { InstructorProfile } from './entities/instructor-profile.entity';
 import { MediaResource } from './entities/media-resource.entity';
 import { TenantRegistrationLog } from './entities/tenant-registration-log.entity';
 import { TenantTheme } from './entities/tenant-theme.entity';
+import { TenantLearnerMembership } from './entities/tenant-learner-membership.entity';
+import { TenantLearnerMembershipService } from './services/tenant-learner-membership.service';
 import { TenantProfileService } from './services/tenant-profile.service';
 import { InstructorProfileService } from './services/instructor-profile.service';
 import { MediaResourceService } from './services/media-resource.service';
@@ -46,7 +48,7 @@ function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
 @VendurePlugin({
   compatibility: '^3.0.0',
   imports: [PluginCommonModule, CustomerDeletionModule, CommercialEntitlementModule],
-  entities: [TenantProfile, InstructorProfile, MediaResource, TenantRegistrationLog, TenantTheme],
+  entities: [TenantProfile, InstructorProfile, MediaResource, TenantRegistrationLog, TenantTheme, TenantLearnerMembership],
   providers: [
     TenantProfileService,
     InstructorProfileService,
@@ -58,6 +60,7 @@ function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
     TenantRoleReconciliationService,
     TenantThemeService,
     TenantCommercialEligibilityService,
+    TenantLearnerMembershipService,
   ],
   adminApiExtensions: {
     schema: concatApiExtensions(adminApiExtensions, themeAdminExtensions),

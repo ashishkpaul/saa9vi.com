@@ -185,6 +185,9 @@ export const adminApiExtensions = gql`
     validFrom: DateTime
     validUntil: DateTime
     source: String!
+    reason: String
+    enrolledByUserId: String
+    enrolledAt: DateTime
   }
 
   type BbbEnrollmentList {
@@ -702,7 +705,6 @@ export const adminApiExtensions = gql`
     customerId: ID!
     type: String!
     resourceId: ID!
-    source: String!
     validFrom: String
     validUntil: String
   }

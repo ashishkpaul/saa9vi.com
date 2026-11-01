@@ -8,6 +8,7 @@ import { Args, Mutation, Query, Resolver } from "@nestjs/graphql";
 import {
   Allow,
   Ctx,
+  ForbiddenError,
   Permission,
   RequestContext,
   Transaction,
@@ -62,7 +63,6 @@ import { SessionAttendance } from "../entities/session-attendance.entity";
 import { Customer, EntityNotFoundError } from "@vendure/core";
 import { AttendanceAnalyticsService } from "../services/attendance-analytics.service";
 import { BbbBillingService } from "../services/bbb-billing.service";
-
 /** Shape returned to GraphQL with augmented customer info */
 interface MemberWithCustomer extends BbbOrganizationMember {
   customerName?: string | null;
@@ -1078,6 +1078,21 @@ export class BbbAdminResolver {
         ? new Date(Date.now() + input.accessDays * 24 * 60 * 60 * 1000)
         : null;
 
+    // H2 (Phase 1b): verify the target Customer has ACTIVE TenantLearnerMembership
+    // in the active channel. Uses TransactionalConnection directly to avoid
+    // cross-plugin DI coupling between BigBlueButtonPlugin and TenantPlugin.
+    const channelId = ctx.channelId as string;
+    const membershipRepo = this.connection.getRepository(ctx, "TenantLearnerMembership");
+    const membership = await membershipRepo.findOne({
+      where: {
+        customerId: input.customerId,
+        channelId,
+        status: "ACTIVE",
+      },
+    });
+    if (!membership) {
+      throw new ForbiddenError();
+    }
     // Upsert: re-activate existing deactivated enrollment
     const existing = await this.connection
       .getRepository(ctx, BbbEnrollment)
@@ -1085,12 +1100,19 @@ export class BbbAdminResolver {
         where: { roomId: input.roomId, customerId: input.customerId },
       });
 
+    const now = new Date();
+    const requesterId =
+      ctx.activeUserId != null ? String(ctx.activeUserId) : null;
+
     if (existing) {
       existing.active = true;
       existing.expiresAt = expiresAt;
       existing.source = "admin";
-      // W5 audit trail: re-activation clears the deactivation stamp (trace
-      // writer #5) — the row reads as currently-active, not deactivated.
+      // Persist reason and actor on re-activation
+      existing.reason = input.reason ?? null;
+      existing.enrolledByUserId = requesterId;
+      existing.enrolledAt = now;
+      // Clear deactivation stamps on re-activation
       existing.deactivatedByUserId = null;
       existing.deactivatedAt = null;
       return this.connection.getRepository(ctx, BbbEnrollment).save(existing);
@@ -1105,6 +1127,10 @@ export class BbbAdminResolver {
         active: true,
         expiresAt,
         source: "admin",
+        // H2 hotfix: persist reason and actor on create
+        reason: input.reason ?? null,
+        enrolledByUserId: requesterId,
+        enrolledAt: now,
       }),
     );
   }
@@ -1278,7 +1304,6 @@ export class BbbAdminResolver {
       customerId: string;
       type: "bbb_session" | "bbb_room";
       resourceId: string;
-      source: "purchase" | "trial" | "admin" | "import";
       validFrom?: string;
       validUntil?: string;
     },
@@ -1290,27 +1315,47 @@ export class BbbAdminResolver {
     // a foreign channel's session or room.
     //
     // For bbb_session resources, assert session channel. For bbb_room resources,
-    // assert room channel. Skip for non-resource types (purchase/import paths
-    // that carry no resolvable resourceId — the channelId stamp is sufficient).
+    // assert room channel.
     if (input.type === "bbb_session") {
       await this.channelAccess.assertSessionAccess(ctx, input.resourceId);
     } else if (input.type === "bbb_room") {
       await this.channelAccess.assertRoomAccess(ctx, input.resourceId);
     }
+
+    // H1 (Phase 1b): verify the target Customer has ACTIVE TenantLearnerMembership
+    // in the active channel. Uses TransactionalConnection directly to avoid
+    // cross-plugin DI coupling between BigBlueButtonPlugin and TenantPlugin.
+    const channelId = ctx.channelId as string;
+    const membershipRepo = this.connection.getRepository(ctx, "TenantLearnerMembership");
+    const membership = await membershipRepo.findOne({
+      where: {
+        customerId: input.customerId,
+        channelId,
+        status: "ACTIVE",
+      },
+    });
+    if (!membership) {
+      throw new ForbiddenError();
+    }
+
     // Grant (W5 follow-up 2/5 — widened duplicate-row spec): delegated to
     // BbbEntitlementService.create, which runs the read-then-insert under a
     // per-key advisory lock — returns an unexpired row if one exists, else
     // INSERTs a NEW row. Revoked rows stay as stamped history; they are
-    // NEVER reactivated (the earlier reactivation path is gone: clearing
-    // deactivatedByUserId/deactivatedAt destroyed "who revoked this access").
+    // NEVER reactivated.
     // channelId = ctx.channelId keeps ADR-048: a cross-tenant write is
     // structurally impossible; the resource-org asserts above remain for
     // auditability (INV-029) and a clean ForbiddenError.
+    //
+    // H1 hotfix: `source` is server-derived ("admin" for tenant manual grants).
+    // Caller-supplied `source` (purchase/trial/import) is removed from the
+    // tenant-facing contract — those sources are reserved for service-derived
+    // flows (order fulfillment, trial conversion, import).
     return this.entitlementService.create(ctx, {
       type: input.type,
       resourceId: input.resourceId,
       customerId: input.customerId,
-      source: input.source,
+      source: "admin",
       validFrom: input.validFrom ? new Date(input.validFrom) : null,
       validUntil: input.validUntil ? new Date(input.validUntil) : null,
       channelId: ctx.channelId as string,
