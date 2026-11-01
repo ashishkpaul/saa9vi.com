@@ -1408,6 +1408,101 @@ export class BbbAdminResolver {
     return true;
   }
 
+  /**
+   * C-18: Convert legacy BbbEnrollment rows to BbbEntitlement(type='bbb_room').
+   *
+   * Idempotent: for each active enrollment with no existing live entitlement
+   * for the same (customerId, roomId), calls BbbEntitlementService.create()
+   * under its advisory lock. Enrollments that already have a matching live
+   * entitlement are skipped. Historical enrollment rows are preserved for audit.
+   *
+   * Scope: channel-scoped — only converts enrollments whose room belongs to
+   * the caller's channel. SuperAdmin may convert across all channels.
+   *
+   * Returns a summary of converted/skipped counts.
+   */
+  @Allow(BbbAdminPermission.Permission, BbbManageEntitlementsPermission.Permission)
+  @Transaction()
+  @Mutation()
+  async convertBbbEnrollmentsToEntitlements(
+    @Ctx() ctx: RequestContext,
+  ): Promise<{ converted: number; skipped: number; total: number }> {
+    const channelId = ctx.channelId as string;
+    const isSuperAdmin = ctx.userHasPermissions([Permission.SuperAdmin]);
+
+    // Fetch all active enrollments. Channel filtering is via the room's org.
+    const enrollments = await this.connection
+      .getRepository(ctx, BbbEnrollment)
+      .find({ where: { active: true } });
+
+    let converted = 0;
+    let skipped = 0;
+
+    for (const enrollment of enrollments) {
+      // Resolve the room to get channelId for scoping.
+      const room = await this.connection
+        .getRepository(ctx, BbbRoom)
+        .findOne({ where: { id: enrollment.roomId } });
+
+      if (!room) {
+        // Room deleted — skip this orphan enrollment.
+        skipped++;
+        continue;
+      }
+
+      // Channel scoping: non-SuperAdmin callers only convert their own channel.
+      const org = await this.connection
+        .getRepository(ctx, 'BbbOrganization')
+        .findOne({ where: { id: String((room as any).organizationId ?? '') } })
+        .catch(() => null);
+
+      const enrollmentChannelId = String((org as any)?.channelId ?? '');
+      if (!isSuperAdmin && enrollmentChannelId !== String(channelId)) {
+        // Not this caller's channel — skip.
+        skipped++;
+        continue;
+      }
+
+      // Check if a live entitlement already exists for this key.
+      const existingRows = await this.connection
+        .getRepository(ctx, BbbEntitlement)
+        .find({
+          where: {
+            customerId: enrollment.customerId,
+            type: 'bbb_room',
+            resourceId: String(enrollment.roomId),
+          },
+        });
+
+      const now = new Date();
+      const hasLive = existingRows.some((r) =>
+        r.validFrom != null && r.validFrom > now ? false :
+        r.validUntil == null || r.validUntil > now
+      );
+
+      if (hasLive) {
+        // Already has a matching live entitlement — skip.
+        skipped++;
+        continue;
+      }
+
+      // Create the entitlement via the service (advisory lock, history-safe).
+      await this.entitlementService.create(ctx, {
+        type: 'bbb_room',
+        resourceId: String(enrollment.roomId),
+        customerId: enrollment.customerId as any,
+        source: enrollment.source === 'admin' ? 'admin' : 'import',
+        validFrom: enrollment.validFrom ?? null,
+        validUntil: enrollment.validUntil ?? enrollment.expiresAt ?? null,
+        channelId: enrollmentChannelId || null,
+      });
+
+      converted++;
+    }
+
+    return { converted, skipped, total: enrollments.length };
+  }
+
   // ─── Scheduled Sessions ────────────────────────────────────────────────────
 
   @Query()
