@@ -3,6 +3,7 @@ import { PluginCommonModule, VendurePlugin } from '@vendure/core';
 import { CustomerDeletionModule } from '../../platform/customer-deletion/customer-deletion.module';
 import { CommercialEntitlementModule } from '../../platform/commercial/commercial-entitlement.module';
 import { CustomerDeletionService } from '../../platform/customer-deletion/customer-deletion.service';
+import { LEARNER_ADMISSION_PORT } from '../../platform/learner-admission.port';
 import {
   tenantProfilePermission,
   instructorProfilePermission,
@@ -63,7 +64,14 @@ function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
     TenantThemeService,
     TenantCommercialEligibilityService,
     TenantLearnerMembershipService,
+    // C-10: expose LearnerAdmissionPort so BBB and other plugins can inject
+    // it without directly importing TenantLearnerMembershipService.
+    {
+      provide: LEARNER_ADMISSION_PORT,
+      useExisting: TenantLearnerMembershipService,
+    },
   ],
+  exports: [LEARNER_ADMISSION_PORT, TenantLearnerMembershipService],
   adminApiExtensions: {
     schema: concatApiExtensions(adminApiExtensions, themeAdminExtensions),
     resolvers: [TenantAdminResolver],

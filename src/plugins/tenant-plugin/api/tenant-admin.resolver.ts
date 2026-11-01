@@ -23,6 +23,112 @@ import { TenantLearnerMembershipService } from '../services/tenant-learner-membe
 import { tenantProfilePermission, instructorProfilePermission, mediaResourcePermission, tenantManageAdmissionsPermission } from '../constants';
 import { Administrator, Role } from '@vendure/core';
 
+// ── C-15: Typed input DTOs (replacing `input: any`) ─────────────────────────
+
+interface CreateTenantProfileInput {
+  channelId?: string;
+  businessName: string;
+  tagline?: string;
+  logoAssetId?: ID;
+  timezone?: string;
+  contactEmail: string;
+}
+
+interface UpdateTenantProfileInput {
+  channelId: string;
+  businessName?: string;
+  tagline?: string;
+  logoAssetId?: ID;
+  timezone?: string;
+  contactEmail?: string;
+  customDomain?: string;
+  onboardingComplete?: boolean;
+}
+
+interface CreateInstructorProfileInput {
+  customerId: ID;
+  slug: string;
+  fullName: string;
+  bio?: string;
+  photoAssetId?: ID;
+  credentials?: string;
+  expertiseAreas?: string[];
+  displayOrder?: number;
+  isActive?: boolean;
+  isPublic?: boolean;
+}
+
+interface UpdateInstructorProfileInput {
+  id: ID;
+  customerId?: ID;
+  slug?: string;
+  fullName?: string;
+  bio?: string;
+  photoAssetId?: ID;
+  credentials?: string;
+  expertiseAreas?: string[];
+  displayOrder?: number;
+  isActive?: boolean;
+  isPublic?: boolean;
+}
+
+interface CreateMediaResourceInput {
+  ownerType: string;
+  ownerId: string;
+  type: string;
+  url: string;
+  title: string;
+  thumbnailAssetId?: ID;
+  displayOrder?: number;
+  isFeatured?: boolean;
+  isActive?: boolean;
+}
+
+interface UpdateMediaResourceInput {
+  id: ID;
+  ownerType?: string;
+  ownerId?: string;
+  type?: string;
+  url?: string;
+  title?: string;
+  thumbnailAssetId?: ID;
+  displayOrder?: number;
+  isFeatured?: boolean;
+  isActive?: boolean;
+}
+
+interface TenantThemeInput {
+  primaryColor?: string;
+  secondaryColor?: string;
+  accentColor?: string;
+  backgroundColor?: string;
+  textColor?: string;
+  fontFamily?: string;
+  logoAssetId?: ID;
+  displayName?: string;
+}
+
+interface AdmitTenantLearnerInput {
+  customerId: ID;
+  admissionType?: string;
+  invitedByUserId?: ID;
+}
+
+interface SuspendTenantLearnerInput {
+  customerId: ID;
+  reason: string;
+}
+
+interface RevokeTenantLearnerInput {
+  customerId: ID;
+  reason?: string;
+}
+
+interface ReadmitTenantLearnerInput {
+  customerId: ID;
+  reason?: string;
+}
+
 @Resolver()
 export class TenantAdminResolver {
   constructor(
@@ -226,14 +332,14 @@ export class TenantAdminResolver {
   @Allow(tenantProfilePermission.Update)
   @Transaction()
   @Mutation()
-  createTenantProfile(@Ctx() ctx: RequestContext, @Args('input') input: any) {
+  createTenantProfile(@Ctx() ctx: RequestContext, @Args('input') input: CreateTenantProfileInput) {
     return this.tenantProfileService.create(ctx, input);
   }
 
   @Allow(tenantProfilePermission.Update)
   @Transaction()
   @Mutation()
-  updateTenantProfile(@Ctx() ctx: RequestContext, @Args('input') input: any) {
+  updateTenantProfile(@Ctx() ctx: RequestContext, @Args('input') input: UpdateTenantProfileInput) {
     // C-01: Non-SuperAdmin callers cannot write to a different channel.
     if (!ctx.userHasPermissions([Permission.SuperAdmin])) {
       if (input.channelId && String(input.channelId) !== String(ctx.channelId)) {
@@ -261,15 +367,15 @@ export class TenantAdminResolver {
   @Allow(instructorProfilePermission.Create)
   @Transaction()
   @Mutation()
-  createInstructorProfile(@Ctx() ctx: RequestContext, @Args('input') input: any) {
-    return this.instructorProfileService.create(ctx, input);
+  createInstructorProfile(@Ctx() ctx: RequestContext, @Args('input') input: CreateInstructorProfileInput) {
+    return this.instructorProfileService.create(ctx, input as any);
   }
 
   @Allow(instructorProfilePermission.Update)
   @Transaction()
   @Mutation()
-  updateInstructorProfile(@Ctx() ctx: RequestContext, @Args('input') input: any) {
-    return this.instructorProfileService.update(ctx, input.id, input);
+  updateInstructorProfile(@Ctx() ctx: RequestContext, @Args('input') input: UpdateInstructorProfileInput) {
+    return this.instructorProfileService.update(ctx, input.id as string, input as any);
   }
 
   @Allow(instructorProfilePermission.Delete)
@@ -295,15 +401,15 @@ export class TenantAdminResolver {
   @Allow(mediaResourcePermission.Create)
   @Transaction()
   @Mutation()
-  createMediaResource(@Ctx() ctx: RequestContext, @Args('input') input: any) {
-    return this.mediaResourceService.create(ctx, input);
+  createMediaResource(@Ctx() ctx: RequestContext, @Args('input') input: CreateMediaResourceInput) {
+    return this.mediaResourceService.create(ctx, input as any);
   }
 
   @Allow(mediaResourcePermission.Update)
   @Transaction()
   @Mutation()
-  updateMediaResource(@Ctx() ctx: RequestContext, @Args('input') input: any) {
-    return this.mediaResourceService.update(ctx, input.id, input);
+  updateMediaResource(@Ctx() ctx: RequestContext, @Args('input') input: UpdateMediaResourceInput) {
+    return this.mediaResourceService.update(ctx, input.id as string, input as any);
   }
 
   @Allow(mediaResourcePermission.Delete)
@@ -332,15 +438,15 @@ export class TenantAdminResolver {
   @Mutation()
   @Transaction()
   @Allow(tenantProfilePermission.Update)
-  async createTenantTheme(@Ctx() ctx: RequestContext, @Args('input') input: any) {
-    return this.tenantThemeService.createTheme(ctx, input);
+  async createTenantTheme(@Ctx() ctx: RequestContext, @Args('input') input: TenantThemeInput) {
+    return this.tenantThemeService.createTheme(ctx, input as any);
   }
 
   @Mutation()
   @Transaction()
   @Allow(tenantProfilePermission.Update)
-  async updateTenantTheme(@Ctx() ctx: RequestContext, @Args('id') id: ID, @Args('input') input: any) {
-    return this.tenantThemeService.updateTheme(ctx, id, input);
+  async updateTenantTheme(@Ctx() ctx: RequestContext, @Args('id') id: ID, @Args('input') input: TenantThemeInput) {
+    return this.tenantThemeService.updateTheme(ctx, id, input as any);
   }
 
   @Mutation()
@@ -381,7 +487,7 @@ export class TenantAdminResolver {
   @Mutation()
   @Transaction()
   @Allow(tenantManageAdmissionsPermission.Create)
-  async admitTenantLearner(@Ctx() ctx: RequestContext, @Args('input') input: { customerId: ID; admissionType?: string; invitedByUserId?: ID }) {
+  async admitTenantLearner(@Ctx() ctx: RequestContext, @Args('input') input: AdmitTenantLearnerInput) {
     const actorId = ctx.activeUserId != null ? String(ctx.activeUserId) : null;
     return this.tenantLearnerMembershipService.admit(ctx, {
       customerId: input.customerId,
@@ -402,7 +508,7 @@ export class TenantAdminResolver {
   @Mutation()
   @Transaction()
   @Allow(tenantManageAdmissionsPermission.Update)
-  async suspendTenantLearner(@Ctx() ctx: RequestContext, @Args('input') input: { customerId: ID; reason: string }) {
+  async suspendTenantLearner(@Ctx() ctx: RequestContext, @Args('input') input: SuspendTenantLearnerInput) {
     const actorId = ctx.activeUserId != null ? String(ctx.activeUserId) : null;
     return this.tenantLearnerMembershipService.suspend(ctx, input.customerId, ctx.channelId as string, input.reason, actorId);
   }
@@ -410,7 +516,7 @@ export class TenantAdminResolver {
   @Mutation()
   @Transaction()
   @Allow(tenantManageAdmissionsPermission.Update)
-  async revokeTenantLearner(@Ctx() ctx: RequestContext, @Args('input') input: { customerId: ID; reason?: string }) {
+  async revokeTenantLearner(@Ctx() ctx: RequestContext, @Args('input') input: RevokeTenantLearnerInput) {
     const actorId = ctx.activeUserId != null ? String(ctx.activeUserId) : null;
     return this.tenantLearnerMembershipService.revoke(ctx, input.customerId, ctx.channelId as string, actorId, input.reason);
   }
@@ -418,7 +524,7 @@ export class TenantAdminResolver {
   @Mutation()
   @Transaction()
   @Allow(tenantManageAdmissionsPermission.Update)
-  async readmitTenantLearner(@Ctx() ctx: RequestContext, @Args('input') input: { customerId: ID; reason?: string }) {
+  async readmitTenantLearner(@Ctx() ctx: RequestContext, @Args('input') input: ReadmitTenantLearnerInput) {
     const actorId = ctx.activeUserId != null ? String(ctx.activeUserId) : null;
     return this.tenantLearnerMembershipService.readmit(ctx, input.customerId, ctx.channelId as string, actorId, input.reason);
   }

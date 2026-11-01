@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService, ID, RequestContext, TransactionalConnection } from "@vendure/core";
 import { InstructorProfile } from "../entities/instructor-profile.entity";
 import { TenantLearnerMembershipService } from "./tenant-learner-membership.service";
+import { decodeEntityId } from "../../../platform/id-utils";
 
 const loggerCtx = "TenantDeletionService";
 
@@ -26,8 +27,7 @@ export class TenantDeletionService {
 
   /** Decode GraphQL-encoded id to the raw PK string stored in varchar columns. */
   private rawId(id: ID): string {
-    const decoded = this.configService.entityIdStrategy.decodeId(String(id));
-    return decoded === -1 ? String(id) : String(decoded);
+    return decodeEntityId(id, this.configService);
   }
 
   /**

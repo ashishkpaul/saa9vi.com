@@ -5,6 +5,7 @@
 // remains backward compatible while allowing finer-grained roles.
 
 import { Args, Mutation, Query, Resolver } from "@nestjs/graphql";
+import { Inject } from "@nestjs/common";
 import {
   Allow,
   Ctx,
@@ -16,6 +17,10 @@ import {
   UserInputError,
 } from "@vendure/core";
 import { In } from "typeorm";
+import {
+  LEARNER_ADMISSION_PORT,
+  LearnerAdmissionPort,
+} from "../../../platform/learner-admission.port";
 import { BbbServerService } from "../services/bbb-server.service";
 import { BbbOrganizationService } from "../services/bbb-organization.service";
 // H3 (BUG-049 / INV-029): capacity-grant reads are channel-asserted, exactly as
@@ -207,6 +212,8 @@ export class BbbAdminResolver {
     private readonly billingService: BbbBillingService,
     private readonly reconciliationService: BbbReconciliationService,
     private readonly entitlementService: BbbEntitlementService,
+    @Inject(LEARNER_ADMISSION_PORT)
+    private readonly learnerAdmissionPort: LearnerAdmissionPort,
   ) {}
 
   // ─── Capacity Intelligence Dashboard (ADR v1.7 §6A CI-003) ────────────────
@@ -1078,19 +1085,11 @@ export class BbbAdminResolver {
         ? new Date(Date.now() + input.accessDays * 24 * 60 * 60 * 1000)
         : null;
 
-    // H2 (Phase 1b): verify the target Customer has ACTIVE TenantLearnerMembership
-    // in the active channel. Uses TransactionalConnection directly to avoid
-    // cross-plugin DI coupling between BigBlueButtonPlugin and TenantPlugin.
+    // H2 (C-10): verify the target Customer has ACTIVE TenantLearnerMembership
+    // in the active channel via LearnerAdmissionPort (typed cross-plugin boundary).
     const channelId = ctx.channelId as string;
-    const membershipRepo = this.connection.getRepository(ctx, "TenantLearnerMembership");
-    const membership = await membershipRepo.findOne({
-      where: {
-        customerId: input.customerId,
-        channelId,
-        status: "ACTIVE",
-      },
-    });
-    if (!membership) {
+    const isAdmitted = await this.learnerAdmissionPort.isActiveMember(ctx, input.customerId, channelId);
+    if (!isAdmitted) {
       throw new ForbiddenError();
     }
     // Upsert: re-activate existing deactivated enrollment
@@ -1322,19 +1321,11 @@ export class BbbAdminResolver {
       await this.channelAccess.assertRoomAccess(ctx, input.resourceId);
     }
 
-    // H1 (Phase 1b): verify the target Customer has ACTIVE TenantLearnerMembership
-    // in the active channel. Uses TransactionalConnection directly to avoid
-    // cross-plugin DI coupling between BigBlueButtonPlugin and TenantPlugin.
+    // H1 (C-10): verify the target Customer has ACTIVE TenantLearnerMembership
+    // in the active channel via LearnerAdmissionPort (typed cross-plugin boundary).
     const channelId = ctx.channelId as string;
-    const membershipRepo = this.connection.getRepository(ctx, "TenantLearnerMembership");
-    const membership = await membershipRepo.findOne({
-      where: {
-        customerId: input.customerId,
-        channelId,
-        status: "ACTIVE",
-      },
-    });
-    if (!membership) {
+    const isAdmitted = await this.learnerAdmissionPort.isActiveMember(ctx, input.customerId, channelId);
+    if (!isAdmitted) {
       throw new ForbiddenError();
     }
 
