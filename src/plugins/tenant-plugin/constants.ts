@@ -1,4 +1,4 @@
-import { CrudPermissionDefinition, Permission } from '@vendure/core';
+import { CrudPermissionDefinition, Permission, PermissionDefinition } from '@vendure/core';
 import {
   BbbManageEntitlementsPermission,
   BbbManageMeetingsPermission,
@@ -19,6 +19,12 @@ export const TENANT_PLUGIN_OPTIONS = 'TENANT_PLUGIN_OPTIONS';
 export const tenantProfilePermission = new CrudPermissionDefinition('TenantProfile');
 export const instructorProfilePermission = new CrudPermissionDefinition('InstructorProfile');
 export const mediaResourcePermission = new CrudPermissionDefinition('MediaResource');
+
+/**
+ * Permission for managing academy learner admissions within a tenant channel.
+ * Granted to tenant admins; not a BBB or platform-infrastructure permission.
+ */
+export const tenantManageAdmissionsPermission = new CrudPermissionDefinition('TenantManageAdmissions');
 
 /**
  * Permissions granted to a new tenant's Administrator on their own Channel via
@@ -114,4 +120,9 @@ export const TENANT_ADMIN_ROLE_PERMISSIONS: Permission[] = [
   pagePermission.Delete,
   // Reviews
   REVIEW_ADMIN_PERMISSION.Permission,
+  // Academy admission management (C-02)
+  tenantManageAdmissionsPermission.Create,
+  tenantManageAdmissionsPermission.Read,
+  tenantManageAdmissionsPermission.Update,
+  tenantManageAdmissionsPermission.Delete,
 ];

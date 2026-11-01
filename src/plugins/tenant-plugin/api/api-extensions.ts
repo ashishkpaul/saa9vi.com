@@ -150,12 +150,73 @@ export const adminApiExtensions = gql`
         isActive: Boolean
     }
 
+    type TenantLearnerMembership implements Node {
+        id: ID!
+        createdAt: DateTime!
+        updatedAt: DateTime!
+        customerId: String!
+        channelId: String!
+        status: String!
+        admissionType: String!
+        lastActivityAt: DateTime
+        invitedByUserId: String
+        invitedAt: DateTime
+        joinedAt: DateTime
+    }
+
+    type TenantLearnerMembershipList implements PaginatedList {
+        items: [TenantLearnerMembership!]!
+        totalItems: Int!
+    }
+
+    input TenantLearnersListOptions {
+        skip: Int
+        take: Int
+    }
+
+    type TenantLearnerMembershipLog implements Node {
+        id: ID!
+        createdAt: DateTime!
+        updatedAt: DateTime!
+        membershipId: ID!
+        customerId: String!
+        channelId: String!
+        oldStatus: String
+        newStatus: String!
+        reason: String
+        actorId: String
+        transitionedAt: DateTime!
+    }
+
+    input AdmitTenantLearnerInput {
+        customerId: ID!
+        admissionType: String
+        invitedByUserId: ID
+    }
+
+    input SuspendTenantLearnerInput {
+        customerId: ID!
+        reason: String!
+    }
+
+    input RevokeTenantLearnerInput {
+        customerId: ID!
+        reason: String
+    }
+
+    input ReadmitTenantLearnerInput {
+        customerId: ID!
+        reason: String
+    }
+
     extend type Query {
         tenantProfile(channelId: String): TenantProfile
         instructorProfiles(options: InstructorProfileListOptions): InstructorProfileList!
         instructorProfile(id: ID!): InstructorProfile
         mediaResources(options: MediaResourceListOptions): MediaResourceList!
         mediaResource(id: ID!): MediaResource
+        tenantLearners(options: TenantLearnersListOptions): TenantLearnerMembershipList!
+        tenantLearnerMembershipLogs(customerId: ID!): [TenantLearnerMembershipLog!]!
     }
 
     extend type Mutation {
@@ -167,6 +228,11 @@ export const adminApiExtensions = gql`
         createMediaResource(input: CreateMediaResourceInput!): MediaResource!
         updateMediaResource(input: UpdateMediaResourceInput!): MediaResource!
         deleteMediaResource(id: ID!): Boolean!
+        admitTenantLearner(input: AdmitTenantLearnerInput!): TenantLearnerMembership!
+        activateTenantLearner(customerId: ID!): TenantLearnerMembership!
+        suspendTenantLearner(input: SuspendTenantLearnerInput!): TenantLearnerMembership!
+        revokeTenantLearner(input: RevokeTenantLearnerInput!): TenantLearnerMembership!
+        readmitTenantLearner(input: ReadmitTenantLearnerInput!): TenantLearnerMembership!
     }
 `;
 

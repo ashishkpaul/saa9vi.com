@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService, ID, RequestContext, TransactionalConnection } from "@vendure/core";
 import { InstructorProfile } from "../entities/instructor-profile.entity";
+import { TenantLearnerMembershipService } from "./tenant-learner-membership.service";
 
 const loggerCtx = "TenantDeletionService";
 
@@ -10,12 +11,17 @@ const loggerCtx = "TenantDeletionService";
  * Called by CustomerDeletionService during Flow A (leave_channel) and
  * Flow B (full_delete). Anonymizes instructor profiles rather than
  * deleting them — slugs are preserved for URL integrity.
+ *
+ * C-03: also transitions TenantLearnerMembership status through
+ * TenantLearnerMembershipService (single writer — never writes the entity
+ * directly). Both flows are idempotent: terminal-state rows are skipped.
  */
 @Injectable()
 export class TenantDeletionService {
   constructor(
     private readonly connection: TransactionalConnection,
     private readonly configService: ConfigService,
+    private readonly membershipService: TenantLearnerMembershipService,
   ) {}
 
   /** Decode GraphQL-encoded id to the raw PK string stored in varchar columns. */
@@ -25,7 +31,8 @@ export class TenantDeletionService {
   }
 
   /**
-   * Anonymize instructor profiles for this customer in a single channel.
+   * Flow A — Remove the customer from a single channel.
+   * Anonymizes instructor profiles and transitions membership to LEFT.
    */
   async removeFromChannel(
     ctx: RequestContext,
@@ -48,10 +55,15 @@ export class TenantDeletionService {
       profile.isActive = false;
       await this.connection.getRepository(ctx, InstructorProfile).save(profile);
     }
+
+    // C-03: transition membership to LEFT via the admission service so the
+    // single-writer rule is preserved and the log is appended.
+    await this.membershipService.leaveAcademy(ctx, customerId, channelId);
   }
 
   /**
-   * Anonymize instructor profiles for this customer across all channels.
+   * Flow B — Permanently remove the customer from the entire platform.
+   * Anonymizes instructor profiles across all channels and revokes all memberships.
    */
   async fullDelete(
     ctx: RequestContext,
@@ -72,6 +84,13 @@ export class TenantDeletionService {
       profile.photoAssetId = null as any;
       profile.isActive = false;
       await this.connection.getRepository(ctx, InstructorProfile).save(profile);
+    }
+
+    // C-03: revoke all memberships across all channels via the admission
+    // service. revoke() is idempotent — already-REVOKED rows are skipped.
+    const memberships = await this.membershipService.findByCustomer(ctx, customerId);
+    for (const m of memberships) {
+      await this.membershipService.revoke(ctx, customerId, m.channelId, null, 'account-deleted');
     }
   }
 }

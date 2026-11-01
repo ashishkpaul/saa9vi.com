@@ -3,6 +3,7 @@ import {
   AdministratorService,
   Allow,
   Ctx,
+  ForbiddenError,
   ID,
   ListQueryBuilder,
   Permission,
@@ -18,7 +19,8 @@ import { TenantProfileService } from '../services/tenant-profile.service';
 import { InstructorProfileService } from '../services/instructor-profile.service';
 import { MediaResourceService } from '../services/media-resource.service';
 import { TenantThemeService } from '../services/tenant-theme.service';
-import { tenantProfilePermission, instructorProfilePermission, mediaResourcePermission } from '../constants';
+import { TenantLearnerMembershipService } from '../services/tenant-learner-membership.service';
+import { tenantProfilePermission, instructorProfilePermission, mediaResourcePermission, tenantManageAdmissionsPermission } from '../constants';
 import { Administrator, Role } from '@vendure/core';
 
 @Resolver()
@@ -28,6 +30,7 @@ export class TenantAdminResolver {
     private readonly instructorProfileService: InstructorProfileService,
     private readonly mediaResourceService: MediaResourceService,
     private readonly tenantThemeService: TenantThemeService,
+    private readonly tenantLearnerMembershipService: TenantLearnerMembershipService,
     private readonly connection: TransactionalConnection,
     private readonly administratorService: AdministratorService,
     private readonly roleService: RoleService,
@@ -212,7 +215,9 @@ export class TenantAdminResolver {
   @Query()
   @Allow(tenantProfilePermission.Read)
   tenantProfile(@Ctx() ctx: RequestContext, @Args() args?: { channelId?: string }) {
-    const channelId = args?.channelId && args.channelId !== '__current__'
+    // C-01: SuperAdmin may read any channel by explicit channelId.
+    // Non-SuperAdmin callers are always scoped to ctx.channelId — ignore supplied channelId.
+    const channelId = ctx.userHasPermissions([Permission.SuperAdmin]) && args?.channelId && args.channelId !== '__current__'
       ? args.channelId
       : ctx.channelId as string;
     return this.tenantProfileService.findByChannelId(ctx, channelId);
@@ -229,7 +234,16 @@ export class TenantAdminResolver {
   @Transaction()
   @Mutation()
   updateTenantProfile(@Ctx() ctx: RequestContext, @Args('input') input: any) {
-    return this.tenantProfileService.update(ctx, input.channelId, input);
+    // C-01: Non-SuperAdmin callers cannot write to a different channel.
+    if (!ctx.userHasPermissions([Permission.SuperAdmin])) {
+      if (input.channelId && String(input.channelId) !== String(ctx.channelId)) {
+        throw new ForbiddenError();
+      }
+    }
+    const channelId = ctx.userHasPermissions([Permission.SuperAdmin]) && input.channelId
+      ? input.channelId
+      : ctx.channelId as string;
+    return this.tenantProfileService.update(ctx, channelId, input);
   }
 
   @Query()
@@ -348,5 +362,64 @@ export class TenantAdminResolver {
   @Allow(tenantProfilePermission.Update)
   async resetTenantTheme(@Ctx() ctx: RequestContext) {
     return this.tenantThemeService.resetTheme(ctx);
+  }
+
+  // ── Academy admission (C-02) ──────────────────────────────────────────────
+
+  @Query()
+  @Allow(tenantManageAdmissionsPermission.Read)
+  async tenantLearners(@Ctx() ctx: RequestContext, @Args() args?: { options?: any }) {
+    return this.tenantLearnerMembershipService.findAllByChannel(ctx, ctx.channelId as string, args?.options);
+  }
+
+  @Query()
+  @Allow(tenantManageAdmissionsPermission.Read)
+  async tenantLearnerMembershipLogs(@Ctx() ctx: RequestContext, @Args() args: { customerId: ID }) {
+    return this.tenantLearnerMembershipService.findLogs(ctx, args.customerId, ctx.channelId as string);
+  }
+
+  @Mutation()
+  @Transaction()
+  @Allow(tenantManageAdmissionsPermission.Create)
+  async admitTenantLearner(@Ctx() ctx: RequestContext, @Args('input') input: { customerId: ID; admissionType?: string; invitedByUserId?: ID }) {
+    const actorId = ctx.activeUserId != null ? String(ctx.activeUserId) : null;
+    return this.tenantLearnerMembershipService.admit(ctx, {
+      customerId: input.customerId,
+      channelId: ctx.channelId as string,
+      admissionType: (input.admissionType as any) ?? 'REGULAR',
+      actorId,
+    });
+  }
+
+  @Mutation()
+  @Transaction()
+  @Allow(tenantManageAdmissionsPermission.Update)
+  async activateTenantLearner(@Ctx() ctx: RequestContext, @Args('customerId') customerId: ID) {
+    const actorId = ctx.activeUserId != null ? String(ctx.activeUserId) : null;
+    return this.tenantLearnerMembershipService.activate(ctx, customerId, ctx.channelId as string, actorId);
+  }
+
+  @Mutation()
+  @Transaction()
+  @Allow(tenantManageAdmissionsPermission.Update)
+  async suspendTenantLearner(@Ctx() ctx: RequestContext, @Args('input') input: { customerId: ID; reason: string }) {
+    const actorId = ctx.activeUserId != null ? String(ctx.activeUserId) : null;
+    return this.tenantLearnerMembershipService.suspend(ctx, input.customerId, ctx.channelId as string, input.reason, actorId);
+  }
+
+  @Mutation()
+  @Transaction()
+  @Allow(tenantManageAdmissionsPermission.Update)
+  async revokeTenantLearner(@Ctx() ctx: RequestContext, @Args('input') input: { customerId: ID; reason?: string }) {
+    const actorId = ctx.activeUserId != null ? String(ctx.activeUserId) : null;
+    return this.tenantLearnerMembershipService.revoke(ctx, input.customerId, ctx.channelId as string, actorId, input.reason);
+  }
+
+  @Mutation()
+  @Transaction()
+  @Allow(tenantManageAdmissionsPermission.Update)
+  async readmitTenantLearner(@Ctx() ctx: RequestContext, @Args('input') input: { customerId: ID; reason?: string }) {
+    const actorId = ctx.activeUserId != null ? String(ctx.activeUserId) : null;
+    return this.tenantLearnerMembershipService.readmit(ctx, input.customerId, ctx.channelId as string, actorId, input.reason);
   }
 }

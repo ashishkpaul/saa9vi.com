@@ -7,6 +7,7 @@ import {
   tenantProfilePermission,
   instructorProfilePermission,
   mediaResourcePermission,
+  tenantManageAdmissionsPermission,
 } from './constants';
 import { TenantProfile } from './entities/tenant-profile.entity';
 import { InstructorProfile } from './entities/instructor-profile.entity';
@@ -14,6 +15,7 @@ import { MediaResource } from './entities/media-resource.entity';
 import { TenantRegistrationLog } from './entities/tenant-registration-log.entity';
 import { TenantTheme } from './entities/tenant-theme.entity';
 import { TenantLearnerMembership } from './entities/tenant-learner-membership.entity';
+import { TenantLearnerMembershipLog } from './entities/tenant-learner-membership-log.entity';
 import { TenantLearnerMembershipService } from './services/tenant-learner-membership.service';
 import { TenantProfileService } from './services/tenant-profile.service';
 import { InstructorProfileService } from './services/instructor-profile.service';
@@ -48,7 +50,7 @@ function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
 @VendurePlugin({
   compatibility: '^3.0.0',
   imports: [PluginCommonModule, CustomerDeletionModule, CommercialEntitlementModule],
-  entities: [TenantProfile, InstructorProfile, MediaResource, TenantRegistrationLog, TenantTheme, TenantLearnerMembership],
+  entities: [TenantProfile, InstructorProfile, MediaResource, TenantRegistrationLog, TenantTheme, TenantLearnerMembership, TenantLearnerMembershipLog],
   providers: [
     TenantProfileService,
     InstructorProfileService,
@@ -76,6 +78,7 @@ function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
       tenantProfilePermission,
       instructorProfilePermission,
       mediaResourcePermission,
+      tenantManageAdmissionsPermission,
     );
     return config;
   },
