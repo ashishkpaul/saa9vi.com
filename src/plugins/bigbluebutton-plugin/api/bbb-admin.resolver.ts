@@ -5,9 +5,11 @@
 // remains backward compatible while allowing finer-grained roles.
 
 import { Args, Mutation, Query, Resolver } from "@nestjs/graphql";
+import { Inject } from "@nestjs/common";
 import {
   Allow,
   Ctx,
+  ForbiddenError,
   Permission,
   RequestContext,
   Transaction,
@@ -15,6 +17,10 @@ import {
   UserInputError,
 } from "@vendure/core";
 import { In } from "typeorm";
+import {
+  LEARNER_ADMISSION_PORT,
+  LearnerAdmissionPort,
+} from "../../../platform/learner-admission.port";
 import { BbbServerService } from "../services/bbb-server.service";
 import { BbbOrganizationService } from "../services/bbb-organization.service";
 // H3 (BUG-049 / INV-029): capacity-grant reads are channel-asserted, exactly as
@@ -62,7 +68,6 @@ import { SessionAttendance } from "../entities/session-attendance.entity";
 import { Customer, EntityNotFoundError } from "@vendure/core";
 import { AttendanceAnalyticsService } from "../services/attendance-analytics.service";
 import { BbbBillingService } from "../services/bbb-billing.service";
-
 /** Shape returned to GraphQL with augmented customer info */
 interface MemberWithCustomer extends BbbOrganizationMember {
   customerName?: string | null;
@@ -207,6 +212,8 @@ export class BbbAdminResolver {
     private readonly billingService: BbbBillingService,
     private readonly reconciliationService: BbbReconciliationService,
     private readonly entitlementService: BbbEntitlementService,
+    @Inject(LEARNER_ADMISSION_PORT)
+    private readonly learnerAdmissionPort: LearnerAdmissionPort,
   ) {}
 
   // ─── Capacity Intelligence Dashboard (ADR v1.7 §6A CI-003) ────────────────
@@ -1078,6 +1085,13 @@ export class BbbAdminResolver {
         ? new Date(Date.now() + input.accessDays * 24 * 60 * 60 * 1000)
         : null;
 
+    // H2 (C-10): verify the target Customer has ACTIVE TenantLearnerMembership
+    // in the active channel via LearnerAdmissionPort (typed cross-plugin boundary).
+    const channelId = ctx.channelId as string;
+    const isAdmitted = await this.learnerAdmissionPort.isActiveMember(ctx, input.customerId, channelId);
+    if (!isAdmitted) {
+      throw new ForbiddenError();
+    }
     // Upsert: re-activate existing deactivated enrollment
     const existing = await this.connection
       .getRepository(ctx, BbbEnrollment)
@@ -1085,12 +1099,19 @@ export class BbbAdminResolver {
         where: { roomId: input.roomId, customerId: input.customerId },
       });
 
+    const now = new Date();
+    const requesterId =
+      ctx.activeUserId != null ? String(ctx.activeUserId) : null;
+
     if (existing) {
       existing.active = true;
       existing.expiresAt = expiresAt;
       existing.source = "admin";
-      // W5 audit trail: re-activation clears the deactivation stamp (trace
-      // writer #5) — the row reads as currently-active, not deactivated.
+      // Persist reason and actor on re-activation
+      existing.reason = input.reason ?? null;
+      existing.enrolledByUserId = requesterId;
+      existing.enrolledAt = now;
+      // Clear deactivation stamps on re-activation
       existing.deactivatedByUserId = null;
       existing.deactivatedAt = null;
       return this.connection.getRepository(ctx, BbbEnrollment).save(existing);
@@ -1105,6 +1126,10 @@ export class BbbAdminResolver {
         active: true,
         expiresAt,
         source: "admin",
+        // H2 hotfix: persist reason and actor on create
+        reason: input.reason ?? null,
+        enrolledByUserId: requesterId,
+        enrolledAt: now,
       }),
     );
   }
@@ -1278,7 +1303,6 @@ export class BbbAdminResolver {
       customerId: string;
       type: "bbb_session" | "bbb_room";
       resourceId: string;
-      source: "purchase" | "trial" | "admin" | "import";
       validFrom?: string;
       validUntil?: string;
     },
@@ -1290,27 +1314,39 @@ export class BbbAdminResolver {
     // a foreign channel's session or room.
     //
     // For bbb_session resources, assert session channel. For bbb_room resources,
-    // assert room channel. Skip for non-resource types (purchase/import paths
-    // that carry no resolvable resourceId — the channelId stamp is sufficient).
+    // assert room channel.
     if (input.type === "bbb_session") {
       await this.channelAccess.assertSessionAccess(ctx, input.resourceId);
     } else if (input.type === "bbb_room") {
       await this.channelAccess.assertRoomAccess(ctx, input.resourceId);
     }
+
+    // H1 (C-10): verify the target Customer has ACTIVE TenantLearnerMembership
+    // in the active channel via LearnerAdmissionPort (typed cross-plugin boundary).
+    const channelId = ctx.channelId as string;
+    const isAdmitted = await this.learnerAdmissionPort.isActiveMember(ctx, input.customerId, channelId);
+    if (!isAdmitted) {
+      throw new ForbiddenError();
+    }
+
     // Grant (W5 follow-up 2/5 — widened duplicate-row spec): delegated to
     // BbbEntitlementService.create, which runs the read-then-insert under a
     // per-key advisory lock — returns an unexpired row if one exists, else
     // INSERTs a NEW row. Revoked rows stay as stamped history; they are
-    // NEVER reactivated (the earlier reactivation path is gone: clearing
-    // deactivatedByUserId/deactivatedAt destroyed "who revoked this access").
+    // NEVER reactivated.
     // channelId = ctx.channelId keeps ADR-048: a cross-tenant write is
     // structurally impossible; the resource-org asserts above remain for
     // auditability (INV-029) and a clean ForbiddenError.
+    //
+    // H1 hotfix: `source` is server-derived ("admin" for tenant manual grants).
+    // Caller-supplied `source` (purchase/trial/import) is removed from the
+    // tenant-facing contract — those sources are reserved for service-derived
+    // flows (order fulfillment, trial conversion, import).
     return this.entitlementService.create(ctx, {
       type: input.type,
       resourceId: input.resourceId,
       customerId: input.customerId,
-      source: input.source,
+      source: "admin",
       validFrom: input.validFrom ? new Date(input.validFrom) : null,
       validUntil: input.validUntil ? new Date(input.validUntil) : null,
       channelId: ctx.channelId as string,
@@ -1370,6 +1406,101 @@ export class BbbAdminResolver {
       params,
     );
     return true;
+  }
+
+  /**
+   * C-18: Convert legacy BbbEnrollment rows to BbbEntitlement(type='bbb_room').
+   *
+   * Idempotent: for each active enrollment with no existing live entitlement
+   * for the same (customerId, roomId), calls BbbEntitlementService.create()
+   * under its advisory lock. Enrollments that already have a matching live
+   * entitlement are skipped. Historical enrollment rows are preserved for audit.
+   *
+   * Scope: channel-scoped — only converts enrollments whose room belongs to
+   * the caller's channel. SuperAdmin may convert across all channels.
+   *
+   * Returns a summary of converted/skipped counts.
+   */
+  @Allow(BbbAdminPermission.Permission, BbbManageEntitlementsPermission.Permission)
+  @Transaction()
+  @Mutation()
+  async convertBbbEnrollmentsToEntitlements(
+    @Ctx() ctx: RequestContext,
+  ): Promise<{ converted: number; skipped: number; total: number }> {
+    const channelId = ctx.channelId as string;
+    const isSuperAdmin = ctx.userHasPermissions([Permission.SuperAdmin]);
+
+    // Fetch all active enrollments. Channel filtering is via the room's org.
+    const enrollments = await this.connection
+      .getRepository(ctx, BbbEnrollment)
+      .find({ where: { active: true } });
+
+    let converted = 0;
+    let skipped = 0;
+
+    for (const enrollment of enrollments) {
+      // Resolve the room to get channelId for scoping.
+      const room = await this.connection
+        .getRepository(ctx, BbbRoom)
+        .findOne({ where: { id: enrollment.roomId } });
+
+      if (!room) {
+        // Room deleted — skip this orphan enrollment.
+        skipped++;
+        continue;
+      }
+
+      // Channel scoping: non-SuperAdmin callers only convert their own channel.
+      const org = await this.connection
+        .getRepository(ctx, 'BbbOrganization')
+        .findOne({ where: { id: String((room as any).organizationId ?? '') } })
+        .catch(() => null);
+
+      const enrollmentChannelId = String((org as any)?.channelId ?? '');
+      if (!isSuperAdmin && enrollmentChannelId !== String(channelId)) {
+        // Not this caller's channel — skip.
+        skipped++;
+        continue;
+      }
+
+      // Check if a live entitlement already exists for this key.
+      const existingRows = await this.connection
+        .getRepository(ctx, BbbEntitlement)
+        .find({
+          where: {
+            customerId: enrollment.customerId,
+            type: 'bbb_room',
+            resourceId: String(enrollment.roomId),
+          },
+        });
+
+      const now = new Date();
+      const hasLive = existingRows.some((r) =>
+        r.validFrom != null && r.validFrom > now ? false :
+        r.validUntil == null || r.validUntil > now
+      );
+
+      if (hasLive) {
+        // Already has a matching live entitlement — skip.
+        skipped++;
+        continue;
+      }
+
+      // Create the entitlement via the service (advisory lock, history-safe).
+      await this.entitlementService.create(ctx, {
+        type: 'bbb_room',
+        resourceId: String(enrollment.roomId),
+        customerId: enrollment.customerId as any,
+        source: enrollment.source === 'admin' ? 'admin' : 'import',
+        validFrom: enrollment.validFrom ?? null,
+        validUntil: enrollment.validUntil ?? enrollment.expiresAt ?? null,
+        channelId: enrollmentChannelId || null,
+      });
+
+      converted++;
+    }
+
+    return { converted, skipped, total: enrollments.length };
   }
 
   // ─── Scheduled Sessions ────────────────────────────────────────────────────

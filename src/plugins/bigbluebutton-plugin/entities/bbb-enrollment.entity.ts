@@ -54,6 +54,18 @@ export class BbbEnrollment extends VendureEntity {
   @Column({ type: "varchar", default: "purchase" })
   source: EnrollmentSource;
 
+  /** Human-readable reason for the enrollment, captured at grant time. */
+  @Column({ type: "varchar", nullable: true })
+  reason: string | null;
+
+  /** User (ctx.activeUserId) who enrolled this customer; null = system. */
+  @Column({ type: "varchar", nullable: true })
+  enrolledByUserId: string | null;
+
+  /** When the enrollment happened. null = system/import. */
+  @Column({ type: "timestamp", nullable: true })
+  enrolledAt: Date | null;
+
   // ─── Audit trail (W5 follow-up, approved 2026-10-05) ────────────────────────
   // New rows only — NO backfill. Stamped at deactivation (admin mutation or
   // customer-deletion erasure); cleared on re-activation (createBbbEnrollment

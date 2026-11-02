@@ -3,16 +3,21 @@ import { PluginCommonModule, VendurePlugin } from '@vendure/core';
 import { CustomerDeletionModule } from '../../platform/customer-deletion/customer-deletion.module';
 import { CommercialEntitlementModule } from '../../platform/commercial/commercial-entitlement.module';
 import { CustomerDeletionService } from '../../platform/customer-deletion/customer-deletion.service';
+import { LEARNER_ADMISSION_PORT } from '../../platform/learner-admission.port';
 import {
   tenantProfilePermission,
   instructorProfilePermission,
   mediaResourcePermission,
+  tenantManageAdmissionsPermission,
 } from './constants';
 import { TenantProfile } from './entities/tenant-profile.entity';
 import { InstructorProfile } from './entities/instructor-profile.entity';
 import { MediaResource } from './entities/media-resource.entity';
 import { TenantRegistrationLog } from './entities/tenant-registration-log.entity';
 import { TenantTheme } from './entities/tenant-theme.entity';
+import { TenantLearnerMembership } from './entities/tenant-learner-membership.entity';
+import { TenantLearnerMembershipLog } from './entities/tenant-learner-membership-log.entity';
+import { TenantLearnerMembershipService } from './services/tenant-learner-membership.service';
 import { TenantProfileService } from './services/tenant-profile.service';
 import { InstructorProfileService } from './services/instructor-profile.service';
 import { MediaResourceService } from './services/media-resource.service';
@@ -46,7 +51,7 @@ function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
 @VendurePlugin({
   compatibility: '^3.0.0',
   imports: [PluginCommonModule, CustomerDeletionModule, CommercialEntitlementModule],
-  entities: [TenantProfile, InstructorProfile, MediaResource, TenantRegistrationLog, TenantTheme],
+  entities: [TenantProfile, InstructorProfile, MediaResource, TenantRegistrationLog, TenantTheme, TenantLearnerMembership, TenantLearnerMembershipLog],
   providers: [
     TenantProfileService,
     InstructorProfileService,
@@ -58,7 +63,15 @@ function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
     TenantRoleReconciliationService,
     TenantThemeService,
     TenantCommercialEligibilityService,
+    TenantLearnerMembershipService,
+    // C-10: expose LearnerAdmissionPort so BBB and other plugins can inject
+    // it without directly importing TenantLearnerMembershipService.
+    {
+      provide: LEARNER_ADMISSION_PORT,
+      useExisting: TenantLearnerMembershipService,
+    },
   ],
+  exports: [LEARNER_ADMISSION_PORT, TenantLearnerMembershipService],
   adminApiExtensions: {
     schema: concatApiExtensions(adminApiExtensions, themeAdminExtensions),
     resolvers: [TenantAdminResolver],
@@ -73,6 +86,7 @@ function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
       tenantProfilePermission,
       instructorProfilePermission,
       mediaResourcePermission,
+      tenantManageAdmissionsPermission,
     );
     return config;
   },

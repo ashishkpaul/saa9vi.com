@@ -25,6 +25,7 @@ import { BigBlueButtonPlugin } from "./plugins/bigbluebutton-plugin";
 import { domainChannelMiddleware } from "./plugins/tenant-plugin/config/domain-channel.middleware";
 import { CmsPlugin } from "./plugins/cms/cms.plugin";
 import { TenantPlugin } from "./plugins/tenant-plugin/tenant-plugin.plugin";
+import { TenantChannelAssignmentStrategy } from "./plugins/tenant-plugin/config/tenant-channel-assignment.strategy";
 import { ReviewsPlugin } from "./plugins/reviews/reviews-plugin";
 import { LoadSimulationPlugin } from "./plugins/load-simulation-plugin/load-simulation.plugin";
 import { MarketplaceIndexerPlugin } from "./plugins/marketplace";
@@ -177,6 +178,9 @@ apiOptions: {
     cookieOptions: {
       secret: process.env.COOKIE_SECRET || "cookie-secret-dev-fallback",
     },
+    // Phase 1b: invitation-aware channel assignment. Only customers with an
+    // ACTIVE TenantLearnerMembership are auto-assigned to a tenant channel.
+    customerChannelAssignmentStrategy: new TenantChannelAssignmentStrategy(),
   },
   dbConnectionOptions: {
     type: "postgres",

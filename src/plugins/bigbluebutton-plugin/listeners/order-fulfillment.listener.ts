@@ -52,7 +52,7 @@ export class BbbOrderFulfillmentListener implements OnApplicationBootstrap {
   ): Promise<void> {
     const order = await this.connection.getRepository(ctx, Order).findOne({
       where: { id: eventOrder.id as string },
-      relations: ["customer", "lines", "lines.productVariant"],
+      relations: ["customer", "channels", "lines", "lines.productVariant"],
     });
 
     if (!order?.customer) {
@@ -64,6 +64,7 @@ export class BbbOrderFulfillmentListener implements OnApplicationBootstrap {
     }
 
     const customerId = String(order.customer.id);
+    const orderChannelId = String(order.channels?.[0]?.id ?? "");
     const now = new Date();
 
     for (const line of order.lines ?? []) {
@@ -80,6 +81,16 @@ export class BbbOrderFulfillmentListener implements OnApplicationBootstrap {
         });
 
       if (session) {
+        // H3 hotfix: order channel must match the provisioned resource's channel.
+        const sessionChannelId = String((session as any).channelId ?? "");
+        if (sessionChannelId && sessionChannelId !== orderChannelId) {
+          Logger.warn(
+            `Order ${eventOrder.code} (channel ${orderChannelId}) cannot provision session ${session.id} (channel ${sessionChannelId}): channel mismatch`,
+            loggerCtx,
+          );
+          continue;
+        }
+
         await this.entitlementService.create(ctx, {
           type: "bbb_session",
           resourceId: String(session.id),
@@ -115,6 +126,16 @@ export class BbbOrderFulfillmentListener implements OnApplicationBootstrap {
 
       const channelId =
         productAccess.room.organization?.channelId ?? null;
+
+      // H3 hotfix: order channel must match the provisioned resource's channel.
+      const roomChannelId = String(channelId ?? "");
+      if (roomChannelId && roomChannelId !== orderChannelId) {
+        Logger.warn(
+          `Order ${eventOrder.code} (channel ${orderChannelId}) cannot provision room ${roomId} (channel ${roomChannelId}): channel mismatch`,
+          loggerCtx,
+        );
+        continue;
+      }
 
       await this.entitlementService.create(ctx, {
         type: "bbb_room",

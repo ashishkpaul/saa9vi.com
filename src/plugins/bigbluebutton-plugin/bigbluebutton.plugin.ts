@@ -103,9 +103,10 @@ import {
   BBB_PUBLIC_BASE_URL,
   BbbAdminPermission,
 } from "./constants";
+import { LearnerAdmissionModule } from "../../platform/learner-admission.module";
 
 @VendurePlugin({
-  imports: [PluginCommonModule, PlatformTracingModule, CustomerDeletionModule],
+  imports: [PluginCommonModule, PlatformTracingModule, CustomerDeletionModule, LearnerAdmissionModule],
 
   entities: [
     BbbServer,

@@ -56,7 +56,7 @@ export function EntitlementsList() {
 
   const reGrantMutation = useMutation({
     mutationFn: (e: any) => api.mutate(CREATE_ENTITLEMENT, {
-      input: { customerId: e.customerId, type: e.type, resourceId: e.resourceId, source: 'admin' },
+      input: { customerId: e.customerId, type: e.type, resourceId: e.resourceId },
     }),
     onSuccess: () => { query.refetch(); toast.success('Access re-granted'); },
     onError: (err: Error) => toast.error('Error', { description: err.message }),

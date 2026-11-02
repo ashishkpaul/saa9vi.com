@@ -185,6 +185,9 @@ export const adminApiExtensions = gql`
     validFrom: DateTime
     validUntil: DateTime
     source: String!
+    reason: String
+    enrolledByUserId: String
+    enrolledAt: DateTime
   }
 
   type BbbEnrollmentList {
@@ -503,6 +506,19 @@ export const adminApiExtensions = gql`
     convertTrialToEnrollment(registrationId: ID!, roomId: ID!, accessDays: Int): BbbEntitlement!
     createBbbEntitlement(input: CreateBbbEntitlementInput!): BbbEntitlement!
     deleteBbbEntitlement(id: ID!): Boolean!
+
+    """
+    C-18: Convert all active legacy BbbEnrollment rows to BbbEntitlement(type='bbb_room').
+    Idempotent — skips rows that already have a matching live entitlement.
+    Returns counts of converted, skipped, and total processed.
+    """
+    convertBbbEnrollmentsToEntitlements: BbbEnrollmentConversionResult!
+  }
+
+  type BbbEnrollmentConversionResult {
+    converted: Int!
+    skipped: Int!
+    total: Int!
   }
 
   # ─── Input Types ─────────────────────────────────────────────────────────────
@@ -702,7 +718,6 @@ export const adminApiExtensions = gql`
     customerId: ID!
     type: String!
     resourceId: ID!
-    source: String!
     validFrom: String
     validUntil: String
   }
