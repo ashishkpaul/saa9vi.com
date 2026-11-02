@@ -1,6 +1,9 @@
+import { Inject, OnApplicationBootstrap } from '@nestjs/common';
 import { PluginCommonModule, VendurePlugin } from '@vendure/core';
 import { LearnerAdmissionModule } from '../../platform/learner-admission.module';
 import { CourseToolRegistryModule } from '../../platform/course-tool-registry.module';
+import { CustomerDeletionModule } from '../../platform/customer-deletion/customer-deletion.module';
+import { CustomerDeletionService } from '../../platform/customer-deletion/customer-deletion.service';
 import {
   courseManagePermission,
   courseEnrollPermission,
@@ -19,6 +22,7 @@ import { LearningCourseService } from './services/learning-course.service';
 import { CourseEnrollmentService } from './services/course-enrollment.service';
 import { CourseAnnouncementService } from './services/course-announcement.service';
 import { CourseScheduledSessionService } from './services/course-scheduled-session.service';
+import { LearningDeletionService } from './services/learning-deletion.service';
 import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
 import { LearningAdminResolver } from './api/learning-admin.resolver';
 import { LearningShopResolver } from './api/learning-shop.resolver';
@@ -37,7 +41,7 @@ import { LearningShopResolver } from './api/learning-shop.resolver';
  */
 @VendurePlugin({
   compatibility: '^3.0.0',
-  imports: [PluginCommonModule, LearnerAdmissionModule, CourseToolRegistryModule],
+  imports: [PluginCommonModule, LearnerAdmissionModule, CourseToolRegistryModule, CustomerDeletionModule],
   entities: [
     LearningCourse,
     CourseTemplate,
@@ -53,6 +57,7 @@ import { LearningShopResolver } from './api/learning-shop.resolver';
     CourseEnrollmentService,
     CourseAnnouncementService,
     CourseScheduledSessionService,
+    LearningDeletionService,
   ],
   adminApiExtensions: {
     schema: adminApiExtensions,
@@ -71,4 +76,23 @@ import { LearningShopResolver } from './api/learning-shop.resolver';
     return config;
   },
 })
-export class LearningPlugin {}
+export class LearningPlugin implements OnApplicationBootstrap {
+  constructor(
+    private readonly deletionService: LearningDeletionService,
+    @Inject(CustomerDeletionService)
+    private readonly customerDeletionService: CustomerDeletionService,
+  ) {}
+
+  async onApplicationBootstrap() {
+    this.customerDeletionService.registerChannelScopedHandler(
+      'learning-plugin',
+      (ctx, customerId, channelId) =>
+        this.deletionService.removeFromChannel(ctx, customerId, channelId),
+    );
+    this.customerDeletionService.registerFullDeleteHandler(
+      'learning-plugin',
+      (ctx, customerId) =>
+        this.deletionService.fullDelete(ctx, customerId),
+    );
+  }
+}
