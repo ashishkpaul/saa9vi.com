@@ -31,6 +31,12 @@ export class CourseScheduledSessionService {
     });
   }
 
+  /**
+   * N-04 (L3 fix): verify the BBB session belongs to the same channel.
+   * LearningPlugin must not import BBB entities, so use a string-named
+   * repository lookup (read-only, no cross-plugin type dependency).
+   * The BBB plugin's BbbScheduledSession entity has a channelId column.
+   */
   async addSession(
     ctx: RequestContext,
     courseId: ID,
@@ -44,6 +50,17 @@ export class CourseScheduledSessionService {
       .findOne({ where: { id: String(courseId), channelId } });
     if (!course) {
       throw new IllegalOperationError('Course not found in this channel');
+    }
+
+    // N-04: verify the BBB session belongs to the same channel
+    const sessionRepo = this.connection.getRepository(ctx, 'BbbScheduledSession' as any);
+    const session = await sessionRepo.findOne({ where: { id: sessionId as any } });
+    if (!session) {
+      throw new IllegalOperationError('Scheduled session not found');
+    }
+    const sessionChannelId = String((session as any).channelId ?? '');
+    if (sessionChannelId !== channelId) {
+      throw new IllegalOperationError('Session does not belong to this channel');
     }
 
     // Check for existing association (idempotent)

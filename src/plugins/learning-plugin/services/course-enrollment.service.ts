@@ -52,6 +52,7 @@ export class CourseEnrollmentService {
   /**
    * Enroll a customer in a course. Requires ACTIVE academy admission.
    * C-25: enrollment eligibility check via LearnerAdmissionPort.
+   * N-03 (L2 fix): every lookup verifies the course belongs to ctx.channelId.
    */
   async enroll(
     ctx: RequestContext,
@@ -61,7 +62,7 @@ export class CourseEnrollmentService {
   ): Promise<CourseEnrollment> {
     const channelId = String(ctx.channelId);
 
-    // Verify course exists and is published (or caller is staff)
+    // N-03: verify course exists in THIS channel
     const course = await this.connection
       .getRepository(ctx, LearningCourse)
       .findOne({ where: { id: String(courseId), channelId } });
@@ -78,9 +79,14 @@ export class CourseEnrollmentService {
       throw new ForbiddenError();
     }
 
-    // Check for existing enrollment
-    const existing = await this.findOne(ctx, courseId, customerId);
+    // N-03: check for existing enrollment (channel-scoped via course ownership)
+    const existing = await this.connection
+      .getRepository(ctx, CourseEnrollment)
+      .findOne({ where: { courseId: String(courseId), customerId: String(customerId) } });
     if (existing) {
+      if (existing.channelId !== channelId) {
+        throw new IllegalOperationError('Cross-tenant enrollment access denied');
+      }
       if (existing.status === 'ENROLLED') {
         return existing; // idempotent
       }
@@ -125,9 +131,28 @@ export class CourseEnrollmentService {
     customerId: ID,
     target: EnrollmentStatus,
   ): Promise<CourseEnrollment> {
-    const enrollment = await this.findOne(ctx, courseId, customerId);
+    const channelId = String(ctx.channelId);
+
+    // N-03 (L2 fix): verify the course belongs to this channel before
+    // transitioning an enrollment. Without this, a tenant admin could
+    // change another tenant's enrollment by guessing the courseId.
+    const course = await this.connection
+      .getRepository(ctx, LearningCourse)
+      .findOne({ where: { id: String(courseId), channelId } });
+    if (!course) {
+      throw new IllegalOperationError('Course not found in this channel');
+    }
+
+    const enrollment = await this.connection
+      .getRepository(ctx, CourseEnrollment)
+      .findOne({ where: { courseId: String(courseId), customerId: String(customerId) } });
     if (!enrollment) {
       throw new IllegalOperationError('Enrollment not found');
+    }
+
+    // N-03: verify the enrollment's channel matches
+    if (enrollment.channelId !== channelId) {
+      throw new IllegalOperationError('Cross-tenant enrollment access denied');
     }
 
     const transitions: Record<EnrollmentStatus, EnrollmentStatus[]> = {

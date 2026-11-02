@@ -1,6 +1,11 @@
 import gql from 'graphql-tag';
 
-export const adminApiExtensions = gql`
+/**
+ * Shared type definitions — defined once, referenced by both admin and shop.
+ * Vendure concatenates all plugin schemas; defining the same type twice
+ * causes "There can be only one type named X" at schema build time.
+ */
+export const sharedTypes = gql`
   type LearningCourse implements Node {
     id: ID!
     createdAt: DateTime!
@@ -13,7 +18,6 @@ export const adminApiExtensions = gql`
     templateId: String
     createdByUserId: String
     tools: [CourseTool!]!
-    enrollments: [CourseEnrollment!]!
   }
 
   type LearningCourseList implements PaginatedList {
@@ -92,6 +96,15 @@ export const adminApiExtensions = gql`
     body: String
   }
 
+  input LearningCourseListOptions {
+    skip: Int
+    take: Int
+  }
+`;
+
+export const adminApiExtensions = gql`
+  ${sharedTypes}
+
   extend type Query {
     learningCourses(options: LearningCourseListOptions): LearningCourseList!
     learningCourse(id: ID!): LearningCourse
@@ -118,32 +131,6 @@ export const adminApiExtensions = gql`
 `;
 
 export const shopApiExtensions = gql`
-  type LearningCourse implements Node {
-    id: ID!
-    createdAt: DateTime!
-    updatedAt: DateTime!
-    slug: String!
-    title: String!
-    description: String
-    status: String!
-    tools: [CourseTool!]!
-  }
-
-  type CourseTool implements Node {
-    id: ID!
-    toolKey: String!
-    order: Int!
-    visibility: String!
-  }
-
-  type CourseAnnouncement implements Node {
-    id: ID!
-    title: String!
-    body: String!
-    publishedAt: DateTime
-    authorId: String
-  }
-
   extend type Query {
     myCourses: [LearningCourse!]!
     myCourse(slug: String!): LearningCourse
