@@ -488,10 +488,31 @@ export class TenantAdminResolver {
   @Transaction()
   @Allow(tenantManageAdmissionsPermission.Create)
   async admitTenantLearner(@Ctx() ctx: RequestContext, @Args('input') input: AdmitTenantLearnerInput) {
+    // NF5: verify the customer belongs to the caller's channel before admitting.
+    // Without this, a tenant admin can admit a customer who has never visited
+    // their academy into their channel.
+    const channelId = ctx.channelId as string;
+    const customer = await this.connection
+      .getRepository(ctx, 'Customer' as any)
+      .findOne({
+        where: { id: input.customerId as any },
+        relations: ['channels'],
+      });
+    if (!customer) {
+      throw new ForbiddenError();
+    }
+    const customerChannels = (customer as any).channels ?? [];
+    const isInChannel = customerChannels.some(
+      (c: any) => String(c.id) === String(channelId),
+    );
+    if (!isInChannel && !ctx.userHasPermissions([Permission.SuperAdmin])) {
+      throw new ForbiddenError();
+    }
+
     const actorId = ctx.activeUserId != null ? String(ctx.activeUserId) : null;
     return this.tenantLearnerMembershipService.admit(ctx, {
       customerId: input.customerId,
-      channelId: ctx.channelId as string,
+      channelId,
       admissionType: (input.admissionType as any) ?? 'REGULAR',
       actorId,
     });

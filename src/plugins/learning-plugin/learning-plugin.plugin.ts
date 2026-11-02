@@ -40,7 +40,7 @@ import { LearningShopResolver } from './api/learning-shop.resolver';
  * ACTIVE academy admission before enrolling a learner (C-25 invariant 1).
  */
 @VendurePlugin({
-  compatibility: '^3.0.0',
+  compatibility: '^3.7.0',
   imports: [PluginCommonModule, LearnerAdmissionModule, CourseToolRegistryModule, CustomerDeletionModule],
   entities: [
     LearningCourse,

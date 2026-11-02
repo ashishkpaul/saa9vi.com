@@ -49,7 +49,7 @@ function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
 }
 
 @VendurePlugin({
-  compatibility: '^3.0.0',
+  compatibility: '^3.7.0',
   imports: [PluginCommonModule, CustomerDeletionModule, CommercialEntitlementModule],
   entities: [TenantProfile, InstructorProfile, MediaResource, TenantRegistrationLog, TenantTheme, TenantLearnerMembership, TenantLearnerMembershipLog],
   providers: [
