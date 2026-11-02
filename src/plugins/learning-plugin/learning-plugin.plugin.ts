@@ -14,6 +14,7 @@ import { CourseEnrollment } from './entities/course-enrollment.entity';
 import { CourseScheduledSession } from './entities/course-scheduled-session.entity';
 import { CourseAnnouncement } from './entities/course-announcement.entity';
 import { CourseToolRegistry } from './services/course-tool-registry';
+import { LearningToolContributor } from './services/learning-tool-contributor';
 import { LearningCourseService } from './services/learning-course.service';
 import { CourseEnrollmentService } from './services/course-enrollment.service';
 import { CourseAnnouncementService } from './services/course-announcement.service';
@@ -47,6 +48,7 @@ import { LearningShopResolver } from './api/learning-shop.resolver';
     CourseAnnouncement,
   ],
   providers: [
+    LearningToolContributor,
     LearningCourseService,
     CourseEnrollmentService,
     CourseAnnouncementService,
