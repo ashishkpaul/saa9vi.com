@@ -67,6 +67,7 @@ import { LearningShopResolver } from './api/learning-shop.resolver';
     schema: shopApiExtensions,
     resolvers: [LearningShopResolver],
   },
+  dashboard: './dashboard/index.tsx',
   configuration: (config) => {
     config.authOptions.customPermissions.push(
       courseManagePermission,

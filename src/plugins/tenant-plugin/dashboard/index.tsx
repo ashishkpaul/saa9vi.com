@@ -1,9 +1,10 @@
-import { Building2Icon } from 'lucide-react';
+import { Building2Icon, GraduationCapIcon } from 'lucide-react';
 import { defineDashboardExtension } from '@vendure/dashboard';
 
 import { TenantProfileDetail } from './routes/tenant-profiles/TenantProfileDetail';
 import { InstructorsList } from './routes/instructors/InstructorsList';
 import { MediaResourcesList } from './routes/media/MediaResourcesList';
+import { LearnersList } from './routes/learners/LearnersList';
 import { ACADEMY_NAV_ITEMS, AcademyHome } from './shared/academy-dashboard';
 
 const academyPermissions: Record<string, string[]> = {
@@ -11,6 +12,7 @@ const academyPermissions: Record<string, string[]> = {
   'tenant-profile': ['SuperAdmin', 'ReadTenantProfile'],
   instructors: ['SuperAdmin', 'ReadInstructorProfile'],
   'media-resources': ['SuperAdmin', 'ReadMediaResource'],
+  'learners': ['SuperAdmin', 'ReadTenantManageAdmissions'],
 };
 
 export default defineDashboardExtension({
@@ -46,6 +48,18 @@ export default defineDashboardExtension({
         id: ACADEMY_NAV_ITEMS[1].id,
         url: ACADEMY_NAV_ITEMS[1].href,
         requiresPermission: academyPermissions[ACADEMY_NAV_ITEMS[1].id],
+      },
+    },
+    {
+      path: '/academy/learners',
+      component: () => <LearnersList />,
+      navMenuItem: {
+        sectionId: 'academy',
+        title: 'Learners',
+        icon: GraduationCapIcon,
+        id: 'learners',
+        url: '/academy/learners',
+        requiresPermission: academyPermissions['learners'],
       },
     },
     {
