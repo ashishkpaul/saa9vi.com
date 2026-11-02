@@ -104,9 +104,11 @@ import {
   BbbAdminPermission,
 } from "./constants";
 import { LearnerAdmissionModule } from "../../platform/learner-admission.module";
+import { CourseToolRegistryModule } from "../../platform/course-tool-registry.module";
+import { BbbVideoconferenceToolContributor } from "./services/bbb-videoconference-tool";
 
 @VendurePlugin({
-  imports: [PluginCommonModule, PlatformTracingModule, CustomerDeletionModule, LearnerAdmissionModule],
+  imports: [PluginCommonModule, PlatformTracingModule, CustomerDeletionModule, LearnerAdmissionModule, CourseToolRegistryModule],
 
   entities: [
     BbbServer,
@@ -216,6 +218,9 @@ import { LearnerAdmissionModule } from "../../platform/learner-admission.module"
         (BigBlueButtonPlugin.options.publicBaseUrl ?? process.env.BBB_PUBLIC_BASE_URL ?? "")
           .replace(/\/+$/, ""),
     },
+    // C-27: BBB contributes the videoconference tool to the LearningPlugin
+    // CourseToolRegistry on module init.
+    BbbVideoconferenceToolContributor,
   ],
 
   adminApiExtensions: {

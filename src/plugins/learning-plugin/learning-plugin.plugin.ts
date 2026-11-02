@@ -1,5 +1,6 @@
 import { PluginCommonModule, VendurePlugin } from '@vendure/core';
 import { LearnerAdmissionModule } from '../../platform/learner-admission.module';
+import { CourseToolRegistryModule } from '../../platform/course-tool-registry.module';
 import {
   courseManagePermission,
   courseEnrollPermission,
@@ -35,7 +36,7 @@ import { LearningShopResolver } from './api/learning-shop.resolver';
  */
 @VendurePlugin({
   compatibility: '^3.0.0',
-  imports: [PluginCommonModule, LearnerAdmissionModule],
+  imports: [PluginCommonModule, LearnerAdmissionModule, CourseToolRegistryModule],
   entities: [
     LearningCourse,
     CourseTemplate,
@@ -46,7 +47,6 @@ import { LearningShopResolver } from './api/learning-shop.resolver';
     CourseAnnouncement,
   ],
   providers: [
-    CourseToolRegistry,
     LearningCourseService,
     CourseEnrollmentService,
     CourseAnnouncementService,
