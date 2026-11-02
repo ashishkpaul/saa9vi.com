@@ -1,13 +1,22 @@
 import { Args, Mutation, Query, Resolver, ResolveField, Parent } from '@nestjs/graphql';
-import { Allow, Ctx, ID, Permission, RequestContext, Transaction, TransactionalConnection } from '@vendure/core';
+import {
+  Allow, Ctx, ID, IllegalOperationError, Permission, RequestContext, Transaction, TransactionalConnection, UserInputError,
+} from '@vendure/core';
 import { LearningCourseService } from '../services/learning-course.service';
 import { CourseEnrollmentService } from '../services/course-enrollment.service';
 import { CourseAnnouncementService } from '../services/course-announcement.service';
 import { CourseScheduledSessionService } from '../services/course-scheduled-session.service';
-import { courseManagePermission, courseEnrollPermission, courseAnnouncementPermission } from '../constants';
+import { CourseToolRegistry } from '../services/course-tool-registry';
+import {
+  courseManagePermission, courseEnrollPermission, courseAnnouncementPermission,
+} from '../constants';
 import { LearningCourse } from '../entities/learning-course.entity';
 import { CourseTool } from '../entities/course-tool.entity';
-import { CourseEnrollment } from '../entities/course-enrollment.entity';
+import { CourseEnrollment, CourseRole } from '../entities/course-enrollment.entity';
+import {
+  validateSlug, validateTitle, validateAnnouncementTitle,
+  validateCourseRole, capTake,
+} from '../services/learning-validation';
 
 @Resolver()
 export class LearningAdminResolver {
@@ -16,6 +25,7 @@ export class LearningAdminResolver {
     private readonly enrollmentService: CourseEnrollmentService,
     private readonly announcementService: CourseAnnouncementService,
     private readonly scheduledSessionService: CourseScheduledSessionService,
+    private readonly toolRegistry: CourseToolRegistry,
     private readonly connection: TransactionalConnection,
   ) {}
 
@@ -41,8 +51,9 @@ export class LearningAdminResolver {
 
   @Query()
   @Allow(courseManagePermission.Read)
-  async learningCourses(@Ctx() ctx: RequestContext, @Args() args?: { options?: any }) {
-    return this.courseService.findAll(ctx, args?.options);
+  async learningCourses(@Ctx() ctx: RequestContext, @Args() args?: { options?: { skip?: number; take?: number } }) {
+    const take = args?.options?.take != null ? capTake(args.options.take) : undefined;
+    return this.courseService.findAll(ctx, { skip: args?.options?.skip, take });
   }
 
   @Query()
@@ -51,19 +62,34 @@ export class LearningAdminResolver {
     return this.courseService.findOne(ctx, id);
   }
 
-  // ── Course mutations ───────────────────────────────────────────────────────
+  // ── Course mutations (N-06: typed inputs + validation) ─────────────────────
 
   @Mutation()
   @Allow(courseManagePermission.Create)
   @Transaction()
-  async createLearningCourse(@Ctx() ctx: RequestContext, @Args('input') input: any) {
-    return this.courseService.create(ctx, input);
+  async createLearningCourse(
+    @Ctx() ctx: RequestContext,
+    @Args('input') input: { slug: string; title: string; description?: string; templateId?: ID },
+  ) {
+    validateSlug(input.slug);
+    validateTitle(input.title);
+    return this.courseService.create(ctx, {
+      slug: input.slug,
+      title: input.title,
+      description: input.description,
+      templateId: input.templateId != null ? String(input.templateId) : undefined,
+    });
   }
 
   @Mutation()
   @Allow(courseManagePermission.Update)
   @Transaction()
-  async updateLearningCourse(@Ctx() ctx: RequestContext, @Args('id') id: ID, @Args('input') input: any) {
+  async updateLearningCourse(
+    @Ctx() ctx: RequestContext,
+    @Args('id') id: ID,
+    @Args('input') input: { title?: string; description?: string },
+  ) {
+    if (input.title !== undefined) validateTitle(input.title);
     return this.courseService.update(ctx, id, input);
   }
 
@@ -88,7 +114,7 @@ export class LearningAdminResolver {
     return this.courseService.archive(ctx, id);
   }
 
-  // ── Enrollment mutations ──────────────────────────────────────────────────
+  // ── Enrollment mutations (N-06: role control) ──────────────────────────────
 
   @Query()
   @Allow(courseEnrollPermission.Read)
@@ -99,8 +125,21 @@ export class LearningAdminResolver {
   @Mutation()
   @Allow(courseEnrollPermission.Create)
   @Transaction()
-  async enrollLearner(@Ctx() ctx: RequestContext, @Args('input') input: any) {
-    return this.enrollmentService.enroll(ctx, input.courseId, input.customerId, input.courseRole ?? 'LEARNER');
+  async enrollLearner(
+    @Ctx() ctx: RequestContext,
+    @Args('input') input: { courseId: ID; customerId: ID; courseRole?: string },
+  ) {
+    // N-06: validate role enum. TRAINER/ASSISTANT require CourseManage.Update.
+    const role = input.courseRole ? validateCourseRole(input.courseRole) : 'LEARNER';
+    if (role !== 'LEARNER') {
+      // Only callers with CourseManage.Update may assign TRAINER or ASSISTANT.
+      if (!ctx.userHasPermissions([courseManagePermission.Update as any])) {
+        throw new IllegalOperationError(
+          'Only callers with CourseManage.Update may assign TRAINER or ASSISTANT roles',
+        );
+      }
+    }
+    return this.enrollmentService.enroll(ctx, input.courseId, input.customerId, role as CourseRole);
   }
 
   @Mutation()
@@ -124,7 +163,7 @@ export class LearningAdminResolver {
     return this.enrollmentService.withdraw(ctx, courseId, customerId);
   }
 
-  // ── Announcement mutations ─────────────────────────────────────────────────
+  // ── Announcement mutations (N-06: typed inputs + validation) ──────────────
 
   @Query()
   @Allow(courseAnnouncementPermission.Read)
@@ -135,7 +174,14 @@ export class LearningAdminResolver {
   @Mutation()
   @Allow(courseAnnouncementPermission.Create)
   @Transaction()
-  async createCourseAnnouncement(@Ctx() ctx: RequestContext, @Args('input') input: any) {
+  async createCourseAnnouncement(
+    @Ctx() ctx: RequestContext,
+    @Args('input') input: { courseId: ID; title: string; body: string },
+  ) {
+    validateAnnouncementTitle(input.title);
+    if (!input.body || input.body.trim().length === 0) {
+      throw new UserInputError('body is required');
+    }
     return this.announcementService.create(ctx, input);
   }
 
@@ -149,7 +195,80 @@ export class LearningAdminResolver {
   @Mutation()
   @Allow(courseAnnouncementPermission.Update)
   @Transaction()
-  async updateCourseAnnouncement(@Ctx() ctx: RequestContext, @Args('id') id: ID, @Args('input') input: any) {
+  async updateCourseAnnouncement(
+    @Ctx() ctx: RequestContext,
+    @Args('id') id: ID,
+    @Args('input') input: { title?: string; body?: string },
+  ) {
+    if (input.title !== undefined) validateAnnouncementTitle(input.title);
     return this.announcementService.update(ctx, id, input);
+  }
+
+  // ── N-08: Session/Tool/Template operations ────────────────────────────────
+
+  @Query()
+  @Allow(courseManagePermission.Read)
+  async courseTools(@Ctx() ctx: RequestContext, @Args('courseId') courseId: ID) {
+    return this.courseService.getCourseTools(ctx, courseId);
+  }
+
+  @Mutation()
+  @Allow(courseManagePermission.Update)
+  @Transaction()
+  async updateCourseTool(
+    @Ctx() ctx: RequestContext,
+    @Args('id') id: ID,
+    @Args('input') input: { visibility?: string; order?: number },
+  ) {
+    const tool = await this.connection.getEntityOrThrow(ctx, CourseTool, id);
+    // Validate tool key still exists in registry
+    if (!this.toolRegistry.has(tool.toolKey)) {
+      throw new UserInputError(`Unknown tool key: ${tool.toolKey}`);
+    }
+    if (input.visibility !== undefined) {
+      if (!['VISIBLE', 'HIDDEN'].includes(input.visibility)) {
+        throw new UserInputError('visibility must be VISIBLE or HIDDEN');
+      }
+      tool.visibility = input.visibility as any;
+    }
+    if (input.order !== undefined) {
+      tool.order = input.order;
+    }
+    return this.connection.getRepository(ctx, CourseTool).save(tool);
+  }
+
+  @Query()
+  @Allow(courseManagePermission.Read)
+  async courseScheduledSessions(@Ctx() ctx: RequestContext, @Args('courseId') courseId: ID) {
+    return this.scheduledSessionService.findSessionsByCourse(ctx, courseId);
+  }
+
+  @Mutation()
+  @Allow(courseManagePermission.Update)
+  @Transaction()
+  async addCourseSession(
+    @Ctx() ctx: RequestContext,
+    @Args('courseId') courseId: ID,
+    @Args('sessionId') sessionId: ID,
+  ) {
+    return this.scheduledSessionService.addSession(ctx, courseId, sessionId);
+  }
+
+  @Mutation()
+  @Allow(courseManagePermission.Update)
+  @Transaction()
+  async removeCourseSession(
+    @Ctx() ctx: RequestContext,
+    @Args('courseId') courseId: ID,
+    @Args('sessionId') sessionId: ID,
+  ) {
+    await this.scheduledSessionService.removeSession(ctx, courseId, sessionId);
+    return true;
+  }
+
+  @Query()
+  @Allow(courseManagePermission.Read)
+  async courseToolDefinitions(@Ctx() ctx: RequestContext) {
+    return this.toolRegistry.list();
   }
 }

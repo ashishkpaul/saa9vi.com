@@ -68,6 +68,15 @@ export const adminApiExtensions = gql`
     authorId: String
   }
 
+  type CourseScheduledSessionAdmin implements Node {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    courseId: ID!
+    sessionId: ID!
+    channelId: String!
+  }
+
   input LearningCreateCourseInput {
     slug: String!
     title: String!
@@ -102,11 +111,28 @@ export const adminApiExtensions = gql`
     take: Int
   }
 
+  input LearningUpdateCourseToolInput {
+    visibility: String
+    order: Int
+  }
+
+  type CourseToolDefinition {
+    key: String!
+    category: String!
+    label: String!
+    icon: String!
+    routeKey: String!
+    defaultVisibility: String!
+  }
+
   extend type Query {
     learningCourses(options: LearningCourseAdminListOptions): LearningCourseAdminList!
     learningCourse(id: ID!): LearningCourseAdmin
     courseEnrollments(courseId: ID!): CourseEnrollmentAdminList!
     courseAnnouncements(courseId: ID!): [CourseAnnouncementAdmin!]!
+    courseTools(courseId: ID!): [CourseToolAdmin!]!
+    courseScheduledSessions(courseId: ID!): [CourseScheduledSessionAdmin!]!
+    courseToolDefinitions: [CourseToolDefinition!]!
   }
 
   extend type Mutation {
@@ -124,6 +150,10 @@ export const adminApiExtensions = gql`
     createCourseAnnouncement(input: LearningCreateAnnouncementInput!): CourseAnnouncementAdmin!
     publishCourseAnnouncement(id: ID!): CourseAnnouncementAdmin!
     updateCourseAnnouncement(id: ID!, input: LearningUpdateAnnouncementInput!): CourseAnnouncementAdmin!
+
+    updateCourseTool(id: ID!, input: LearningUpdateCourseToolInput!): CourseToolAdmin!
+    addCourseSession(courseId: ID!, sessionId: ID!): CourseScheduledSessionAdmin!
+    removeCourseSession(courseId: ID!, sessionId: ID!): Boolean!
   }
 `;
 
