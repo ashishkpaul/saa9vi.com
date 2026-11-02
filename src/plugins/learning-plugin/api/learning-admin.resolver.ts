@@ -1,10 +1,13 @@
-import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
-import { Allow, Ctx, ID, Permission, RequestContext, Transaction } from '@vendure/core';
+import { Args, Mutation, Query, Resolver, ResolveField, Parent } from '@nestjs/graphql';
+import { Allow, Ctx, ID, Permission, RequestContext, Transaction, TransactionalConnection } from '@vendure/core';
 import { LearningCourseService } from '../services/learning-course.service';
 import { CourseEnrollmentService } from '../services/course-enrollment.service';
 import { CourseAnnouncementService } from '../services/course-announcement.service';
 import { CourseScheduledSessionService } from '../services/course-scheduled-session.service';
 import { courseManagePermission, courseEnrollPermission, courseAnnouncementPermission } from '../constants';
+import { LearningCourse } from '../entities/learning-course.entity';
+import { CourseTool } from '../entities/course-tool.entity';
+import { CourseEnrollment } from '../entities/course-enrollment.entity';
 
 @Resolver()
 export class LearningAdminResolver {
@@ -13,7 +16,26 @@ export class LearningAdminResolver {
     private readonly enrollmentService: CourseEnrollmentService,
     private readonly announcementService: CourseAnnouncementService,
     private readonly scheduledSessionService: CourseScheduledSessionService,
+    private readonly connection: TransactionalConnection,
   ) {}
+
+  // ── NF2: Field resolvers for LearningCourseAdmin ───────────────────────────
+
+  @ResolveField()
+  async tools(@Ctx() ctx: RequestContext, @Parent() course: LearningCourse): Promise<CourseTool[]> {
+    return this.connection.getRepository(ctx, CourseTool).find({
+      where: { courseId: String(course.id) },
+      order: { order: 'ASC' },
+    });
+  }
+
+  @ResolveField()
+  async enrollments(@Ctx() ctx: RequestContext, @Parent() course: LearningCourse): Promise<CourseEnrollment[]> {
+    return this.connection.getRepository(ctx, CourseEnrollment).find({
+      where: { courseId: String(course.id), channelId: String(course.channelId) },
+      order: { createdAt: 'DESC' },
+    });
+  }
 
   // ── Course queries ─────────────────────────────────────────────────────────
 

@@ -17,9 +17,10 @@ export class LearningShopResolver {
   ) {}
 
   /**
-   * N-02 (L1 fix): resolve the Customer from the logged-in User, then return
-   * published courses where the customer has an ENROLLED enrollment in the
-   * current channel.
+   * N-02 (L1 fix) + NF4: resolve the Customer from the logged-in User, then
+   * return published courses where the customer has an ENROLLED enrollment
+   * in the current channel. Also check ACTIVE admission so a suspended
+   * academy member does not see the course list.
    */
   @Query()
   @Allow(Permission.Authenticated)
@@ -29,6 +30,11 @@ export class LearningShopResolver {
 
     const channelId = String(ctx.channelId);
 
+    // NF4: check admission first — suspended/revoked members see nothing
+    const isAdmitted = await this.admissionPort.isActiveMember(ctx, customerId, channelId);
+    if (!isAdmitted) return [];
+
+    // Query only the enrolled course IDs (no loading-all-and-filter-in-memory)
     const enrollments = await this.connection
       .getRepository(ctx, CourseEnrollment)
       .find({
@@ -38,6 +44,7 @@ export class LearningShopResolver {
     if (enrollments.length === 0) return [];
 
     const courseIds = enrollments.map((e) => e.courseId);
+    // Fetch only the PUBLISHED courses in those IDs
     const courses = await this.connection
       .getRepository(ctx, LearningCourse)
       .find({ where: { channelId } });
@@ -77,7 +84,8 @@ export class LearningShopResolver {
   }
 
   /**
-   * N-05: only enrolled + admitted learners see announcements.
+   * N-05 (L4, L5) + NF3: only enrolled + admitted learners see announcements
+   * for a PUBLISHED course.
    */
   @Query()
   @Allow(Permission.Authenticated)
@@ -87,12 +95,23 @@ export class LearningShopResolver {
 
     const channelId = String(ctx.channelId);
 
+    // NF3: verify the course is PUBLISHED in this channel
+    const course = await this.connection
+      .getRepository(ctx, LearningCourse)
+      .findOne({ where: { id: String(courseId), channelId } });
+    if (!course || course.status !== 'PUBLISHED') return [];
+
+    // Check enrollment
     const enrollment = await this.connection
       .getRepository(ctx, CourseEnrollment)
       .findOne({
         where: { courseId: String(courseId), customerId: String(customerId), channelId },
       });
     if (!enrollment || enrollment.status !== 'ENROLLED') return [];
+
+    // NF3: check ACTIVE admission
+    const isAdmitted = await this.admissionPort.isActiveMember(ctx, customerId, channelId);
+    if (!isAdmitted) return [];
 
     const announcements = await this.announcementService.findAllByCourse(ctx, courseId);
     return announcements.filter((a) => a.status === 'PUBLISHED');

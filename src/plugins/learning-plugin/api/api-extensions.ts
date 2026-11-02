@@ -68,31 +68,31 @@ export const adminApiExtensions = gql`
     authorId: String
   }
 
-  input CreateCourseInput {
+  input LearningCreateCourseInput {
     slug: String!
     title: String!
     description: String
     templateId: ID
   }
 
-  input UpdateCourseInput {
+  input LearningUpdateCourseInput {
     title: String
     description: String
   }
 
-  input EnrollLearnerInput {
+  input LearningEnrollLearnerInput {
     courseId: ID!
     customerId: ID!
     courseRole: String
   }
 
-  input CreateAnnouncementInput {
+  input LearningCreateAnnouncementInput {
     courseId: ID!
     title: String!
     body: String!
   }
 
-  input UpdateAnnouncementInput {
+  input LearningUpdateAnnouncementInput {
     title: String
     body: String
   }
@@ -110,20 +110,20 @@ export const adminApiExtensions = gql`
   }
 
   extend type Mutation {
-    createLearningCourse(input: CreateCourseInput!): LearningCourseAdmin!
-    updateLearningCourse(id: ID!, input: UpdateCourseInput!): LearningCourseAdmin!
+    createLearningCourse(input: LearningCreateCourseInput!): LearningCourseAdmin!
+    updateLearningCourse(id: ID!, input: LearningUpdateCourseInput!): LearningCourseAdmin!
     publishLearningCourse(id: ID!): LearningCourseAdmin!
     closeLearningCourse(id: ID!): LearningCourseAdmin!
     archiveLearningCourse(id: ID!): LearningCourseAdmin!
 
-    enrollLearner(input: EnrollLearnerInput!): CourseEnrollmentAdmin!
+    enrollLearner(input: LearningEnrollLearnerInput!): CourseEnrollmentAdmin!
     suspendLearner(courseId: ID!, customerId: ID!): CourseEnrollmentAdmin!
     completeLearner(courseId: ID!, customerId: ID!): CourseEnrollmentAdmin!
     withdrawLearner(courseId: ID!, customerId: ID!): CourseEnrollmentAdmin!
 
-    createCourseAnnouncement(input: CreateAnnouncementInput!): CourseAnnouncementAdmin!
+    createCourseAnnouncement(input: LearningCreateAnnouncementInput!): CourseAnnouncementAdmin!
     publishCourseAnnouncement(id: ID!): CourseAnnouncementAdmin!
-    updateCourseAnnouncement(id: ID!, input: UpdateAnnouncementInput!): CourseAnnouncementAdmin!
+    updateCourseAnnouncement(id: ID!, input: LearningUpdateAnnouncementInput!): CourseAnnouncementAdmin!
   }
 `;
 
