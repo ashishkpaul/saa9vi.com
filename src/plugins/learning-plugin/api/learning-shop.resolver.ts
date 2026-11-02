@@ -17,20 +17,18 @@ export class LearningShopResolver {
   ) {}
 
   /**
-   * N-02 (L1 fix): Resolve the Customer from the logged-in User, then return
+   * N-02 (L1 fix): resolve the Customer from the logged-in User, then return
    * published courses where the customer has an ENROLLED enrollment in the
-   * current channel. Single query, no per-course loop.
+   * current channel.
    */
   @Query()
   @Allow(Permission.Authenticated)
-  async myCourses(@Ctx() ctx: RequestContext) {
+  async myCoursePages(@Ctx() ctx: RequestContext) {
     const customerId = await this.resolveCustomerId(ctx);
     if (!customerId) return [];
 
     const channelId = String(ctx.channelId);
 
-    // Single join query: enrollments for this customer in this channel
-    // where the course is PUBLISHED and enrollment is ENROLLED.
     const enrollments = await this.connection
       .getRepository(ctx, CourseEnrollment)
       .find({
@@ -42,34 +40,29 @@ export class LearningShopResolver {
     const courseIds = enrollments.map((e) => e.courseId);
     const courses = await this.connection
       .getRepository(ctx, LearningCourse)
-      .find({
-        where: { channelId },
-      });
+      .find({ where: { channelId } });
 
-    // Filter to PUBLISHED courses the customer is enrolled in.
     return courses.filter(
       (c) => c.status === 'PUBLISHED' && courseIds.includes(String(c.id)),
     );
   }
 
   /**
-   * N-05 (L4, L5 fix): Only enrolled + ACTIVE admission learners can view a course.
+   * N-05 (L4, L5 fix): only enrolled + ACTIVE admission learners can view.
    */
   @Query()
   @Allow(Permission.Authenticated)
-  async myCourse(@Ctx() ctx: RequestContext, @Args('slug') slug: string) {
+  async myCoursePage(@Ctx() ctx: RequestContext, @Args('slug') slug: string) {
     const customerId = await this.resolveCustomerId(ctx);
     if (!customerId) return null;
 
     const channelId = String(ctx.channelId);
 
-    // Find the course in this channel
     const course = await this.connection
       .getRepository(ctx, LearningCourse)
       .findOne({ where: { channelId, slug } });
     if (!course || course.status !== 'PUBLISHED') return null;
 
-    // N-05: verify enrollment + active admission
     const enrollment = await this.connection
       .getRepository(ctx, CourseEnrollment)
       .findOne({
@@ -84,17 +77,16 @@ export class LearningShopResolver {
   }
 
   /**
-   * N-05: Only enrolled + admitted learners see announcements.
+   * N-05: only enrolled + admitted learners see announcements.
    */
   @Query()
   @Allow(Permission.Authenticated)
-  async courseAnnouncements(@Ctx() ctx: RequestContext, @Args('courseId') courseId: any) {
+  async coursePageAnnouncements(@Ctx() ctx: RequestContext, @Args('courseId') courseId: any) {
     const customerId = await this.resolveCustomerId(ctx);
     if (!customerId) return [];
 
     const channelId = String(ctx.channelId);
 
-    // Verify enrollment in this course
     const enrollment = await this.connection
       .getRepository(ctx, CourseEnrollment)
       .findOne({
@@ -106,7 +98,6 @@ export class LearningShopResolver {
     return announcements.filter((a) => a.status === 'PUBLISHED');
   }
 
-  /** Resolve Customer.id from the logged-in User via CustomerService. */
   private async resolveCustomerId(ctx: RequestContext): Promise<string | null> {
     if (!ctx.activeUserId) return null;
     try {

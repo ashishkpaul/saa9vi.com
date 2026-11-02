@@ -1,12 +1,12 @@
 import gql from 'graphql-tag';
 
 /**
- * Shared type definitions — defined once, referenced by both admin and shop.
- * Vendure concatenates all plugin schemas; defining the same type twice
- * causes "There can be only one type named X" at schema build time.
+ * Admin API type definitions and extensions for LearningPlugin.
+ * Shared types are defined here (admin schema) and separately in
+ * shopApiExtensions — Vendure builds Admin and Shop schemas independently.
  */
-export const sharedTypes = gql`
-  type LearningCourse implements Node {
+export const adminApiExtensions = gql`
+  type LearningCourseAdmin implements Node {
     id: ID!
     createdAt: DateTime!
     updatedAt: DateTime!
@@ -17,15 +17,16 @@ export const sharedTypes = gql`
     status: String!
     templateId: String
     createdByUserId: String
-    tools: [CourseTool!]!
+    tools: [CourseToolAdmin!]!
+    enrollments: [CourseEnrollmentAdmin!]!
   }
 
-  type LearningCourseList implements PaginatedList {
-    items: [LearningCourse!]!
+  type LearningCourseAdminList implements PaginatedList {
+    items: [LearningCourseAdmin!]!
     totalItems: Int!
   }
 
-  type CourseTool implements Node {
+  type CourseToolAdmin implements Node {
     id: ID!
     createdAt: DateTime!
     updatedAt: DateTime!
@@ -36,7 +37,7 @@ export const sharedTypes = gql`
     settings: JSON
   }
 
-  type CourseEnrollment implements Node {
+  type CourseEnrollmentAdmin implements Node {
     id: ID!
     createdAt: DateTime!
     updatedAt: DateTime!
@@ -49,12 +50,12 @@ export const sharedTypes = gql`
     enrolledAt: DateTime
   }
 
-  type CourseEnrollmentList implements PaginatedList {
-    items: [CourseEnrollment!]!
+  type CourseEnrollmentAdminList implements PaginatedList {
+    items: [CourseEnrollmentAdmin!]!
     totalItems: Int!
   }
 
-  type CourseAnnouncement implements Node {
+  type CourseAnnouncementAdmin implements Node {
     id: ID!
     createdAt: DateTime!
     updatedAt: DateTime!
@@ -96,44 +97,74 @@ export const sharedTypes = gql`
     body: String
   }
 
-  input LearningCourseListOptions {
+  input LearningCourseAdminListOptions {
     skip: Int
     take: Int
   }
-`;
-
-export const adminApiExtensions = gql`
-  ${sharedTypes}
 
   extend type Query {
-    learningCourses(options: LearningCourseListOptions): LearningCourseList!
-    learningCourse(id: ID!): LearningCourse
-    courseEnrollments(courseId: ID!): CourseEnrollmentList!
-    courseAnnouncements(courseId: ID!): [CourseAnnouncement!]!
+    learningCourses(options: LearningCourseAdminListOptions): LearningCourseAdminList!
+    learningCourse(id: ID!): LearningCourseAdmin
+    courseEnrollments(courseId: ID!): CourseEnrollmentAdminList!
+    courseAnnouncements(courseId: ID!): [CourseAnnouncementAdmin!]!
   }
 
   extend type Mutation {
-    createLearningCourse(input: CreateCourseInput!): LearningCourse!
-    updateLearningCourse(id: ID!, input: UpdateCourseInput!): LearningCourse!
-    publishLearningCourse(id: ID!): LearningCourse!
-    closeLearningCourse(id: ID!): LearningCourse!
-    archiveLearningCourse(id: ID!): LearningCourse!
+    createLearningCourse(input: CreateCourseInput!): LearningCourseAdmin!
+    updateLearningCourse(id: ID!, input: UpdateCourseInput!): LearningCourseAdmin!
+    publishLearningCourse(id: ID!): LearningCourseAdmin!
+    closeLearningCourse(id: ID!): LearningCourseAdmin!
+    archiveLearningCourse(id: ID!): LearningCourseAdmin!
 
-    enrollLearner(input: EnrollLearnerInput!): CourseEnrollment!
-    suspendLearner(courseId: ID!, customerId: ID!): CourseEnrollment!
-    completeLearner(courseId: ID!, customerId: ID!): CourseEnrollment!
-    withdrawLearner(courseId: ID!, customerId: ID!): CourseEnrollment!
+    enrollLearner(input: EnrollLearnerInput!): CourseEnrollmentAdmin!
+    suspendLearner(courseId: ID!, customerId: ID!): CourseEnrollmentAdmin!
+    completeLearner(courseId: ID!, customerId: ID!): CourseEnrollmentAdmin!
+    withdrawLearner(courseId: ID!, customerId: ID!): CourseEnrollmentAdmin!
 
-    createCourseAnnouncement(input: CreateAnnouncementInput!): CourseAnnouncement!
-    publishCourseAnnouncement(id: ID!): CourseAnnouncement!
-    updateCourseAnnouncement(id: ID!, input: UpdateAnnouncementInput!): CourseAnnouncement!
+    createCourseAnnouncement(input: CreateAnnouncementInput!): CourseAnnouncementAdmin!
+    publishCourseAnnouncement(id: ID!): CourseAnnouncementAdmin!
+    updateCourseAnnouncement(id: ID!, input: UpdateAnnouncementInput!): CourseAnnouncementAdmin!
   }
 `;
 
+/**
+ * Shop API extensions for LearningPlugin.
+ *
+ * IMPORTANT: BBB plugin already defines `LearningCourse` in its Shop schema
+ * for myLearningDashboard. These types use `CoursePage` / `CoursePageTool` /
+ * `CoursePageAnnouncement` prefixes to avoid the duplicate-type conflict.
+ * Both schemas are built independently by Vendure and cannot share types.
+ */
 export const shopApiExtensions = gql`
+  type CoursePage implements Node {
+    id: ID!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    slug: String!
+    title: String!
+    description: String
+    status: String!
+    tools: [CoursePageTool!]!
+  }
+
+  type CoursePageTool implements Node {
+    id: ID!
+    toolKey: String!
+    order: Int!
+    visibility: String!
+  }
+
+  type CoursePageAnnouncement implements Node {
+    id: ID!
+    title: String!
+    body: String!
+    publishedAt: DateTime
+    authorId: String
+  }
+
   extend type Query {
-    myCourses: [LearningCourse!]!
-    myCourse(slug: String!): LearningCourse
-    courseAnnouncements(courseId: ID!): [CourseAnnouncement!]!
+    myCoursePages: [CoursePage!]!
+    myCoursePage(slug: String!): CoursePage
+    coursePageAnnouncements(courseId: ID!): [CoursePageAnnouncement!]!
   }
 `;
