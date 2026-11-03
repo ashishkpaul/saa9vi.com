@@ -39,7 +39,7 @@ function CourseDetailPage({ route }: { route: AnyRoute }) {
   const [enrollCustomerId, setEnrollCustomerId] = useState('');
   const [activeTab, setActiveTab] = useState<'overview' | 'tools' | 'users'>('overview');
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['learningCourse', id],
     queryFn: () => api.query(GET_COURSE, { id }),
     enabled: !!id,
@@ -77,6 +77,17 @@ function CourseDetailPage({ route }: { route: AnyRoute }) {
   const statusVariant = (s: string) =>
     s === 'PUBLISHED' ? 'success' : s === 'CLOSED' ? 'warning' : s === 'ARCHIVED' ? 'secondary' : 'outline';
 
+  // UQ3: never render a failed query as "Course not found".
+  if (isError) {
+    return (
+      <div className="p-6 text-center text-destructive" role="alert">
+        <p className="font-semibold">Unable to load course</p>
+        <p className="text-sm text-muted-foreground mt-1">
+          {error instanceof Error ? error.message : String(error ?? 'Unknown error')}
+        </p>
+      </div>
+    );
+  }
   if (isLoading) return <Skeleton className="h-64 w-full" />;
   if (!course) return <div className="text-center text-muted-foreground py-8">Course not found</div>;
 

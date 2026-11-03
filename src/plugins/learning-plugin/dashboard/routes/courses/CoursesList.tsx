@@ -8,6 +8,8 @@ import { toast } from 'sonner';
 import { useState } from 'react';
 import { graphql } from '@/gql';
 
+import { resolveListState } from '../../../../../platform/dashboard/query-state';
+
 const GET_COURSES = graphql(`
   query GetLearningCourses($options: LearningCourseAdminListOptions) {
     learningCourses(options: $options) {
@@ -41,10 +43,17 @@ export function CoursesList() {
   const [newTitle, setNewTitle] = useState('');
   const [newSlug, setNewSlug] = useState('');
 
-  const { data, isLoading } = useQuery({
+  const query = useQuery({
     queryKey: ['learningCourses'],
     queryFn: () => api.query(GET_COURSES, { options: { take: 50 } }),
   });
+
+  // UQ3: never render a failed query as an empty table.
+  const coursesState = resolveListState(
+    query,
+    data => data.learningCourses,
+    { expected: 'learningCourses' },
+  );
 
   const createMutation = useMutation({
     mutationFn: (input: { title: string; slug: string }) =>
@@ -132,9 +141,24 @@ export function CoursesList() {
         </Dialog>
       </div>
 
-      {isLoading ? (
+      {coursesState.status === 'loading' && (
         <Skeleton className="h-64 w-full" />
-      ) : (
+      )}
+      {coursesState.status === 'error' && (
+        <div className="p-6 text-center text-destructive" role="alert">
+          <p className="font-semibold">Unable to load courses</p>
+          <p className="text-sm text-muted-foreground mt-1">{coursesState.message}</p>
+          {coursesState.retry ? (
+            <button
+              onClick={() => coursesState.retry()}
+              className="mt-3 text-sm font-medium text-blue-600 hover:underline"
+            >
+              Retry
+            </button>
+          ) : null}
+        </div>
+      )}
+      {coursesState.status === 'ready' && (
         <Card>
           <Table>
             <TableHeader>
@@ -146,10 +170,10 @@ export function CoursesList() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data?.learningCourses?.items?.map((course: any) => (
+              {coursesState.items.map((course: any) => (
                 <TableRow key={course.id}>
                   <TableCell>
-                    <Link href={`/learning/${course.id}`} className="text-blue-600 hover:underline font-medium">
+                    <Link to={`/learning/${course.id}`} className="text-blue-600 hover:underline font-medium">
                       {course.title}
                     </Link>
                   </TableCell>
@@ -171,7 +195,7 @@ export function CoursesList() {
                   </TableCell>
                 </TableRow>
               ))}
-              {data?.learningCourses?.items?.length === 0 && (
+              {coursesState.items.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
                     No courses yet. Create your first course.
