@@ -1,9 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, Input, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Skeleton } from '@vendure/dashboard';
+import {
+  api, Badge, Button, Card, Dialog, DialogContent, DialogDescription, DialogFooter,
+  DialogHeader, DialogTitle, DialogTrigger, Input, Label, Link, Table, TableBody,
+  TableCell, TableHead, TableHeader, TableRow, Skeleton,
+} from '@vendure/dashboard';
 import { toast } from 'sonner';
 import { useState } from 'react';
 import { graphql } from '@/gql';
-import { useNavigate } from '@tanstack/react-router';
 
 const GET_COURSES = graphql(`
   query GetLearningCourses($options: LearningCourseAdminListOptions) {
@@ -33,7 +36,6 @@ const CLOSE_COURSE = graphql(`
 `);
 
 export function CoursesList() {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [newTitle, setNewTitle] = useState('');
@@ -47,7 +49,7 @@ export function CoursesList() {
   const createMutation = useMutation({
     mutationFn: (input: { title: string; slug: string }) =>
       api.mutate(CREATE_COURSE, { input }),
-    onSuccess: (data: any) => {
+    onSuccess: () => {
       toast.success('Course created');
       setShowCreate(false);
       setNewTitle('');
@@ -78,10 +80,8 @@ export function CoursesList() {
   const slugify = (s: string) =>
     s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
-  const statusBadge = (status: string) => {
-    const variant = status === 'PUBLISHED' ? 'success' : status === 'CLOSED' ? 'warning' : status === 'ARCHIVED' ? 'secondary' : 'outline';
-    return <Badge variant={variant as any}>{status}</Badge>;
-  };
+  const statusVariant = (status: string) =>
+    status === 'PUBLISHED' ? 'success' : status === 'CLOSED' ? 'warning' : status === 'ARCHIVED' ? 'secondary' : 'outline';
 
   return (
     <div className="space-y-4">
@@ -99,14 +99,24 @@ export function CoursesList() {
             <div className="space-y-3">
               <div>
                 <Label htmlFor="title">Title</Label>
-                <Input id="title" value={newTitle} onChange={(e) => {
-                  setNewTitle(e.target.value);
-                  setNewSlug(slugify(e.target.value));
-                }} placeholder="Introduction to Physics" />
+                <Input
+                  id="title"
+                  value={newTitle}
+                  onChange={(e) => {
+                    setNewTitle(e.target.value);
+                    setNewSlug(slugify(e.target.value));
+                  }}
+                  placeholder="Introduction to Physics"
+                />
               </div>
               <div>
                 <Label htmlFor="slug">Slug</Label>
-                <Input id="slug" value={newSlug} onChange={(e) => setNewSlug(e.target.value)} placeholder="introduction-to-physics" />
+                <Input
+                  id="slug"
+                  value={newSlug}
+                  onChange={(e) => setNewSlug(e.target.value)}
+                  placeholder="introduction-to-physics"
+                />
               </div>
             </div>
             <DialogFooter>
@@ -139,15 +149,14 @@ export function CoursesList() {
               {data?.learningCourses?.items?.map((course: any) => (
                 <TableRow key={course.id}>
                   <TableCell>
-                    <button
-                      className="text-blue-600 hover:underline font-medium"
-                      onClick={() => navigate({ to: `/learning/${course.id}` })}
-                    >
+                    <Link href={`/learning/${course.id}`} className="text-blue-600 hover:underline font-medium">
                       {course.title}
-                    </button>
+                    </Link>
                   </TableCell>
                   <TableCell className="text-muted-foreground">{course.slug}</TableCell>
-                  <TableCell>{statusBadge(course.status)}</TableCell>
+                  <TableCell>
+                    <Badge variant={statusVariant(course.status) as any}>{course.status}</Badge>
+                  </TableCell>
                   <TableCell className="space-x-2">
                     {course.status === 'DRAFT' && (
                       <Button size="sm" variant="outline" onClick={() => publishMutation.mutate(course.id)}>

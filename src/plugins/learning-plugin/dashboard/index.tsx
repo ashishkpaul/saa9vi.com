@@ -1,8 +1,8 @@
-import { BookOpenIcon, GraduationCapIcon } from 'lucide-react';
+import { BookOpenIcon } from 'lucide-react';
 import { defineDashboardExtension } from '@vendure/dashboard';
 
 import { CoursesList } from './routes/courses/CoursesList';
-import { CourseDetail } from './routes/courses/CourseDetail';
+import { courseDetail } from './routes/courses/CourseDetail';
 
 export default defineDashboardExtension({
   navSections: [
@@ -27,9 +27,6 @@ export default defineDashboardExtension({
         requiresPermission: ['SuperAdmin', 'ReadCourseManage'],
       },
     },
-    {
-      path: '/learning/:id',
-      component: () => <CourseDetail />,
-    },
+    courseDetail,
   ],
 });
