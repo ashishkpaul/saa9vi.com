@@ -29,24 +29,6 @@ export class LearningAdminResolver {
     private readonly connection: TransactionalConnection,
   ) {}
 
-  // ── NF2: Field resolvers for LearningCourseAdmin ───────────────────────────
-
-  @ResolveField()
-  async tools(@Ctx() ctx: RequestContext, @Parent() course: LearningCourse): Promise<CourseTool[]> {
-    return this.connection.getRepository(ctx, CourseTool).find({
-      where: { courseId: String(course.id) },
-      order: { order: 'ASC' },
-    });
-  }
-
-  @ResolveField()
-  async enrollments(@Ctx() ctx: RequestContext, @Parent() course: LearningCourse): Promise<CourseEnrollment[]> {
-    return this.connection.getRepository(ctx, CourseEnrollment).find({
-      where: { courseId: String(course.id), channelId: String(course.channelId) },
-      order: { createdAt: 'DESC' },
-    });
-  }
-
   // ── Course queries ─────────────────────────────────────────────────────────
 
   @Query()
@@ -221,6 +203,12 @@ export class LearningAdminResolver {
     @Args('input') input: { visibility?: string; order?: number },
   ) {
     const tool = await this.connection.getEntityOrThrow(ctx, CourseTool, id);
+    // NF9: verify the parent course belongs to this channel before allowing writes.
+    // CourseTool has no channelId column, so the channel check goes through the course.
+    const course = await this.connection.getEntityOrThrow(ctx, LearningCourse, tool.courseId);
+    if (!ctx.userHasPermissions(['SuperAdmin' as any]) && String(course.channelId) !== String(ctx.channelId)) {
+      throw new IllegalOperationError('Cross-tenant course tool access denied');
+    }
     // Validate tool key still exists in registry
     if (!this.toolRegistry.has(tool.toolKey)) {
       throw new UserInputError(`Unknown tool key: ${tool.toolKey}`);
@@ -270,5 +258,31 @@ export class LearningAdminResolver {
   @Allow(courseManagePermission.Read)
   async courseToolDefinitions(@Ctx() ctx: RequestContext) {
     return this.toolRegistry.list();
+  }
+}
+
+// ── NF2: Field resolvers for LearningCourseAdmin ────────────────────────────
+// Must live in a separate @Resolver('LearningCourseAdmin') class so Vendure
+// wires them to the LearningCourseAdmin type. A bare @Resolver() class only
+// handles root queries/mutations; its @ResolveField() methods are ignored.
+
+@Resolver('LearningCourseAdmin')
+export class LearningCourseAdminFieldResolver {
+  constructor(private readonly connection: TransactionalConnection) {}
+
+  @ResolveField()
+  async tools(@Ctx() ctx: RequestContext, @Parent() course: LearningCourse): Promise<CourseTool[]> {
+    return this.connection.getRepository(ctx, CourseTool).find({
+      where: { courseId: String(course.id) },
+      order: { order: 'ASC' },
+    });
+  }
+
+  @ResolveField()
+  async enrollments(@Ctx() ctx: RequestContext, @Parent() course: LearningCourse): Promise<CourseEnrollment[]> {
+    return this.connection.getRepository(ctx, CourseEnrollment).find({
+      where: { courseId: String(course.id), channelId: String(course.channelId) },
+      order: { createdAt: 'DESC' },
+    });
   }
 }

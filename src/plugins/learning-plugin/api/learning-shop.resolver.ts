@@ -1,7 +1,8 @@
-import { Args, Query, Resolver } from '@nestjs/graphql';
+import { Args, Query, Resolver, ResolveField, Parent } from '@nestjs/graphql';
 import { Allow, Ctx, Permission, RequestContext, TransactionalConnection, CustomerService } from '@vendure/core';
 import { LearningCourse } from '../entities/learning-course.entity';
 import { CourseEnrollment } from '../entities/course-enrollment.entity';
+import { CourseTool } from '../entities/course-tool.entity';
 import { CourseAnnouncementService } from '../services/course-announcement.service';
 import { LEARNER_ADMISSION_PORT, LearnerAdmissionPort } from '../../../platform/learner-admission.port';
 import { Inject } from '@nestjs/common';
@@ -125,5 +126,23 @@ export class LearningShopResolver {
     } catch {
       return null;
     }
+  }
+}
+
+// ── NF2: Shop CoursePage.tools field resolver ───────────────────────────────
+// The Shop schema exposes CoursePage.tools but no resolver existed for it,
+// so any storefront query selecting tools would fail. Resolves through the
+// parent course (already channel-scoped by myCoursePages/myCoursePage).
+
+@Resolver('CoursePage')
+export class CoursePageFieldResolver {
+  constructor(private readonly connection: TransactionalConnection) {}
+
+  @ResolveField()
+  async tools(@Ctx() ctx: RequestContext, @Parent() page: LearningCourse): Promise<CourseTool[]> {
+    return this.connection.getRepository(ctx, CourseTool).find({
+      where: { courseId: String(page.id) },
+      order: { order: 'ASC' },
+    });
   }
 }

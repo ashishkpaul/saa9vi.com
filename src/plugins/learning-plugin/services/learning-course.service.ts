@@ -176,6 +176,15 @@ export class LearningCourseService {
   // ── Course tools ──────────────────────────────────────────────────────────
 
   async getCourseTools(ctx: RequestContext, courseId: ID): Promise<CourseTool[]> {
+    // NF9: verify the parent course belongs to this channel before exposing tools.
+    // CourseTool has no channelId column, so the channel check goes through the course.
+    const course = await this.connection.getRepository(ctx, LearningCourse).findOne({
+      where: { id: String(courseId) },
+    });
+    if (!course) return [];
+    if (!ctx.userHasPermissions(['SuperAdmin' as any]) && String(course.channelId) !== String(ctx.channelId)) {
+      throw new IllegalOperationError('Cross-tenant course tool access denied');
+    }
     return this.connection.getRepository(ctx, CourseTool).find({
       where: { courseId: String(courseId) },
       order: { order: 'ASC' },
