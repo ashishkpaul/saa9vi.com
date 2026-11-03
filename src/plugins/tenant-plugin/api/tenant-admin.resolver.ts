@@ -15,6 +15,7 @@ import {
 } from '@vendure/core';
 import { IsNull } from 'typeorm';
 import { SUPER_ADMIN_ROLE_CODE } from '@vendure/common/lib/shared-constants';
+import { ChannelRoleRepairService } from '../services/channel-role-repair.service';
 import { TenantProfileService } from '../services/tenant-profile.service';
 import { InstructorProfileService } from '../services/instructor-profile.service';
 import { MediaResourceService } from '../services/media-resource.service';
@@ -137,6 +138,7 @@ export class TenantAdminResolver {
     private readonly mediaResourceService: MediaResourceService,
     private readonly tenantThemeService: TenantThemeService,
     private readonly tenantLearnerMembershipService: TenantLearnerMembershipService,
+    private readonly channelRoleRepairService: ChannelRoleRepairService,
     private readonly connection: TransactionalConnection,
     private readonly administratorService: AdministratorService,
     private readonly roleService: RoleService,
@@ -548,5 +550,26 @@ export class TenantAdminResolver {
   async readmitTenantLearner(@Ctx() ctx: RequestContext, @Args('input') input: ReadmitTenantLearnerInput) {
     const actorId = ctx.activeUserId != null ? String(ctx.activeUserId) : null;
     return this.tenantLearnerMembershipService.readmit(ctx, input.customerId, ctx.channelId as string, actorId, input.reason);
+  }
+
+  // ── Channel Role Repair Mutations (for Channel 13 issue) ─────────────────
+
+  @Query()
+  @Allow(Permission.SuperAdmin)
+  async checkChannelRoleAssignments(
+    @Ctx() ctx: RequestContext,
+    @Args('channelId') channelId: ID,
+  ) {
+    return this.channelRoleRepairService.checkChannelRoleAssignments(channelId);
+  }
+
+  @Mutation()
+  @Transaction()
+  @Allow(Permission.SuperAdmin)
+  async repairChannelRoleAssignments(
+    @Ctx() ctx: RequestContext,
+    @Args('channelId') channelId: ID,
+  ) {
+    return this.channelRoleRepairService.repairChannelRoleAssignments(channelId);
   }
 }

@@ -99,12 +99,15 @@ export class BbbChannelAccessService {
   /**
    * Assert that the active user can access the given organization.
    * BbbOrganization is ChannelAware — check channelId directly.
+   * Platform callers (SuperAdmin, BBBAdmin, BBBPlatformInfrastructure) bypass
+   * channel ownership checks and can access any organization.
    */
   async assertOrganizationAccess(
     ctx: RequestContext,
     organizationId: ID,
   ): Promise<BbbOrganization | undefined> {
-    if (this.isSuperAdmin(ctx)) return undefined;
+    // Platform callers can access any organization
+    if (this.isPlatformCaller(ctx)) return undefined;
 
     const channelId = ctx.channelId as string;
     const org = await this.connection
@@ -138,7 +141,8 @@ export class BbbChannelAccessService {
     ctx: RequestContext,
     roomId: ID,
   ): Promise<BbbRoom | undefined> {
-    if (this.isSuperAdmin(ctx)) return undefined;
+    // Platform callers can access any room
+    if (this.isPlatformCaller(ctx)) return undefined;
 
     const channelId = ctx.channelId as string;
     const room = await this.connection
@@ -180,7 +184,8 @@ export class BbbChannelAccessService {
     ctx: RequestContext,
     meetingId: ID,
   ): Promise<BbbMeeting | undefined> {
-    if (this.isSuperAdmin(ctx)) return undefined;
+    // Platform callers can access any meeting
+    if (this.isPlatformCaller(ctx)) return undefined;
 
     const channelId = ctx.channelId as string;
     const meeting = await this.connection
@@ -222,7 +227,8 @@ export class BbbChannelAccessService {
     ctx: RequestContext,
     sessionId: ID,
   ): Promise<BbbScheduledSession | undefined> {
-    if (this.isSuperAdmin(ctx)) return undefined;
+    // Platform callers can access any session
+    if (this.isPlatformCaller(ctx)) return undefined;
 
     const channelId = ctx.channelId as string;
     const session = await this.connection
@@ -266,7 +272,8 @@ export class BbbChannelAccessService {
     ctx: RequestContext,
     entitlementId: ID,
   ): Promise<BbbEntitlement | undefined> {
-    if (this.isSuperAdmin(ctx)) return undefined;
+    // Platform callers can access any entitlement
+    if (this.isPlatformCaller(ctx)) return undefined;
 
     const channelId = ctx.channelId as string;
     const entitlement = await this.connection
@@ -337,7 +344,8 @@ export class BbbChannelAccessService {
     ctx: RequestContext,
     memberId: ID,
   ): Promise<BbbOrganizationMember | undefined> {
-    if (this.isSuperAdmin(ctx)) return undefined;
+    // Platform callers can access any member
+    if (this.isPlatformCaller(ctx)) return undefined;
 
     const channelId = ctx.channelId as string;
     const member = await this.connection
@@ -377,7 +385,8 @@ export class BbbChannelAccessService {
     ctx: RequestContext,
     membershipId: ID,
   ): Promise<BbbOrganizationMembership | undefined> {
-    if (this.isSuperAdmin(ctx)) return undefined;
+    // Platform callers can access any membership
+    if (this.isPlatformCaller(ctx)) return undefined;
 
     const channelId = ctx.channelId as string;
     const membership = await this.connection
@@ -405,7 +414,8 @@ export class BbbChannelAccessService {
     ctx: RequestContext,
     productAccessId: ID,
   ): Promise<BbbProductAccess | undefined> {
-    if (this.isSuperAdmin(ctx)) return undefined;
+    // Platform callers can access any product access
+    if (this.isPlatformCaller(ctx)) return undefined;
 
     const channelId = ctx.channelId as string;
     const productAccess = await this.connection
@@ -447,7 +457,8 @@ export class BbbChannelAccessService {
     ctx: RequestContext,
     trialId: ID,
   ): Promise<BbbTrialRegistration | undefined> {
-    if (this.isSuperAdmin(ctx)) return undefined;
+    // Platform callers can access any trial registration
+    if (this.isPlatformCaller(ctx)) return undefined;
 
     const channelId = ctx.channelId as string;
     const trial = await this.connection

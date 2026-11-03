@@ -209,6 +209,15 @@ export const adminApiExtensions = gql`
         reason: String
     }
 
+    type ChannelRoleRepairResult {
+        channelId: String!
+        channelCode: String!
+        channelToken: String!
+        superAdminRoleAssigned: Boolean!
+        customerRoleAssigned: Boolean!
+        errors: [String!]!
+    }
+
     extend type Query {
         tenantProfile(channelId: String): TenantProfile
         instructorProfiles(options: InstructorProfileListOptions): InstructorProfileList!
@@ -217,6 +226,7 @@ export const adminApiExtensions = gql`
         mediaResource(id: ID!): MediaResource
         tenantLearners(options: TenantLearnersListOptions): TenantLearnerMembershipList!
         tenantLearnerMembershipLogs(customerId: ID!): [TenantLearnerMembershipLog!]!
+        checkChannelRoleAssignments(channelId: ID!): ChannelRoleRepairResult!
     }
 
     extend type Mutation {
@@ -233,6 +243,7 @@ export const adminApiExtensions = gql`
         suspendTenantLearner(input: SuspendTenantLearnerInput!): TenantLearnerMembership!
         revokeTenantLearner(input: RevokeTenantLearnerInput!): TenantLearnerMembership!
         readmitTenantLearner(input: ReadmitTenantLearnerInput!): TenantLearnerMembership!
+        repairChannelRoleAssignments(channelId: ID!): ChannelRoleRepairResult!
     }
 `;
 

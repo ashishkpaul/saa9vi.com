@@ -27,9 +27,10 @@ import { TenantDeletionService } from './services/tenant-deletion.service';
 import { TenantRegistrationService } from './services/tenant-registration.service';
 import { TenantRoleReconciliationService } from './services/tenant-role-reconciliation.service';
 import { TenantThemeService } from './services/tenant-theme.service';
-import { TenantCommercialEligibilityService } from './services/tenant-commercial-eligibility.service';
-import { TenantAdminResolver } from './api/tenant-admin.resolver';
+import { ChannelRoleRepairService } from './services/channel-role-repair.service';
 import { TenantShopResolver } from './api/tenant-shop.resolver';
+import { TenantAdminResolver } from './api/tenant-admin.resolver';
+import { TenantCommercialEligibilityService } from './services/tenant-commercial-eligibility.service';
 import { adminApiExtensions, shopApiExtensions, themeAdminExtensions, themeShopExtensions } from './api/api-extensions';
 import { DocumentNode, Kind } from 'graphql';
 
@@ -64,6 +65,7 @@ function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
     TenantThemeService,
     TenantCommercialEligibilityService,
     TenantLearnerMembershipService,
+    ChannelRoleRepairService,
     // C-10: expose LearnerAdmissionPort so BBB and other plugins can inject
     // it without directly importing TenantLearnerMembershipService.
     {

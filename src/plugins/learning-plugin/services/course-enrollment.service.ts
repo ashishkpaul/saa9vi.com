@@ -45,7 +45,11 @@ export class CourseEnrollmentService {
     customerId: ID,
   ): Promise<CourseEnrollment | null> {
     return this.connection.getRepository(ctx, CourseEnrollment).findOne({
-      where: { courseId: String(courseId), customerId: String(customerId) },
+      where: { 
+        courseId: String(courseId), 
+        customerId: String(customerId),
+        channelId: String(ctx.channelId)  // Added channel filter for security
+      },
     });
   }
 
@@ -143,9 +147,8 @@ export class CourseEnrollmentService {
       throw new IllegalOperationError('Course not found in this channel');
     }
 
-    const enrollment = await this.connection
-      .getRepository(ctx, CourseEnrollment)
-      .findOne({ where: { courseId: String(courseId), customerId: String(customerId) } });
+    // Use the findOne method which now includes channel filtering
+    const enrollment = await this.findOne(ctx, courseId, customerId);
     if (!enrollment) {
       throw new IllegalOperationError('Enrollment not found');
     }
