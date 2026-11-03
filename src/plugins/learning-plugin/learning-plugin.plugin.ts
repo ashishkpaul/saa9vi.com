@@ -26,6 +26,8 @@ import { LearningDeletionService } from './services/learning-deletion.service';
 import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
 import { LearningAdminResolver } from './api/learning-admin.resolver';
 import { LearningShopResolver } from './api/learning-shop.resolver';
+import { LearningCourseAdminFieldResolver } from './api/learning-admin.resolver';
+import { CoursePageFieldResolver } from './api/learning-shop.resolver';
 
 /**
  * LearningPlugin — Chamilo-inspired course domain for Saa9vi.
@@ -61,11 +63,11 @@ import { LearningShopResolver } from './api/learning-shop.resolver';
   ],
   adminApiExtensions: {
     schema: adminApiExtensions,
-    resolvers: [LearningAdminResolver],
+    resolvers: [LearningAdminResolver, LearningCourseAdminFieldResolver],
   },
   shopApiExtensions: {
     schema: shopApiExtensions,
-    resolvers: [LearningShopResolver],
+    resolvers: [LearningShopResolver, CoursePageFieldResolver],
   },
   dashboard: './dashboard/index.tsx',
   configuration: (config) => {

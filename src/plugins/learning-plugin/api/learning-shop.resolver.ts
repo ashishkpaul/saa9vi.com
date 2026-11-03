@@ -140,9 +140,11 @@ export class CoursePageFieldResolver {
 
   @ResolveField()
   async tools(@Ctx() ctx: RequestContext, @Parent() page: LearningCourse): Promise<CourseTool[]> {
-    return this.connection.getRepository(ctx, CourseTool).find({
+    const allTools = await this.connection.getRepository(ctx, CourseTool).find({
       where: { courseId: String(page.id) },
       order: { order: 'ASC' },
     });
+    // Shop API should not expose hidden tools to learners
+    return allTools.filter((t) => t.visibility === 'VISIBLE');
   }
 }
