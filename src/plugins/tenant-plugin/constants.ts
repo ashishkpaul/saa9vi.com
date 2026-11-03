@@ -13,6 +13,11 @@ import {
   pagePermission,
 } from '../cms/constants';
 import { REVIEW_ADMIN_PERMISSION } from '../reviews/constants';
+import {
+  courseManagePermission,
+  courseEnrollPermission,
+  courseAnnouncementPermission,
+} from '../../platform/course-permissions';
 
 export const TENANT_PLUGIN_OPTIONS = 'TENANT_PLUGIN_OPTIONS';
 
@@ -120,6 +125,20 @@ export const TENANT_ADMIN_ROLE_PERMISSIONS: Permission[] = [
   pagePermission.Delete,
   // Reviews
   REVIEW_ADMIN_PERMISSION.Permission,
+  // Course management (LearningPlugin) — tenant admins manage courses, tools,
+  // enrollments and announcements within their own channel (AQ1).
+  courseManagePermission.Create,
+  courseManagePermission.Read,
+  courseManagePermission.Update,
+  courseManagePermission.Delete,
+  courseEnrollPermission.Create,
+  courseEnrollPermission.Read,
+  courseEnrollPermission.Update,
+  courseEnrollPermission.Delete,
+  courseAnnouncementPermission.Create,
+  courseAnnouncementPermission.Read,
+  courseAnnouncementPermission.Update,
+  courseAnnouncementPermission.Delete,
   // Academy admission management (C-02)
   tenantManageAdmissionsPermission.Create,
   tenantManageAdmissionsPermission.Read,

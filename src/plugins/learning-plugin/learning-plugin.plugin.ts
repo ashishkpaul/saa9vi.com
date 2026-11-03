@@ -8,7 +8,7 @@ import {
   courseManagePermission,
   courseEnrollPermission,
   courseAnnouncementPermission,
-} from './constants';
+} from '../../platform/course-permissions';
 import { LearningCourse } from './entities/learning-course.entity';
 import { CourseTemplate } from './entities/course-template.entity';
 import { CourseTemplateTool } from './entities/course-template-tool.entity';

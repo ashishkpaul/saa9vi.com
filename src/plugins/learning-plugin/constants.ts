@@ -1,7 +1,12 @@
-import { CrudPermissionDefinition } from '@vendure/core';
-
 export const LEARNING_PLUGIN_OPTIONS = 'LEARNING_PLUGIN_OPTIONS';
 
-export const courseManagePermission = new CrudPermissionDefinition('CourseManage');
-export const courseEnrollPermission = new CrudPermissionDefinition('CourseEnroll');
-export const courseAnnouncementPermission = new CrudPermissionDefinition('CourseAnnouncement');
+/**
+ * Course management permissions, defined in src/platform/course-permissions.ts
+ * so the TenantPlugin can reference them without a tenant→learning import cycle.
+ * Re-exported here for backward compatibility within the learning plugin.
+ */
+export {
+  courseManagePermission,
+  courseEnrollPermission,
+  courseAnnouncementPermission,
+} from '../../platform/course-permissions';

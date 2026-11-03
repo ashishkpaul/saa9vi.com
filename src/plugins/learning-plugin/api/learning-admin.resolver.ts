@@ -8,8 +8,10 @@ import { CourseAnnouncementService } from '../services/course-announcement.servi
 import { CourseScheduledSessionService } from '../services/course-scheduled-session.service';
 import { CourseToolRegistry } from '../services/course-tool-registry';
 import {
-  courseManagePermission, courseEnrollPermission, courseAnnouncementPermission,
-} from '../constants';
+  courseManagePermission,
+  courseEnrollPermission,
+  courseAnnouncementPermission,
+} from '../../../platform/course-permissions';
 import { LearningCourse } from '../entities/learning-course.entity';
 import { CourseTool } from '../entities/course-tool.entity';
 import { CourseEnrollment, CourseRole } from '../entities/course-enrollment.entity';
