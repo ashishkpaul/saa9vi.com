@@ -86,6 +86,7 @@ import { BigBlueButtonPlugin } from '../bigbluebutton.plugin';
 import { CmsPlugin } from '../../cms/cms.plugin';
 import { ReviewsPlugin } from '../../reviews/reviews-plugin';
 import { SubscriptionPlugin } from '../../subscription/subscription.plugin';
+import { LearningPlugin } from '../../learning-plugin/learning-plugin.plugin';
 import { E2E_INITIAL_DATA } from '../../tenant-plugin/e2e/fixtures/e2e-initial-data';
 import { verifyTenantAdminViaApi } from '../../tenant-plugin/e2e/fixtures/verify-tenant-admin';
 import { BbbMeeting } from '../entities/bbb-meeting.entity';
@@ -735,6 +736,7 @@ describe('BBB Channel Isolation (Phase A)', () => {
         CmsPlugin,
         ReviewsPlugin,
         SubscriptionPlugin.init({}) as any,
+        LearningPlugin,
       ],
     }),
   );

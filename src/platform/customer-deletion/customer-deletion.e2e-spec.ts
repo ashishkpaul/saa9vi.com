@@ -58,6 +58,7 @@ import { TenantPlugin } from '../../plugins/tenant-plugin/tenant-plugin.plugin';
 import { BigBlueButtonPlugin } from '../../plugins/bigbluebutton-plugin';
 import { CmsPlugin } from '../../plugins/cms/cms.plugin';
 import { ReviewsPlugin } from '../../plugins/reviews/reviews-plugin';
+import { LearningPlugin } from '../../plugins/learning-plugin/learning-plugin.plugin';
 import { E2E_INITIAL_DATA } from '../../plugins/tenant-plugin/e2e/fixtures/e2e-initial-data';
 import { CustomerDeletionLog } from './entities/customer-deletion-log.entity';
 import { BbbEntitlement } from '../../plugins/bigbluebutton-plugin/entities/bbb-entitlement.entity';
@@ -132,7 +133,7 @@ describe('CustomerDeletion (INV-013)', () => {
         schema: 'e2e_customer_deletion',
         synchronize: true,
       },
-      plugins: [TenantPlugin, BigBlueButtonPlugin, CmsPlugin, ReviewsPlugin],
+      plugins: [TenantPlugin, BigBlueButtonPlugin, CmsPlugin, ReviewsPlugin, LearningPlugin],
     }),
   );
 
