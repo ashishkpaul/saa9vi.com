@@ -676,6 +676,7 @@ export class BbbShopResolver {
       ctx,
       customerId,
     );
-    return rows.find((r) => r.scheduledSessionId === sessionId) ?? null;
+    const wanted = this.trialRegistrationService.toPk(sessionId);
+    return rows.find((r) => String(r.scheduledSessionId) === wanted) ?? null;
   }
 }

@@ -17,6 +17,7 @@
 import 'reflect-metadata';
 import 'dotenv/config';
 import net from 'net';
+import gql from 'graphql-tag';
 import {
   createTestEnvironment,
   registerInitializer,
@@ -57,6 +58,7 @@ const { server, adminClient, shopClient } = createTestEnvironment(
   mergeConfig(testConfig, {
     // Free port assigned by startOnFreePort() in beforeAll (test-utils/free-port).
     apiOptions: { port: 0 },
+    authOptions: { requireVerification: false },
     dbConnectionOptions: {
       type: 'postgres',
       host: process.env.DB_HOST ?? '127.0.0.1',
@@ -71,6 +73,89 @@ const { server, adminClient, shopClient } = createTestEnvironment(
   }),
 );
 
+
+const MY_SESSION_ATTENDANCE = gql`
+  query MySessionAttendance($sessionId: ID!) {
+    mySessionAttendance(sessionId: $sessionId) {
+      id
+      scheduledSessionId
+      attendanceStatus
+    }
+  }
+`;
+
+const REGISTER_CUSTOMER = gql`
+  mutation RegisterCustomer($input: RegisterCustomerInput!) {
+    registerCustomerAccount(input: $input) {
+      ... on Success { success }
+      ... on ErrorResult { errorCode message }
+    }
+  }
+`;
+
+const LOGIN = gql`
+  mutation Login($emailAddress: String!, $password: String!) {
+    login(username: $emailAddress, password: $password) {
+      ... on CurrentUser { id identifier }
+      ... on ErrorResult { errorCode message }
+    }
+  }
+`;
+
+const ACTIVE_CUSTOMER = gql`
+  query ActiveCustomer {
+    activeCustomer {
+      id
+    }
+  }
+`;
+
+const DECODE = (id: unknown): string => String(id).replace(/^T_/, '');
+const ENCODE = (id: unknown): string =>
+  String(id).startsWith('T_') ? String(id) : `T_${id}`;
+
+interface Learner {
+  email: string;
+  password: string;
+  userId: string;
+  customerId: string;
+}
+
+async function registerLearner(email: string): Promise<Learner> {
+  const password = 'Attend123!';
+  await shopClient.asAnonymousUser();
+  const reg: any = await shopClient.query(REGISTER_CUSTOMER, {
+    input: { emailAddress: email, password },
+  });
+  if (reg.registerCustomerAccount.errorCode) {
+    throw new Error(JSON.stringify(reg));
+  }
+  const login: any = await shopClient.query(LOGIN, {
+    emailAddress: email,
+    password,
+  });
+  if (login.login.errorCode) {
+    throw new Error(JSON.stringify(login));
+  }
+  const me: any = await shopClient.query(ACTIVE_CUSTOMER);
+  return {
+    email,
+    password,
+    userId: DECODE(login.login.id),
+    customerId: DECODE(me.activeCustomer.id),
+  };
+}
+
+async function loginAs(l: Learner): Promise<void> {
+  await shopClient.asAnonymousUser();
+  const r: any = await shopClient.query(LOGIN, {
+    emailAddress: l.email,
+    password: l.password,
+  });
+  if (r.login.errorCode) {
+    throw new Error(JSON.stringify(r));
+  }
+}
 
 describe('SessionAttendance (3D.3e)', () => {
   const d = ATTENDANCE_E2E ? describe : describe.skip;
@@ -198,6 +283,19 @@ describe('SessionAttendance (3D.3e)', () => {
         validUntil: null,
       }),
     );
+
+    // Create attendance row for customer A (PRESENT)
+    const attendanceRepo = connection.getRepository(ctx, SessionAttendance);
+    await attendanceRepo.save(
+      attendanceRepo.create({
+        channelId: String(ctx.channelId),
+        scheduledSessionId: String(session.id),
+        customerId: String(customerA.id),
+        attendanceStatus: 'PRESENT',
+        source: 'WEBHOOK',
+        lastEventAt: new Date(),
+      }),
+    );
   }, 60000);
 
   afterAll(async () => {
@@ -275,6 +373,80 @@ describe('SessionAttendance (3D.3e)', () => {
       expect(summary.totalNoShow).toBeGreaterThanOrEqual(1); // C
       expect(summary.attendanceRate).toBeGreaterThan(0);
       expect(summary.totalSessions).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('mySessionAttendance resolves Customer.id, not User.id (BB1)', () => {
+    let x: Learner;
+    let y: Learner;
+    let attSession: BbbScheduledSession;
+    let realRowId: string;
+    let decoyRowId: string;
+
+    beforeAll(async () => {
+      // Fresh session so the unique (session, customer, channel) index
+      // cannot collide with the webhook tests above.
+      const sessionRepo = connection.getRepository(ctx, BbbScheduledSession);
+      const now = new Date();
+      attSession = await sessionRepo.save(
+        sessionRepo.create({
+          title: 'BB1 Attendance Session',
+          startTime: now,
+          endTime: new Date(now.getTime() + 3600000),
+          status: 'LIVE',
+          organizationId: String(org.id),
+          organization: org,
+        }),
+      );
+
+      x = await registerLearner(`bb1-att-x-${Date.now()}@example.com`);
+      y = await registerLearner(`bb1-att-y-${Date.now()}@example.com`);
+      expect(x.userId).not.toBe(x.customerId); // the divergence is real
+
+      const repo = connection.getRepository(ctx, SessionAttendance);
+      const common = {
+        channelId: String(ctx.channelId),
+        scheduledSessionId: String(attSession.id),
+        source: 'WEBHOOK' as const,
+        lastEventAt: new Date(),
+      };
+      // Real row keyed by X's Customer.id (what the fix returns)
+      const real = await repo.save(
+        repo.create({
+          ...common,
+          customerId: x.customerId,
+          attendanceStatus: 'PRESENT',
+        }),
+      );
+      // Decoy row keyed by X's User.id (what the old buggy lookup returned)
+      const decoy = await repo.save(
+        repo.create({
+          ...common,
+          customerId: x.userId,
+          attendanceStatus: 'NO_SHOW',
+        }),
+      );
+      realRowId = String(real.id);
+      decoyRowId = String(decoy.id);
+    }, 60000);
+
+    it("returns the learner's own row, not the User.id decoy", async () => {
+      await loginAs(x);
+      const res: any = await shopClient.query(MY_SESSION_ATTENDANCE, {
+        sessionId: ENCODE(attSession.id),
+      });
+      expect(res.mySessionAttendance).not.toBeNull();
+      expect(DECODE(res.mySessionAttendance.id)).toBe(realRowId);
+      expect(DECODE(res.mySessionAttendance.id)).not.toBe(decoyRowId);
+      expect(res.mySessionAttendance.attendanceStatus).toBe('PRESENT');
+    });
+
+    it('another learner gets null for the same session', async () => {
+      await loginAs(y);
+      const res: any = await shopClient.query(MY_SESSION_ATTENDANCE, {
+        sessionId: ENCODE(attSession.id),
+      });
+      expect(res.mySessionAttendance).toBeNull();
     });
   });
 });

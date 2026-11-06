@@ -39,7 +39,7 @@ export class TrialRegistrationService {
    * registration mutation missed its row. Mirrors `BbbMeetingService.toPk`
    * and `BbbOrganizationService.toInternalId` so the three cannot drift.
    */
-  private toPk(id: ID): string {
+  toPk(id: ID): string {
     const decoded = this.configService.entityIdStrategy.decodeId(String(id));
     return decoded === -1 ? String(id) : String(decoded);
   }
