@@ -470,8 +470,7 @@ export class BbbShopResolver {
       attendedAt: string | null;
     }>
   > {
-    if (!ctx.activeUserId) throw new Error("Unauthenticated");
-    const customerId = ctx.activeUserId as string;
+    const customerId = await this.trialRegistrationService.resolveActiveCustomerId(ctx);
     const registrations = await this.connection
       .getRepository(ctx, BbbTrialRegistration)
       .find({
@@ -502,7 +501,6 @@ export class BbbShopResolver {
     status: string;
     registeredAt: string;
   }> {
-    if (!ctx.activeUserId) throw new Error("Unauthenticated");
     const registration = await this.trialRegistrationService.register(
       ctx,
       sessionId,
@@ -673,10 +671,10 @@ export class BbbShopResolver {
     @Ctx() ctx: RequestContext,
     @Args("sessionId") sessionId: string,
   ): Promise<SessionAttendance | null> {
-    if (!ctx.activeUserId) throw new ForbiddenError();
+    const customerId = await this.trialRegistrationService.resolveActiveCustomerId(ctx);
     const rows = await this.attendanceAnalytics.getCustomerAttendance(
       ctx,
-      String(ctx.activeUserId),
+      customerId,
     );
     return rows.find((r) => r.scheduledSessionId === sessionId) ?? null;
   }

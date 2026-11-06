@@ -1,12 +1,14 @@
 import { Injectable, Logger } from "@nestjs/common";
 import {
   ConfigService,
+  Customer,
   EntityNotFoundError,
   ForbiddenError,
   ID,
   RequestContext,
   TransactionalConnection,
 } from "@vendure/core";
+import { IsNull } from "typeorm";
 import { BbbTrialRegistration } from "../entities/trial-registration.entity";
 import { BbbScheduledSession } from "../entities/bbb-scheduled-session.entity";
 import { BbbEntitlement } from "../entities/bbb-entitlement.entity";
@@ -98,17 +100,39 @@ export class TrialRegistrationService {
       });
   }
 
+  /**
+   * Resolve the Customer.id from the active user session.
+   * Throws ForbiddenError if no active user or customer not found.
+   */
+  async resolveActiveCustomerId(ctx: RequestContext): Promise<string> {
+    if (!ctx.activeUserId) {
+      throw new ForbiddenError();
+    }
+
+    const customer = await this.connection
+      .getRepository(ctx, Customer)
+      .findOne({
+        where: {
+          user: { id: ctx.activeUserId as string },
+          deletedAt: IsNull(),
+        },
+      });
+
+    if (!customer) {
+      throw new ForbiddenError(); // admin/non-customer sessions can't register
+    }
+
+    return String(customer.id);
+  }
+
   async register(
     ctx: RequestContext,
     sessionId: string,
     customerEmail: string,
     customerName: string,
   ): Promise<BbbTrialRegistration> {
-    // Use authenticated customer if available, otherwise create from email
-    const customerId = ctx.activeUserId as string;
-    if (!customerId) {
-      throw new Error("Customer authentication required for trial registration");
-    }
+    // Resolve the Customer.id from the active user session
+    const customerId = await this.resolveActiveCustomerId(ctx);
 
     const existing = await this.findBySessionAndCustomer(ctx, sessionId, customerId);
     if (existing) {
