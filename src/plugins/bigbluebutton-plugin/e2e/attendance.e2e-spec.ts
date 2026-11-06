@@ -42,8 +42,6 @@ import { TransactionalConnection, Customer } from '@vendure/core';
 
 registerInitializer('postgres', new SchemaPostgresInitializer());
 
-const ATTENDANCE_E2E = process.env.ATTENDANCE_E2E === 'true';
-
 async function assertPostgres(): Promise<void> {
   const host = process.env.DB_HOST ?? '127.0.0.1';
   const port = Number(process.env.DB_PORT ?? 5435);
@@ -158,8 +156,6 @@ async function loginAs(l: Learner): Promise<void> {
 }
 
 describe('SessionAttendance (3D.3e)', () => {
-  const d = ATTENDANCE_E2E ? describe : describe.skip;
-
   // placeholder test to verify harness
 
   let ctx: any;

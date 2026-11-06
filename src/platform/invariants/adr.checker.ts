@@ -79,6 +79,7 @@ export class AdrChecker implements Checker {
     const allowedAccessEntities = new Set([
       'bbb-organization-member.entity.ts',
       'bbb-organization-membership.entity.ts',
+      'tenant-learner-membership-log.entity.ts',
     ]);
 
     for (const file of files) {
@@ -110,7 +111,7 @@ export class AdrChecker implements Checker {
       passed: nonEntitlementAccessEntities.length === 0,
       severity: nonEntitlementAccessEntities.length > 0 ? 'warning' : 'info',
       message,
-      details: 'INV-003 allows documented exceptions (e.g., BbbOrganizationMember/Membership as prior gates per §8A)',
+      details: 'INV-003 allows documented exceptions (e.g., BbbOrganizationMember/Membership as prior gates per §8A, TenantLearnerMembershipLog as append-only audit trail)',
     };
   }
 
