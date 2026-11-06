@@ -272,6 +272,24 @@ const CREATE_BBB_ENROLLMENT = gql`
   }
 `;
 
+const ADMIT_TENANT_LEARNER = gql`
+  mutation AdmitTenantLearner($input: AdmitTenantLearnerInput!) {
+    admitTenantLearner(input: $input) {
+      id
+      status
+    }
+  }
+`;
+
+const ACTIVATE_TENANT_LEARNER = gql`
+  mutation ActivateTenantLearner($customerId: ID!) {
+    activateTenantLearner(customerId: $customerId) {
+      id
+      status
+    }
+  }
+`;
+
 const CREATE_BBB_ORG_MEMBERSHIP = gql`
   mutation CreateBbbOrgMembership($input: CreateBbbOrgMembershipInput!) {
     createBbbOrgMembership(input: $input) {
@@ -2343,6 +2361,14 @@ describe('BBB Channel Isolation (Phase A)', () => {
       });
       customerAEncoded = customerA.createCustomer.id;
 
+      // H2 guard requires active TenantLearnerMembership before enrollment.
+      await adminClient.query(ADMIT_TENANT_LEARNER, {
+        input: { customerId: customerAEncoded },
+      });
+      await adminClient.query(ACTIVATE_TENANT_LEARNER, {
+        customerId: customerAEncoded,
+      });
+
       const memberA: any = await adminClient.query(ADD_BBB_MEMBER, {
         input: {
           organizationId: orgAId,
@@ -2373,7 +2399,6 @@ describe('BBB Channel Isolation (Phase A)', () => {
           customerId: customerAEncoded,
           type: 'bbb_room',
           resourceId: roomAEncoded,
-          source: 'admin',
         },
       });
 
@@ -2413,6 +2438,14 @@ describe('BBB Channel Isolation (Phase A)', () => {
       });
       customerBEncoded = customerB.createCustomer.id;
 
+      // H2 guard requires active TenantLearnerMembership before enrollment.
+      await adminClient.query(ADMIT_TENANT_LEARNER, {
+        input: { customerId: customerBEncoded },
+      });
+      await adminClient.query(ACTIVATE_TENANT_LEARNER, {
+        customerId: customerBEncoded,
+      });
+
       const roomB: any = await adminClient.query(CREATE_BBB_ROOM, {
         input: { organizationId: orgBId, name: 'Read Room B' },
       });
@@ -2432,7 +2465,6 @@ describe('BBB Channel Isolation (Phase A)', () => {
           customerId: customerBEncoded,
           type: 'bbb_room',
           resourceId: roomBEncoded,
-          source: 'admin',
         },
       });
     }, 90_000);
@@ -2772,6 +2804,13 @@ describe('BBB Channel Isolation (Phase A)', () => {
       if (!existingEnrollmentA) {
         await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
         adminClient.setChannelToken(tenantAChannelToken);
+        // H2 guard requires active TenantLearnerMembership before enrollment.
+        await adminClient.query(ADMIT_TENANT_LEARNER, {
+          input: { customerId: customerAId },
+        });
+        await adminClient.query(ACTIVATE_TENANT_LEARNER, {
+          customerId: customerAId,
+        });
         const r: any = await adminClient.query(CREATE_BBB_ENROLLMENT, {
           input: { roomId: roomAId, customerId: customerAId, accessDays: 30 },
         });
@@ -2790,6 +2829,13 @@ describe('BBB Channel Isolation (Phase A)', () => {
       if (!existingEnrollmentB) {
         await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
         adminClient.setChannelToken(tenantBChannelToken);
+        // H2 guard requires active TenantLearnerMembership before enrollment.
+        await adminClient.query(ADMIT_TENANT_LEARNER, {
+          input: { customerId: customerBId },
+        });
+        await adminClient.query(ACTIVATE_TENANT_LEARNER, {
+          customerId: customerBId,
+        });
         const r: any = await adminClient.query(CREATE_BBB_ENROLLMENT, {
           input: { roomId: roomBId, customerId: customerBId, accessDays: 30 },
         });
@@ -2823,8 +2869,7 @@ describe('BBB Channel Isolation (Phase A)', () => {
         await adminClient.asUserWithCredentials(tenantAEmail, 'StrongP@ss1');
         adminClient.setChannelToken(tenantAChannelToken);
         const r: any = await adminClient.query(CREATE_BBB_ENTITLEMENT, {
-          input: { customerId: customerAId, type: 'bbb_room',
-                   resourceId: roomAId, source: 'admin' },
+          input: { customerId: customerAId, type: 'bbb_room', resourceId: roomAId },
         });
         entitlementAId = r.createBbbEntitlement.id;
       }
@@ -2838,8 +2883,7 @@ describe('BBB Channel Isolation (Phase A)', () => {
         await adminClient.asUserWithCredentials(tenantBEmail, 'StrongP@ss2');
         adminClient.setChannelToken(tenantBChannelToken);
         const r: any = await adminClient.query(CREATE_BBB_ENTITLEMENT, {
-          input: { customerId: customerBId, type: 'bbb_room',
-                   resourceId: roomBId, source: 'admin' },
+          input: { customerId: customerBId, type: 'bbb_room', resourceId: roomBId },
         });
         entitlementBId = r.createBbbEntitlement.id;
       }
