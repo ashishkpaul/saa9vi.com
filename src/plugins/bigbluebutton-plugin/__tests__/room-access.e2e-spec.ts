@@ -180,6 +180,17 @@ const LIST_BBB_CAPACITY_GRANTS = gql`
   }
 `;
 
+/** Tenant admission — required before enrollment (H2/C-10 guard). */
+const ADMIT_TENANT_LEARNER = gql`
+  mutation AdmitTenantLearner($input: AdmitTenantLearnerInput!) {
+    admitTenantLearner(input: $input) {
+      id
+      customerId
+      status
+    }
+  }
+`;
+
 /** Preview surface — must decide EXACTLY like join (INV-027). */
 const ROOM_STATUS = gql`
   query RoomAccessRoomStatus($id: ID!) {
@@ -368,6 +379,7 @@ describe('INV-027 room preview/join parity (BUG-045)', () => {
     });
 
     await adminClient.asSuperAdmin();
+    adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
     shopClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
 
     const stamp = Date.now();
@@ -451,6 +463,29 @@ describe('INV-027 room preview/join parity (BUG-045)', () => {
       outsiderEmail,
       PASSWORD,
     );
+
+    // H2/C-10: createBbbEnrollment requires ACTIVE TenantLearnerMembership.
+    // Admit the enrolled customer before any enrollment grants are written.
+    const admitEnrolled: any = await adminClient.query(ADMIT_TENANT_LEARNER, {
+      input: { customerId: encode(enrolledCustomerId) },
+    });
+    if (!admitEnrolled.admitTenantLearner?.id) {
+      fail('admitTenantLearner(enrolled)', admitEnrolled);
+    }
+    const activateEnrolled: any = await adminClient.query(
+      gql`
+        mutation ActivateTenantLearner($customerId: ID!) {
+          activateTenantLearner(customerId: $customerId) {
+            id
+            status
+          }
+        }
+      `,
+      { customerId: encode(enrolledCustomerId) },
+    );
+    if (!activateEnrolled.activateTenantLearner?.id) {
+      fail('activateTenantLearner(enrolled)', activateEnrolled);
+    }
 
     // C1 — enrollment only (the admin EnrollmentsList → createBbbEnrollment
     // path, the only remaining BbbEnrollment writer).
