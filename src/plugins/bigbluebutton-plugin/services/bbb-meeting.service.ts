@@ -48,10 +48,6 @@ import { BbbOpsAlertService } from "./bbb-ops-alert.service";
 import { SessionAttendanceService } from "./session-attendance.service";
 import { LEARNER_ADMISSION_PORT, LearnerAdmissionStatus } from "../../../platform/learner-admission.port";
 import {
-  MeetingProvisionedEvent,
-  MeetingFailedEvent,
-} from "../events/bbb-events";
-import {
   BBB_PLUGIN_OPTIONS,
   JOIN_STATUS_WAITING_FOR_TRAINER,
   MEETING_STATE,
