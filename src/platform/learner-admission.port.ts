@@ -38,8 +38,8 @@ export interface LearnerAdmissionPort {
 
   /**
    * Returns the customer's current admission status in the specified channel,
-   * or null when no membership row exists.
-   * Fails closed (returns null) on any error.
+   * or null when no membership row exists. Errors propagate; they are not
+   * mapped to null.
    */
   getStatus(
     ctx: RequestContext,

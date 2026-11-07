@@ -46,7 +46,6 @@ import {
 } from "./metered-billing.policy";
 import { BbbOpsAlertService } from "./bbb-ops-alert.service";
 import { SessionAttendanceService } from "./session-attendance.service";
-import { LEARNER_ADMISSION_PORT, LearnerAdmissionStatus } from "../../../platform/learner-admission.port";
 import {
   BBB_PLUGIN_OPTIONS,
   JOIN_STATUS_WAITING_FOR_TRAINER,
@@ -162,14 +161,6 @@ export class BbbMeetingService implements OnModuleInit {
     private readonly opsAlert: BbbOpsAlertService,
     @Inject(BBB_PROVISIONING_ENQUEUER)
     private readonly provisioningEnqueuer: BbbProvisioningEnqueuer,
-    @Inject(LEARNER_ADMISSION_PORT)
-    private readonly admissionPort: {
-      getStatus(
-        ctx: RequestContext,
-        customerId: ID,
-        channelId: string,
-      ): Promise<LearnerAdmissionStatus | null>;
-    },
     // W6: join URLs carry BBB's logoutURL, which is built from the documented
     // `storefrontUrl` option (falling back to STOREFRONT_URL) — the same
     // resolution the /create call uses, so the two can never diverge.
@@ -634,6 +625,9 @@ export class BbbMeetingService implements OnModuleInit {
       if (this.memberService.isModerator(member)) {
         return this.getModeratorJoinUrl(ctx, meetingId, participantName);
       }
+      if (await this.roomAccessService.isLearnerBlocked(ctx, customer.id)) {
+        throw new ForbiddenError();
+      }
       return this.getAttendeeJoinUrl(
         ctx,
         meetingId,
@@ -659,17 +653,7 @@ export class BbbMeetingService implements OnModuleInit {
       );
 
       if (hasSessionAccess) {
-        // BB2: suspended/revoked/left learners cannot join via entitlement
-        const status = await this.admissionPort.getStatus(
-          ctx,
-          customer.id as string,
-          String(ctx.channelId),
-        );
-        if (
-          status === "SUSPENDED" ||
-          status === "REVOKED" ||
-          status === "LEFT"
-        ) {
+        if (await this.roomAccessService.isLearnerBlocked(ctx, customer.id)) {
           throw new ForbiddenError();
         }
         return this.getAttendeeJoinUrl(
