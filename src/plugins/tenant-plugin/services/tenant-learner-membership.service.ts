@@ -120,6 +120,15 @@ export class TenantLearnerMembershipService {
     return membership?.status === 'ACTIVE';
   }
 
+  async getStatus(
+    ctx: RequestContext,
+    customerId: ID,
+    channelId: string,
+  ): Promise<'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'REVOKED' | 'LEFT' | null> {
+    const membership = await this.findOne(ctx, customerId, channelId);
+    return membership?.status ?? null;
+  }
+
   // ── Internal log writer ───────────────────────────────────────────────────
 
   private async writeLog(

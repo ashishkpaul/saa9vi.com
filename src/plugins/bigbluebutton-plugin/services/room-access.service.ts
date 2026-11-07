@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Inject } from "@nestjs/common";
 import { ID, RequestContext, TransactionalConnection } from "@vendure/core";
 
 import { BbbMemberService } from "./bbb-member.service";
@@ -12,6 +12,7 @@ import {
   deriveRoomAccess,
   RoomAccessDecision,
 } from "./room-access.policy";
+import { LEARNER_ADMISSION_PORT, LearnerAdmissionStatus } from "../../../platform/learner-admission.port";
 
 /**
  * INV-027 (BUG-045) — the ONE place room access is evaluated.
@@ -29,6 +30,10 @@ import {
  *   `BbbChannelAccessService.assertRoomAccess` when the room is fetched), and
  *   filtering by channelId here would reintroduce a preview-vs-join divergence
  *   for entitlement rows with a null channelId.
+ * - BB2: learner suspension is enforced here for learner-facing access
+ *   sources (entitlement, enrollment). Staff sources (membership,
+ *   legacyMember) are NOT blocked — a suspended learner who is also staff
+ *   still gets in through their staff membership.
  */
 @Injectable()
 export class BbbRoomAccessService {
@@ -36,7 +41,37 @@ export class BbbRoomAccessService {
     private readonly connection: TransactionalConnection,
     private readonly membershipService: BbbMembershipService,
     private readonly memberService: BbbMemberService,
+    @Inject(LEARNER_ADMISSION_PORT)
+    private readonly admissionPort: {
+      getStatus(
+        ctx: RequestContext,
+        customerId: ID,
+        channelId: string,
+      ): Promise<LearnerAdmissionStatus | null>;
+    },
   ) {}
+
+  /**
+   * BB2: a learner whose TenantLearnerMembership is SUSPENDED, REVOKED or
+   * LEFT is blocked from joining rooms through learner-facing access
+   * sources (entitlement, enrollment). Staff-facing sources (membership,
+   * legacyMember) are not blocked.
+   *
+   * Only explicit negative statuses block: SUSPENDED, REVOKED, LEFT.
+   * No membership row (null) and PENDING learners are NOT blocked, so
+   * purchase flows and trial attendees are not broken.
+   */
+  async isLearnerBlocked(
+    ctx: RequestContext,
+    customerId: ID,
+  ): Promise<boolean> {
+    const status = await this.admissionPort.getStatus(
+      ctx,
+      customerId,
+      String(ctx.channelId),
+    );
+    return status === "SUSPENDED" || status === "REVOKED" || status === "LEFT";
+  }
 
   async evaluate(
     ctx: RequestContext,
@@ -86,9 +121,22 @@ export class BbbRoomAccessService {
       entitlementRows[0] ??
       null;
 
-    return deriveRoomAccess(
+    const decision = deriveRoomAccess(
       { membership, legacyMember, entitlement, enrollment },
       now,
     );
+
+    // BB2: learner-facing access sources are blocked for suspended learners.
+    // Staff sources (membership, legacyMember) are not blocked.
+    if (
+      decision.allowed &&
+      decision.source !== "membership" &&
+      decision.source !== "legacy_member" &&
+      (await this.isLearnerBlocked(ctx, customerId))
+    ) {
+      return { allowed: false, isModerator: false, source: null };
+    }
+
+    return decision;
   }
 }
