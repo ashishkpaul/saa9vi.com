@@ -6,13 +6,14 @@
  *
  * Policy under test (BbbRoomAccessService.isLearnerBlocked):
  *   BLOCK  learner-facing access sources (entitlement / enrollment / session entitlement)
- *          when the learner's TenantLearnerMembership is SUSPENDED, REVOKED or LEFT.
- *   ALLOW  staff sources (org membership / moderator), PENDING learners, and learners
+ *          when the learner's TenantLearnerMembership is NOT ACTIVE
+ *          (SUSPENDED, REVOKED, LEFT or PENDING).
+ *   ALLOW  staff sources (org membership / moderator), and learners
  *          with NO membership row (purchase flows, trial attendees).
  *
  * Status transitions (tenant-learner-membership.service.ts):
  *   ACTIVE → SUSPENDED → ACTIVE (activateTenantLearner)      ← suspension round trip
- *   ACTIVE/PENDING → REVOKED (terminal) → readmit → PENDING  ← NOT a suspension restore
+ *   ACTIVE/PENDING → REVOKED (terminal) → readmit → PENDING  ← blocked until reactivated
  *
  * All state changes go through GraphQL. The only direct DB writes are the two personas
  * that cannot be created through the API (purchase entitlement with no membership row, and
@@ -125,6 +126,12 @@ const SUSPEND_TENANT_LEARNER = gql`
 const REVOKE_TENANT_LEARNER = gql`
   mutation Bb2Revoke($input: RevokeTenantLearnerInput!) {
     revokeTenantLearner(input: $input) { id status }
+  }
+`;
+
+const READMIT_TENANT_LEARNER = gql`
+  mutation Bb2Readmit($input: ReadmitTenantLearnerInput!) {
+    readmitTenantLearner(input: $input) { id status }
   }
 `;
 
@@ -456,10 +463,15 @@ describe('BB2: suspended learners are denied at join time', () => {
     await expectDenied(revoked);
   });
 
-  it.todo(
-    'DECISION: readmit() puts a REVOKED/LEFT learner in PENDING, and PENDING is currently NOT blocked — ' +
-      'so a readmitted learner regains rooms before activateTenantLearner. Decide, then pin it here.',
-  );
+  it('readmitted learner stays blocked (PENDING) until activated', async () => {
+    const r: any = await adminClient.query(READMIT_TENANT_LEARNER, {
+      input: { customerId: encode(revoked.customerId), reason: 'BB2 e2e' },
+    });
+    expect(r.readmitTenantLearner.status).toBe('PENDING');
+    await expectDenied(revoked);
+    await setStatus('activate', revoked);
+    await expectAllowed(revoked);
+  });
 
   // ─── Staff control ───────────────────────────────────────────────────────
 
@@ -481,7 +493,9 @@ describe('BB2: suspended learners are denied at join time', () => {
     await expectAllowed(purchaser);
   });
 
-  it('POLICY: a PENDING learner is not blocked', async () => {
+  it('POLICY: a PENDING learner is blocked until activated', async () => {
+    await expectDenied(pending);
+    await setStatus('activate', pending);
     await expectAllowed(pending);
   });
 
@@ -496,8 +510,7 @@ describe('BB2: suspended learners are denied at join time', () => {
     };
 
     const before = await attempt();
-    expect(String(before?.message ?? '')).not.toMatch(DENIED_PREVIEW);
-    expect(String(before?.message ?? '')).not.toMatch(/do not have access to this meeting/i);
+    expect(String(before?.message ?? '')).toMatch(/has not been provisioned yet/i);
 
     await setStatus('suspend', sessionLearner);
     const during = await attempt();
@@ -506,7 +519,6 @@ describe('BB2: suspended learners are denied at join time', () => {
 
     await setStatus('activate', sessionLearner);
     const after = await attempt();
-    expect(String(after?.message ?? '')).not.toMatch(DENIED_PREVIEW);
-    expect(String(after?.message ?? '')).not.toMatch(/do not have access to this meeting/i);
+    expect(String(after?.message ?? '')).toMatch(/has not been provisioned yet/i);
   });
 });

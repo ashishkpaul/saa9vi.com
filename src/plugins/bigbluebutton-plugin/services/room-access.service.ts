@@ -25,9 +25,9 @@ import { LEARNER_ADMISSION_PORT, LearnerAdmissionStatus } from "../../../platfor
  *   filtering by channelId here would reintroduce a preview-vs-join divergence
  *   for entitlement rows with a null channelId.
  * - BB2: learner suspension is enforced here for learner-facing access
- *   sources (entitlement, enrollment). Staff sources (membership,
- *   legacyMember) are NOT blocked — a suspended learner who is also staff
- *   still gets in through their staff membership.
+ *   sources (entitlement, enrollment, session entitlement). Staff sources
+ *   (membership, legacyMember) are NOT blocked — a suspended learner who is
+ *   also staff still gets in through their staff membership.
  */
 @Injectable()
 export class BbbRoomAccessService {
@@ -46,14 +46,15 @@ export class BbbRoomAccessService {
   ) {}
 
   /**
-   * BB2: a learner whose TenantLearnerMembership is SUSPENDED, REVOKED or
-   * LEFT is blocked from joining rooms through learner-facing access
-   * sources (entitlement, enrollment). Staff-facing sources (membership,
-   * legacyMember) are not blocked.
+   * BB2: a learner whose TenantLearnerMembership is not ACTIVE is blocked
+   * from joining rooms through learner-facing access sources (entitlement,
+   * enrollment, session entitlement).
    *
-   * Only explicit negative statuses block: SUSPENDED, REVOKED, LEFT.
-   * No membership row (null) and PENDING learners are NOT blocked, so
-   * purchase flows and trial attendees are not broken.
+   * Only explicit ACTIVE status passes. SUSPENDED, REVOKED, LEFT and PENDING
+   * all block, because a PENDING learner (admitted or readmitted but not yet
+   * activated) has not been approved for academy access. No membership row
+   * (null) does NOT block, so purchase flows and trial attendees are not
+   * broken.
    */
   async isLearnerBlocked(
     ctx: RequestContext,
@@ -64,7 +65,7 @@ export class BbbRoomAccessService {
       customerId,
       String(ctx.channelId),
     );
-    return status === "SUSPENDED" || status === "REVOKED" || status === "LEFT";
+    return status !== null && status !== "ACTIVE";
   }
 
   async evaluate(

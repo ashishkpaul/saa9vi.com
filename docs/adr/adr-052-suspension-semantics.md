@@ -1,7 +1,8 @@
 # ADR-052 — Academy Admission Suspension vs Customer Checkout Suspension
 
-**Status:** DECISION REQUIRED  
-**Date:** 1 November 2026
+**Status:** ACCEPTED  (**Option B**)  
+**Date:** 7 November 2026
+**Decided:** Block `TenantLearnerMembership.status = NOT ACTIVE` (SUSPENDED, REVOKED, LEFT or PENDING) from BBB join paths. Only `ACTIVE` passes. No membership row (null) does NOT block.
 
 ---
 
@@ -49,13 +50,15 @@ Define whether an academy admission suspension (`TenantLearnerMembership.status 
 3. **Revoke existing BBB entitlements?** — Currently: no. Existing `BbbEntitlement` rows remain live until expiry. Should academy suspension also revoke or expire live entitlements?
 4. **Block new checkout?** — Currently: no. Should academy suspension also set `CustomerChannelStatus = Suspended` to block checkout?
 
-## Proposed default (pending confirmation)
+## Decision (accepted)
 
-- Academy suspension blocks new admission, new course enrollment, and new BBB joins.
-- Academy suspension does **not** revoke existing BBB entitlements (they expire naturally).
-- Academy suspension does **not** automatically block checkout (that is `CustomerChannelStatus`'s separate concern).
-- Platform-wide suspension (`Customer.customFields.status = Suspended`) remains independent and SuperAdmin-only.
+Academy suspension blocks new BBB joins at join time (not only at grant time):
+
+1. **Block new BBB joins?** — Yes. `BbbRoomAccessService.isLearnerBlocked()` blocks any non-null status that is not `ACTIVE` (SUSPENDED, REVOKED, LEFT or PENDING). Checked for learner-facing access sources (entitlement, enrollment, session entitlement). Staff sources (membership, legacyMember) are NOT blocked.
+2. **Revoke existing BBB entitlements?** — No. Existing `BbbEntitlement` rows remain live until natural expiry; suspension does NOT revoke them.
+3. **Block new checkout?** — No. Academy suspension does not set `CustomerChannelStatus = Suspended`; those are separate concerns.
+4. **PENDING membership** — Blocked until activated via `activateTenantLearner`. Readmitted learners (REVOKED → PENDING) stay blocked until activation.
 
 ## Gate
 
-Do not merge academy suspension into `CustomerChannelStatus` or vice versa without an explicit product decision on items 1–4 above. C-14 is documentation-only until the decision is made.
+Do not merge academy suspension into `CustomerChannelStatus` or vice versa without an explicit product decision.
