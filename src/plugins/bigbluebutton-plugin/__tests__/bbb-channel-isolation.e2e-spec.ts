@@ -3382,7 +3382,6 @@ describe('BBB Channel Isolation (Phase A)', () => {
             customerId: customerBId,
             type,
             resourceId,
-            source: 'admin',
           },
         }),
       );
@@ -3398,7 +3397,6 @@ describe('BBB Channel Isolation (Phase A)', () => {
           customerId: customerAId,
           type: 'bbb_room',
           resourceId: roomAId,
-          source: 'admin',
         },
       });
       expect(res.createBbbEntitlement.id).toBeTruthy();
@@ -3501,7 +3499,6 @@ describe('BBB Channel Isolation (Phase A)', () => {
           customerId: customerAId,
           type: 'bbb_room',
           resourceId: roomAId,
-          source: 'admin',
         },
       });
       const newRawId = String(reGrant.createBbbEntitlement.id).replace(/^T_/, '');
@@ -3585,7 +3582,6 @@ describe('BBB Channel Isolation (Phase A)', () => {
         customerId: customerAId,
         type: 'bbb_room',
         resourceId: roomAId,
-        source: 'admin',
       };
       const results: any[] = await Promise.all(
         Array.from({ length: 4 }, () =>
