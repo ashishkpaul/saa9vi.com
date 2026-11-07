@@ -4,14 +4,8 @@ import { ID, RequestContext, TransactionalConnection } from "@vendure/core";
 import { BbbMemberService } from "./bbb-member.service";
 import { BbbMembershipService } from "./bbb-membership.service";
 import { BbbEnrollment } from "../entities/bbb-enrollment.entity";
-import {
-  BbbEntitlement,
-  isEntitlementRowLive,
-} from "../entities/bbb-entitlement.entity";
-import {
-  deriveRoomAccess,
-  RoomAccessDecision,
-} from "./room-access.policy";
+import { BbbEntitlement, isEntitlementRowLive } from "../entities/bbb-entitlement.entity";
+import { deriveRoomAccess, RoomAccessDecision } from "./room-access.policy";
 import { LEARNER_ADMISSION_PORT, LearnerAdmissionStatus } from "../../../platform/learner-admission.port";
 
 /**
