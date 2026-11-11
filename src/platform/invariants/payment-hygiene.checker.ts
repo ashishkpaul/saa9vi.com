@@ -11,14 +11,15 @@ import { CheckResult, Checker } from './runner';
  *
  *   1. Tenant role keeps ReadPaymentMethod but NOT Create/Update/Delete.
  *   2. vendure-config gates dummyPaymentHandler behind dev/test.
- *   3. Tenant auto-provision filters to the Razorpay handler code.
+ *   3. Tenant auto-provision does NOT assign Saa9vi's platform payment method
+ *      to tenant channels (tenant-client collections are tenant-owned).
  *   4. PaymentsProductionGuard refuses non-dev boot with dummy rows.
  *
- * Live per-channel state (every non-dev channel has an enabled Razorpay
- * method, none has dummy) is enforced at RUNTIME by
- * PaymentsProductionGuard.onApplicationBootstrap, not here — this CLI has
- * no database connection. In dev the runtime guard is intentionally
- * skipped; this checker reports that skip explicitly via checkRuntimeSkip().
+ * Live per-channel state (no enabled dummy payment methods in non-dev) is
+ * enforced at RUNTIME by PaymentsProductionGuard.onApplicationBootstrap, not
+ * here — this CLI has no database connection. In dev the runtime guard is
+ * intentionally skipped; this checker reports that skip explicitly via
+ * checkRuntimeSkip().
  */
 export class PaymentHygieneChecker implements Checker {
   name = 'payment-hygiene';
@@ -27,7 +28,7 @@ export class PaymentHygieneChecker implements Checker {
     const checks: Array<{ name: string; passed: boolean; detail?: string }> = [
       this.tenantRoleReadOnly(),
       this.dummyGatedInConfig(),
-      this.provisionFiltersToRazorpay(),
+      this.noPlatformPaymentMethodAutoAssigned(),
       this.productionGuardRegistered(),
     ];
     const failed = checks.filter((c) => !c.passed);
@@ -50,7 +51,7 @@ export class PaymentHygieneChecker implements Checker {
     if (process.env.APP_ENV === 'dev' || !process.env.APP_ENV) {
       return 'Runtime per-channel check skipped (dev: PaymentsProductionGuard no-ops by design).';
     }
-    return 'Runtime per-channel check active (PaymentsProductionGuard enforces at boot).';
+    return 'Runtime per-channel check active (PaymentsProductionGuard rejects enabled dummy handlers at boot).';
   }
 
   private read(rel: string): string {
@@ -87,13 +88,22 @@ export class PaymentHygieneChecker implements Checker {
     };
   }
 
-  private provisionFiltersToRazorpay() {
+  private noPlatformPaymentMethodAutoAssigned() {
     const src = this.read('src/plugins/tenant-plugin/services/tenant-registration.service.ts');
-    const filtered = src.includes('RAZORPAY_HANDLER_CODE') && src.includes('razorpayMethods');
+    // The auto-provision block that copied platform Razorpay methods to tenant
+    // channels has been removed. Future tenant-owned payment methods may be
+    // registered separately; this check only verifies the platform Razorpay
+    // handler is not imported and PaymentMethodService is not injected for
+    // auto-assigning platform methods to tenant channels.
+    const noAutoAssign =
+      !src.includes('RAZORPAY_HANDLER_CODE') &&
+      !src.includes('paymentMethodService');
     return {
-      name: 'auto-provision-razorpay-only',
-      passed: filtered,
-      detail: filtered ? undefined : 'autoProvisionChannelResources must filter to RAZORPAY_HANDLER_CODE',
+      name: 'no-platform-payment-method-auto-assigned',
+      passed: noAutoAssign,
+      detail: noAutoAssign
+        ? undefined
+        : 'autoProvisionChannelResources must not import RAZORPAY_HANDLER_CODE or inject PaymentMethodService for platform method auto-assignment',
     };
   }
 

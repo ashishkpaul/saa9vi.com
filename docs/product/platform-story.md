@@ -108,14 +108,14 @@ Internal rooms are `BbbRoom` entities with `productVariantId = null`. They are n
 Student searches marketplace.saa9vi.com
   → MarketplaceSearchResolver queries ES index
   → Result links to tenant storefront
-  → Student redirected to mehta.saa9vi.com
-  → Commerce happens on tenant channel
-  → CommissionLedger records row (even at 0%)
+  → Student redirected to tenant storefront
+  → Commerce happens on tenant channel (tenant-owned collections)
+  → CommissionLedger records $0 row (GMV + attribution history only)
 ```
 
 The marketplace is a **discovery layer only**. It does not transact. The platform-level Elasticsearch indices (`saa9vi_marketplace_sessions`, `saa9vi_marketplace_instructors`) are derived read projections. All writes (orders, entitlements, billing) go through channel-scoped Vendure Shop API.
 
-**CommissionLedger $0-row pattern:** A commission row is written for every `orderSource = 'marketplace'` order regardless of the current `MARKETPLACE_COMMISSION_PERCENT` rate. When the rate is 0%, the row is written with `amountInPaise: 0` to preserve complete GMV history.
+**CommissionLedger $0-row pattern:** A commission row is written for every `orderSource = 'marketplace'` order. Commission is permanently 0% under ADR-051 (Option C) — the row carries `commissionPercent: 0` and `commissionAmountInPaise: 0` to preserve complete marketplace GMV and attribution history for analytics. No commission is ever calculated, deducted, or payable.
 
 > **ⓘ Note:** `orderSource` is classified and stamped by Vendure-side logic from a signed opaque `marketplaceRef`. The server verifies the reference — HMAC signature, validity window, channel/resource relationship, and single-use replay constraint — before classification. The storefront never chooses `orderSource` directly (INV-008; ADR-021).
 
@@ -203,13 +203,13 @@ Every 60 seconds, `BbbReconciliationService` runs three loops:
 
 ## Revenue Model
 
-Saa9vi has four distinct commercial/usage streams. Tenant subscription billing and BBB usage billing are separate lifecycles and records; marketplace commission and advertising are separate platform revenue streams.
+Saa9vi has three distinct commercial/usage streams. Tenant subscription billing and BBB usage billing are separate lifecycles and records; marketplace commission is permanently 0% under ADR-051 (Option C).
 
 | Stream | What it charges | Control mechanism | Ledger / source of truth |
 |---|---|---|---|
 | **1 — SaaS Subscription** | Tenant plan / recurring subscription | `SubscriptionPlan` + Razorpay recurring lifecycle | `OrganizationSubscription` + provider binding/mandate + `SubscriptionBillingAttempt` + webhook inbox/reconciliation |
 | **2 — BBB Usage** | Actual live-teaching / BBB usage | Capacity grants and usage policy | `BbbUsageLedger` append-only usage facts |
-| **3 — Marketplace Commission** | % of marketplace-originated order | `MARKETPLACE_COMMISSION_PERCENT` env var (default 0%) | `CommissionLedger` always records marketplace attribution, including $0 rows |
+| **3 — Marketplace Commission** | 0% permanently — no commission on tenant-client collections | `MARKETPLACE_COMMISSION_PERCENT` env var (must be 0; non-zero aborts boot) | `CommissionLedger` always records marketplace attribution, including $0 rows (GMV + history only) |
 | **4 — Advertising** | Sponsored listings / campaign spend | Tenant-initiated `AdWallet` funding and campaign controls | `AdSpendLedger` actual spend facts |
 
 ## Workflow Diagram

@@ -167,6 +167,16 @@ import {
       list: false,
     });
     }
+    if (!config.customFields.Order.some((f) => f.name === 'paymentPurpose')) {
+    config.customFields.Order.push({
+      name: 'paymentPurpose',
+      type: 'string',
+      nullable: true,
+      readonly: true,
+      label: [{ languageCode: LanguageCode.en, value: 'Payment Purpose (platform-controlled)' }],
+      list: false,
+    });
+    }
 
     // Register Settings Store fields for the Bayesian baseline (3D.1a/3D.1b).
     config.settingsStoreFields ??= {};
@@ -230,5 +240,6 @@ declare module '@vendure/core' {
   interface CustomOrderFields {
     orderSource?: 'marketplace' | 'referral' | 'direct' | null;
     marketplaceRef?: string | null;
+    paymentPurpose?: 'platform-service' | 'tenant-client' | null;
   }
 }

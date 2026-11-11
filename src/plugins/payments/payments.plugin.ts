@@ -17,8 +17,8 @@ const loggerCtx = 'PaymentsPlugin';
 
 /**
  * Commit 1 hygiene guard: in any non-dev deployment, boot must fail when a
- * PaymentMethod row still uses the dummy handler — tenants must pay through
- * the platform Razorpay method. Dev/test keep the dummy for e2e fixtures.
+ * PaymentMethod row still uses the dummy handler — tenants must not pay
+ * through a dev-only dummy handler. Dev/test keep the dummy for e2e fixtures.
  */
 @Injectable()
 export class PaymentsProductionGuard implements OnApplicationBootstrap {
@@ -58,6 +58,11 @@ export class PaymentsProductionGuard implements OnApplicationBootstrap {
  * Orders/Payments API, checkout signature verification, and `PaymentSettled`
  * settlement. Recurring billing stays in `SubscriptionPlugin`
  * (`production-readiness.md` §7/§9 keep the two provider lifecycles separate).
+ *
+ * Flow A only: this handler uses Saa9vi's platform Razorpay credentials for
+ * tenant-admin payments to Saa9vi (Flow A). Tenant-client collections (Flow B)
+ * are outside this plugin's scope — tenants collect directly through their
+ * own Razorpay account (future phase, ADR-051 Option C).
  *
  * It does not own fulfillment: downstream access (entitlement + capacity grant)
  * is produced by the BigBlueButton plugin from the `PaymentSettled` transition —

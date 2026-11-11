@@ -68,7 +68,8 @@ const IS_DEV = process.env.APP_ENV === "dev";
 const IS_TEST = process.env.NODE_ENV === "test";
 // Commit 1 hygiene: dummyPaymentHandler is dev/test only. Production boot
 // must fail if any PaymentMethod row still uses it (see PaymentsPlugin
-// onApplicationBootstrap guard) — tenants use the platform Razorpay method.
+// onApplicationBootstrap guard). The platform Razorpay method is for Flow A
+// only (tenant admin pays Saa9vi); tenant-client collections are tenant-owned.
 const allowDummyPaymentHandler = IS_DEV || IS_TEST;
 const serverPort = 3000;
 

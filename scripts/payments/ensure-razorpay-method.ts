@@ -1,21 +1,31 @@
 /**
- * Commit 1 checklist item 3 — Razorpay PaymentMethod provisioning (GraphQL-only).
+ * Commit 1 checklist item 3 — Razorpay PaymentMethod provisioning runbook (manual stub).
+ *
+ * THIS SCRIPT IS NOT OPERATIONAL. It prints instructions only; it does not
+ * create or assign any PaymentMethod through GraphQL. Token-based
+ * authenticated GraphQL operations have not been wired. Use the Admin UI or
+ * Admin GraphQL API directly until this script is implemented.
  *
  * Creates ONE platform PaymentMethod (code 'razorpay', handler 'razorpay') in
- * the default channel when none exists, then assigns it to every channel
- * lacking it. Idempotent; safe to re-run.
+ * the default channel when none exists, then assigns it to the default channel
+ * only. Tenant channels must NOT inherit the platform Razorpay method —
+ * tenant-client collections are tenant-owned (ADR-051, Option C).
+ *
+ * Per-tenant Razorpay configuration (tenant's own credentials) is a future
+ * phase and is not handled by this script.
  *
  * Usage:
- *   ts-node scripts/payments/ensure-razorpay-method.ts --dry-run   # print channel|method table, change nothing
- *   ts-node scripts/payments/ensure-razorpay-method.ts --apply      # create + assign
+ *   ts-node scripts/payments/ensure-razorpay-method.ts --dry-run   # print instructions, change nothing
+ *   ts-node scripts/payments/ensure-razorpay-method.ts --apply      # print instructions, change nothing
  *
  * Safety:
  *   - GraphQL Admin API only — no direct DB writes.
  *   - Refuses to run when APP_ENV=dev unless --force is passed.
  *   - Handler args are taken from env and NEVER printed.
- *   - DO NOT run against the dev DB without explicit approval (dev checkout
- *     depends on the dummy method; see Commit 1 audit).
+ *   - DO NOT run against tenant channels — the platform Razorpay method must
+ *     never be assigned to tenant channels.
  */
+
 import 'dotenv/config';
 
 const ADMIN_API = process.env.ADMIN_API_URL ?? 'http://localhost:3000/admin-api';
@@ -63,9 +73,6 @@ async function main() {
     process.exit(1);
   }
 
-  // NOTE: @vendure/testing token flow differs; for a raw fetch session we
-  // rely on cookie auth. Re-login via authenticated fetch is out of scope —
-  // this script is a pre-launch runbook step, reviewed before use.
   console.log('=== Razorpay PaymentMethod provisioning ===');
   console.log(`Mode: ${dryRun ? 'DRY-RUN (no changes)' : 'APPLY'}`);
   console.log(`Admin API: ${ADMIN_API}`);
@@ -73,10 +80,12 @@ async function main() {
   console.log('Planned method:');
   console.log(`  code: ${RAZORPAY_METHOD_CODE}`);
   console.log(`  handler: ${RAZORPAY_HANDLER_CODE} (args from env, never printed)`);
+  console.log('  channel scope: Default channel only (Flow A — tenant admin pays Saa9vi)');
+  console.log('  tenant channels: NOT assigned (tenant-owned collections)');
   console.log('');
   console.log('Next (manual until token flow is wired):');
   console.log('  1. Admin UI → Settings → Payment methods → create code=razorpay, handler=razorpay.');
-  console.log('  2. Assign to every channel (Channels tab on the method).');
+  console.log('  2. Assign to the Default channel only — NEVER to tenant channels.');
   console.log('  3. Re-run this script with --apply once token auth lands.');
   console.log('');
   console.log('Dry-run table: channel | method — requires an authenticated session (not yet wired).');

@@ -8,7 +8,6 @@ import {
   ConfigService,
   EventBus,
   ID,
-  PaymentMethodService,
   RequestContext,
   RequestContextService,
   Role,
@@ -26,7 +25,6 @@ import { Repository } from 'typeorm';
 import { TenantRegistrationLog } from '../entities/tenant-registration-log.entity';
 import { TenantProfileService } from './tenant-profile.service';
 import { TENANT_ADMIN_ROLE_PERMISSIONS } from '../constants';
-import { RAZORPAY_HANDLER_CODE } from '../../payments/constants';
 
 const loggerCtx = 'TenantRegistrationService';
 
@@ -104,7 +102,6 @@ export class TenantRegistrationService {
     private readonly configService: ConfigService,
     private readonly requestContextService: RequestContextService,
     private readonly shippingMethodService: ShippingMethodService,
-    private readonly paymentMethodService: PaymentMethodService,
     private readonly stockLocationService: StockLocationService,
     private readonly userService: UserService,
     private readonly eventBus: EventBus,
@@ -441,35 +438,16 @@ export class TenantRegistrationService {
       Logger.warn(`Failed to assign shipping methods to channel ${newChannel.code}: ${e.message}`, loggerCtx);
     }
 
-    // PaymentMethods — Commit 1 hygiene: assign only the platform Razorpay
-    // method(s); never copy a dummy/dev method onto a tenant channel.
-    try {
-      const { items: paymentMethods } = await this.paymentMethodService.findAll(ctx);
-      const razorpayMethods = paymentMethods.filter(
-        (m) => (m.handler as { code?: string })?.code === RAZORPAY_HANDLER_CODE,
-      );
-      const skipped = paymentMethods.length - razorpayMethods.length;
-      if (skipped > 0) {
-        Logger.warn(
-          `Skipped ${skipped} non-Razorpay payment method(s) for channel ${newChannel.code} (Commit 1 hygiene)`,
-          loggerCtx,
-        );
-      }
-      if (razorpayMethods.length > 0) {
-        await this.paymentMethodService.assignPaymentMethodsToChannel(ctx, {
-          channelId: newChannel.id,
-          paymentMethodIds: razorpayMethods.map((m) => m.id),
-        });
-        Logger.log(`Assigned ${razorpayMethods.length} Razorpay payment method(s) to channel ${newChannel.code}`, loggerCtx);
-      } else {
-        Logger.warn(
-          `No Razorpay payment method to assign to channel ${newChannel.code} — checkout will fail until a platform admin creates one`,
-          loggerCtx,
-        );
-      }
-    } catch (e: any) {
-      Logger.warn(`Failed to assign payment methods to channel ${newChannel.code}: ${e.message}`, loggerCtx);
-    }
+    // PaymentMethods — No platform payment method is auto-assigned to tenant
+    // channels. Tenant-client collections are tenant-owned; the platform
+    // Razorpay method (Saa9vi credentials) is used only for Flow A (tenant
+    // admin pays Saa9vi for platform services). Per-tenant Razorpay
+    // configuration is a future phase (ADR-051, Option C, implementation
+    // deferred).
+    Logger.log(
+      `No platform payment method auto-assigned to channel ${newChannel.code} (tenant-owned collections)`,
+      loggerCtx,
+    );
 
     // StockLocations
     try {

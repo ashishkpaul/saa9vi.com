@@ -326,18 +326,19 @@
 
 **Status:** Active
 
-**Decision:** Three-stream revenue model: subscription + commission + advertising.
+**Decision:** Three-stream revenue model: subscription + (0% commission) + advertising. Marketplace commission is permanently 0% under ADR-051 (Option C). The CommissionLedger writes $0 rows per marketplace order for GMV and attribution history only — no commission is calculated, deducted, or payable.
 
-**Rationale:** Streams are additive and reinforce each other. Subscription provides predictable base revenue. Commission aligns Saa9vi's growth with academy growth. Advertising creates a self-serve high-margin stream. Zero commission on direct traffic protects academy relationships.
+**Rationale:** Streams are additive and reinforce each other. Subscription provides predictable base revenue (tenant admin pays Saa9vi for platform services). Marketplace commission is permanently 0% — tenant-client collections belong entirely to the tenant. Advertising creates a self-serve high-margin stream (tenant pays Saa9vi for marketplace banner/sponsored placement). Zero commission on direct traffic protects academy relationships.
 
 **Alternatives Rejected:**
 
 - Single-stream SaaS only (leaves growth revenue on table)
 - Commission on all traffic (penalises academies for existing students, risks churn)
+- Non-zero marketplace commission (violates ADR-051 Option C — Saa9vi does not participate in tenant revenue)
 
 **Open Design Questions:**
 
-- **Stream 2 commission attribution:** `Order.customFields.orderSource = 'marketplace'` must be set at checkout for commission attribution. **Resolved by the ADR-021 addendum below (Marketplace Attribution Contract).** The storefront passes an opaque, signed `marketplaceRef`; Vendure-side logic verifies and classifies the order. The storefront never stamps `orderSource` directly (INV-008). See RFC-001 Appendix C-2 for the subscription checkout equivalent.
+- **Stream 2 commission attribution:** `Order.customFields.orderSource = 'marketplace'` is set at checkout for marketplace attribution (analytics only — commission is 0%). **Resolved by the ADR-021 addendum below (Marketplace Attribution Contract).** The storefront passes an opaque, signed `marketplaceRef`; Vendure-side logic verifies and classifies the order. The storefront never stamps `orderSource` directly (INV-008). See RFC-001 Appendix C-2 for the subscription checkout equivalent.
 
 ---
 
@@ -530,15 +531,16 @@ The client carries a signed reference but **cannot** choose `orderSource = 'mark
 
 **Status:** Active
 
-**Decision:** `CommissionLedger` always writes a row per marketplace order, even at 0% rate ($0 rows). The env var is named `MARKETPLACE_COMMISSION_PERCENT` (not `PLATFORM_FEE_PERCENT`).
+**Decision:** `CommissionLedger` always writes a row per marketplace order, even at 0% rate ($0 rows). The env var is named `MARKETPLACE_COMMISSION_PERCENT` (not `PLATFORM_FEE_PERCENT`). Commission is permanently 0% under ADR-051 (Option C) — any non-zero value aborts boot.
 
-**Rationale:** Three-stream revenue model has three separate control mechanisms. Stream 2 (marketplace commission) is the only one where "the event happened but the rate is zero" is a recurring state worth recording. Writing $0 rows preserves complete `orderSource = 'marketplace'` GMV history so future rate changes have full historical data. The env var name must be unambiguous about which stream it controls.
+**Rationale:** Three-stream revenue model has three separate control mechanisms. Stream 2 (marketplace commission) records marketplace attribution and GMV history at 0% commission. Writing $0 rows preserves complete `orderSource = 'marketplace'` GMV and attribution history for analytics. No commission is ever calculated, deducted, or payable. The env var name must be unambiguous about which stream it controls, and must reject any non-zero value at startup.
 
 **Alternatives Rejected:**
 
 - `PLATFORM_FEE_PERCENT` (ambiguous — reads like it controls all three streams)
-- Not writing $0 rows (loses GMV history when rate is turned up later)
+- Not writing $0 rows (loses GMV history)
 - Applying $0-row pattern to Stream 1 or 3 (incorrect — absence of rows in those streams correctly means no usage/no ad spend)
+- Configurable non-zero commission (violates ADR-051 Option C)
 
 ---
 

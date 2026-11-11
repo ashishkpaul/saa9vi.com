@@ -13,6 +13,15 @@ let checkoutService: RazorpayCheckoutService;
 /**
  * R3 — one-time Razorpay payment handler (single-step settlement, decision 2).
  *
+ * Flow A only: this handler uses Saa9vi's platform Razorpay credentials
+ * (RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET) and is reserved for tenant-admin
+ * payments to Saa9vi for platform services (subscription, BBB usage,
+ * advertising, optional storefront hosting).
+ *
+ * It must NOT be used for Flow B (tenant-client collections). Tenant clients
+ * pay the tenant directly through the tenant's own Razorpay account — a
+ * separate integration deferred to a future phase (ADR-051, Option C).
+ *
  * `createPayment` never trusts client input on its own: every path re-reads the
  * Razorpay order + payment server-to-server, and SHOP traffic must additionally
  * present a valid HMAC-SHA256 checkout signature (see

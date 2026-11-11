@@ -180,7 +180,9 @@ subscriber that emits the ops-alert channel (`BbbCapacityAlertListener` →
 
 ## DL-030: CommissionLedger $0-Row Pattern (Stream 2 Only)
 
-**Rule:** `CommissionLedger` rows are written for every marketplace order regardless of the current `MARKETPLACE_COMMISSION_PERCENT` rate. When the rate is 0%, rows are written with `amountInPaise: 0`. This preserves complete `orderSource = 'marketplace'` GMV history.
+**Rule:** `CommissionLedger` rows are written for every marketplace order. Commission is permanently 0% under ADR-051 (Option C) — every row carries `commissionPercent: 0` and `commissionAmountInPaise: 0`. No commission is ever calculated, deducted, or payable. The `MARKETPLACE_COMMISSION_PERCENT` env var must be 0; any non-zero value aborts boot.
+
+This pattern preserves complete `orderSource = 'marketplace'` GMV and attribution history for analytics. It does **not** imply commission can be enabled later.
 
 This pattern does **not** apply to Stream 1 (`BbbUsageLedger`) or Stream 3 (`AdSpendLedger`).
 

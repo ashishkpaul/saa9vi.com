@@ -55,6 +55,30 @@ export class RazorpayCheckoutService {
     return this.client.isConfigured();
   }
 
+  /**
+   * Platform-service payment policy (ADR-051, Option C).
+   *
+   * This checkout service uses Saa9vi's platform Razorpay credentials and is
+   * reserved for Flow A — tenant admin pays Saa9vi for platform services.
+   * Tenant-client collections (Flow B) must NOT be settled through this
+   * handler. The order must carry an explicit server-set paymentPurpose
+   * of 'platform-service'; orderSource is an attribution field stamped
+   * after order placement and must NOT be used as a payee boundary.
+   *
+   * Called from both createCheckoutOrder() and verifyAndSettle() so that
+   * neither the checkout-creation path nor the settlement path can be used
+   * by a tenant-client order.
+   */
+  assertPlatformServicePayment(order: Order): void {
+    const paymentPurpose = (order.customFields as { paymentPurpose?: string } | null)?.paymentPurpose;
+    if (paymentPurpose !== 'platform-service') {
+      throw new RazorpayApiError(
+        0,
+        'Platform Razorpay checkout is only available for Saa9vi platform service charges. Tenant-client collections belong to the tenant.',
+      );
+    }
+  }
+
   /** Creates the Razorpay order that the browser will open Checkout against. */
   async createCheckoutOrder(
     ctx: RequestContext,
@@ -69,6 +93,8 @@ export class RazorpayCheckoutService {
     if (order.state !== 'ArrangingPayment') {
       throw new RazorpayApiError(0, `Order must be in ArrangingPayment state (got ${order.state})`);
     }
+
+    this.assertPlatformServicePayment(order);
 
     const razorpayOrder = await this.client.createOrder({
       amountMinor: order.totalWithTax,
@@ -102,6 +128,8 @@ export class RazorpayCheckoutService {
     order: Order,
     metadata: unknown,
   ): Promise<SettleOutcome> {
+    this.assertPlatformServicePayment(order);
+
     const md = extractCheckoutMetadata(metadata);
     if (!md) {
       return this.fail(
