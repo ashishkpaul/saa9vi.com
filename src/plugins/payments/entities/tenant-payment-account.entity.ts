@@ -16,12 +16,12 @@ export class TenantPaymentAccount extends VendureEntity {
   }
 
   /** Owning tenant channel (INV-001: Channel = Tenant, scalar). */
-
   @Index()
   @Column('varchar')
   channelId: ID;
 
   /** Payment provider — always 'razorpay' in Phase 2. */
+  @Index()
   @Column('varchar')
   provider: string;
 
