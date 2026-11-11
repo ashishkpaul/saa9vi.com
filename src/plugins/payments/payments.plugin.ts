@@ -1,4 +1,5 @@
 import { PluginCommonModule, RuntimeVendureConfig, VendurePlugin, TransactionalConnection, PaymentMethod } from '@vendure/core';
+import { DocumentNode, Kind } from 'graphql';
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { razorpayPaymentHandler } from './config/razorpay-payment-handler';
 import { RazorpayOrdersClient } from './services/razorpay-orders.client';
@@ -15,11 +16,23 @@ import { TenantPaymentEncryptionService } from './services/tenant-payment-encryp
 import { TenantPaymentAccountService } from './services/tenant-payment-account.service';
 import { tenantPaymentAdminSchema } from './api/tenant-payment-admin.schema';
 import { TenantPaymentAdminResolver } from './api/tenant-payment-admin.resolver';
+import { TenantRazorpayOrdersClient } from './services/tenant-razorpay-orders.client';
+import { TenantRazorpayService } from './services/tenant-razorpay.service';
+import { tenantRazorpayShopApiExtensions } from './api/tenant-razorpay-shop.schema';
+import { TenantRazorpayShopResolver } from './api/tenant-razorpay-shop.resolver';
 
 /** Vendure core handler code for the dev-only dummy payment handler. */
 export const DUMMY_PAYMENT_HANDLER_CODE = 'dummy-payment-handler';
 
 const loggerCtx = 'PaymentsPlugin';
+
+/** Concatenates multiple GraphQL schema-extension documents into one. */
+function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
+  return {
+    kind: Kind.DOCUMENT,
+    definitions: docs.flatMap((doc) => doc.definitions),
+  };
+}
 
 /**
  * Commit 1 hygiene guard: in any non-dev deployment, boot must fail when a
@@ -86,11 +99,16 @@ export class PaymentsProductionGuard implements OnApplicationBootstrap {
     // Phase 2 — per-tenant Razorpay
     TenantPaymentEncryptionService,
     TenantPaymentAccountService,
+    TenantRazorpayOrdersClient,
+    TenantRazorpayService,
   ],
   controllers: [RazorpayPaymentsWebhookController],
   shopApiExtensions: {
-    schema: razorpayShopApiExtensions,
-    resolvers: [RazorpayShopResolver],
+    schema: concatApiExtensions(
+      razorpayShopApiExtensions,
+      tenantRazorpayShopApiExtensions,
+    ),
+    resolvers: [RazorpayShopResolver, TenantRazorpayShopResolver],
   },
   adminApiExtensions: {
     schema: tenantPaymentAdminSchema,
