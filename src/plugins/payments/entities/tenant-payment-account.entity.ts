@@ -50,7 +50,7 @@ export class TenantPaymentAccount extends VendureEntity {
   isEnabled: boolean;
 
   /** Last successful Razorpay connection test (nullable). */
-  @Column('datetime', { nullable: true })
+  @Column('timestamp', { nullable: true })
   lastVerifiedAt: Date | null;
 
   /** Unique account per tenant per provider. */
