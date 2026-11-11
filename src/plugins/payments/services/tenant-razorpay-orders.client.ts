@@ -98,6 +98,23 @@ export class TenantRazorpayOrdersClient {
     );
   }
 
+  /**
+   * Fetch account details to verify credentials are valid.
+   * Uses the Razorpay "fetch all payments" endpoint with limit=1 as a
+   * lightweight credential check (returns 200 if credentials are valid).
+   */
+  async fetchAccount(
+    keyId: string,
+    keySecret: string,
+  ): Promise<{ id: string; name: string; email: string }> {
+    return this.request<{ id: string; name: string; email: string }>(
+      keyId,
+      keySecret,
+      'GET',
+      '/accounts?count=1',
+    );
+  }
+
   async capturePayment(
     keyId: string,
     keySecret: string,

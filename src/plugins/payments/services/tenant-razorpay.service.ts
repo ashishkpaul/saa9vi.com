@@ -61,6 +61,22 @@ export class TenantRazorpayService {
       channelId,
     );
 
+    // Only allow checkout if account is active AND enabled.
+    const account = await this.accountService.findByChannel(ctx, channelId);
+    if (!account) {
+      throw new NotFoundException('No Razorpay payment account found');
+    }
+    if (account.status !== 'active') {
+      throw new Error(
+        `Razorpay gateway is not verified (status: ${account.status}). Verify credentials first.`,
+      );
+    }
+    if (!account.isEnabled) {
+      throw new Error(
+        'Razorpay gateway is disabled. Enable it in Payment Gateways settings.',
+      );
+    }
+
     // Find the order and verify it belongs to this channel.
     const orderRepo = this.connection.getRepository(ctx, 'Order');
     const order = orderId
@@ -110,6 +126,21 @@ export class TenantRazorpayService {
       currency: razorpayOrder.currency,
       keyId: credentials.keyId,
     };
+  }
+
+  /**
+   * Verify tenant Razorpay credentials by fetching account details.
+   * Used during tenant payment account verification.
+   */
+  async verifyCredentials(keyId: string, keySecret: string): Promise<void> {
+    try {
+      await this.client.fetchAccount(keyId, keySecret);
+    } catch (err: any) {
+      if (err instanceof TenantRazorpayApiError) {
+        throw new Error(err.providerMessage);
+      }
+      throw err;
+    }
   }
 
   /**

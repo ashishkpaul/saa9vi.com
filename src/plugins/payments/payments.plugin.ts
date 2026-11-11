@@ -20,6 +20,7 @@ import { TenantRazorpayOrdersClient } from './services/tenant-razorpay-orders.cl
 import { TenantRazorpayService } from './services/tenant-razorpay.service';
 import { tenantRazorpayShopApiExtensions } from './api/tenant-razorpay-shop.schema';
 import { TenantRazorpayShopResolver } from './api/tenant-razorpay-shop.resolver';
+import { ManageTenantPaymentAccount } from './constants';
 
 /** Vendure core handler code for the dev-only dummy payment handler. */
 export const DUMMY_PAYMENT_HANDLER_CODE = 'dummy-payment-handler';
@@ -114,7 +115,11 @@ export class PaymentsProductionGuard implements OnApplicationBootstrap {
     schema: tenantPaymentAdminSchema,
     resolvers: [TenantPaymentAdminResolver],
   },
+  dashboard: './dashboard/index.tsx',
   configuration: (config: RuntimeVendureConfig) => {
+    // Register custom permission
+    config.authOptions.customPermissions.push(ManageTenantPaymentAccount);
+
     // Register alongside `dummyPaymentHandler`, which stays available for local
     // development and the existing e2e suites (it is the only handler that can
     // deterministically decline/error a payment).

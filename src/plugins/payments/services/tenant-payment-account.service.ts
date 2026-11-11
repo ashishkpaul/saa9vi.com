@@ -36,6 +36,7 @@ export interface TenantPaymentAccountSafeView {
   createdAt: Date;
   updatedAt: Date;
   credentialsConfigured: boolean;
+  webhookSecretConfigured: boolean;
 }
 
 @Injectable()
@@ -197,6 +198,7 @@ export class TenantPaymentAccountService {
       createdAt: account.createdAt,
       updatedAt: account.updatedAt,
       credentialsConfigured: !!account.encryptedKeySecret,
+      webhookSecretConfigured: !!account.encryptedWebhookSecret,
     };
   }
 }

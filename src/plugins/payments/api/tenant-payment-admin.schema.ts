@@ -14,8 +14,9 @@ export const tenantPaymentAdminSchema = gql`
     """
     Get the current channel's tenant payment account (safe view — no secrets).
     Tenant-scoped: returns only the account for the active channel.
+    Returns null if no account is configured for the channel.
     """
-    tenantPaymentAccount: TenantPaymentAccount!
+    tenantPaymentAccount: TenantPaymentAccount
 
     """
     Get all tenant payment accounts (SuperAdmin only).
@@ -43,6 +44,17 @@ export const tenantPaymentAdminSchema = gql`
     Delete the current channel's payment account (SuperAdmin or tenant admin).
     """
     deleteTenantPaymentAccount: Boolean!
+
+    """
+    Verify the current channel's Razorpay credentials by calling Razorpay API.
+    Marks account as verified if successful.
+    """
+    verifyTenantPaymentAccount: TenantPaymentAccount!
+
+    """
+    Verify that the configured webhook secret is valid.
+    """
+    verifyTenantPaymentWebhook: VerifyTenantPaymentWebhookResult!
   }
 
   type TenantPaymentAccount {
@@ -60,6 +72,10 @@ export const tenantPaymentAdminSchema = gql`
     True if encrypted credentials exist (decrypted values are never returned).
     """
     credentialsConfigured: Boolean!
+    """
+    True if a webhook secret is configured for this account.
+    """
+    webhookSecretConfigured: Boolean!
   }
 
   input UpsertTenantPaymentAccountInput {
@@ -67,5 +83,9 @@ export const tenantPaymentAdminSchema = gql`
     keySecret: String!
     webhookSecret: String
     accountMode: String! # 'test' or 'live'
+  }
+
+  type VerifyTenantPaymentWebhookResult {
+    webhookVerified: Boolean!
   }
 `;

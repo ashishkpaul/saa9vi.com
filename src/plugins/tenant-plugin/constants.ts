@@ -18,6 +18,7 @@ import {
   courseEnrollPermission,
   courseAnnouncementPermission,
 } from '../../platform/course-permissions';
+import { ManageTenantPaymentAccount } from '../payments/constants';
 
 export const TENANT_PLUGIN_OPTIONS = 'TENANT_PLUGIN_OPTIONS';
 
@@ -144,4 +145,6 @@ export const TENANT_ADMIN_ROLE_PERMISSIONS: Permission[] = [
   tenantManageAdmissionsPermission.Read,
   tenantManageAdmissionsPermission.Update,
   tenantManageAdmissionsPermission.Delete,
+  // Tenant payment account management (Flow B: tenant-client collections)
+  ManageTenantPaymentAccount.Permission,
 ];
