@@ -9,6 +9,12 @@ import { razorpayShopApiExtensions } from './api/razorpay-shop.schema';
 import { RazorpayShopResolver } from './api/razorpay-shop.resolver';
 import { RazorpayPaymentsWebhookController } from './api/razorpay-payments-webhook.controller';
 import { PaymentOpsAlertService } from './services/payment-ops-alert.service';
+// Phase 2 — Per-tenant Razorpay (ADR-051 Option C)
+import { TenantPaymentAccount } from './entities/tenant-payment-account.entity';
+import { TenantPaymentEncryptionService } from './services/tenant-payment-encryption.service';
+import { TenantPaymentAccountService } from './services/tenant-payment-account.service';
+import { tenantPaymentAdminSchema } from './api/tenant-payment-admin.schema';
+import { TenantPaymentAdminResolver } from './api/tenant-payment-admin.resolver';
 
 /** Vendure core handler code for the dev-only dummy payment handler. */
 export const DUMMY_PAYMENT_HANDLER_CODE = 'dummy-payment-handler';
@@ -70,12 +76,25 @@ export class PaymentsProductionGuard implements OnApplicationBootstrap {
  */
 @VendurePlugin({
   imports: [PluginCommonModule],
-  entities: [PaymentWebhookEvent],
-  providers: [RazorpayOrdersClient, RazorpayCheckoutService, PaymentWebhookQueueService, PaymentsProductionGuard, PaymentOpsAlertService],
+  entities: [PaymentWebhookEvent, TenantPaymentAccount],
+  providers: [
+    RazorpayOrdersClient,
+    RazorpayCheckoutService,
+    PaymentWebhookQueueService,
+    PaymentsProductionGuard,
+    PaymentOpsAlertService,
+    // Phase 2 — per-tenant Razorpay
+    TenantPaymentEncryptionService,
+    TenantPaymentAccountService,
+  ],
   controllers: [RazorpayPaymentsWebhookController],
   shopApiExtensions: {
     schema: razorpayShopApiExtensions,
     resolvers: [RazorpayShopResolver],
+  },
+  adminApiExtensions: {
+    schema: tenantPaymentAdminSchema,
+    resolvers: [TenantPaymentAdminResolver],
   },
   configuration: (config: RuntimeVendureConfig) => {
     // Register alongside `dummyPaymentHandler`, which stays available for local
