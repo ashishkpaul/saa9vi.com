@@ -5,6 +5,7 @@ import {
   DefaultJobQueuePlugin,
   VendureConfig,
   RedisCachePlugin,
+  DefaultEncryptionStrategy,
 } from "@vendure/core";
 import {
   EmailPlugin,
@@ -200,6 +201,13 @@ apiOptions: {
     port: +process.env.DB_PORT || 5432,
     username: process.env.DB_USERNAME || "postgres",
     password: process.env.DB_PASSWORD || "postgres",
+  },
+  // Encryption strategy for secrets (Stripe API keys, etc.)
+  // Required for encryptSecrets: true in StripePlugin
+  systemOptions: {
+    encryptionStrategy: new DefaultEncryptionStrategy({
+      secret: process.env.VENDURE_ENCRYPTION_KEY!,
+    }),
   },
   paymentOptions: {
     // Commit 1: dummy stays registered for dev/test only (e2e suites create
@@ -454,8 +462,11 @@ apiOptions: {
     // R4 — one-time guest/customer collections via Stripe Payment Intents.
     // API key + webhook secret are entered per PaymentMethod in the Admin UI
     // (handler "Stripe payments"); they are not stored here.
+    // encryptSecrets: true uses DefaultEncryptionStrategy for stored credentials
+    // storeCustomersInStripe: false (multi-tenant safe: no cross-merchant customer ID conflicts)
     StripePlugin.init({
-      storeCustomersInStripe: true,
+      encryptSecrets: true,
+      storeCustomersInStripe: false,
     }),
 ],
 };
