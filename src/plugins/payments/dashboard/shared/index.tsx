@@ -27,7 +27,7 @@ export function PaymentGatewayPageHeader({ title, description, children }: Payme
 }
 
 interface StatusBadgeProps {
-  status: 'not-configured' | 'pending' | 'verified' | 'active' | 'disabled' | 'verification-failed';
+  status: 'not-configured' | 'pending' | 'active' | 'disabled';
 }
 
 /**
@@ -37,10 +37,8 @@ export function PaymentGatewayStatusBadge({ status }: StatusBadgeProps) {
   const config = {
     'not-configured': { label: 'Not configured', color: 'bg-gray-100 text-gray-800 border-gray-200' },
     'pending': { label: 'Pending verification', color: 'bg-amber-100 text-amber-800 border-amber-200' },
-    'verified': { label: 'Verified', color: 'bg-blue-100 text-blue-800 border-blue-200' },
     'active': { label: 'Active', color: 'bg-green-100 text-green-800 border-green-200' },
     'disabled': { label: 'Disabled', color: 'bg-gray-100 text-gray-800 border-gray-200' },
-    'verification-failed': { label: 'Verification failed', color: 'bg-red-100 text-red-800 border-red-200' },
   };
 
   const { label, color } = config[status];

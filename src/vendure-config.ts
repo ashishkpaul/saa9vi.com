@@ -37,6 +37,7 @@ import { AdWalletLedgerImmutableSubscriber } from './plugins/marketplace/ad-wall
 import { SubscriptionPlugin } from './plugins/subscription/subscription.plugin';
 import { PaymentsPlugin } from './plugins/payments/payments.plugin';
 import { LearningPlugin } from './plugins/learning-plugin/learning-plugin.plugin';
+import { StripePlugin } from '@vendure-community/stripe-plugin';
 // ADR-038: Razorpay is the sole recurring-billing provider. The former Juspay
 // implementation was removed in 9a31beb and its legacy tables dropped in
 // 466a4ef (ADR-040). Billing credentials are resolved eagerly at config time
@@ -450,5 +451,11 @@ apiOptions: {
         freePlanSlug: process.env.FREE_PLAN_SLUG ?? 'free-basic',
     }),
     LearningPlugin,
+    // R4 — one-time guest/customer collections via Stripe Payment Intents.
+    // API key + webhook secret are entered per PaymentMethod in the Admin UI
+    // (handler "Stripe payments"); they are not stored here.
+    StripePlugin.init({
+      storeCustomersInStripe: true,
+    }),
 ],
 };

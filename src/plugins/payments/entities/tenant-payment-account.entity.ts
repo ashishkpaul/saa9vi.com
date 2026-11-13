@@ -1,5 +1,5 @@
 import { DeepPartial, VendureEntity, EntityId, ID } from '@vendure/core';
-import { Column, Entity, Index } from 'typeorm';
+import { Column, Entity, Index, Unique } from 'typeorm';
 
 /**
  * Tenant-owned Razorpay payment account (ADR-051, Option C — Phase 2).
@@ -10,6 +10,7 @@ import { Column, Entity, Index } from 'typeorm';
  * or verifying webhooks — never returned through GraphQL.
  */
 @Entity('tenant_payment_account')
+@Unique('IDX_tenant_payment_account_channel_provider', ['channelId', 'provider'])
 export class TenantPaymentAccount extends VendureEntity {
   constructor(input?: DeepPartial<TenantPaymentAccount>) {
     super(input);

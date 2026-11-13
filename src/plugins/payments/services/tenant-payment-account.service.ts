@@ -53,7 +53,7 @@ export class TenantPaymentAccountService {
     const repo = this.connection.getRepository(ctx, TenantPaymentAccount);
 
     const existing = await repo.findOne({
-      where: { channelId: input.channelId, provider: 'razorpay' },
+      where: { channelId: String(input.channelId), provider: 'razorpay' },
     });
     if (existing) {
       throw new ConflictException(
@@ -62,7 +62,7 @@ export class TenantPaymentAccountService {
     }
 
     const account = repo.create({
-      channelId: input.channelId,
+      channelId: String(input.channelId),
       provider: 'razorpay',
       keyId: input.keyId,
       encryptedKeySecret: this.encryptionService.encrypt(input.keySecret),
@@ -82,7 +82,7 @@ export class TenantPaymentAccountService {
     channelId: ID,
   ): Promise<TenantPaymentAccount | null> {
     const repo = this.connection.getRepository(ctx, TenantPaymentAccount);
-    return repo.findOne({ where: { channelId, provider: 'razorpay' } });
+    return repo.findOne({ where: { channelId: String(channelId), provider: 'razorpay' } });
   }
 
   async findAll(ctx: RequestContext): Promise<TenantPaymentAccountSafeView[]> {

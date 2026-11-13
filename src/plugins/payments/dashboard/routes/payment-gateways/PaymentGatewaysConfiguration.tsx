@@ -21,7 +21,7 @@ import {
 } from '../../shared/queries';
 
 type AccountMode = 'test' | 'live';
-type AccountStatus = 'not-configured' | 'pending' | 'verified' | 'active' | 'disabled' | 'verification-failed';
+type AccountStatus = 'not-configured' | 'pending' | 'active' | 'disabled';
 
 export function PaymentGatewaysConfiguration() {
   const queryClient = useQueryClient();
@@ -110,11 +110,11 @@ export function PaymentGatewaysConfiguration() {
       return 'pending';
     }
     
-    if (account.status === 'verified' && account.isEnabled) {
+    if (account.status === 'active' && account.isEnabled) {
       return 'active';
     }
     
-    if (account.status === 'verified' && !account.isEnabled) {
+    if (account.status === 'active' && !account.isEnabled) {
       return 'disabled';
     }
     
@@ -190,7 +190,7 @@ export function PaymentGatewaysConfiguration() {
       return;
     }
     
-    if (enabled && account.status !== 'verified') {
+    if (enabled && account.status !== 'active') {
       toast.error('Account not verified', { description: 'Please verify credentials before enabling' });
       return;
     }
@@ -341,13 +341,13 @@ export function PaymentGatewaysConfiguration() {
               title="API Credentials"
               status={
                 !account?.credentialsConfigured ? 'neutral' :
-                account?.status === 'verified' ? 'success' :
+                account?.status === 'active' ? 'success' :
                 account?.status === 'pending' ? 'warning' :
                 account?.status === 'verification-failed' ? 'error' : 'neutral'
               }
               description={
                 !account?.credentialsConfigured ? 'Not configured' :
-                account?.status === 'verified' ? `Verified ${account.lastVerifiedAt ? new Date(account.lastVerifiedAt).toLocaleDateString() : ''}` :
+                account?.status === 'active' ? `Verified ${account.lastVerifiedAt ? new Date(account.lastVerifiedAt).toLocaleDateString() : ''}` :
                 account?.status === 'pending' ? 'Pending verification' :
                 account?.status === 'verification-failed' ? 'Verification failed' : 'Unknown status'
               }
@@ -369,7 +369,7 @@ export function PaymentGatewaysConfiguration() {
               status={account?.webhookSecretConfigured ? 'success' : 'warning'}
               description={
                 account?.webhookSecretConfigured 
-                  ? 'Webhook secret is configured'
+                  ? 'Webhook secret is configured and can be decrypted'
                   : 'Webhook secret is not configured. Recommended for production.'
               }
             >
@@ -380,7 +380,7 @@ export function PaymentGatewaysConfiguration() {
                   onClick={handleVerifyWebhook}
                   disabled={isVerifyingWebhook || !account?.credentialsConfigured}
                 >
-                  {isVerifyingWebhook ? 'Verifying...' : 'Verify Webhook'}
+                  {isVerifyingWebhook ? 'Checking...' : 'Check Webhook Secret'}
                 </Button>
               )}
             </ConnectionStatusCard>
@@ -391,12 +391,12 @@ export function PaymentGatewaysConfiguration() {
               description={
                 account?.isEnabled 
                   ? 'Payment gateway is enabled for checkout'
-                  : account?.status === 'verified'
+                  : account?.status === 'active'
                     ? 'Payment gateway is verified but disabled'
                     : 'Payment gateway is not ready for checkout'
               }
             >
-              {account?.credentialsConfigured && account?.status === 'verified' && (
+              {account?.credentialsConfigured && account?.status === 'active' && (
                 <div className="flex items-center gap-2">
                   <Switch
                     checked={account?.isEnabled}

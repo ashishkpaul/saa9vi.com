@@ -129,12 +129,12 @@ export class TenantRazorpayService {
   }
 
   /**
-   * Verify tenant Razorpay credentials by fetching account details.
+   * Verify tenant Razorpay credentials by testing API access.
    * Used during tenant payment account verification.
    */
   async verifyCredentials(keyId: string, keySecret: string): Promise<void> {
     try {
-      await this.client.fetchAccount(keyId, keySecret);
+      await this.client.testCredentials(keyId, keySecret);
     } catch (err: any) {
       if (err instanceof TenantRazorpayApiError) {
         throw new Error(err.providerMessage);

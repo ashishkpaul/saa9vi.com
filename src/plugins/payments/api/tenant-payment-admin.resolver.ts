@@ -67,7 +67,7 @@ export class TenantPaymentAdminResolver {
       const updated = await this.accountService.update(ctx, String(existing.id), {
         keyId: input.keyId,
         keySecret: input.keySecret,
-        webhookSecret: input.webhookSecret ?? null,
+        webhookSecret: input.webhookSecret, // Pass undefined to preserve existing, null to clear, string to update
         accountMode: input.accountMode,
         status: 'pending',
         isEnabled: false,
@@ -79,7 +79,7 @@ export class TenantPaymentAdminResolver {
       channelId,
       keyId: input.keyId,
       keySecret: input.keySecret,
-      webhookSecret: input.webhookSecret ?? null,
+      webhookSecret: input.webhookSecret ?? null, // For create, null is fine for no webhook secret
       accountMode: input.accountMode,
     });
     return this.accountService['toSafeView'](created);
@@ -100,6 +100,14 @@ export class TenantPaymentAdminResolver {
         'No Razorpay payment account configured for this channel',
       );
     }
+
+    // Only allow enabling if account is active (verified)
+    if (isEnabled && account.status !== 'active') {
+      throw new BadRequestException(
+        'Cannot enable payment gateway: account credentials are not verified. Please verify credentials first.',
+      );
+    }
+
     const updated = await this.accountService.setEnabled(
       ctx,
       String(account.id),
