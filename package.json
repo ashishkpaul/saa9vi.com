@@ -58,6 +58,7 @@
     "@electric-sql/pglite": "^0.5.4",
     "@opentelemetry/api": "^1.9.1",
     "@types/glob": "^8.1.0",
+    "@vendure-community/stripe-plugin": "^2.0.0",
     "@vendure/asset-server-plugin": "3.8.1",
     "@vendure/core": "3.8.1",
     "@vendure/dashboard": "3.8.1",
@@ -73,6 +74,7 @@
     "pg-mem": "^3.0.14",
     "razorpay": "^2.9.8",
     "sql.js": "^1.14.1",
+    "stripe": "^23.1.0",
     "xml2js": "^0.6.2"
   },
   "devDependencies": {

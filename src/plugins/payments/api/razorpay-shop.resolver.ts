@@ -75,6 +75,21 @@ export class RazorpayShopResolver {
       throw new UserInputError(`Order must be in ArrangingPayment state (got ${order.state})`);
     }
 
+    // Platform-service payment policy (ADR-051, Option C):
+    // This Razorpay integration uses Saa9vi's platform credentials and is
+    // reserved for Flow A — tenant admin pays Saa9vi for platform services
+    // (subscription, BBB usage, advertising, optional storefront hosting).
+    // Tenant-client collections (Flow B) must NOT be settled through this
+    // handler. The order must carry an explicit server-set paymentPurpose
+    // of 'platform-service'; orderSource is an attribution field stamped
+    // after order placement and must NOT be used as a payee boundary.
+    const paymentPurpose = (order.customFields as { paymentPurpose?: string } | null)?.paymentPurpose;
+    if (paymentPurpose !== 'platform-service') {
+      throw new UserInputError(
+        'Platform Razorpay checkout is only available for Saa9vi platform service charges. Tenant-client collections belong to the tenant and must use the tenant\u2019s own payment method (not yet implemented).',
+      );
+    }
+
     return this.checkoutService.createCheckoutOrder(ctx, order);
   }
 }

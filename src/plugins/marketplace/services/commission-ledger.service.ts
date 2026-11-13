@@ -34,37 +34,37 @@ export type RecordMarketplaceOrderResult =
 @Injectable()
 export class CommissionLedgerService {
   private readonly logger = new Logger(loggerCtx);
-  private readonly commissionPercent: number;
+  private readonly commissionPercent = 0;
 
   constructor(private readonly connection: TransactionalConnection) {
-    // Fail-closed financial config: malformed percent aborts boot rather than
-    // silently mis-computing commission (parseInt('10garbage') === 10 is not acceptable).
+    // Fail-closed financial config: any non-zero MARKETPLACE_COMMISSION_PERCENT
+    // aborts boot. Commission is permanently 0% under the selected business
+    // model (ADR-051, Option C). The $0-row pattern is retained for GMV and
+    // attribution history only.
     const raw = process.env.MARKETPLACE_COMMISSION_PERCENT;
-    if (raw === undefined || raw.trim() === '') {
-      this.commissionPercent = 0;
-      return;
+    if (raw !== undefined && raw.trim() !== '') {
+      const trimmed = raw.trim();
+      if (!/^\d+$/.test(trimmed)) {
+        throw new Error(
+          `CommissionLedgerService: MARKETPLACE_COMMISSION_PERCENT must be 0 or unset (commission is permanently disabled under ADR-051) (got '${raw}').`
+        );
+      }
+      const parsed = parseInt(trimmed, 10);
+      if (parsed !== 0) {
+        throw new Error(
+          `CommissionLedgerService: MARKETPLACE_COMMISSION_PERCENT must be 0 (commission is permanently disabled under ADR-051). Got ${parsed}.`
+        );
+      }
     }
-    const trimmed = raw.trim();
-    if (!/^\d+$/.test(trimmed)) {
-      throw new Error(
-        `CommissionLedgerService: MARKETPLACE_COMMISSION_PERCENT must be an integer 0..100 (got '${raw}').`
-      );
-    }
-    const parsed = parseInt(trimmed, 10);
-    if (parsed > 100) {
-      throw new Error(
-        `CommissionLedgerService: MARKETPLACE_COMMISSION_PERCENT must be an integer 0..100 (got ${parsed}).`
-      );
-    }
-    this.commissionPercent = parsed;
   }
 
   getCommissionPercent(): number {
     return this.commissionPercent;
   }
 
-  computeCommissionAmount(grossInPaise: number, percent: number): number {
-    return Math.floor((grossInPaise * percent) / 100);
+  computeCommissionAmount(_grossInPaise: number): number {
+    // Commission is permanently 0% under ADR-051 (Option C).
+    return 0;
   }
 
   /**
@@ -85,7 +85,7 @@ export class CommissionLedgerService {
     // a 23505 which we detect as a replay (duplicate_ref).
     const repo = this.connection.getRepository(input.ctx, CommissionLedger);
     const percent = this.commissionPercent;
-    const amount = this.computeCommissionAmount(input.grossAmountInPaise, percent);
+    const amount = 0;
     const row = repo.create({
       channelId: input.channelId,
       orderId: String(input.orderId),

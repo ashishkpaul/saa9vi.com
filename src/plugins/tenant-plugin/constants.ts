@@ -18,6 +18,7 @@ import {
   courseEnrollPermission,
   courseAnnouncementPermission,
 } from '../../platform/course-permissions';
+import { ManageTenantPaymentAccount } from '../payments/constants';
 
 export const TENANT_PLUGIN_OPTIONS = 'TENANT_PLUGIN_OPTIONS';
 
@@ -72,10 +73,8 @@ export const TENANT_ADMIN_ROLE_PERMISSIONS: Permission[] = [
   Permission.ReadOrder,
   Permission.UpdateOrder,
   Permission.DeleteOrder,
-  // PaymentMethod: tenants use the platform's Razorpay method.
-  // Read-only so tenant admins can see how orders will be paid;
-  // Create/Update/Delete stay platform-only (Commit 1 hygiene).
-  Permission.ReadPaymentMethod,
+  // PaymentMethod: tenants configure payments via Payment Gateways (custom).
+  // Native Payment Methods are platform-only for operational control.
   Permission.CreatePromotion,
   Permission.ReadPromotion,
   Permission.UpdatePromotion,
@@ -144,4 +143,6 @@ export const TENANT_ADMIN_ROLE_PERMISSIONS: Permission[] = [
   tenantManageAdmissionsPermission.Read,
   tenantManageAdmissionsPermission.Update,
   tenantManageAdmissionsPermission.Delete,
+  // Tenant payment account management (Flow B: tenant-client collections)
+  ManageTenantPaymentAccount.Permission,
 ];

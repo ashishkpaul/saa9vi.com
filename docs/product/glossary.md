@@ -24,13 +24,13 @@
 | **BbbProductAccess** | Maps a ProductVariant to a BbbRoom for fulfillment. |
 | **Capacity Grant** | Prepaid block of meeting minutes. The billing unit for BBB usage. |
 | **Entitlement** | Access grant. The single gate for all paid content access. |
-| **Marketplace** | Cross-channel discovery layer. Platform-level Elasticsearch indices for sessions and instructors. Does not transact — redirects to tenant storefronts. |
-| **Marketplace Commission** | Stream 2 revenue. A percentage of marketplace-originated orders, controlled by `MARKETPLACE_COMMISSION_PERCENT` env var. |
+| **Marketplace** | Cross-channel discovery layer (current implementation). Platform-level Elasticsearch indices for sessions and instructors. Does not transact — discovery results link to tenant storefronts. A shared marketplace storefront (discover, register, purchase/enroll, join classes directly through Saa9vi's marketplace domain for tenants without custom domains) is a Phase 3 target, not yet implemented. |
+| **Marketplace Commission** | Permanently 0% under ADR-051 (Option C). The CommissionLedger writes a $0 row per marketplace order to preserve GMV and attribution history — no commission is ever calculated, deducted, or payable. |
 | **CommissionLedger** | Append-only ledger for marketplace commission rows. Always writes a row per marketplace order, even at 0% ($0-row pattern). |
 | **AdWallet** | Prepaid advertising wallet per tenant. Top-up intentionally not exposed; payment-origin mechanism TBD pending R3 (one-time commerce). |
 | **AdSpendLedger** | Append-only ledger for ad spend events (impression, click, conversion). |
 | **Stream 1** | Tenant billing — BBB usage + portal/hosting. Usage-driven via `BbbCapacityGrant`/`BbbUsageLedger`. Always on. |
-| **Stream 2** | Marketplace commission — percentage of marketplace orders. Controlled by `MARKETPLACE_COMMISSION_PERCENT`. |
+| **Stream 2** | Marketplace attribution and GMV history. Commission is permanently 0% — the ledger preserves marketplace order history for analytics, not revenue. Controlled by `MARKETPLACE_COMMISSION_PERCENT` (must be 0; non-zero aborts boot). |
 | **Stream 3** | Advertising — sponsored listings and marketplace banners. Opt-in, tenant-initiated via `AdWallet`. |
 | **INV-001** | Channel = Tenant. One identity system. |
 | **INV-002** | Every billing fact is an immutable ledger row. |

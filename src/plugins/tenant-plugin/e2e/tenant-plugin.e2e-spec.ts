@@ -716,6 +716,37 @@ describe('TenantPlugin', () => {
       await verifyTenantAdminViaApi(server, shopClient, tenantBEmail);
     });
 
+    it('does not inherit platform Razorpay payment method on new tenant channels (P1-05)', async () => {
+      // Newly registered tenant channels must NOT have the platform Razorpay
+      // PaymentMethod assigned. Tenant-client collections are tenant-owned
+      // (ADR-051, Option C); per-tenant Razorpay is a future phase.
+      const ELIGIBLE_PAYMENT_METHODS = gql`
+        query {
+          eligiblePaymentMethods {
+            id
+            code
+            name
+            isEligible
+          }
+        }
+      `;
+      for (const [label, channelToken] of [
+        ['tenant A', tenantAChannelToken],
+        ['tenant B', tenantBChannelToken],
+      ]) {
+        shopClient.setChannelToken(channelToken);
+        const result = await shopClient.query(ELIGIBLE_PAYMENT_METHODS);
+        const methods = result.eligiblePaymentMethods ?? [];
+        const razorpay = methods.filter((m: any) => m.code === 'razorpay');
+        expect(razorpay).toHaveLength(0);
+        console.log(
+          `${label} eligible payment methods: ${methods
+            .map((m: any) => m.code)
+            .join(', ') || 'none'}`,
+        );
+      }
+    });
+
     it('rejects a duplicate email address', async () => {
       const promise = shopClient.query(REGISTER_NEW_TENANT, {
         input: {

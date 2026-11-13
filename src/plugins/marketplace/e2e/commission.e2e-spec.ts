@@ -403,12 +403,13 @@ describe('Commission classification + ledger (3B.5)', () => {
       expect(rows[0].commissionAmountInPaise).toBe(0);
     });
 
-    it('writes a $0 ledger row at 0% rate + commission math is correct', async () => {
+    it('writes a $0 ledger row at 0% rate + commission math always returns zero', async () => {
       const ledgerService = server.app.get(CommissionLedgerService);
-      expect(ledgerService.computeCommissionAmount(100000, 10)).toBe(10000);
-      expect(ledgerService.computeCommissionAmount(100000, 0)).toBe(0);
-      expect(ledgerService.computeCommissionAmount(99999, 10)).toBe(9999);
-      expect(ledgerService.computeCommissionAmount(100000, 100)).toBe(100000);
+      // Commission is permanently 0% under ADR-051 (Option C).
+      expect(ledgerService.getCommissionPercent()).toBe(0);
+      expect(ledgerService.computeCommissionAmount(100000)).toBe(0);
+      expect(ledgerService.computeCommissionAmount(99999)).toBe(0);
+      expect(ledgerService.computeCommissionAmount(0)).toBe(0);
 
       await registerAndLoginCustomer();
       const variantId = await createVariant(50000);
@@ -420,6 +421,24 @@ describe('Commission classification + ledger (3B.5)', () => {
       expect(row.commissionPercent).toBe(0);
       expect(row.commissionAmountInPaise).toBe(0);
       expect(row.grossAmountInPaise).toBe(50000);
+    });
+
+    it('rejects non-zero MARKETPLACE_COMMISSION_PERCENT at service construction', async () => {
+      // Commission is permanently 0% under ADR-051 — any non-zero value must
+      // prevent the service from being constructed (fail-closed).
+      const originalEnv = process.env.MARKETPLACE_COMMISSION_PERCENT;
+      try {
+        process.env.MARKETPLACE_COMMISSION_PERCENT = '10';
+        expect(() => {
+          new CommissionLedgerService(server.app.get(TransactionalConnection));
+        }).toThrow(/MARKETPLACE_COMMISSION_PERCENT must be 0/);
+      } finally {
+        if (originalEnv === undefined) {
+          delete process.env.MARKETPLACE_COMMISSION_PERCENT;
+        } else {
+          process.env.MARKETPLACE_COMMISSION_PERCENT = originalEnv;
+        }
+      }
     });
 
     it('reclassifies a forged orderSource=marketplace to direct (INV-008)', async () => {

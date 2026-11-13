@@ -5,6 +5,7 @@
  * readable through the Admin API). They are resolved from the process
  * environment only — see `.env.example`.
  */
+import { PermissionDefinition } from '@vendure/core';
 
 /** Payment-method code used by `addPaymentToOrder(input: { method: ... })`. */
 export const RAZORPAY_HANDLER_CODE = 'razorpay';
@@ -24,6 +25,17 @@ export function razorpayKeyId(): string {
 export function razorpayKeySecret(): string {
   return process.env.RAZORPAY_KEY_SECRET ?? '';
 }
+
+/**
+ * Permission for managing tenant Razorpay payment accounts.
+ * Granted to authorized tenant administrators — allows configuring,
+ * verifying, enabling/disabling, and deleting their own channel's
+ * Razorpay payment account (Flow B: tenant-client collections).
+ */
+export const ManageTenantPaymentAccount = new PermissionDefinition({
+  name: 'ManageTenantPaymentAccount',
+  description: 'Permission to configure and manage tenant Razorpay payment accounts',
+});
 
 /**
  * Webhook secret for the one-time endpoint. Falls back to the subscription

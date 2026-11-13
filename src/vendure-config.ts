@@ -5,6 +5,7 @@ import {
   DefaultJobQueuePlugin,
   VendureConfig,
   RedisCachePlugin,
+  DefaultEncryptionStrategy,
 } from "@vendure/core";
 import {
   EmailPlugin,
@@ -37,6 +38,7 @@ import { AdWalletLedgerImmutableSubscriber } from './plugins/marketplace/ad-wall
 import { SubscriptionPlugin } from './plugins/subscription/subscription.plugin';
 import { PaymentsPlugin } from './plugins/payments/payments.plugin';
 import { LearningPlugin } from './plugins/learning-plugin/learning-plugin.plugin';
+import { StripePlugin } from '@vendure-community/stripe-plugin';
 // ADR-038: Razorpay is the sole recurring-billing provider. The former Juspay
 // implementation was removed in 9a31beb and its legacy tables dropped in
 // 466a4ef (ADR-040). Billing credentials are resolved eagerly at config time
@@ -68,7 +70,8 @@ const IS_DEV = process.env.APP_ENV === "dev";
 const IS_TEST = process.env.NODE_ENV === "test";
 // Commit 1 hygiene: dummyPaymentHandler is dev/test only. Production boot
 // must fail if any PaymentMethod row still uses it (see PaymentsPlugin
-// onApplicationBootstrap guard) — tenants use the platform Razorpay method.
+// onApplicationBootstrap guard). The platform Razorpay method is for Flow A
+// only (tenant admin pays Saa9vi); tenant-client collections are tenant-owned.
 const allowDummyPaymentHandler = IS_DEV || IS_TEST;
 const serverPort = 3000;
 
@@ -198,6 +201,13 @@ apiOptions: {
     port: +process.env.DB_PORT || 5432,
     username: process.env.DB_USERNAME || "postgres",
     password: process.env.DB_PASSWORD || "postgres",
+  },
+  // Encryption strategy for secrets (Stripe API keys, etc.)
+  // Required for encryptSecrets: true in StripePlugin
+  systemOptions: {
+    encryptionStrategy: new DefaultEncryptionStrategy({
+      secret: process.env.VENDURE_ENCRYPTION_KEY!,
+    }),
   },
   paymentOptions: {
     // Commit 1: dummy stays registered for dev/test only (e2e suites create
@@ -449,5 +459,14 @@ apiOptions: {
         freePlanSlug: process.env.FREE_PLAN_SLUG ?? 'free-basic',
     }),
     LearningPlugin,
+    // R4 — one-time guest/customer collections via Stripe Payment Intents.
+    // API key + webhook secret are entered per PaymentMethod in the Admin UI
+    // (handler "Stripe payments"); they are not stored here.
+    // encryptSecrets: true uses DefaultEncryptionStrategy for stored credentials
+    // storeCustomersInStripe: false (multi-tenant safe: no cross-merchant customer ID conflicts)
+    StripePlugin.init({
+      encryptSecrets: true,
+      storeCustomersInStripe: false,
+    }),
 ],
 };

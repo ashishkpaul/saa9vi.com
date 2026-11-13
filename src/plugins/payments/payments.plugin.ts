@@ -1,4 +1,5 @@
 import { PluginCommonModule, RuntimeVendureConfig, VendurePlugin, TransactionalConnection, PaymentMethod } from '@vendure/core';
+import { DocumentNode, Kind } from 'graphql';
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { razorpayPaymentHandler } from './config/razorpay-payment-handler';
 import { RazorpayOrdersClient } from './services/razorpay-orders.client';
@@ -9,16 +10,35 @@ import { razorpayShopApiExtensions } from './api/razorpay-shop.schema';
 import { RazorpayShopResolver } from './api/razorpay-shop.resolver';
 import { RazorpayPaymentsWebhookController } from './api/razorpay-payments-webhook.controller';
 import { PaymentOpsAlertService } from './services/payment-ops-alert.service';
+// Phase 2 — Per-tenant Razorpay (ADR-051 Option C)
+import { TenantPaymentAccount } from './entities/tenant-payment-account.entity';
+import { TenantPaymentEncryptionService } from './services/tenant-payment-encryption.service';
+import { TenantPaymentAccountService } from './services/tenant-payment-account.service';
+import { tenantPaymentAdminSchema } from './api/tenant-payment-admin.schema';
+import { TenantPaymentAdminResolver } from './api/tenant-payment-admin.resolver';
+import { TenantRazorpayOrdersClient } from './services/tenant-razorpay-orders.client';
+import { TenantRazorpayService } from './services/tenant-razorpay.service';
+import { tenantRazorpayShopApiExtensions } from './api/tenant-razorpay-shop.schema';
+import { TenantRazorpayShopResolver } from './api/tenant-razorpay-shop.resolver';
+import { ManageTenantPaymentAccount } from './constants';
 
 /** Vendure core handler code for the dev-only dummy payment handler. */
 export const DUMMY_PAYMENT_HANDLER_CODE = 'dummy-payment-handler';
 
 const loggerCtx = 'PaymentsPlugin';
 
+/** Concatenates multiple GraphQL schema-extension documents into one. */
+function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
+  return {
+    kind: Kind.DOCUMENT,
+    definitions: docs.flatMap((doc) => doc.definitions),
+  };
+}
+
 /**
  * Commit 1 hygiene guard: in any non-dev deployment, boot must fail when a
- * PaymentMethod row still uses the dummy handler — tenants must pay through
- * the platform Razorpay method. Dev/test keep the dummy for e2e fixtures.
+ * PaymentMethod row still uses the dummy handler — tenants must not pay
+ * through a dev-only dummy handler. Dev/test keep the dummy for e2e fixtures.
  */
 @Injectable()
 export class PaymentsProductionGuard implements OnApplicationBootstrap {
@@ -59,20 +79,47 @@ export class PaymentsProductionGuard implements OnApplicationBootstrap {
  * settlement. Recurring billing stays in `SubscriptionPlugin`
  * (`production-readiness.md` §7/§9 keep the two provider lifecycles separate).
  *
+ * Flow A only: this handler uses Saa9vi's platform Razorpay credentials for
+ * tenant-admin payments to Saa9vi (Flow A). Tenant-client collections (Flow B)
+ * are outside this plugin's scope — tenants collect directly through their
+ * own Razorpay account (future phase, ADR-051 Option C).
+ *
  * It does not own fulfillment: downstream access (entitlement + capacity grant)
  * is produced by the BigBlueButton plugin from the `PaymentSettled` transition —
  * see `bbbOrderProcess` (Option A, automatic fulfillment).
  */
 @VendurePlugin({
   imports: [PluginCommonModule],
-  entities: [PaymentWebhookEvent],
-  providers: [RazorpayOrdersClient, RazorpayCheckoutService, PaymentWebhookQueueService, PaymentsProductionGuard, PaymentOpsAlertService],
+  entities: [PaymentWebhookEvent, TenantPaymentAccount],
+  providers: [
+    RazorpayOrdersClient,
+    RazorpayCheckoutService,
+    PaymentWebhookQueueService,
+    PaymentsProductionGuard,
+    PaymentOpsAlertService,
+    // Phase 2 — per-tenant Razorpay
+    TenantPaymentEncryptionService,
+    TenantPaymentAccountService,
+    TenantRazorpayOrdersClient,
+    TenantRazorpayService,
+  ],
   controllers: [RazorpayPaymentsWebhookController],
   shopApiExtensions: {
-    schema: razorpayShopApiExtensions,
-    resolvers: [RazorpayShopResolver],
+    schema: concatApiExtensions(
+      razorpayShopApiExtensions,
+      tenantRazorpayShopApiExtensions,
+    ),
+    resolvers: [RazorpayShopResolver, TenantRazorpayShopResolver],
   },
+  adminApiExtensions: {
+    schema: tenantPaymentAdminSchema,
+    resolvers: [TenantPaymentAdminResolver],
+  },
+  dashboard: './dashboard/index.tsx',
   configuration: (config: RuntimeVendureConfig) => {
+    // Register custom permission
+    config.authOptions.customPermissions.push(ManageTenantPaymentAccount);
+
     // Register alongside `dummyPaymentHandler`, which stays available for local
     // development and the existing e2e suites (it is the only handler that can
     // deterministically decline/error a payment).
