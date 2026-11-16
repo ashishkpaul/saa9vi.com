@@ -155,7 +155,7 @@ None (injects TenantPlugin services for org verification).
 
 | Task | Schedule | Purpose |
 |---|---|---|
-| `bbb-reconciliation` | Every 5 minutes | Fixes stuck provisioning, reconciles active meetings and room/meeting state drift |
+| `bbb-reconciliation` | Every 5 minutes | Reconciles provisioning, confirmed active-meeting state and room drift; recovers grant/metered billing, repairs missing recording URLs, and reports unknown remote meetings (report-only) |
 | `bbb-hooks-reconciliation` | Every 5 minutes | Reconciles BBB webhook subscriptions across enabled, healthy servers |
 | `bbb-capacity-alert` | Every 15 minutes | Capacity intelligence check; builds dashboard and publishes alerts |
 | `bbb-server-health` | Every 5 minutes | Per-server health probe; marks servers healthy/unhealthy |
