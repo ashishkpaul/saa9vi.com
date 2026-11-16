@@ -14,7 +14,7 @@ Tenant-scoped data must never leak across channels. Enforced at the service laye
 
 ## SEC-003: Rate Limiting on Public Mutations — ✅ Fixed
 
-`rate-limiter.middleware.ts` applies `shopApiRateLimiter` (registerForTrial 10/min, bbbJoinMeeting 10/min, registerNewTenant 5/hour) and `bbbWebhookRateLimiter` (100 req/min per IP, allowlist via env).
+`rate-limiter.middleware.ts` applies operation-specific Shop API limits: `registerForTrial` (10/min per customer), `bbbJoinMeeting` (10/min per customer), and `registerNewTenant` (5/hour per IP). The BBB webhook limiter is registered on `bbb/webhook` (matching `/bbb/webhook/:serverId`) at 100 requests/minute per IP, with `BBB_WEBHOOK_ALLOWED_IPS` bypass.
 
 ## SEC-004: Channel Isolation (historical collision — see SEC-002) — ✅ Fixed (superseded)
 
@@ -36,24 +36,18 @@ Caddy is the selected TLS termination and custom-domain routing architecture (se
 
 The `administrators` Admin API query must never leak administrators from other channels to a tenant admin. `TenantAdminResolver.administrators` filters by `role.channels` join on `ctx.channelId`; SuperAdmin sees all. Enforced by INV-016 and the `administratorVisibility` invariant checker. See ADR-034.
 
-## SEC-008: Tenant-Tier Reads Derive Their Organization From the Channel — ⚠️ In remediation (BUG-046, BUG-047)
+## SEC-008: Tenant-Tier BBB Reads and Writes Enforce Channel Ownership — ✅ Fixed in code
 
-**Rule (INV-029, ADR-047):** a tenant-facing BBB read must derive its organization from
-`ctx.channelId` and must accept **no** `organizationId` argument. An *optional* organization
-argument is a security surface, not a convenience: if omitting it widens the result set instead of
-narrowing it to the caller's own tenant, the parameter is a cross-tenant read primitive.
+**Rule (INV-029 / ADR-047):** every tenant-facing BBB read or write must be constrained to the caller's channel. A resolver may accept an explicit `organizationId` or resource ID only when it asserts ownership through `BbbChannelAccessService` before reading or mutating. When an optional organization argument is omitted, the query must derive the tenant scope from `ctx.channelId`; omission must never widen a tenant result to all organizations. Unrestricted cross-tenant access is limited to platform-tier callers.
 
-**Verified violations (2026-09-30 code audit):**
+**Source verification against the current branch:**
 
-| Ref | Surface | Defect | Remediation |
-|---|---|---|---|
-| BUG-046 | `bbbMeetings` (`bbb-admin.resolver.ts:491-497` → `bbb-meeting.service.ts:137-160`) | With `organizationId` omitted, **no channel filter is applied**, and the shipped tenant `MeetingsList.tsx` calls it that way with a cross-tenant `bbbOrganizations` picker | Phase 5 — channel-derive for non-platform callers, make the cross-tenant path `BBBPlatformInfrastructure`-gated, add isolation regression cases |
-| BUG-047 | `updateBbbOrganization` (`:280-289`, `Object.assign` over an input that includes `suspended`) | A tenant admin can **un-suspend its own organization** — and, once `suspended` is a postpaid billing guard, can widen its own credit exposure | Phase 4 — the four billing controls move to a `BBBPlatformInfrastructure`-gated mutation and are removed from the tenant input |
-| BUG-049 | `bbbCapacityGrants` (`:579-594`) | No channel assert on an arbitrary `organizationId` (cross-tenant grant read) | ✅ **Fixed 2026-09-30** — `assertOrganizationAccess(ctx, orgId)` before the read (own-channel reads preserved, cross-tenant → `ForbiddenError`); regression e2e `bbb-channel-isolation.e2e-spec.ts` §7; enforced by the `sec-008-platform-guards` check in `MeteredBillingChecker` |
-| BUG-047 sibling | `createBbbCapacityGrant` (`:599-631`), `deleteBbbOrganization` (`:552-561`) | Tenant-callable: mint free grants, delete the tenant's own organization | ✅ **Fixed 2026-09-30** — both retargeted to `BBBPlatformInfrastructure` (tenant role untouched, A15) and the `Capacity Grants` nav gate mirrored; regression e2e `bbb-channel-isolation.e2e-spec.ts` §6; enforced by `sec-008-platform-guards` |
+| Ref | Surface | Current enforcement |
+|---|---|---|
+| BUG-046 | `bbbMeetings` | ✅ `BbbMeetingService.findAll()` asserts an explicit `organizationId`/`roomId`. When both are omitted, non-platform callers are filtered through `org.channels` using `ctx.channelId`; only platform callers retain the unrestricted list path. |
+| BUG-047 | `updateBbbOrganization` | ✅ `BbbOrganizationService.update()` uses an allowlist for tenant callers (`name`, `recordingEnabled`). Fields such as `suspended`, billing controls, and capacity limits are rejected for tenant callers; platform callers use the platform permission path. |
+| BUG-049 | `bbbCapacityGrants` | ✅ `assertOrganizationAccess(ctx, orgId)` is checked before the read; cross-channel access is denied. |
+| BUG-047 sibling | `createBbbCapacityGrant`, `deleteBbbOrganization` | ✅ Platform infrastructure permission is required; these are not tenant-admin operations. |
 
-**Enforcement direction:** `bbbOrganizations` + explicit organization arguments remain legitimate
-**only** on platform-tier screens (`BBBPlatformInfrastructure` / `BBBAdmin`), which exist to browse
-across tenants. Tenant-tier surfaces migrate to `bbbMyOrganization`-style channel derivation
-(DL-031), which is what INV-029 now requires of all of them.
+`bbbMyOrganization` provides the channel-derived tenant organization for tenant screens. Explicit-ID paths remain safe only because ownership assertions execute before service operations. The current implementation is in `bbb-meeting.service.ts`, `bbb-organization.service.ts`, `bbb-admin.resolver.ts`, and `bbb-channel-access.service.ts`.
 
