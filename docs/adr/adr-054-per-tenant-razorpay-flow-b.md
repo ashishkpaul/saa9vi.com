@@ -65,7 +65,7 @@ Flow B checkout uses the same HMAC signature verification helpers (`computeCheck
 
 **Consequences:**
 
-- Flow A and Flow B share one signature verification path. Any security fix to `razorpay-checkout.policy.ts` applies to both.
+- Flow A and the future Flow B handler are intended to share the same pure signature/binding policy. The Flow B `verifyAndSettle()` call path is currently unwired, so do not claim equivalent end-to-end protection until its PaymentMethodHandler integration and regression tests exist.
 `TenantRazorpayService.verifyAndSettle()` contains the common signature/order/payment checks, but at the reviewed commit it has no registered tenant `PaymentMethodHandler` or call site. Therefore the existence of the shared helpers is not evidence of a working Flow B settlement path.
 
 ---
@@ -81,7 +81,7 @@ Existing tenant roles that pre-date this permission may lack it. `tenant:roles:c
 **Consequences:**
 
 - `TenantPaymentAdminResolver` decorates mutations with `@Allow(ManageTenantPaymentAccount.Permission)`.
-- Existing tenants need a one-time role repair to gain the permission; new tenants get it at registration.
+- New tenants get the permission at registration. Existing tenants may need permission reconciliation, but the current CLI apply path is not allowed under the GraphQL-only mutation rule; an approved Admin GraphQL repair operation is still required.
 
 ---
 
