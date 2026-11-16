@@ -1,6 +1,6 @@
 # ADR-054 — Per-Tenant Razorpay Integration (Flow B Implementation)
 
-**Status:** ACCEPTED — implementation phase active  
+**Status:** ACCEPTED — backend implementation partial; Flow B settlement is not yet wired  
 **Date:** 16 November 2026  
 **Author:** Kiro CLI baseline (C-05 follow-up)
 
@@ -42,16 +42,18 @@ Each tenant channel that wishes to collect payments configures a `TenantPaymentA
 
 ### D2 — Tenant credentials are verified before activation via a live Razorpay API probe
 
-A `TenantPaymentAccount` row starts in `pending` status. The tenant admin triggers a `verifyTenantRazorpayCredentials` mutation, which calls the Razorpay `/orders` endpoint with a minimal test order (₹1, never captured). Success transitions the account to `active`; failure keeps it in `pending` and returns the error.
+A `TenantPaymentAccount` row starts in `pending` status. The tenant admin triggers `verifyTenantPaymentAccount`; the current client performs `GET /payments?count=1` against the Razorpay API using the supplied Key ID/Secret. Success transitions the account to `active` and stamps `lastVerifiedAt`; failure leaves it pending. This is a credential/API-access probe: it does not create a ₹1 order, capture a payment, or validate the webhook secret.
 
-An `active` account can be toggled `isEnabled: false` to disable checkout without deleting credentials.
+An `active` account can be toggled `isEnabled: false` to disable order creation without deleting credentials. The checkout-order service requires both `status === 'active'` and `isEnabled === true`.
+
+The separate `verifyTenantPaymentWebhook` mutation currently checks that an encrypted webhook secret exists and can be decrypted, then returns `webhookVerified: true`. It does **not** perform a signed test delivery or establish that Razorpay is configured to call a tenant-specific endpoint. Treat that result as a presence/decryption check, not webhook verification.
 
 **Rationale:** Storing invalid credentials silently and failing at checkout is a poor user experience. A synchronous verification step at configuration time surfaces errors before any learner attempts to pay.
 
 **Consequences:**
 
 - `TenantRazorpayService.createCheckoutOrder()` fails closed if the account is not `active` or `isEnabled` is false.
-- The test-order probe creates a Razorpay Order object; it is never captured and expires in 15 minutes. No funds are moved.
+- The actual probe is a read-only `GET /payments?count=1`; no test order is created and no payment is attempted.
 
 ---
 
@@ -64,7 +66,7 @@ Flow B checkout uses the same HMAC signature verification helpers (`computeCheck
 **Consequences:**
 
 - Flow A and Flow B share one signature verification path. Any security fix to `razorpay-checkout.policy.ts` applies to both.
-- `TenantRazorpayShopResolver` is a thin wrapper that resolves tenant credentials and delegates to `TenantRazorpayService`, which calls the policy functions.
+`TenantRazorpayService.verifyAndSettle()` contains the common signature/order/payment checks, but at the reviewed commit it has no registered tenant `PaymentMethodHandler` or call site. Therefore the existence of the shared helpers is not evidence of a working Flow B settlement path.
 
 ---
 
@@ -97,3 +99,44 @@ Existing tenant roles that pre-date this permission must be repaired via the exi
 - `src/plugins/tenant-plugin/constants.ts` — `TENANT_ADMIN_ROLE_PERMISSIONS`
 - ADR-051 — seller payment model; established Option C and deferred this implementation
 - ADR-038 — direct Razorpay provider (Flow A — platform subscriptions; remains unchanged)
+
+
+---
+
+## As-built API and implementation boundary — 16 November 2026
+
+### Admin API
+
+The current Admin SDL exposes:
+
+- Queries: `tenantPaymentAccount` (current channel) and `allTenantPaymentAccounts` (SuperAdmin only).
+- Mutations: `upsertTenantPaymentAccount`, `setTenantPaymentAccountEnabled`, `deleteTenantPaymentAccount`, `verifyTenantPaymentAccount`, and `verifyTenantPaymentWebhook`.
+
+Tenant mutations use `ManageTenantPaymentAccount`. Newly registered tenant-admin roles receive this permission through `TENANT_ADMIN_ROLE_PERMISSIONS`; existing roles may need the repository's `tenant:roles:repair` reconciliation command. The safe GraphQL view exposes the public Key ID and configuration metadata, never decrypted secrets.
+
+### Shop API currently exposed
+
+The only Flow B Shop mutation is `createTenantRazorpayCheckoutOrder(orderId)`. It requires an authenticated customer, resolves credentials from `ctx.channelId`, and checks that the order belongs to that channel, is in `ArrangingPayment`, and has a positive total. It returns the Razorpay order ID, amount, currency, and public Key ID.
+
+There is no `verifyTenantPayment` Shop mutation in the current SDL. More importantly, `PaymentsPlugin` registers only the platform `razorpayPaymentHandler` (Flow A); it does not register a tenant-specific `PaymentMethodHandler`. `TenantRazorpayService.verifyAndSettle()` exists but is not wired to Vendure's `addPaymentToOrder` lifecycle. Accordingly, Flow B can currently create a provider order but cannot complete the intended tenant-funded Vendure payment/settlement lifecycle through this plugin. Do not describe Flow B as end-to-end implemented or production-ready.
+
+The current one-time webhook controller and `PaymentWebhookEvent`/queue belong to Flow A at `POST /payments/razorpay/checkout-webhook`; the recurring subscription webhook belongs to SubscriptionPlugin at `POST /payments/razorpay/webhook`. There is no tenant-specific Flow B webhook endpoint or tenant webhook reconciliation worker in the current PaymentsPlugin.
+
+### Security items that remain open
+
+1. **Order owner binding:** when an explicit `orderId` is passed to `createTenantRazorpayCheckoutOrder`, the service verifies channel membership but does not visibly compare `order.customer.user.id` with `ctx.activeUserId`. The resolver is decorated with `@Allow(Permission.Owner)`, but add an adversarial cross-customer test and an explicit service-level owner assertion unless Vendure's resolver permission semantics are proven to bind this argument to the order resource. Flow A performs an explicit owner comparison in its resolver.
+2. **Webhook status semantics:** rename/rework the current `verifyTenantPaymentWebhook` behavior before it is relied on operationally; it only checks secret presence/decryption.
+3. **Settlement guard:** when wiring `verifyAndSettle()`, ensure the account is rechecked as active and enabled at settlement time, not only when the checkout order is created.
+4. **Webhook design:** decide and implement the tenant webhook route, tenant/channel resolution, signature verification, durable inbox, idempotency and reconciliation semantics before claiming webhook-backed recovery.
+
+### Credential operations
+
+`TENANT_PAYMENT_ENCRYPTION_KEY` must be a 64-character hex string (32 bytes) and is mandatory when `APP_ENV !== 'dev'`. Generate with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+`TENANT_PAYMENT_ENCRYPTION_KEY_PREVIOUS` is an optional prior key used as a decrypt fallback during rotation. The reviewed service does not provide an automatic bulk re-encryption command; retain the old key until all ciphertext has been deliberately re-encrypted and verified. This key is distinct from `VENDURE_ENCRYPTION_KEY`, which is configured as Vendure's `DefaultEncryptionStrategy` for the Stripe plugin's `encryptSecrets: true` setting. Back up both keys independently of the database.
+
+**Verification boundary:** code and GraphQL SDL were reviewed at commit `3c245952d57b9ddeb27b9cbd6ee01de5bae0ba71`. No live Razorpay merchant checkout, webhook delivery, or production key-rotation test is claimed.
