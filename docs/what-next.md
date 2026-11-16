@@ -1,6 +1,8 @@
 # What Next — Saa9vi Platform
 
-**Updated:** 2026-09-27
+**Updated:** 2026-11-16
+
+> **Current-state reconciliation (16 November 2026):** This document contains historical September snapshots below. For current backend truth, use the dated addendum at the end and the canonical `plugin-map.md`, `roadmap.md`, and `production-readiness.md`. ADR-046 tenant self-service plan-change/cancellation Shop API is now present in the current SubscriptionPlugin source; storefront/live-provider verification remains separate. Per-tenant Razorpay Flow B is only partially implemented (account setup + provider order creation; settlement handler and tenant webhook lifecycle are missing). LearningPlugin Admin APIs and authenticated learner read APIs are present; Shop enrollment/invitation acceptance and template CRUD are not exposed. `tenant:roles:repair` apply mode directly saves Role entities and must not be used under the GraphQL-only data-mutation rule without an approved exception.
 
 ---
 
@@ -507,3 +509,40 @@ OrganizationSubscription status update
 A successful HTTP response from the provider means the request was accepted/initiated; it is not terminal payment success. This distinction must remain intact.
 
 The storefront template contract remains owned by the `nextjs-starter-vendure` repository and is intentionally not duplicated here.
+
+
+---
+
+## Current implementation status — 16 November 2026
+
+**Source baseline:** `saa9vi_com` at `3c245952d57b9ddeb27b9cbd6ee01de5bae0ba71`. This section supersedes earlier dated status statements where they conflict; historical evidence and dates above are retained as historical records.
+
+### SubscriptionPlugin / ADR-046
+
+- [x] Backend Shop API exposes `availableSubscriptionPlans`, `mySubscription`, `myLiveUsage`, `requestMySubscriptionPlanChange`, and `cancelMySubscription`.
+- [x] Tenant resolution is based on `ctx.channelId`; plan-change access uses tenant business-account/provenance checks and a five-minute Redis cooldown.
+- [ ] Storefront UI/browser integration and end-to-end verification against current branch.
+- [ ] Live Razorpay authorization, webhook activation and production recovery evidence remain governed by `production-readiness.md`.
+
+### LearningPlugin / ADR-053
+
+- [x] Backend plugin registration, course/template/tool/enrollment/session-link/announcement entities.
+- [x] Admin course/enrollment/announcement/tool/session-link APIs.
+- [x] Authenticated Shop reads for enrolled learners with ACTIVE academy admission.
+- [ ] Shop enrollment/invitation acceptance; template CRUD; complete learner/instructor course storefront.
+- [ ] Runtime/e2e verification in the current deployed environment.
+
+### PaymentsPlugin / ADR-054 — Flow B is partial
+
+- [x] Per-tenant account configuration with AES-256-GCM encrypted secrets, credential probe and enable/disable controls.
+- [x] Tenant-channel-scoped Razorpay checkout-order creation.
+- [ ] Tenant-specific Vendure PaymentMethodHandler wiring `TenantRazorpayService.verifyAndSettle()` into `addPaymentToOrder`.
+- [ ] Explicit order-customer ownership proof/regression tests for the tenant checkout path.
+- [ ] Tenant webhook signature verification, durable inbox, worker/idempotency and reconciliation.
+- [ ] Live merchant checkout/capture/failure/replay/key-rotation tests.
+
+### Operational-policy blocker — existing tenant role repair
+
+`npm run tenant:roles:check` is dry-run/read-only. The current `npm run tenant:roles:repair` apply path writes Role records directly with repository `save()`, contrary to the GraphQL-only application-data mutation rule. Do not use apply mode unless the owner explicitly approves an exception. The preferred remediation is a SuperAdmin-authorized Admin GraphQL role-reconciliation operation with add-only default semantics.
+
+See `docs/architecture/plugin-code-review-2026-11-16.md` for the code-level review and `docs/implementation/roadmap.md` for the consolidated worklist.
