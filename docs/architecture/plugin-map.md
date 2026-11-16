@@ -678,3 +678,19 @@ The Admin safe view never returns decrypted secrets. `verifyTenantPaymentAccount
 | `ManageTenantPaymentAccount` (CRUD) | Tenant admins; granted to new roles by TenantPlugin |
 
 Existing tenant roles may lack the permission. `tenant:roles:check` is read-only; the current `tenant:roles:repair` apply path writes Role records directly via repository save and conflicts with the GraphQL-only mutation policy. Do not run it without an approved exception; add a SuperAdmin Admin GraphQL repair path first.
+
+
+---
+
+## Marketplace commerce cross-plugin responsibilities — ADR-055 proposal
+
+| Context | Owns / remains authoritative for | Required integration |
+|---|---|---|
+| PaymentsPlugin | Flow A platform one-time payment; tenant payment-account configuration and Flow B payment boundary | Complete tenant PaymentMethodHandler, settlement and tenant webhook/reconciliation before Flow B is production-ready |
+| SubscriptionPlugin | Tenant `OrganizationSubscription` (tenant → Saa9vi) | Do not reuse it for learner-to-tenant recurring subscriptions |
+| LearningPlugin | `LearningCourse`, `CourseEnrollment`, course access/read APIs | Integrate learner subscription state with course enrollment and bounded digital access |
+| BigBlueButtonPlugin | Sessions, BBB entitlements, capacity grants and usage billing | Keep free trial access separate from paid entitlements; retain ADR-047 usage facts |
+| Marketplace | Search projections, attribution, commission ledger, AdWallet and AdSpendLedger | Add owner-channel-aware marketplace checkout and listing destinations; retain 0% commission |
+| Vendure core commerce | Product/variant, tenant Channel, Order, Payment, stock, shipping and fulfilment primitives | All tenant-owned checkout operations run in the owning tenant Channel; initial order contains one tenant only |
+
+Marketplace-hosted checkout is an integration surface, not a new catalogue or merchant-of-record bounded context. See [ADR-055](../adr/adr-055-marketplace-commerce-and-revenue-model.md) and [MCR worklist](../implementation/marketplace-commerce-revenue-worklist.md).
