@@ -32,7 +32,7 @@ Platform-default or tenant-specific reusable configuration.
 | `channelId` | varchar, nullable | null = platform default |
 | `name` | varchar | |
 | `description` | text, nullable | |
-| `isDefault` | boolean | One platform default |
+| `isDefault` | boolean | Default marker; no uniqueness constraint guarantees a single default row |
 
 Current source declares a non-unique index on `(channelId, name)`. It does not enforce uniqueness or guarantee a single platform-default template.
 
@@ -97,13 +97,13 @@ Course-scoped announcements (MVP D10).
 | Column | Type | Notes |
 |---|---|---|
 | `id` | auto PK | |
-| `courseId` | FK → LearningCourse | |
+| `courseId` | varchar | Scalar course identifier; no TypeORM relation decorator |
 | `channelId` | varchar | Denormalized |
 | `title` | varchar | |
 | `body` | text | |
 | `status` | varchar | `DRAFT` / `PUBLISHED` |
 | `publishedAt` | timestamp, nullable | |
-| `authorId` | varchar | |
+| `authorId` | varchar, nullable | |
 | `createdAt` / `updatedAt` | timestamp | |
 
 ---
@@ -116,12 +116,12 @@ Course-scoped announcements (MVP D10).
 DRAFT → PUBLISHED → CLOSED → ARCHIVED
 ```
 
-- `DRAFT`: Only academy staff can see/edit. No Shop API exposure.
-- `PUBLISHED`: Visible to enrolled learners via Shop API. Enrollment open.
-- `CLOSED`: No new enrollments. Existing enrollments remain accessible.
-- `ARCHIVED`: Read-only. No mutations. Existing enrollments preserved.
+- `DRAFT`: Only academy staff can see/edit. No Shop API exposure, but the current Admin enrollment service does not prohibit enrollment while draft.
+- `PUBLISHED`: Visible to enrolled learners through the current Shop API. The enrollment service permits new enrollment.
+- `CLOSED`: The enrollment service rejects new enrollments. Current Shop course-page queries also require `PUBLISHED`, so closed courses are not returned through these reads.
+- `ARCHIVED`: Course content is read-only and the enrollment service rejects new enrollments. Existing enrollment rows are retained; the current Shop course-page queries do not expose archived courses.
 
-Who may publish/close: academy staff with `TenantManageAdmissions` or a dedicated course permission.
+Who may publish/close: callers with `CourseManage` Update permission. The current resolver gates archive with `Permission.SuperAdmin`.
 Who may archive: SuperAdmin only.
 
 ### CourseEnrollment lifecycle
@@ -194,7 +194,7 @@ Registry is a typed provider map. BBB plugin contributes the `videoconference` t
 2. Course TRAINER does not auto-grant BBB moderator (D8).
 3. Course tools are snapshots — template edits do not mutate existing courses.
 4. Cross-tenant course access is denied at the service level.
-5. Hidden tools are not rendered, but their API endpoints still enforce authorization.
+5. Hidden tools are omitted from learner-facing `CoursePage.tools`; visibility itself is not an authorization grant and no tool-specific Shop mutation is exposed.
 6. `myLearningDashboard` semantics are preserved — LearningPlugin does not replace the existing BBB entitlement/session projection.
 
 
