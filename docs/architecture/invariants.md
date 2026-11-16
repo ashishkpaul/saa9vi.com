@@ -16,12 +16,20 @@ BbbOrganization (BigBlueButtonPlugin)
 Seller (Vendure core — Phase 3)
 ```
 
-**Rule:** Every entity that is tenant-scoped **must** implement `ChannelAware` and be persisted via `channelService.assignToCurrentChannel(entity, ctx)` before the first `save()`. Every read against a channel-scoped entity **must** use `ListQueryBuilder` with `RequestContext` or `findOneInChannel`.
+**Rule:** Every tenant-scoped entity must either implement `ChannelAware` and be assigned to the current channel, or use an explicitly documented scalar/inherited scope with equivalent service-layer enforcement. Every channel-scoped read must apply the effective channel from `RequestContext`; no client-supplied tenant identifier is trusted without an ownership check.
 
-**Exceptions (documented in Decision Log):**
+**Documented scalar/inherited-scope patterns include:**
 - `InstructorProfile` — scalar `channelId` (DL-010)
 - `BbbEntitlement` — scalar `channelId` (DL-011)
 - `BbbOrganizationMembership` — scalar `channelId` (DL-017)
+- `TenantLearnerMembership` / `TenantLearnerMembershipLog` — scalar `channelId`
+- `TenantTheme` — scalar `channelId` (INV-025 / ADR-043)
+- LearningPlugin course, enrollment, scheduled-session, and announcement records — scalar `channelId`; `CourseTool` inherits through its course, and `CourseTemplate` may be platform-default (`channelId IS NULL`) (ADR-053)
+- `BbbMeteredUsage` and `SessionAttendance` — scalar `channelId` with meeting/session identity
+- `SubscriptionBillingAttempt` and `ProviderWebhookEvent` — denormalized scalar `channelId` (webhook channel is resolved from the provider binding)
+- `TenantPaymentAccount` — tenant `channelId` plus provider identity
+- `CustomerChannelStatus` / `CustomerStatusChangeLog` — per-channel or optional scalar `channelId`
+- BBB room/member/enrollment records may inherit channel ownership through `BbbOrganization` and must be checked by `BbbChannelAccessService`
 
 - **Inherited tenant scope (ADR-documented aggregates):** BBB entities (`BbbScheduledSession`, `BbbMeeting`, `BbbRoom`, etc.) are intentionally **not** channel-scoped directly; their tenant scope is **inherited through the authoritative channel-scoped aggregate** `BbbOrganization → channelId`. This is an accepted scoping pattern, not a violation: tenant scope may be inherited through an ADR-documented channel-scoped aggregate (e.g. ADR-012 for scheduled sessions). All reads/writes must still enforce the effective channel via `BbbChannelAccessService`.
 
@@ -33,7 +41,7 @@ Seller (Vendure core — Phase 3)
 
 ## INV-002: Every Billing Fact Is an Immutable Ledger Row.
 
-**Rule:** `BbbUsageLedger` rows are never updated. Never deleted. The source of billing truth is always `SUM(consumedMinutes) WHERE organizationId = X AND period`. Meeting state columns (`BbbMeeting.durationMinutes`) are operational convenience fields, never the authoritative billing source.
+**Rule:** `BbbUsageLedger` rows are never updated or deleted; for grant-billed meetings, grant consumption is authoritative in this ledger and is aggregated by organization and billing period. For metered organizations, `BbbMeteredUsage` is the separate authoritative usage fact (one row per completed metered meeting; see INV-028). Meeting state columns (`BbbMeeting.durationMinutes`) are operational convenience fields, never the authoritative billing source.
 
 **Concurrency rule:** Ledger creation must be concurrency-safe and database-idempotent. The idempotency decision must be made by the database write itself (`INSERT ... ON CONFLICT DO NOTHING` + `RETURNING`, winning insert ⇒ grant increment), never by check-then-insert. Check-then-insert is prohibited for billing facts: two concurrent workers can both pass a read guard and race. The grant increment and `GrantConsumedEvent.remainingMinutes` must derive from committed post-increment values (`UPDATE ... RETURNING`), never from a pre-transaction entity read. Billing failure after a meeting reaches `COMPLETED` is recovered by the scheduled `reconcilePendingBilling()` scan (COMPLETED + no ledger row + persisted grantId → replay billing).
 
@@ -52,7 +60,7 @@ Seller (Vendure core — Phase 3)
 
 **Rule:** All access to paid content — live sessions, recorded courses, workshops, coaching packages — is gated through a single `Entitlement` entity with a uniform `hasAccess(ctx, customerId, type, resourceId)` interface.
 
-**Current status:** `BbbEntitlement` entity and `BbbEntitlementService` are live. The primary room-access path (`joinRoom()` → `BbbEntitlementService.hasAccess()`) is migrated (ADR-002). `BbbEnrollment` is retained only for the trial-conversion audit trail (`convertTrialToEnrollment`), pending Phase 1.5 cleanup.
+**Current status:** `BbbEntitlement` and `BbbEntitlementService` are live and are the primary paid-access model. `BbbEnrollment` remains a legacy room-access source used by the shared room evaluator (INV-027), as well as a compatibility record in trial conversion (`convertTrialToEnrollment`). It must not be removed until legacy access and conversion consumers are explicitly migrated.
 
 **Rejection criterion:** Any new entity named `*Enrollment` or `*Access` that is not `BbbEnrollment` backward-compatibility is rejected.
 
@@ -151,7 +159,7 @@ Payments:
 
 **Rejection criterion:** Any service method that calls `.update()` on an `AdSpendLedger` row is rejected.
 
-> **INV-011 is intentionally unassigned.** The current canonical sequence runs INV-010 → INV-012; nothing in `invariants.md` or the legacy ADR defines an INV-011. When adding a new invariant, use the next free number (**INV-028**) rather than claiming INV-011. The canonical sequence currently runs through **INV-027** (INV-020–INV-027 were assigned after this note was written; INV-011 remains reserved, not a free slot).
+> **INV-011 is intentionally reserved and must not be reused.** The catalog now includes invariants through **INV-031** (including INV-028, INV-029, and INV-030). Before assigning a new number, check this file, the ADR index, and `src/platform/invariants/` for existing or reserved IDs; do not infer availability from a numbering gap.
 
 ---
 
@@ -551,6 +559,14 @@ field allowlist (`name`, `recordingEnabled`); suspension, billing, and capacity 
 platform-only. See `docs/architecture/security.md` SEC-008.
 
 
+
+## INV-030: Platform Payment Methods Are Not Auto-Assigned to Tenant Channels (ADR-051)
+
+**Rule:** Saa9vi platform payment methods are not automatically assigned to tenant channels. Flow A (tenant-admin payments to Saa9vi) uses platform credentials; Flow B (tenant-client collections) is configured separately through tenant-owned payment accounts. Tenant roles may read Vendure PaymentMethods but must not hold PaymentMethod create/update/delete permissions. The dummy payment handler is permitted only for development and tests; production startup must reject enabled dummy handlers.
+
+**Enforcement:** `PaymentHygieneChecker` (`src/platform/invariants/payment-hygiene.checker.ts`) statically verifies (1) tenant PaymentMethod permissions are read-only, (2) dummy-handler configuration is dev/test-gated, (3) tenant registration does not auto-assign the platform Razorpay handler, and (4) the production guard is registered. `PaymentsProductionGuard` performs the live per-channel dummy-handler check at application bootstrap outside development. The structural checker is run through `npm run verify:invariants`.
+
+---
 
 ## INV-031: `BbbServer.currentLoad` Is Measured, Not Assumed (ADR-050)
 
