@@ -443,8 +443,8 @@ and no pre-enqueue allowance probe was added. Runs under `npm run verify:invaria
 
 ## INV-027: Room Preview and Room Join Evaluate the Same Authorization Sources (BUG-045)
 
-**Rule:** The customer-facing room access decision exists in exactly one place. `bbbRoomStatus`
-(preview), `joinRoom` (action), and any future room-access surface MUST derive their answer from
+**Rule:** The customer-facing room access decision exists in exactly one place. The Shop API `bbbRoomStatus`
+(preview), `bbbJoinRoom` (action; delegates to `BbbMeetingService.joinRoom()`), and any future room-access surface MUST derive their answer from
 a single shared evaluation — the pure policy module `room-access.policy.ts` (expiry/role
 semantics) plus the shared service evaluator — over the same four sources, in this order:
 
@@ -459,8 +459,8 @@ semantics) plus the shared service evaluator — over the same four sources, in 
 `allowed = any source passes`; `isModerator` derives only from sources 1–2.
 
 **Corollaries:**
-- Authorization runs **before** provisioning is requested. `joinRoom` MUST evaluate the shared
-  decision before calling `requestProvisioning`; a denied customer must never enqueue a meeting,
+- Authorization runs **before** provisioning is requested. The internal `BbbMeetingService.joinRoom()`
+  path used by `bbbJoinRoom` MUST evaluate the shared decision before calling `requestProvisioning`; a denied customer must never enqueue a meeting,
   acquire a grant linkage, or reach BBB `createMeeting`.
 - Preview denial ⇔ join denial for the same `(customer, room)` at the same instant. A source
   recognized by one surface MUST be recognized by the other (BUG-045's two contradictions:
@@ -471,12 +471,12 @@ semantics) plus the shared service evaluator — over the same four sources, in 
   `BbbScheduledSession`) and tenant scoping (`BbbChannelAccessService`) are unchanged.
 
 **Rejection criterion:** Any new room-access surface that hand-rolls its own source list, any
-edit that adds or removes a source from `joinRoom` or `bbbRoomStatus` without changing the shared
+edit that adds or removes a source from `BbbMeetingService.joinRoom()` or `bbbRoomStatus` without changing the shared
 evaluation, and any ordering that authorizes after `requestProvisioning` — is rejected.
 
 **Structural checker (since 2026-09-30):** `RoomAccessChecker`
-(`src/platform/invariants/room-access.checker.ts`) — verifies both call sites delegate to the
-shared evaluator, the policy module enumerates all four sources, and `joinRoom` evaluates access
+(`src/platform/invariants/room-access.checker.ts`) — verifies both resolver/service call paths delegate to the
+shared evaluator, the policy module enumerates all four sources, and `BbbMeetingService.joinRoom()` evaluates access
 before `requestProvisioning`. Registered in `src/platform/invariants/cli.ts`; runs under
 `npm run verify:invariants`.
 
@@ -520,17 +520,20 @@ Registered in `src/platform/invariants/cli.ts`.
 
 ## INV-029: Tenant-Tier Reads Resolve Their Organization From the Channel (ADR-047)
 
-**Rule:** On every tenant-facing BBB read, the organization is derived from `ctx.channelId`
-(`BbbChannelAccessService`) and the API **accepts no `organizationId` argument at all**. An
-optional `organizationId` parameter whose omission widens the result set is a cross-tenant leak:
-omitting it must mean "the caller's own tenant", never "all tenants".
+**Rule:** Every tenant-facing BBB read must be constrained by `ctx.channelId` through
+`BbbChannelAccessService`. An explicit `organizationId`/resource ID is permitted only when the
+resolver asserts ownership before the read. If an optional argument is omitted, the fallback must
+still be channel-scoped — never widened to every tenant. Unrestricted cross-tenant reads are
+reserved for platform-tier callers.
 
 **Corollaries:**
 - Cross-tenant reads are legitimate only on **platform-tier** surfaces gated by
-  `BBBPlatformInfrastructure` (e.g. `bbbOrganizations`, platform billing summaries), which may
-  accept an explicit organization id because browsing across tenants *is* their function.
-- A caller-supplied organization id must never be trusted: it is either absent from the schema
-  (tenant tier) or exercised only after a platform-permission check.
+  `BBBPlatformInfrastructure` / `BBBAdmin` (e.g. `bbbOrganizations`, platform billing summaries).
+- A caller-supplied organization/resource ID is untrusted. Tenant paths must assert ownership
+  through `BbbChannelAccessService`; platform paths may proceed only after the platform permission gate.
+- `bbbMeetings` intentionally retains an optional `organizationId`: an explicit value is asserted
+  against the caller's channel, while the no-ID tenant path joins `org.channels` on `ctx.channelId`.
+  Platform callers may use the unrestricted no-ID path.
 - Extended by SEC-008: the billing controls that guard postpaid exposure (`billingMode`,
   `ratePaisePerLearnerHour`, `monthlySpendLimitPaise`, `suspended`) are platform-only writes, so a
   tenant cannot widen its own exposure or clear its own suspension.
@@ -540,10 +543,12 @@ omitting it must mean "the caller's own tenant", never "all tenants".
 returns other tenants' data, and any tenant-callable mutation that mutates platform billing
 controls — is rejected.
 
-**Known violation being remediated:** BUG-046 (`bbbMeetings` with `organizationId` omitted
-applies no channel filter) is fixed in Phase 5 of
-`docs/implementation/bbb-attendee-hour-billing-plan.md`; this invariant is added now so the
-checker and the fix have a documented rule to converge on.
+**Current implementation (verified on 2026-11-16):** BUG-046 is fixed in
+`BbbMeetingService.findAll()`: explicit organization/room arguments are ownership-asserted, and
+the no-argument tenant path derives the organization set through `org.channels` and
+`ctx.channelId`. BUG-047 is fixed in `BbbOrganizationService.update()` by the tenant-editable
+field allowlist (`name`, `recordingEnabled`); suspension, billing, and capacity controls remain
+platform-only. See `docs/architecture/security.md` SEC-008.
 
 
 
