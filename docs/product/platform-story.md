@@ -104,7 +104,7 @@ Internal rooms are `BbbRoom` entities with `productVariantId = null`. They are n
 
 ## Marketplace Lifecycle
 
-**Current as-built baseline:** marketplace search is a cross-channel discovery projection. Existing search and attribution must be preserved. The shared marketplace checkout described here is the target product contract proposed by ADR-055; it is not claimed as delivered in the reviewed source baseline.
+**Current as-built baseline:** marketplace search is a cross-channel discovery projection. The shared marketplace checkout described here is the target product contract proposed by ADR-055; it is not claimed as delivered in the reviewed source baseline.
 
 ```text
 Student searches marketplace.saa9vi.com
@@ -116,19 +116,19 @@ Student searches marketplace.saa9vi.com
   → CommissionLedger records $0 row (GMV + attribution history only)
 ```
 
-The marketplace is a shared storefront and discovery experience. It may host checkout UI, but it must not create tenant-owned orders in the Vendure default channel. The trusted server resolves the product/variant's owner Channel and performs cart, order, payment-method eligibility and payment mutations in that tenant context. The tenant's custom-domain storefront is optional and uses the same tenant catalogue, stock, prices, payment configuration and order lifecycle.
+The marketplace is a shared storefront and discovery experience. It may host checkout UI, but must not create tenant-owned orders in the Vendure default channel. The trusted server resolves the product/variant owner Channel and performs cart, order, payment-method eligibility and payment mutations in that tenant context. A tenant's custom-domain storefront is optional and uses the same tenant catalogue, stock, prices, payment configuration and order lifecycle.
 
-**Initial checkout boundary:** one tenant per cart/order. Products from multiple tenants require separate seller carts/orders. Cross-tenant order orchestration is deferred.
+Initial checkout supports one tenant per cart/order. Products from multiple tenants require separate seller carts/orders; cross-tenant order orchestration is deferred.
 
-**Fulfilment is split by commercial item:**
-- **Digital:** verified tenant payment or permitted free trial/admission activates course enrollment, time-bounded BBB entitlement, recorded content or scheduled-service access. Subscription renewals extend the applicable paid period; expiry/grace/cancellation follows the learner policy.
-- **Physical:** verified tenant payment and stock checks begin tenant-owned stock allocation, packing, shipping, delivery, cancellation, return and refund. Physical fulfilment is not governed by digital entitlement expiry.
+**Digital fulfilment:** verified tenant payment or permitted free trial/admission activates course enrollment, time-bounded BBB entitlement, recorded content or scheduled-service access. Subscription renewals extend the applicable paid period; expiry/grace/cancellation follows the learner policy.
 
-**CommissionLedger $0-row pattern:** commission remains permanently 0% under ADR-051 (Option C). A zero-value row preserves marketplace GMV and attribution history; it is not a payable fee.
+**Physical fulfilment:** verified tenant payment and stock checks begin tenant-owned stock allocation, packing, shipping, delivery, cancellation, return and refund. Physical fulfilment is not governed by digital entitlement expiry.
+
+Marketplace commission remains permanently 0% under ADR-051. A zero-value CommissionLedger row preserves GMV and attribution history; it is not a payable fee.
 
 > **Attribution boundary:** `orderSource` is classified and stamped by Vendure-side logic from signed opaque `marketplaceRef`. The server verifies HMAC signature, validity window, channel/resource relationship and single-use replay constraint. The reference proves marketplace provenance; it does not select the payment recipient, override tenant ownership or authorize a channel switch (INV-008; ADR-021).
 
-**Implementation boundary:** Flow B tenant Razorpay credentials and provider order creation exist, but ADR-054 records that tenant PaymentMethodHandler settlement and tenant webhook reconciliation are not yet wired end to end. The target marketplace checkout must not be treated as production-ready until those gates are complete. See [ADR-055](../adr/adr-055-marketplace-commerce-and-revenue-model.md), [commerce policy](marketplace-commerce-policy.md) and [implementation worklist](../implementation/marketplace-commerce-revenue-worklist.md).
+**Implementation boundary:** Flow B tenant Razorpay credentials and provider order creation exist, but ADR-054 records that tenant PaymentMethodHandler settlement and tenant webhook reconciliation are not yet wired end to end. Marketplace checkout must not be treated as production-ready until those gates are complete. See [ADR-055](../adr/adr-055-marketplace-commerce-and-revenue-model.md), [commerce policy](marketplace-commerce-policy.md) and [implementation worklist](../implementation/marketplace-commerce-revenue-worklist.md).
 ---
 
 ## Subscription Billing Lifecycle
