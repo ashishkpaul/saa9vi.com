@@ -710,6 +710,6 @@ The sections above describe the main domain aggregates. The following supporting
 | PaymentsPlugin | `TenantPaymentAccount` | Tenant-channel Razorpay account configuration; credentials are encrypted and account status is `pending` or `active`. |
 | CustomerSuspensionPlugin | `CustomerChannelStatus` | Per-customer/per-channel checkout suspension state. |
 | CustomerSuspensionPlugin | `CustomerStatusChangeLog` | Append-only platform/channel suspension audit. |
-| LearningPlugin | `CourseTemplate`, `CourseTemplateTool`, `CourseTool`, `CourseEnrollment`, `CourseScheduledSession`, `CourseAnnouncement` | Course-domain supporting records; see `docs/architecture/learning-domain.md` and ADR-053 for states, relations, and admission rules. |
+| LearningPlugin | `LearningCourse`, `CourseTemplate`, `CourseTemplateTool`, `CourseTool`, `CourseEnrollment`, `CourseScheduledSession`, `CourseAnnouncement` | Course-domain supporting records; see `docs/architecture/learning-domain.md` and ADR-053 for states, relations, and admission rules. |
 
 **Scoping reminder:** entity ownership is not synonymous with `ChannelAware`. Several records deliberately use scalar `channelId` or inherit scope through a parent organization/course/room. The owning plugin resolver/service guard and the relevant ADR/invariant remain authoritative; do not infer tenant isolation from a table name alone.
