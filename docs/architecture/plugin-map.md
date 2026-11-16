@@ -136,6 +136,11 @@ None (injects TenantPlugin services for org verification).
 | `LearningDashboardService` | Domain API for student dashboard |
 | `TrialRegistrationService` | Trial registration and conversion |
 | `GrantReaderService` | Abstracted grant resolution (Q-009 seam) |
+| `BbbMeteringService` / `BbbBillingService` | Per-minute metering samples and read-side usage/billing summaries (ADR-047) |
+| `BbbDailyAllowanceService` | Single writer of daily live-allowance grants (ADR-045 / INV-026) |
+| `SessionAttendanceService` / `AttendanceAnalyticsService` | Attendance recording and analytics |
+| `BbbHooksService` / `BbbWebhookRetentionService` | Hook lifecycle management and webhook retention |
+| `BbbServerLoadService` | Measured server load/health signals for server selection |
 
 ### Job Queues
 
@@ -145,6 +150,15 @@ None (injects TenantPlugin services for org verification).
 | `bbb-webhook-processor` | On demand | Process persisted webhook event |
 | `bbb-reconciliation` | Every 60s | Reconcile active meetings |
 | `bbb-capacity-alert` | Every 15min | Capacity intelligence check |
+
+### Scheduled Tasks
+
+| Task | Schedule / trigger | Purpose |
+|---|---|---|
+| `bbb-metering` | Every minute | Record attendee/minute metering samples (idempotent bucket writes) |
+| `bbb-metering-prune` | Scheduled | Prune obsolete metering samples when they can no longer be billed |
+| `bbb-daily-allowance` | Hourly | Materialize the current server-day free allowance grant |
+| `bbb-server-health` | Scheduled | Signed health probes; sole recovery writer for server health state |
 
 ---
 
@@ -204,6 +218,10 @@ None (injects TenantPlugin services for org verification).
 |---|---|---|
 | `ReviewsShopResolver` | Shop API | `productReviews`, `canReviewProduct`, `submitReview` |
 | `ReviewsAdminResolver` | Admin API | Review moderation, reports, rewards |
+
+### Key Services / extensions
+
+The plugin registers target, eligibility and aggregation strategy registries plus the ProductReview target/strategy implementations, anti-fraud, aggregation/cache, request/reward/report and customer-deletion services. It also exposes a review upload REST controller and a Vendure dashboard extension.
 
 ---
 
@@ -391,6 +409,9 @@ None (extends `orderOptions.process` with `customerStatusOrderProcess` to block 
 | `SubscriptionRenewalService` | Renewal discovery — `processRenewals()` selects `status IN ('active','trialing') AND currentPeriodEnd < now`, so **any** `active` row with a past period end becomes a charge candidate (including a provider-free row: see plan §0.19 F-7) — cycle-monotonic FINALIZE CAS (ADR-041), bounded retry (MAX 3), reconcile-after-charge incidents |
 | `SubscriptionRenewalQueueService` | BullMQ-backed `subscription-renewal` queue |
 | `SubscriptionService` | Plan/enrollment lifecycle (depends on `RecurringBillingProvider` interface) |
+| `SubscriptionShopService` | Tenant-facing commercial reads (`mySubscription`, `myLiveUsage`, public plan catalogue) |
+| `TenantSelfServeSubscriptionCooldownService` | Five-minute per-channel plan-change cooldown (ADR-046) |
+| `FreePlanProvisioningService` / listener | Provider-free Free Basic subscription provisioning on `TenantRegisteredEvent` |
 
 ### Razorpay Webhook Flow
 
