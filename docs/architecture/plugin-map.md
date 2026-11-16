@@ -645,4 +645,4 @@ The Admin safe view never returns decrypted secrets. `verifyTenantPaymentAccount
 |---|---|
 | `ManageTenantPaymentAccount` (CRUD) | Tenant admins; granted to new roles by TenantPlugin |
 
-Existing tenant roles may need `npm run tenant:roles:repair` / `tenant:roles:repair` reconciliation.
+Existing tenant roles may lack the permission. `tenant:roles:check` is read-only; the current `tenant:roles:repair` apply path writes Role records directly via repository save and conflicts with the GraphQL-only mutation policy. Do not run it without an approved exception; add a SuperAdmin Admin GraphQL repair path first.
