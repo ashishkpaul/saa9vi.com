@@ -1644,3 +1644,53 @@ The `encryptionKeyVersion` column already exists on `bbb_server` and
 No schema change is required — `encryptionKeyVersion` already exists.
 The command will be a one-shot admin script (not a scheduled task).
 Implementation is pending explicit approval before code is generated.
+
+
+------------------------------------------------------------------------
+
+# 20. Code-state addendum — 16 November 2026
+
+**Reviewed baseline:** `saa9vi_com` at `3c245952d57b9ddeb27b9cbd6ee01de5bae0ba71`. This addendum records source inspection only. It does not close any production gate.
+
+## 20.1 LearningPlugin
+
+LearningPlugin is registered and exposes Admin course-management APIs plus authenticated Shop reads. Course enrollment requires active tenant admission via `LearnerAdmissionPort`. The current Shop API does not expose learner self-enrollment/invitation acceptance; template CRUD is also absent from the SDL. Storefront integration and live end-to-end evidence must be tracked separately. See `docs/architecture/learning-domain.md` and `docs/architecture/plugin-code-review-2026-11-16.md`.
+
+## 20.2 Per-tenant Razorpay Flow B
+
+The current source supports:
+
+- TenantPaymentAccount configuration through the Admin API.
+- AES-256-GCM encrypted tenant Key Secret and optional webhook secret.
+- Credential probe using Razorpay `GET /payments?count=1`.
+- Authenticated tenant Shop API order creation through `createTenantRazorpayCheckoutOrder`.
+
+The following are **not** complete at this baseline:
+
+1. No tenant-specific Vendure `PaymentMethodHandler` is registered. `TenantRazorpayService.verifyAndSettle()` is not wired to `addPaymentToOrder`; tenant checkout-order creation is not proof of settlement.
+2. No tenant-specific webhook controller, durable inbox or reconciliation worker exists. The existing one-time payment webhook belongs to platform Flow A; recurring Razorpay webhooks belong to SubscriptionPlugin.
+3. `verifyTenantPaymentWebhook` checks only that the stored encrypted webhook secret exists and can be decrypted. It does not verify an HMAC test event or endpoint registration.
+4. The explicit `orderId` path verifies current-channel membership but does not visibly compare the order's customer user to `ctx.activeUserId` in the service. Prove the `Permission.Owner` behavior for this custom resolver or add an explicit owner assertion and cross-customer regression test.
+5. A future tenant settlement handler must re-check the payment account is active and enabled at settlement time.
+
+**R3 scope clarification:** the platform one-time `razorpayPaymentHandler` is Flow A and is reserved for orders tagged `paymentPurpose = 'platform-service'`. It is not the tenant-client Flow B handler. Do not use the existing R3 one-time implementation as evidence that per-tenant course/session fee collection is complete.
+
+## 20.3 Encryption keys and deployment prerequisites
+
+- `TENANT_PAYMENT_ENCRYPTION_KEY`: 64-character hex string representing 32 bytes; required by `TenantPaymentEncryptionService` when `APP_ENV !== 'dev'`. `TENANT_PAYMENT_ENCRYPTION_KEY_PREVIOUS` is an optional previous-key decrypt fallback during rotation. The reviewed service includes no automatic bulk re-encryption operation; retain the old key until all ciphertext has been deliberately re-encrypted and verified.
+- `VENDURE_ENCRYPTION_KEY`: separate from the tenant-payment encryption key; supplied to Vendure's `DefaultEncryptionStrategy` for Stripe plugin secret encryption (`encryptSecrets: true`).
+- Back up both encryption keys independently of PostgreSQL backups. Confirm deployed values and recovery procedures before accepting production credentials.
+
+## 20.4 Evidence classification
+
+| Area | Source status at reviewed commit | Runtime/provider evidence |
+|---|---|---|
+| LearningPlugin backend | Registered; entities and GraphQL inspected | Not collected in this documentation pass |
+| Flow B account encryption/configuration | Source inspected | No live tenant-key verification or rotation exercise |
+| Flow B checkout order creation | Source inspected | No end-to-end merchant checkout evidence |
+| Flow B settlement | Not wired to a tenant PaymentMethodHandler | Blocked |
+| Flow B webhook | No tenant endpoint/inbox/worker | Blocked |
+| Flow A one-time payment webhook | Persist-first source path present | Existing runtime evidence must be checked against current deployment |
+| Subscription recurring billing | Existing source/ADR-041 path present | Separate R2 live-provider verification remains required |
+
+No build, unit/e2e suite, migration, database mutation, live Razorpay request, live BBB request or deployed environment inspection was performed for this addendum.

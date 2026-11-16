@@ -607,3 +607,119 @@ joinRoom(roomId) / bbbRoomStatus(id)
      a denied customer never enqueues a meeting;
      bbbRoomStatus throws ForbiddenError on denial (preview denial ⇔ join denial)
 ```
+
+
+---
+
+## Course lifecycle and learner access (LearningPlugin / ADR-053)
+
+### Course creation and tool snapshot
+
+```text
+createLearningCourse(input) [Admin API; tenant channel from RequestContext]
+  |
+  +-- validate slug/title
+  +-- create LearningCourse { channelId, status: DRAFT, templateId }
+  |
+  +-- if templateId was supplied:
+  |     load platform-default template (channelId NULL)
+  |       or current-channel template
+  |     validate each toolKey/settings through CourseToolRegistry
+  |     copy CourseTemplateTool rows into CourseTool rows
+  |
+  +-- otherwise:
+        enumerate CourseToolRegistry definitions
+        create default CourseTool rows
+```
+
+The registry is populated during module initialization. LearningPlugin contributes `description`, `users`, `agenda`, and `announcements`; BigBlueButtonPlugin contributes `videoconference`. Tool routes/definitions are trusted code. Course tool visibility is presentation metadata, not a grant to join a BBB room.
+
+### Enrollment and publication
+
+```text
+enrollLearner(courseId, customerId) [Admin API]
+  |
+  +-- assert course belongs to ctx.channelId
+  +-- reject CLOSED / ARCHIVED course
+  +-- LearnerAdmissionPort.isActiveMember(customerId, channelId)
+  |     +-- false -> Forbidden
+  |     +-- true  -> continue
+  +-- create/reactivate CourseEnrollment as ENROLLED
+        (COMPLETED / WITHDRAWN rows are terminal)
+
+myCoursePages / myCoursePage(slug) [Shop API]
+  |
+  +-- resolve active User -> Vendure Customer
+  +-- resolve course in ctx.channelId and require PUBLISHED
+  +-- require CourseEnrollment.status = ENROLLED
+  +-- require ACTIVE academy admission via LearnerAdmissionPort
+  +-- return course + visible CoursePage.tools
+```
+
+Shop API also exposes `coursePageAnnouncements(courseId)`, subject to the same published-course, enrolled-customer and active-admission checks; only PUBLISHED announcements are returned.
+
+The current Shop schema does not expose enrollment or invitation acceptance. The Admin mutation `enrollLearner` creates an ENROLLED enrollment directly. `INVITED` is a modeled state but no invitation creation/acceptance API is registered. CourseTemplate entities and snapshotting exist, but template CRUD is not exposed in the current GraphQL schema.
+
+### Course lifecycle
+
+```text
+DRAFT --publishLearningCourse--> PUBLISHED
+PUBLISHED --closeLearningCourse--> CLOSED
+CLOSED --archiveLearningCourse (SuperAdmin)--> ARCHIVED
+```
+
+### Course-to-BBB scheduled-session association
+
+`addCourseSession(courseId, sessionId)` checks that both the course and the existing `BbbScheduledSession` belong to the active channel, then stores a scalar association row. The LearningPlugin does not own the BBB session lifecycle; joining and room authorization remain in BigBlueButtonPlugin.
+
+---
+
+## One-time Razorpay checkout — Flow A (PaymentsPlugin)
+
+```text
+createRazorpayCheckoutOrder(orderId?) [Shop API]
+  |
+  +-- require authenticated caller
+  +-- resolve active/explicit order and check channel + customer ownership
+  +-- require order.state = ArrangingPayment and total > 0
+  +-- require order.customFields.paymentPurpose = 'platform-service'
+  +-- create provider order with platform RAZORPAY_KEY_ID/SECRET
+  +-- return public checkout handle
+  |
+  +-- addPaymentToOrder(method: 'razorpay')
+        +-- razorpayPaymentHandler -> RazorpayCheckoutService.verifyAndSettle()
+        +-- fetch provider order/payment and validate signature/binding
+        +-- capture when required
+        +-- return Settled only after server-side provider verification
+```
+
+The platform one-time webhook route is `POST /payments/razorpay/checkout-webhook`. It verifies the Razorpay HMAC over the raw request body, persists a `PaymentWebhookEvent` inbox record, enqueues the inbox ID to `payment-webhook-reconciliation`, and then acknowledges the delivery. The worker reconciles only settling events (`payment.captured`, `order.paid`) and uses bounded retries. This flow is deliberately separate from recurring subscriptions.
+
+## Per-tenant Razorpay checkout — Flow B (partial implementation)
+
+```text
+Admin: upsertTenantPaymentAccount
+  |
+  +-- encrypt Key Secret (+ optional webhook secret) with AES-256-GCM
+  +-- persist channel-scoped TenantPaymentAccount as pending / disabled
+  |
+Admin: verifyTenantPaymentAccount
+  +-- GET /payments?count=1 using tenant Key ID/Secret
+  +-- on success mark account active (does not enable it)
+  |
+Admin: setTenantPaymentAccountEnabled(true)
+  |
+Shop: createTenantRazorpayCheckoutOrder(orderId?)
+  +-- require authenticated caller
+  +-- resolve account from ctx.channelId; require active + enabled
+  +-- check order belongs to channel, ArrangingPayment, total > 0
+  +-- create Razorpay order using tenant credentials
+  +-- return provider order ID, amount, currency and public Key ID
+```
+
+**Current stopping point:** the reviewed `PaymentsPlugin` does not register a tenant-specific Vendure `PaymentMethodHandler`. `TenantRazorpayService.verifyAndSettle()` contains signature/provider-binding logic but has no registered handler/call site, so the order-creation path is not yet connected to `addPaymentToOrder` and Vendure order settlement. No tenant-specific Flow B webhook controller, inbox or reconciliation worker exists. The platform `razorpayPaymentHandler` is Flow A only and rejects orders whose `paymentPurpose` is not `platform-service`.
+
+**Credential-probe caveat:** `verifyTenantPaymentAccount` performs `GET /payments?count=1`; it does not create a ₹1 test order. `verifyTenantPaymentWebhook` only confirms that the configured encrypted webhook secret exists and decrypts; it does not test a signed webhook delivery or verify a registered endpoint.
+
+**Security follow-up:** the tenant checkout service's explicit `orderId` path checks tenant channel membership but does not visibly compare the order's customer user with `ctx.activeUserId`. The resolver has `@Allow(Permission.Owner)`; prove that this permission is resource-bound for this custom resolver, or add an explicit owner check and cross-customer regression test before completing Flow B.
+

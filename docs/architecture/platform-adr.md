@@ -1153,11 +1153,13 @@ The checker is run as part of the standard gate sequence before push (`npm run v
 
 2. **Academy admission gate uses `LearnerAdmissionPort`** — an injected interface (`LEARNER_ADMISSION_PORT`) resolved from a platform-level NestJS module (`LearnerAdmissionModule`), not a direct import of `TenantPlugin`. `CourseEnrollmentService` requires `TenantLearnerMembership.status = ACTIVE` before enrolling (C-25 invariant). This pattern is the reference for all future cross-plugin behavioral dependencies — prefer a platform port over a direct plugin import.
 
-3. **Course tools use a startup registry (`CourseToolRegistry`)**, not a polymorphic entity hierarchy. `CourseTool` rows store a stable `toolKey` string referencing a registered definition; tool settings are a JSON column. Adding a new tool type requires only a new `CourseToolContributor` and a new key — no migration.
+3. **Course tools use a startup registry (`CourseToolRegistry`)**, not a polymorphic entity hierarchy. `CourseTool` rows store a stable `toolKey` string referencing a registered definition; tool settings are a JSON column. LearningPlugin registers `description`, `users`, `agenda`, and `announcements`; BigBlueButtonPlugin contributes `videoconference`. Adding a new tool type requires a contributor and a new key — no migration.
 
-4. **`CourseEnrollment` status is a strict FSM** with explicit allowed transitions. `COMPLETED` and `WITHDRAWN` are terminal; re-enrollment from terminal states is a documented gap pending a product decision.
+4. **`CourseEnrollment` status is a strict FSM** with explicit allowed transitions. The implementation permits `INVITED → ENROLLED | WITHDRAWN`, `ENROLLED → SUSPENDED | COMPLETED | WITHDRAWN`, and `SUSPENDED → ENROLLED | COMPLETED | WITHDRAWN`. `COMPLETED` and `WITHDRAWN` are terminal; re-enrollment from terminal states is rejected.
 
 **Key additions:** `LearningCourse`, `CourseTemplate`, `CourseTemplateTool`, `CourseTool`, `CourseEnrollment`, `CourseScheduledSession`, `CourseAnnouncement` entities; `LearnerAdmissionPort`; `CourseToolRegistry`; `courseManagePermission`, `courseEnrollPermission`, `courseAnnouncementPermission`.
+
+**Current API boundary:** Admin GraphQL exposes course, enrollment, announcement, tool and BBB-session-link operations. Shop GraphQL exposes `myCoursePages`, `myCoursePage(slug)` and `coursePageAnnouncements(courseId)` only. Template CRUD, Shop enrollment and invitation acceptance are not exposed at this baseline.
 
 **Migrations required:** yes — new tables for all LearningPlugin entities.
 
@@ -1165,19 +1167,22 @@ The checker is run as part of the standard gate sequence before push (`npm run v
 
 ## ADR-054: Per-Tenant Razorpay Integration (Flow B Implementation)
 
-**Status:** Active (implementation phase)  
+**Status:** Accepted; backend implementation partial. Flow B order creation is present, but Vendure payment settlement and tenant webhook processing are not wired at the reviewed baseline.  
 **Full record:** `docs/adr/adr-054-per-tenant-razorpay-flow-b.md`
 
-**Context:** ADR-051 (Option C) selected per-tenant Razorpay and deferred implementation. This ADR records the implementation design.
+**Context:** ADR-051 (Option C) selected tenant-owned Razorpay accounts for tenant-client collections. Saa9vi's platform Razorpay credentials remain reserved for Flow A platform-service charges.
 
-**Core decisions:**
+**Core decisions and current implementation:**
 
-1. **`TenantPaymentAccount` entity stores credentials**: `keyId` plaintext, `keySecret` AES-256-GCM encrypted at rest via `TenantPaymentEncryptionService`. The raw secret is never returned from the API.
+1. **Credential entity and encryption:** `TenantPaymentAccount` stores one provider account per channel. Key ID is plaintext/public; Key Secret and optional webhook secret are AES-256-GCM encrypted via `TenantPaymentEncryptionService`. The safe Admin GraphQL view never returns decrypted secrets.
+2. **Credential probe:** `verifyTenantPaymentAccount` calls Razorpay `GET /payments?count=1` using the tenant credentials and marks the account active on success. It does not create a ₹1 order. The separate `verifyTenantPaymentWebhook` mutation checks only encrypted-secret presence/decryption; it is not a signed webhook test.
+3. **Checkout-order surface:** `createTenantRazorpayCheckoutOrder(orderId)` resolves credentials from `ctx.channelId`, requires an active and enabled account, verifies the order is in the current channel and `ArrangingPayment`, and returns the provider order handle plus public Key ID.
+4. **Shared signature policy:** `TenantRazorpayService.verifyAndSettle()` uses the pure helpers in `razorpay-checkout.policy.ts` for signature and provider order/payment binding. However, no tenant-specific Vendure `PaymentMethodHandler` is registered and this method has no current handler call site. Therefore the method's existence does not make Flow B settlement operational.
+5. **Webhook boundary:** the current `PaymentWebhookEvent` / `RazorpayPaymentsWebhookController` / BullMQ queue belong to platform one-time Flow A only. No tenant-specific Flow B webhook endpoint, inbox or reconciliation worker is registered.
+6. **Permission:** `ManageTenantPaymentAccount` controls tenant account configuration and is granted to newly created tenant-admin roles through `TENANT_ADMIN_ROLE_PERMISSIONS`. Older roles may need the role-repair command.
 
-2. **Credentials are verified before activation**: `verifyTenantRazorpayCredentials` mutation probes the Razorpay `/orders` endpoint with a ₹1 test order (never captured). Account transitions `pending → active` on success; `TenantRazorpayService.createCheckoutOrder()` fails closed if the account is not `active` or `isEnabled` is `false`.
+**Open implementation/security work:** register a tenant-specific payment handler and wire settlement through `addPaymentToOrder`; prove or enforce explicit order-customer ownership for the optional `orderId` path (the service currently checks channel membership but contains no visible `customer.user.id === ctx.activeUserId` comparison); recheck account active/enabled state at settlement; implement proper tenant webhook signature validation, durable inbox/idempotency and reconciliation. Flow B must remain marked partial and not production-ready until these are completed and verified.
 
-3. **Flow B reuses `razorpay-checkout.policy.ts` signature helpers** — the same `computeCheckoutSignature`, `assertOrderBinding`, and `assertPaymentBinding` functions used by Flow A. `TenantRazorpayService` resolves keys from `TenantPaymentAccount` rather than environment variables; the policy functions are agnostic to the key source.
+**Key operations:** `TENANT_PAYMENT_ENCRYPTION_KEY` is a 64-character hex-encoded 32-byte AES key and is required when `APP_ENV !== 'dev'`. `TENANT_PAYMENT_ENCRYPTION_KEY_PREVIOUS` supports fallback decryption during rotation; the reviewed service does not include an automatic bulk re-encryption command. This key is distinct from `VENDURE_ENCRYPTION_KEY`, which configures Vendure's `DefaultEncryptionStrategy` for Stripe plugin secret encryption.
 
-4. **`ManageTenantPaymentAccount` custom permission** controls access to per-tenant Razorpay configuration. Added to `TENANT_ADMIN_ROLE_PERMISSIONS` for new tenant registrations; existing tenants require a one-time role repair via `tenant:roles:repair`.
-
-**Migrations required:** yes — `tenant_payment_account` table.
+**Migrations required:** yes — `tenant_payment_account` table. Source/SDL baseline: `3c245952d57b9ddeb27b9cbd6ee01de5bae0ba71`. Runtime and provider verification remain separate evidence requirements.

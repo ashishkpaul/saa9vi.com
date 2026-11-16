@@ -276,3 +276,36 @@ Every tenant lands on a permanent **Free Basic** plan at registration (no card, 
 
 **Simulation-harness grant-model alignment** (reconcile before either harness is promoted into CI)
 - [ ] `src/platform/stress-test/lifecycle-simulator.ts` (L67/73/77) and `src/plugins/load-simulation-plugin/engine/causal-mapper.ts` (L26) still label the subscription grant `RecurringCapacityGrant` / `RecurringCapacityGrantCreatedEvent`. Both are plain string labels — no such entity or event class exists — and they sit outside the `verify:invariants` scan, so they do not fail any gate today. Reconcile them to the authoritative `BbbCapacityGrant(sourceType='subscription')` / `SubscriptionCapacityGrant` model (RFC-001 v4, `f0e5ece`) before either harness is promoted into CI.
+
+
+---
+
+## 16 November 2026 — LearningPlugin and tenant Razorpay Flow B code-state reconciliation
+
+This section records current code presence separately from product completion and runtime verification. Baseline: branch `saa9vi_com`, commit `3c245952d57b9ddeb27b9cbd6ee01de5bae0ba71`.
+
+### LearningPlugin — backend foundation present; workflow gaps remain
+
+- [x] LearningPlugin registered with course, template/tool, enrollment, course-session-link and announcement entities.
+- [x] Admin GraphQL for course lifecycle, learner enrollment state, announcements, course tools and BBB scheduled-session association.
+- [x] Shop read APIs for enrolled, active-admission learners: `myCoursePages`, `myCoursePage`, `coursePageAnnouncements`.
+- [x] Cross-plugin admission check through `LearnerAdmissionPort`; tool registry contributed by LearningPlugin and BigBlueButtonPlugin.
+- [ ] Shop enrollment / invitation acceptance workflow (not exposed by current SDL).
+- [ ] CourseTemplate CRUD GraphQL and dashboard workflow (entities and template snapshotting exist; CRUD is not exposed by current SDL).
+- [ ] Full Next.js storefront course experience and end-to-end acceptance evidence.
+- [ ] Runtime verification against the deployed PostgreSQL/Redis/BBB environment.
+
+### Per-tenant Razorpay Flow B — configuration and order creation present; settlement incomplete
+
+- [x] `TenantPaymentAccount` with channel/provider uniqueness and AES-256-GCM encrypted Key Secret / optional webhook secret.
+- [x] Tenant Admin account configuration, enable/disable, safe account view and credential probe (`GET /payments?count=1`).
+- [x] Authenticated Shop mutation `createTenantRazorpayCheckoutOrder` using credentials resolved from the current channel.
+- [ ] Register a tenant-specific Vendure `PaymentMethodHandler` and wire `TenantRazorpayService.verifyAndSettle()` through `addPaymentToOrder`. The current plugin registers only the platform Flow A handler.
+- [ ] Explicit order-customer ownership binding and cross-customer regression coverage for the explicit `orderId` path.
+- [ ] Proper tenant webhook signature test; the current `verifyTenantPaymentWebhook` only checks secret presence/decryption.
+- [ ] Tenant-specific webhook route, durable inbox, idempotent worker and recovery/reconciliation.
+- [ ] Test/live merchant end-to-end checkout, capture/settlement, webhook, failure/replay and key-rotation evidence.
+
+**Commercial boundary:** Flow A remains tenant-admin → Saa9vi for platform services. Flow B is tenant-client → tenant admin using tenant credentials and remains a separate lifecycle. The current one-time Razorpay handler enforces `paymentPurpose = 'platform-service'`; it must not be treated as the Flow B handler.
+
+See `docs/architecture/plugin-code-review-2026-11-16.md`, ADR-053 and ADR-054 for source-level details. No migration or runtime operation is implied by this documentation status update.
