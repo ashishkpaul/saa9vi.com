@@ -309,3 +309,43 @@ This section records current code presence separately from product completion an
 **Commercial boundary:** Flow A remains tenant-admin → Saa9vi for platform services. Flow B is tenant-client → tenant admin using tenant credentials and remains a separate lifecycle. The current one-time Razorpay handler enforces `paymentPurpose = 'platform-service'`; it must not be treated as the Flow B handler.
 
 See `docs/architecture/plugin-code-review-2026-11-16.md`, ADR-053 and ADR-054 for source-level details. No migration or runtime operation is implied by this documentation status update.
+
+
+---
+
+## Marketplace Commerce & Revenue model — proposed next programme (ADR-055)
+
+**Status:** Proposed work; do not interpret these entries as implementation evidence. Canonical details and acceptance criteria are in `docs/implementation/marketplace-commerce-revenue-worklist.md`.
+
+### P0 — Tenant-channel commerce foundation
+
+- [ ] Complete Flow B tenant Razorpay PaymentMethodHandler and normal Vendure payment settlement.
+- [ ] Implement tenant-specific webhook inbox, signature verification, idempotency and reconciliation.
+- [ ] Define trusted tenant owner-channel resolution, marketplace customer identity and cross-channel isolation.
+- [ ] Implement marketplace-hosted checkout using tenant-channel carts/orders and eligible payment methods. Do not use the default marketplace channel for tenant orders.
+- [ ] Enforce one tenant per initial cart/order.
+
+### P0 — Learner subscription and digital access
+
+- [ ] Design learner-to-tenant recurring subscription lifecycle separately from `OrganizationSubscription` (tenant-to-Saa9vi).
+- [ ] Link verified subscription/payment periods to course enrollment and bounded BBB/content entitlements.
+- [ ] Define renewal, failure, grace, cancellation, expiry, refund and reconciliation rules.
+
+### P1 — Trial, fulfilment and physical marketplace
+
+- [ ] Harden free trial entitlement creation so registration cannot succeed with missing trial access.
+- [ ] Preserve trial as no-payment/no-mandate by default, with explicit learner conversion after the trial.
+- [ ] Separate digital fulfilment from physical fulfilment.
+- [ ] Allow physical listings on marketplace, tenant storefront, or both; do not require a tenant custom domain.
+- [ ] Gate physical listings on tenant opt-in, payment readiness, inventory, shipping, tax and return/refund policy.
+
+### P1/P2 — Monetization and release readiness
+
+- [ ] Expand homepage, collection/sub-collection, sponsored listing and product/course detail advertising inventory.
+- [ ] Define deduplicated, fraud-resistant impression/click billing before charging CPC/CPM.
+- [ ] Keep custom-domain storefront hosting optional and separately billable.
+- [ ] Preserve ADR-047 BBB billing modes and define included, prepaid and metered plan packaging.
+- [ ] Run two-tenant end-to-end tests across marketplace checkout, tenant storefront, digital access, trial, physical fulfilment, payments, webhooks and advertising.
+
+**Business invariant:** tenant-client commerce remains zero-commission; Saa9vi revenue comes from tenant platform subscriptions, advertising, optional tenant-domain storefront hosting, BBB usage and optional platform services.
+
