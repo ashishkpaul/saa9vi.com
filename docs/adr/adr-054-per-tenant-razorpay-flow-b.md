@@ -51,6 +51,7 @@ An `active` account can be toggled `isEnabled: false` to disable checkout withou
 **Consequences:**
 
 - `TenantRazorpayService.createCheckoutOrder()` fails closed if the account is not `active` or `isEnabled` is false.
+- `verifyTenantPaymentAccount` and `verifyTenantPaymentWebhook` are Admin API mutations on `TenantPaymentAdminResolver`; the Shop API resolver exposes only `createTenantRazorpayCheckoutOrder`.
 - The test-order probe creates a Razorpay Order object; it is never captured and expires in 15 minutes. No funds are moved.
 
 ---
