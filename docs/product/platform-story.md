@@ -333,3 +333,31 @@ sequenceDiagram
 - **BBB `getMeetingInfo` returning `error.forbidden`** (observed against `meeting.saa9vi.com`) blocks join-URL generation. The existence validator now treats only explicit `notFound` as "meeting gone" and otherwise fails open with a structured log. Exact BBB semantics for `error.forbidden` on provisioning-created rooms still need to be confirmed against the live BBB; a join can also be blocked legitimately if BBB auto-destroys an un-joined meeting (default expiry).
 
 (Historical BUG-022/023 were fixed in v1.10–v1.11; see `docs/implementation/release-notes.md`.)
+
+
+---
+
+## Course learner lifecycle (LearningPlugin / ADR-053)
+
+A tenant academy admits a customer through its own `TenantLearnerMembership`. The membership is channel-scoped and is distinct from the global Vendure User/Customer identity. A learner's course enrollment additionally records course role and course status.
+
+At the current backend baseline:
+
+- Tenant staff can create/update/publish/close courses and manage enrollments, announcements, course tools and links to existing BBB scheduled sessions through the Admin API.
+- Course enrollment requires ACTIVE academy admission. The course Shop reads require both an ENROLLED course row and active academy admission.
+- Learners can read their published course pages and published course announcements through `myCoursePages`, `myCoursePage(slug)` and `coursePageAnnouncements(courseId)`.
+- The current Shop API does not expose self-enrollment or invitation acceptance. The Admin enrollment operation writes ENROLLED directly; the INVITED state exists in the model but is not yet a delivered invitation workflow.
+- Course templates and tool snapshots exist in the backend, but template CRUD is not exposed by the current GraphQL contract.
+- A course's `videoconference` tool declaration does not authorize joining a BBB room. BBB access remains controlled by the BBB entitlement/membership access evaluation (INV-027).
+
+This is backend capability, not proof of a complete Next.js learner/instructor storefront.
+
+## Payment responsibilities — Flow A vs Flow B (ADR-051 / ADR-054)
+
+The platform keeps the payee boundary explicit:
+
+**Flow A — tenant admin pays Saa9vi.** Saa9vi's platform Razorpay account is used for platform services such as SaaS subscriptions, BBB usage, advertising and optional hosting. The platform one-time payment handler checks the server-controlled `paymentPurpose = 'platform-service'`. Recurring subscription billing runs separately through SubscriptionPlugin.
+
+**Flow B — tenant customer pays the tenant.** The tenant's own Razorpay account is used for the tenant's client collections (for example, future course/session fees). Saa9vi does not take marketplace commission from tenant-client payments under the accepted Option C model.
+
+At the reviewed backend baseline, Flow B supports per-tenant credential configuration/encryption, credential API probing, enable/disable, and Razorpay order creation using the tenant channel's credentials. It does **not** yet register a tenant-specific Vendure PaymentMethodHandler or connect `TenantRazorpayService.verifyAndSettle()` to Vendure order settlement. It also lacks a tenant-specific webhook inbox/worker. Therefore Flow B should be described as partially implemented, not as a working end-to-end collection flow.
