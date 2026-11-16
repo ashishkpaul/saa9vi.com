@@ -29,14 +29,14 @@ Three design questions required explicit decisions before code was written:
 **Consequences:**
 
 - Every service method that reads or mutates a `LearningCourse` must include `channelId: String(ctx.channelId)` in the WHERE predicate, or call `canAccess()` after fetch.
-- `CourseEnrollment` carries both `courseId` (FK) and a redundant `channelId` column so that cross-channel enrollment isolation is enforced at the enrollment row level, not only by joining through the parent course. This is the N-03 L2 fix.
+- `CourseEnrollment` carries both a scalar `courseId` identifier and a redundant `channelId` column so that cross-channel enrollment isolation is enforced at the enrollment row level, not only by checking the parent course. The entity currently declares no TypeORM relation/foreign-key decorator for `courseId`. This is the N-03 L2 fix.
 - `CourseTemplate` is an exception: it carries a nullable `channelId` to support platform-default templates (`channelId IS NULL`) shared across all tenants. A template whose `channelId` is non-null must match the calling channel.
 
 ---
 
 ### D2 — Academy admission gate uses an injected port (`LearnerAdmissionPort`), not a direct `TenantPlugin` import
 
-`CourseEnrollmentService` requires that a learner hold `TenantLearnerMembership.status = ACTIVE` before enrolling in a course. The check is expressed as an interface (`LearnerAdmissionPort`) resolved at runtime from a NestJS injection token (`LEARNER_ADMISSION_PORT`). `LearningPlugin` imports `LearnerAdmissionModule` (a platform-level NestJS module), not `TenantPlugin` directly.
+`CourseEnrollmentService` requires that a learner hold `TenantLearnerMembership.status = ACTIVE` before enrolling in a course. The check is expressed as an interface (`LearnerAdmissionPort`) resolved at runtime from a NestJS injection token (`LEARNER_ADMISSION_PORT`). `LearningPlugin` imports `LearnerAdmissionModule` (a platform-level NestJS module), not the `TenantPlugin` class directly. The platform module registers `TenantLearnerMembershipService` as the provider for the token; TenantPlugin also exports the same service/token binding for other consumers.
 
 **Rationale:** A direct import of `TenantPlugin` services into `LearningPlugin` would create a plugin-to-plugin dependency that couples deployment order, circular injection risk, and test surface. The port pattern (a named injection token bound to a concrete implementation by the platform wiring layer) keeps `LearningPlugin` testable in isolation by substituting a stub and keeps the two plugins independently versioned.
 
@@ -53,7 +53,7 @@ Three design questions required explicit decisions before code was written:
 
 The set of tools a course can carry (BBB sessions, video content, documents, quizzes) is registered at application startup via `CourseToolContributor` implementations. `CourseTool` rows store a stable `toolKey` string referencing a registered definition. Tools are not represented as a TypeScript class hierarchy or a discriminated-union entity table.
 
-**Rationale:** A polymorphic entity hierarchy (one table per tool type) would require a migration every time a new tool type is introduced. A registry avoids that schema rigidity while still providing type-safe tool metadata at runtime. The `toolKey` is the stable identifier; tool settings are stored as a JSON column (`settings`) validated against the definition's schema at write time.
+**Rationale:** A polymorphic entity hierarchy (one table per tool type) would require a migration every time a new tool type is introduced. A registry avoids that schema rigidity while still providing type-safe tool metadata at runtime. The `toolKey` is the stable identifier; tool settings are stored as a JSON column (`settings`) and optional definition validators are applied by `CourseToolRegistry.validateTools()` when template tools are snapshotted. The current `updateCourseTool` mutation changes only visibility/order and confirms the stored key is still registered.
 
 **Alternatives rejected:**
 
