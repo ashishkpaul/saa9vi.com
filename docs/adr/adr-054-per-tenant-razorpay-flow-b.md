@@ -74,7 +74,7 @@ Flow B checkout uses the same HMAC signature verification helpers (`computeCheck
 
 A new `ManageTenantPaymentAccount` CRUD permission controls access to the per-tenant Razorpay configuration endpoints. It is added to `TENANT_ADMIN_ROLE_PERMISSIONS` in `tenant-plugin/constants.ts` so that all newly registered tenants receive it automatically.
 
-Existing tenant roles that pre-date this permission must be repaired via the existing `tenant:roles:repair` tooling (the same mechanism used for `BBBPlatformInfrastructure` exclusions — ADR-033).
+Existing tenant roles that pre-date this permission may lack it. `tenant:roles:check` is a read-only report. The current `tenant:roles:repair` CLI path writes Role records directly through `TransactionalConnection`/repository save; it therefore conflicts with the repository's operational rule that data mutations are performed through GraphQL APIs. Do not run the repair mode without an explicitly approved exception. Provide a SuperAdmin-authorized Admin GraphQL repair mutation (or another approved API path) before operationally repairing existing roles.
 
 **Rationale:** Flow B configuration is a tenant-admin concern, not a platform-infrastructure concern. Separating it into its own permission prevents SuperAdmin-only operations from blocking tenant self-service.
 
@@ -112,7 +112,7 @@ The current Admin SDL exposes:
 - Queries: `tenantPaymentAccount` (current channel) and `allTenantPaymentAccounts` (SuperAdmin only).
 - Mutations: `upsertTenantPaymentAccount`, `setTenantPaymentAccountEnabled`, `deleteTenantPaymentAccount`, `verifyTenantPaymentAccount`, and `verifyTenantPaymentWebhook`.
 
-Tenant mutations use `ManageTenantPaymentAccount`. Newly registered tenant-admin roles receive this permission through `TENANT_ADMIN_ROLE_PERMISSIONS`; existing roles may need the repository's `tenant:roles:repair` reconciliation command. The safe GraphQL view exposes the public Key ID and configuration metadata, never decrypted secrets.
+Tenant mutations use `ManageTenantPaymentAccount`. Newly registered tenant-admin roles receive this permission through `TENANT_ADMIN_ROLE_PERMISSIONS`; existing roles may lack it. The safe GraphQL view exposes the public Key ID and configuration metadata, never decrypted secrets. The existing repair CLI is not approved under the current GraphQL-only data-mutation rule because its apply path saves Role entities directly; use the read-only `tenant:roles:check` for diagnosis and add an approved Admin API repair path before changing existing role records.
 
 ### Shop API currently exposed
 
