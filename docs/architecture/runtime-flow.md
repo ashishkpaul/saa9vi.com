@@ -69,28 +69,63 @@ bbb-meeting-provisioning job
 ## Webhook Processing
 
 ```
-BBB POST /bbb/webhook
+BBB POST /bbb/webhook/:serverId
   │
-  ├─ Validate HMAC signature
-  ├─ Persist BbbWebhookEvent { status: PENDING }
-  ├─ Enqueue eventId to BullMQ: bbb-webhook-processor
-  └─ Return { ok: true } immediately
+  ├─ Load the registered server and decrypt its API secret
+  ├─ Reconstruct the configured callback URL (do not trust Host headers)
+  ├─ Verify BBB callback authentication against the raw request body
+  ├─ Parse the event array and discard non-allow-listed event types
+  ├─ Compute a per-server SHA-256 deduplication key
+  ├─ Persist BbbWebhookEvent { status: PENDING | PARSE_FAILED }
+  ├─ If parsing succeeded and an allow-listed event exists:
+  │    enqueue the persisted event ID to BullMQ: bbb-webhook-processor
+  └─ Acknowledge the accepted delivery; persistence failure returns 5xx
 
 bbb-webhook-processor job
   │
   ├─ Load BbbWebhookEvent by id
-  ├─ Call meetingService.handleWebhookEvent()
-  │    ├─ meeting-ended → completeMeetingLifecycle()
-  │    │    ├─ Transition: ACTIVE → COMPLETED
+  ├─ Call BbbWebhookProcessorService / meeting lifecycle handlers
+  │    ├─ meeting-ended → complete meeting lifecycle
+  │    │    ├─ Transition meeting: ACTIVE → COMPLETED
   │    │    ├─ Reset room: Idle, currentMeetingId: null
-  │    │    └─ consumeGrantHours()
-  │    │         ├─ Calculate duration (provisionedAt → completedAt)
-  │    │         ├─ Write BbbUsageLedger row (append-only)
-  │    │         └─ Increment grant.consumedMinutes
-  │    └─ Update trial attendance from attendee data
-  └─ Mark BbbWebhookEvent { status: PROCESSED }
-       OR { status: FAILED } (retryable)
+  │    │    └─ Apply grant consumption where the meeting uses grant billing
+  │    │         ├─ Calculate billable usage
+  │    │         ├─ Write immutable BbbUsageLedger fact
+  │    │         └─ Update the linked grant's consumed minutes
+  │    ├─ metered billing path → write BbbMeteredUsage from per-minute samples
+  │    └─ Update session attendance / recording facts where event data supports it
+  └─ Mark processing outcome; retry failures through the queued worker
 ```
+
+---
+
+## Razorpay Checkout Webhook Processing (Flow A — platform payments)
+
+```
+Razorpay POST /payments/razorpay/checkout-webhook
+  │
+  ├─ Verify X-Razorpay-Signature against the exact raw request body
+  ├─ Resolve the provider event id (header preferred; payload fallback)
+  ├─ Persist PaymentWebhookEvent before processing
+  │    └─ UNIQUE(provider, providerEventId) is the duplicate-delivery boundary
+  ├─ Enqueue only the persisted inbox-row ID to BullMQ:
+  │    payment-webhook-reconciliation
+  └─ Return success only after the inbox event is durable and enqueued
+
+payment-webhook-reconciliation job
+  │
+  ├─ Load the PaymentWebhookEvent by ID
+  ├─ Ignore non-settlement event types and terminal/duplicate deliveries
+  ├─ Resolve the Vendure order from the persisted provider/order binding
+  ├─ Require the order to remain in ArrangingPayment
+  ├─ Re-read Razorpay order/payment server-to-server
+  ├─ Verify payment/order binding, amount, currency and payment state
+  ├─ Settle through Vendure OrderService.addPaymentToOrder()
+  └─ Persist processing outcome; retry non-terminal failures, stop at the
+     configured attempt limit
+```
+
+**Boundary:** Flow A uses Saa9vi's platform Razorpay credentials for tenant-admin payments to Saa9vi. It is separate from the recurring-subscription webhook below and from Flow B tenant-client collections.
 
 ---
 
@@ -577,17 +612,18 @@ ReviewApprovedEvent / ReviewRejectedEvent / ReviewHiddenEvent
 leaveAcademy() / deleteMyAccount()
   │
   └─ CustomerDeletionService
-       ├─ BBB handler: anonymize enrollments, entitlements; preserve ledger
-       ├─ Tenant handler: anonymize InstructorProfile, MediaResource
-       └─ Reviews handler: anonymize ProductReview.authorName, deactivate ReviewRequest
+       ├─ BBB handler: anonymize enrollments/entitlements and retain immutable billing facts
+       ├─ Tenant handler: anonymize InstructorProfile and MediaResource
+       ├─ Learning handler: remove or anonymize learner/course-enrollment records in scope
+       └─ Reviews handler: anonymize ProductReview.authorName and deactivate ReviewRequest
 ```
 
 ---
 
-## Room Access Evaluation (INV-027 — shared by joinRoom and bbbRoomStatus)
+## Room Access Evaluation (INV-027 — shared by bbbJoinRoom and bbbRoomStatus)
 
 ```
-joinRoom(roomId) / bbbRoomStatus(id)
+bbbJoinRoom(roomId) / bbbRoomStatus(id)
   │
   ├─ BbbRoomAccessService.evaluate() — ONE decision, both surfaces (BUG-045 fix)
   │    ├─ Source 1: BbbOrganizationMembership.findActiveMembership()
@@ -603,7 +639,7 @@ joinRoom(roomId) / bbbRoomStatus(id)
   │         ├─ Valid → allowed (attendee)
   │         └─ Invalid or absent → Access Denied
   │
-  └─ joinRoom only: evaluation runs BEFORE requestProvisioning (BUG-045 #3) —
-     a denied customer never enqueues a meeting;
-     bbbRoomStatus throws ForbiddenError on denial (preview denial ⇔ join denial)
+  └─ bbbJoinRoom delegates to BbbMeetingService.joinRoom(), where evaluation runs
+     BEFORE requestProvisioning (BUG-045 #3) — a denied customer never enqueues a
+     meeting; bbbRoomStatus throws ForbiddenError on denial (preview denial ⇔ join denial)
 ```
