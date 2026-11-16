@@ -138,6 +138,11 @@ None (injects TenantPlugin services for org verification).
 | `LearningDashboardService` | Domain API for student dashboard |
 | `TrialRegistrationService` | Trial registration and conversion |
 | `GrantReaderService` | Abstracted grant resolution (Q-009 seam) |
+| `BbbRoomAccessService` | Shared authorization evaluator for room preview and join; checks membership, legacy member, entitlement, and enrollment sources (INV-027) |
+| `BbbMeteringService` | Per-minute participant sampling and append-only `BbbMeteredUsage` creation for metered organizations (INV-028) |
+| `SessionAttendanceService` | Scheduled-session attendance facts derived from meeting participant samples/events |
+| `BbbPlatformCapacityPolicyService` | Resolves plan/platform capacity policy and synchronizes organization capacity limits |
+| `BbbWebhookProcessorService` | Processes persisted BBB webhook deliveries asynchronously; ingress is handled by `BbbWebhookController` |
 
 ### Job Queues
 
@@ -216,7 +221,7 @@ None (injects TenantPlugin services for org verification).
 
 | Resolver | Scope | Purpose |
 |---|---|---|
-| `ProductReviewShopResolver` | Shop API (Authenticated) | `canReviewProduct`, `pendingReviewRequests`, `validateReviewToken`; mutations `submitProductReview`, `voteOnReview`, `reportReview`; `ProductReview.userVote` field resolver |
+| `ProductReviewShopResolver` | Shop API | `canReviewProduct`, `pendingReviewRequests`, `validateReviewToken`; mutations `submitProductReview`, `voteOnReview`, `reportReview`; `ProductReview.userVote` field resolver |
 | `ProductReviewAdminResolver` | Admin API (`SuperAdmin` or review-admin permission) | `productReviews`, `productReview`; moderation mutations `updateProductReview`, `approveProductReview`, `rejectProductReview`, `hideProductReview`, `flagProductReview`, `respondToReview` |
 
 ---
