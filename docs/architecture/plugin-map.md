@@ -481,3 +481,99 @@ attempt 3 fails → failed, attemptCount=3, failedAt populated (terminal)
 > Runtime re-verification against a fresh Razorpay Test subscription is required before
 > closing R2-E/F/G. Halted-subscription recovery (D-5) remains an open product gap.
 > See `production-readiness.md`.
+
+
+---
+
+## LearningPlugin
+
+| Property | Value |
+|---|---|
+| **Directory** | `src/plugins/learning-plugin/` |
+| **Status** | Active (C-22 through C-28 complete) |
+| **Purpose** | Chamilo-inspired course domain — courses, enrollments, tools, scheduled sessions, announcements. |
+
+### Owns
+
+| Entity | Table | ChannelAware |
+|---|---|---|
+| LearningCourse | `learning_course` | No (scalar `channelId` — ADR-053 D1) |
+| CourseTemplate | `course_template` | No (nullable `channelId` — platform-default templates have `channelId IS NULL`) |
+| CourseTemplateTool | `course_template_tool` | No (scoped via template) |
+| CourseTool | `course_tool` | No (scoped via course; no `channelId` column — channel enforced through parent course) |
+| CourseEnrollment | `course_enrollment` | No (scalar `channelId` — N-03 L2 enforcement) |
+| CourseScheduledSession | `course_scheduled_session` | No (scalar `channelId`) |
+| CourseAnnouncement | `course_announcement` | No (scalar `channelId`) |
+
+### Publishes
+
+None (currently).
+
+### Consumes
+
+| Port / Module | Source |
+|---|---|
+| `LearnerAdmissionPort` (via `LearnerAdmissionModule`) | Platform — backed by `TenantLearnerMembershipService` (TenantPlugin) |
+| `CourseToolRegistry` (via `CourseToolRegistryModule`) | Platform — contributors registered at bootstrap (BBB plugin registers `bbb_session`) |
+
+### API Surfaces
+
+| Resolver | Scope | Purpose |
+|---|---|---|
+| `LearningAdminResolver` | Admin API | Course CRUD, template management, enrollment admin, announcement management |
+| `LearningShopResolver` | Shop API (Authenticated) | `myCourses`, `enrollInCourse`, `courseAnnouncements` |
+
+### Key Services
+
+| Service | Purpose |
+|---|---|
+| `LearningCourseService` | Course CRUD + FSM (DRAFT → PUBLISHED → CLOSED → ARCHIVED); tool snapshot from template |
+| `CourseEnrollmentService` | Enrollment CRUD + FSM; enforces ACTIVE academy admission via `LearnerAdmissionPort` (C-25) |
+| `CourseAnnouncementService` | Announcement CRUD |
+| `CourseScheduledSessionService` | Course session CRUD |
+| `CourseToolRegistry` | Startup registry of tool definitions; validates tool keys on write |
+| `LearningDeletionService` | GDPR deletion: removes learner enrollments from channel or performs full delete |
+
+### Permissions
+
+| Permission | Grantee |
+|---|---|
+| `courseManagePermission` (CRUD) | Tenant admins |
+| `courseEnrollPermission` (CRUD) | Tenant admins |
+| `courseAnnouncementPermission` (CRUD) | Tenant admins |
+
+> Added to `TENANT_ADMIN_ROLE_PERMISSIONS` in `tenant-plugin/constants.ts`.
+
+---
+
+## PaymentsPlugin (Phase 2 additions — Flow B)
+
+The PaymentsPlugin now owns both flow lifecycles. See ADR-051 (Flow A vs Flow B) and ADR-054 (Flow B implementation).
+
+### Additional entities (Phase 2)
+
+| Entity | Table | Purpose |
+|---|---|---|
+| TenantPaymentAccount | `tenant_payment_account` | Per-tenant Razorpay credentials (keyId plaintext, keySecret AES-256-GCM encrypted); `status` ∈ `pending\|active\|suspended`; `isEnabled` toggle |
+
+### Additional API surfaces (Phase 2)
+
+| Resolver | Scope | Purpose |
+|---|---|---|
+| `TenantPaymentAdminResolver` | Admin API (`ManageTenantPaymentAccount`) | Configure/verify tenant Razorpay account, enable/disable gateway |
+| `TenantRazorpayShopResolver` | Shop API (Authenticated) | `createTenantCheckoutOrder`, `verifyTenantPayment` |
+
+### Additional services (Phase 2)
+
+| Service | Purpose |
+|---|---|
+| `TenantPaymentEncryptionService` | AES-256-GCM encrypt/decrypt for `keySecret` |
+| `TenantPaymentAccountService` | Tenant account CRUD + credential resolution |
+| `TenantRazorpayOrdersClient` | Razorpay Orders API client using per-tenant credentials |
+| `TenantRazorpayService` | Flow B checkout orchestration; reuses `razorpay-checkout.policy.ts` for signature verification |
+
+### Permissions
+
+| Permission | Grantee |
+|---|---|
+| `ManageTenantPaymentAccount` (CRUD) | Tenant admins (added to `TENANT_ADMIN_ROLE_PERMISSIONS`) |
