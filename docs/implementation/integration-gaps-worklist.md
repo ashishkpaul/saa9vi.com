@@ -672,11 +672,9 @@ Cline MUST stop and report rather than improvise when:
 
 **Do not silently convert an unverified claim into an implementation requirement.**
 
-## UI-1 — Subscription UI (post-ADR-046): IMPLEMENTATION IN PROGRESS
+## UI-1 — Subscription UI (post-ADR-046): BACKEND API PRESENT; STOREFRONT VERIFICATION OPEN
 
-**Priority:** P2 — **Status:** ADR-046 accepted 2026-09-26; self-serve Shop API implementation is now on
-`feat/adr-046-self-serve-subscription`. Audit discovery remains preserved in
-`docs/implementation/storefront-subscription-ui-audit.md`.
+**Priority:** P2 — **Status as of 2026-11-16:** The current `saa9vi_com` source exposes the ADR-046 Shop API mutations (`requestMySubscriptionPlanChange`, `cancelMySubscription`) plus the tenant commercial reads. This older feature-branch note is retained as historical context; the remaining work is current storefront integration/browser acceptance and provider/runtime verification. Audit discovery remains preserved in `docs/implementation/storefront-subscription-ui-audit.md`.
 
 ### Decision
 
@@ -712,4 +710,74 @@ Cancellation is exposed symmetrically through `cancelMySubscription(atPeriodEnd)
 - transient redirect proof (new provider URL returned only for that invocation; same-plan returns null);
 - boundary-regression proof (post-change `mySubscription` contains no provider internals);
 - cancellation proof for both at-period-end and immediate paths.
+
+
+
+---
+
+## Track G — Current code audit follow-ups (baseline 2026-11-16)
+
+**Baseline:** `saa9vi_com` at `3c245952d57b9ddeb27b9cbd6ee01de5bae0ba71`. These are implementation gaps established by source inspection, not inferred product features. Do not alter schemas or database records until the required contracts and approvals exist.
+
+### G-1 — Complete tenant Razorpay Flow B settlement
+
+**Priority:** P1 — **Status:** OPEN / BLOCKING FOR TENANT CLIENT COLLECTIONS
+
+Current `TenantRazorpayShopResolver.createTenantRazorpayCheckoutOrder` creates a Razorpay order using credentials resolved from `ctx.channelId`. `TenantRazorpayService.verifyAndSettle()` exists but no tenant-specific Vendure `PaymentMethodHandler` is registered and there is no current handler call site.
+
+Required:
+- Define a tenant-aware PaymentMethodHandler contract that can resolve the tenant account securely at checkout/settlement time.
+- Wire server-side order/payment fetch, HMAC verification, order/payment binding, capture semantics and settlement through Vendure's `addPaymentToOrder` lifecycle.
+- Re-check account `status = active` and `isEnabled = true` at settlement.
+- Preserve the hard separation from platform Flow A (`paymentPurpose = 'platform-service'` and platform credentials).
+- Add tests for success, failed signature, mismatched provider order/payment, amount/currency mismatch, already-used payment, disabled/suspended account and replay.
+
+### G-2 — Prove or enforce tenant checkout order ownership
+
+**Priority:** P1 — **Status:** OPEN SECURITY REVIEW
+
+The Flow B service verifies the explicit order belongs to the current channel, is in `ArrangingPayment` and has a positive total. Unlike Flow A's resolver, it does not visibly load the order's customer user and compare it with `ctx.activeUserId`. Resolver `@Allow(Permission.Owner)` is present, but resource-binding semantics for this custom resolver must be demonstrated.
+
+Required:
+- Add an adversarial same-channel cross-customer test for both explicit `orderId` and active-order paths.
+- If Vendure's permission decorator does not prove order ownership for this resource, add a service-level customer/user assertion before creating a provider order.
+- Confirm that order ID guessing cannot create an order under another customer's identity.
+
+### G-3 — Implement tenant Flow B webhook/recovery lifecycle
+
+**Priority:** P1 — **Status:** OPEN
+
+Current `PaymentWebhookEvent`, controller and queue are for platform Flow A. Recurring subscription webhooks are a separate SubscriptionPlugin flow. No tenant-specific Flow B webhook endpoint/inbox/worker exists.
+
+Required:
+- Select a trusted route/tenant resolution contract without trusting arbitrary request headers or caller-supplied channel IDs.
+- Verify HMAC against exact raw request bytes using the correct tenant webhook secret.
+- Persist the immutable receipt before queueing; enforce provider event idempotency and bounded retries.
+- Reconcile order/payment binding and Vendure payment state with the provider as authority.
+- Rename/rework `verifyTenantPaymentWebhook`: it currently checks only that the configured encrypted secret exists and can be decrypted; it does not verify a test event or endpoint.
+
+### G-4 — Bring tenant role permission repair into the GraphQL mutation policy
+
+**Priority:** P1 — **Status:** OPEN / OPERATIONAL POLICY CONFLICT
+
+`npm run tenant:roles:check` is read-only. The current `tenant:roles:repair` apply implementation calls `TransactionalConnection.getRepository(...).save(roleEntity)` after changing `roleEntity.permissions`. That directly mutates Vendure application data and conflicts with the repository's rule that application-data mutations go through GraphQL APIs.
+
+Required:
+- Do not run `tenant:roles:repair` apply mode without an explicitly approved exception.
+- Add a SuperAdmin-authorized Admin GraphQL repair mutation (or another expressly approved API path) that preserves add-only default semantics.
+- Keep removal of unexpected permissions behind an explicit separate argument/approval and an auditable result.
+- Use `tenant:roles:check` for read-only diagnostics until the API path exists.
+
+### G-5 — Complete LearningPlugin learner/instructor product workflow
+
+**Priority:** P2 — **Status:** BACKEND FOUNDATION PRESENT; API/STORE FRONTEND GAPS OPEN
+
+Current Shop API exposes only `myCoursePages`, `myCoursePage(slug)` and `coursePageAnnouncements(courseId)`, all for customers with an ENROLLED course row and ACTIVE academy admission. Current Admin API can create courses and directly create ENROLLED rows; template entities and tool snapshotting exist.
+
+Required product decisions before adding schema:
+- Decide whether tenant staff may invite learners and what acceptance means; the current `INVITED` state has no invitation creation/Shop acceptance mutation.
+- Decide whether self-service course enrollment is supported, and under what payment/admission conditions.
+- Decide whether CourseTemplate CRUD belongs in the tenant Admin API and how platform-default templates are curated.
+- Implement and verify the Next.js learner/instructor course experience only after the Shop contract is accepted.
+- Preserve independent BBB room/session authorization; tool visibility is not meeting entitlement.
 
