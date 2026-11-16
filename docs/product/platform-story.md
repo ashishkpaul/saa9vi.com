@@ -104,21 +104,31 @@ Internal rooms are `BbbRoom` entities with `productVariantId = null`. They are n
 
 ## Marketplace Lifecycle
 
-```
+**Current as-built baseline:** marketplace search is a cross-channel discovery projection. The shared marketplace checkout described here is the target product contract proposed by ADR-055; it is not claimed as delivered in the reviewed source baseline.
+
+```text
 Student searches marketplace.saa9vi.com
-  → MarketplaceSearchResolver queries ES index
-  → Result links to tenant storefront
-  → Student redirected to tenant storefront
-  → Commerce happens on tenant channel (tenant-owned collections)
+  → MarketplaceSearchResolver queries platform ES projections
+  → Listing resolves to its authoritative tenant Channel
+  → Student may continue on marketplace storefront or tenant custom-domain storefront
+  → Cart/order/payment execute through the owning tenant's Shop API context
+  → Digital or physical tenant-owned fulfilment begins
   → CommissionLedger records $0 row (GMV + attribution history only)
 ```
 
-The marketplace is a **discovery layer only**. It does not transact. The platform-level Elasticsearch indices (`saa9vi_marketplace_sessions`, `saa9vi_marketplace_instructors`) are derived read projections. All writes (orders, entitlements, billing) go through channel-scoped Vendure Shop API.
+The marketplace is a shared storefront and discovery experience. It may host checkout UI, but must not create tenant-owned orders in the Vendure default channel. The trusted server resolves the product/variant owner Channel and performs cart, order, payment-method eligibility and payment mutations in that tenant context. A tenant's custom-domain storefront is optional and uses the same tenant catalogue, stock, prices, payment configuration and order lifecycle.
 
-**CommissionLedger $0-row pattern:** A commission row is written for every `orderSource = 'marketplace'` order. Commission is permanently 0% under ADR-051 (Option C) — the row carries `commissionPercent: 0` and `commissionAmountInPaise: 0` to preserve complete marketplace GMV and attribution history for analytics. No commission is ever calculated, deducted, or payable.
+Initial checkout supports one tenant per cart/order. Products from multiple tenants require separate seller carts/orders; cross-tenant order orchestration is deferred.
 
-> **ⓘ Note:** `orderSource` is classified and stamped by Vendure-side logic from a signed opaque `marketplaceRef`. The server verifies the reference — HMAC signature, validity window, channel/resource relationship, and single-use replay constraint — before classification. The storefront never chooses `orderSource` directly (INV-008; ADR-021).
+**Digital fulfilment:** verified tenant payment or permitted free trial/admission activates course enrollment, time-bounded BBB entitlement, recorded content or scheduled-service access. Subscription renewals extend the applicable paid period; expiry/grace/cancellation follows the learner policy.
 
+**Physical fulfilment:** verified tenant payment and stock checks begin tenant-owned stock allocation, packing, shipping, delivery, cancellation, return and refund. Physical fulfilment is not governed by digital entitlement expiry.
+
+Marketplace commission remains permanently 0% under ADR-051. A zero-value CommissionLedger row preserves GMV and attribution history; it is not a payable fee.
+
+> **Attribution boundary:** `orderSource` is classified and stamped by Vendure-side logic from signed opaque `marketplaceRef`. The server verifies HMAC signature, validity window, channel/resource relationship and single-use replay constraint. The reference proves marketplace provenance; it does not select the payment recipient, override tenant ownership or authorize a channel switch (INV-008; ADR-021).
+
+**Implementation boundary:** Flow B tenant Razorpay credentials and provider order creation exist, but ADR-054 records that tenant PaymentMethodHandler settlement and tenant webhook reconciliation are not yet wired end to end. Marketplace checkout must not be treated as production-ready until those gates are complete. See [ADR-055](../adr/adr-055-marketplace-commerce-and-revenue-model.md), [commerce policy](marketplace-commerce-policy.md) and [implementation worklist](../implementation/marketplace-commerce-revenue-worklist.md).
 ---
 
 ## Subscription Billing Lifecycle

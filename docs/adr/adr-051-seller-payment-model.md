@@ -30,3 +30,14 @@
 - `src/platform/invariants/payment-hygiene.checker.ts` — INV-030 static checks (no platform payment method auto-assigned to tenant channels)
 - `src/plugins/marketplace/services/commission-ledger.service.ts` — 0% commission enforced at boot
 - Execution plan C-05 and C-20
+
+
+---
+
+## Marketplace storefront and checkout clarification — ADR-055 (proposed, 2026-11-16)
+
+ADR-051's zero-commission/payee boundary remains unchanged. The marketplace may provide the storefront and checkout user experience while a tenant-owned order is created, paid and fulfilled in the tenant's Vendure Channel. The tenant's custom-domain storefront is optional and independent of marketplace listing eligibility.
+
+This does **not** mean Flow B is currently end-to-end implemented. See ADR-054 for the reviewed handler/settlement/webhook gaps. The proposed marketplace checkout contract and product/fulfilment policy are detailed in [ADR-055](adr-055-marketplace-commerce-and-revenue-model.md) and the [commerce implementation worklist](../implementation/marketplace-commerce-revenue-worklist.md).
+
+Physical products may be listed on the marketplace, tenant storefront, or both, when tenant opt-in and inventory, payment, shipping, tax and returns readiness conditions are satisfied. Digital and physical fulfilment remain separate. No central/default-channel tenant order is introduced.

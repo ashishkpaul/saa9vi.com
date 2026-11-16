@@ -546,3 +546,24 @@ The storefront template contract remains owned by the `nextjs-starter-vendure` r
 `npm run tenant:roles:check` is dry-run/read-only. The current `npm run tenant:roles:repair` apply path writes Role records directly with repository `save()`, contrary to the GraphQL-only application-data mutation rule. Do not use apply mode unless the owner explicitly approves an exception. The preferred remediation is a SuperAdmin-authorized Admin GraphQL role-reconciliation operation with add-only default semantics.
 
 See `docs/architecture/plugin-code-review-2026-11-16.md` for the code-level review and `docs/implementation/roadmap.md` for the consolidated worklist.
+
+---
+
+## 16 November 2026 — Marketplace commerce and revenue model decision proposal
+
+**Canonical proposal:** [ADR-055 — Marketplace Commerce, Tenant Payment Ownership, and Revenue Model](adr/adr-055-marketplace-commerce-and-revenue-model.md).
+**Policy summary:** [Marketplace Commerce Policy](product/marketplace-commerce-policy.md).
+**Execution plan:** [Marketplace Commerce & Revenue Worklist](implementation/marketplace-commerce-revenue-worklist.md).
+
+The target is a zero-commission marketplace storefront. The marketplace may host checkout UI, but every tenant-owned cart/order/payment must execute in its owning Vendure Channel. The tenant receives tenant-client payments through its own payment gateway. The tenant's custom-domain storefront is optional; the same tenant product may be sold through marketplace, tenant storefront, or both.
+
+Digital and physical fulfilment are separate:
+- Digital courses/services use enrollment and time-bounded entitlements. Ongoing programmes prefer learner subscriptions; fixed-term and one-time models remain possible where appropriate.
+- Free trial registration is a separate no-payment/no-mandate, limited-access flow by default. The learner explicitly selects a paid plan after the trial.
+- Physical products can be listed on marketplace, tenant storefront, or both when tenant opt-in, payment, inventory, shipping, tax and returns readiness conditions are met.
+
+Saa9vi revenue streams remain tenant SaaS subscriptions, marketplace advertising, optional tenant-domain storefront hosting, BBB usage/capacity and optional platform services. Tenant-client commission remains 0%.
+
+**Current-state warning:** This is a product/architecture proposal, not a claim of feature completion. ADR-054's Flow B boundary remains authoritative: tenant credential configuration and provider-order creation are present in the reviewed source, but tenant PaymentMethodHandler settlement and tenant webhook reconciliation are not wired end-to-end. Learner recurring subscription billing is also a distinct future lifecycle from tenant `OrganizationSubscription`.
+
+Use the phased MCR worklist and do not begin marketplace checkout UI before Flow B settlement/webhook and customer/channel isolation gates are met.

@@ -4,6 +4,7 @@
 
 | Term | Meaning |
 |---|---|
+| **Commerce model addendum** | Marketplace commerce terminology, product/billing/fulfilment dimensions, digital versus physical fulfilment, learner subscription and zero-commission policy are defined in [the commerce glossary addendum](glossary-commerce-addendum.md). |
 | **Channel** | Vendure tenant boundary. Every entity that is tenant-scoped is scoped to a Channel. |
 | **Tenant** | A business/academy represented by a Vendure Channel. Has a `TenantProfile`, `BbbOrganization`, and optionally a `Seller`. |
 | **Free Basic** | The permanent provider-free plan every tenant lands on at registration — no card, no trial clock. Commercial limits (daily live minutes, concurrent rooms, participants, staff, students) are product decisions tracked in the Free Basic programme. Its frozen concurrency decision is **1 simultaneous live room** (INV-015 → ADR-031; enforced by `assertCanCreateMeeting()` via a plan-derived `maxConcurrentMeetings = 1`). The in-code **5** is only the entity column / Tier-4 fallback default and is **not** a Free Basic decision; 600 min and 100 students likewise remain seed values, not decisions. |
