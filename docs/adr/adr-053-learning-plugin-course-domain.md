@@ -62,7 +62,7 @@ The set of tools a course can carry (BBB sessions, video content, documents, qui
 
 **Consequences:**
 
-- `LearningToolContributor` (BBB plugin's contribution) registers `bbb_session` as a tool key at bootstrap.
+- `LearningToolContributor` registers the built-in `description`, `users`, `agenda`, and `announcements` tools. `BbbVideoconferenceToolContributor` in BigBlueButtonPlugin registers the `videoconference` key at bootstrap.
 - `CourseToolRegistry.validateTools()` is called on template snapshot and direct tool mutation to prevent unknown tool keys from reaching the database.
 - Adding a new tool type requires: (a) a new `CourseToolContributor` implementation in the contributing plugin, (b) a new tool key string — no schema change.
 
@@ -73,10 +73,16 @@ The set of tools a course can carry (BBB sessions, video content, documents, qui
 `CourseEnrollment.status` follows a strict FSM:
 
 ```
-INVITED → ENROLLED → SUSPENDED → ENROLLED
-                   → COMPLETED  (terminal)
-                   → WITHDRAWN  (terminal)
-        → WITHDRAWN  (terminal)
+INVITED → ENROLLED
+   └──→ WITHDRAWN  (terminal)
+
+ENROLLED → SUSPENDED → ENROLLED
+         → COMPLETED  (terminal)
+         → WITHDRAWN  (terminal)
+
+SUSPENDED → ENROLLED
+          → COMPLETED  (terminal)
+          → WITHDRAWN  (terminal)
 ```
 
 Re-enrollment from `COMPLETED` or `WITHDRAWN` is not supported by the current transition table; a new enrollment row is required (not yet implemented). `SUSPENDED → ENROLLED` re-activation is supported.
@@ -101,3 +107,21 @@ Re-enrollment from `COMPLETED` or `WITHDRAWN` is not supported by the current tr
 - ADR-010, ADR-011, ADR-017 — scalar `channelId` precedents
 - ADR-052 — `TenantLearnerMembership` FSM and suspension semantics
 - INV-001 — Channel = Tenant (applies to all `LearningPlugin` entities via scalar `channelId`)
+
+
+---
+
+## As-built implementation notes — 16 November 2026
+
+The accepted design is implemented as a backend plugin, but the currently exposed API is narrower than the full course-platform concept:
+
+- Admin API: `learningCourses`, `learningCourse`, `courseEnrollments`, `courseAnnouncements`, `courseTools`, `courseScheduledSessions`, and `courseToolDefinitions`; mutations cover course create/update/publish/close/archive, learner enroll/suspend/complete/withdraw, announcement create/update/publish, tool visibility/order updates, and course-to-BBB-session linking.
+- Shop API: `myCoursePages`, `myCoursePage(slug)`, and `coursePageAnnouncements(courseId)`. These reads require an authenticated customer, an `ENROLLED` course enrollment, a `PUBLISHED` course, and active academy admission. Hidden tools are filtered from Shop results.
+- There is no Shop API enrollment/invitation-acceptance mutation. The current `enrollLearner` Admin mutation creates an `ENROLLED` row directly; the `INVITED` state is represented in the entity/FSM but no invitation-creation or acceptance operation is exposed.
+- Template entities and template snapshotting exist, but the current GraphQL extension does not expose template CRUD. `createLearningCourse` can accept a `templateId`.
+- Course-to-session links store identifiers and tenant channel scope; the entities use scalar identifier columns rather than TypeORM relation decorators.
+- The tool registry keys currently include `description`, `users`, `agenda`, `announcements`, and `videoconference` (contributed by BigBlueButtonPlugin). The BBB tool is a UI/tool declaration only; actual room access remains governed by BBB authorization (INV-027).
+
+The FSM implemented in `CourseEnrollmentService` also permits `SUSPENDED → COMPLETED` and `INVITED → WITHDRAWN`; `COMPLETED` and `WITHDRAWN` remain terminal. Re-enrolling from a terminal row is rejected.
+
+**Verification boundary:** this is a source/SDL review at commit `3c245952d57b9ddeb27b9cbd6ee01de5bae0ba71`; it is not evidence of storefront integration or live production behavior.
