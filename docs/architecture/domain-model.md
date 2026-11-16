@@ -554,9 +554,10 @@ Pending → Provisioning → Active → Completed → Archived
 
 **Lifecycle (FSM — ADR-039):**
 - `pending_provider_auth` → `active` → `past_due` → `cancelled`
-- `trialing` remains available for trial subscriptions. Provider-backed subscriptions move from `pending_provider_auth` to `active` through verified Razorpay webhooks (INV-004).
+- `trialing` remains available for trial/non-provider flows. Only provider webhooks drive `pending_provider_auth` → `active`; Razorpay is the authoritative activation source (INV-004).
 - **Implemented provider-free exception:** `FreePlanProvisioningListener` handles `TenantRegisteredEvent` and provisions the configured active Free Basic plan locally as `active`, with no provider subscription, no `SubscriptionProviderBinding`, and NULL `currentPeriodStart`/`currentPeriodEnd`. The operation is idempotent and fail-soft: if the configured provider-free plan is missing, inactive, or has a `providerPlanId`, tenant registration continues without a subscription row.
 - Paid upgrades/downgrades use the plan-change operation on the existing tenant subscription; they do not create a second non-cancelled subscription row.
+- Tenant self-service plan change and cancellation are exposed by SubscriptionPlugin's ADR-046 Shop API; live provider authorization and webhook evidence remain a separate release gate.
 
 **Fields:** `plan`, `channels`, `channelId`, `status`, `currentPeriodStart`, `currentPeriodEnd`, `cancelAtPeriodEnd`, `cancelledAt`, `dunningRetryCount`, `lastDunningAttemptAt`, `billingCustomerId` (provider-neutral customer reference, e.g. Razorpay `customer_id`), `providerStatus`, `providerShortUrl`, `version`
 
@@ -564,6 +565,7 @@ Pending → Provisioning → Active → Completed → Archived
 - `UNIQUE(channelId) WHERE status != 'cancelled'` — at most one non-cancelled subscription per tenant.
 - **Any** non-cancelled status occupies the one-subscription slot, not just authorization states: `subscribeToPlan()` rejects a channel whose existing row is in any state other than `cancelled` (its error message says "active or trialing", which understates the real condition).
 - Subscription lifecycle operations are exposed on both APIs: Admin (`changeOrganizationSubscriptionPlan`, `cancelOrganizationSubscription`) and Shop (`requestMySubscriptionPlanChange`, `cancelMySubscription`). Plan creation/update and initial provider-backed subscription creation remain Admin operations. Pause/resume are **not** exposed through either GraphQL API, even though provider adapter methods exist.
+- The Admin API remains the operator/portal management surface; tenant self-service operations are on the Shop API: `requestMySubscriptionPlanChange(planId)` and `cancelMySubscription(atPeriodEnd)` (ADR-046). The implementation uses a tenant business-account ownership check and a five-minute per-channel cooldown for plan changes.
 - `FreePlanProvisioningService` may create the tenant initial provider-free subscription during registration. Because one non-cancelled row is allowed per channel, an existing tenant upgrades through `changeOrganizationSubscriptionPlan` / `requestMySubscriptionPlanChange`, not by creating a second subscription with `subscribeToPlan`.
 - `providerShortUrl` is returned to the admin caller at creation; it is not automatically cleared on activation (documented residual — authoritative post-auth state is `status` + the binding).
 - `version` is a plain CAS token for renewal compare-and-swap (NOT auto-locking); the worker must check affected-rows === 1 before charging.
@@ -713,3 +715,73 @@ The sections above describe the main domain aggregates. The following supporting
 | LearningPlugin | `LearningCourse`, `CourseTemplate`, `CourseTemplateTool`, `CourseTool`, `CourseEnrollment`, `CourseScheduledSession`, `CourseAnnouncement` | Course-domain supporting records; see `docs/architecture/learning-domain.md` and ADR-053 for states, relations, and admission rules. |
 
 **Scoping reminder:** entity ownership is not synonymous with `ChannelAware`. Several records deliberately use scalar `channelId` or inherit scope through a parent organization/course/room. The owning plugin resolver/service guard and the relevant ADR/invariant remain authoritative; do not infer tenant isolation from a table name alone.
+
+---
+
+## TenantLearnerMembership
+
+| Property | Value |
+|---|---|
+| **Plugin** | TenantPlugin |
+| **Table** | `tenant_learner_membership` |
+| **ChannelAware** | No — scalar `channelId`; unique `(customerId, channelId)` |
+| **Purpose** | Academy-specific admission record for a Vendure Customer; identity remains global while membership is tenant/channel-specific. |
+
+**Fields:** `customerId`, `channelId`, `status` (`PENDING | ACTIVE | SUSPENDED | REVOKED | LEFT`), `admissionType`, `lastActivityAt`, `invitedByUserId`, `invitedAt`, `joinedAt`.
+
+**Invariants:** one row per customer/channel; state transitions go through `TenantLearnerMembershipService`, with an append-only `TenantLearnerMembershipLog` row for every transition. LearningPlugin and BigBlueButtonPlugin consume the shared `LearnerAdmissionPort` through `LEARNER_ADMISSION_PORT`.
+
+## TenantLearnerMembershipLog
+
+| Property | Value |
+|---|---|
+| **Plugin** | TenantPlugin |
+| **Table** | `tenant_learner_membership_log` |
+| **Purpose** | Append-only audit record of academy admission status transitions. |
+
+**Fields:** `membershipId`, `customerId`, `channelId`, `oldStatus`, `newStatus`, `reason`, `actorId`, `transitionedAt`. Rows are transition history and are not updated/deleted by the admission workflow.
+
+---
+
+## LearningCourse and course-domain entities (ADR-053)
+
+The LearningPlugin entity definitions use scalar string identifiers rather than TypeORM relation decorators. Scope is enforced through explicit `channelId` predicates and/or parent-course ownership checks.
+
+| Entity | Table | Scope / key fields |
+|---|---|---|
+| LearningCourse | `learning_course` | Scalar `channelId`; unique `(channelId, slug)`; `DRAFT → PUBLISHED → CLOSED → ARCHIVED` |
+| CourseTemplate | `course_template` | Nullable `channelId` for platform defaults; non-unique index on `(channelId, name)` |
+| CourseTemplateTool | `course_template_tool` | Scalar `templateId`; `toolKey`, order, visibility, JSONB settings |
+| CourseTool | `course_tool` | Scalar `courseId`; unique `(courseId, toolKey)`; visibility and JSONB settings |
+| CourseEnrollment | `course_enrollment` | Scalar `channelId`, `courseId`, `customerId`; unique `(courseId, customerId)`; role/status FSM |
+| CourseScheduledSession | `course_scheduled_session` | Scalar `channelId`, `courseId`, `sessionId`; unique `(courseId, sessionId)` |
+| CourseAnnouncement | `course_announcement` | Scalar `channelId`, `courseId`; `DRAFT/PUBLISHED` |
+
+Course enrollment requires ACTIVE TenantLearnerMembership through LearnerAdmissionPort. Shop reads expose only published courses for an enrolled customer who still has active academy admission. Template tools are snapshotted at course creation; the current GraphQL schema does not expose template CRUD or Shop enrollment/invitation acceptance.
+
+## TenantPaymentAccount
+
+| Property | Value |
+|---|---|
+| **Plugin** | PaymentsPlugin |
+| **Table** | `tenant_payment_account` |
+| **ChannelAware** | No — scalar `channelId`; unique `(channelId, provider)` |
+| **Purpose** | Per-tenant payment-provider account configuration (Razorpay in current implementation). |
+
+**Fields:** `channelId`, `provider`, public `keyId`, `encryptedKeySecret`, `encryptedWebhookSecret`, `accountMode`, `status`, `isEnabled`, `lastVerifiedAt`.
+
+**Security:** Key Secret and webhook secret use AES-256-GCM with `TENANT_PAYMENT_ENCRYPTION_KEY`; the Admin GraphQL safe view never returns decrypted secret values. The current lifecycle starts `pending`, becomes `active` after a credential API probe, and uses `isEnabled` as a separate checkout switch.
+
+**Implementation boundary:** tenant checkout-order creation exists, but a tenant-specific Vendure PaymentMethodHandler, Flow B settlement wiring and tenant-specific webhook inbox/worker are not registered at the reviewed commit. `verifyTenantPaymentWebhook` is only a secret-presence/decryption check.
+
+## PaymentWebhookEvent
+
+| Property | Value |
+|---|---|
+| **Plugin** | PaymentsPlugin |
+| **Table** | `payment_webhook_event` |
+| **Purpose** | Persist-first inbox for one-time platform Razorpay webhook deliveries (Flow A only). |
+
+**Fields:** `provider`, `providerEventId`, `eventType`, `payloadHash`, `rawPayload`, `receivedAt`, `verifiedAt`, `processingStatus`, `attemptCount`, `processedAt`, `failedAt`, `errorMessage`, `vendureOrderCode`.
+
+**Invariants:** unique `(provider, providerEventId)`; ingress verifies HMAC against raw request bytes, persists before enqueue, and returns success only after inbox handling. The worker performs bounded retry/reconciliation. This inbox is not the recurring SubscriptionPlugin webhook inbox and is not a Flow B tenant inbox.

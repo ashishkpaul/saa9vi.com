@@ -20,8 +20,8 @@
 | InstructorProfile | `instructor_profile` | No (DL-010) |
 | MediaResource | `media_resource` | Yes |
 | TenantRegistrationLog | `tenant_registration_log` | No |
-| TenantLearnerMembership | `tenant_learner_membership` | No (scalar `channelId`) |
-| TenantLearnerMembershipLog | `tenant_learner_membership_log` | No (append-only admission audit) |
+| TenantLearnerMembership | `tenant_learner_membership` | No (scalar `channelId`, unique customer/channel) |
+| TenantLearnerMembershipLog | `tenant_learner_membership_log` | No (scalar `channelId`, append-only transition audit) |
 | TenantTheme | `tenant_theme` | No (scalar `channelId`, ADR-043) |
 
 ### Publishes (key cross-plugin events — not an exhaustive inventory; see `src/plugins/tenant-plugin/events/tenant-events.ts` for the full set)
@@ -61,6 +61,8 @@ None.
 | `TenantCommercialEligibilityService` | ADR-043 white-label entitlement gate (`whitelabelEnabled` + status ∈ {trialing, active, past_due}); contributes only the theming window + plan flag and **delegates** the shared evaluation to the platform `CommercialEntitlementService` (`src/platform/commercial/`), which is also ADR-042's `channelMarketplaceEligible()` — one evaluator, window supplied per entitlement |
 | `TenantDeletionService` | GDPR deletion: anonymizes tenant-scoped learner records, instructor profiles and media resources |
 
+`TenantPlugin` also binds/exports `LEARNER_ADMISSION_PORT` using `TenantLearnerMembershipService`; the shared platform `LearnerAdmissionModule` is imported by LearningPlugin and BigBlueButtonPlugin.
+
 ---
 
 ## BigBlueButtonPlugin
@@ -80,6 +82,9 @@ None.
 | BbbScheduledSession | `bbb_scheduled_session` | No (scoped via organization) |
 | BbbSessionTemplate | `bbb_session_template` | No (scoped via organization; factory entity — not a bookable session) |
 | BbbMeeting | `bbb_meeting` | No |
+| BbbMeetingSample | `bbb_meeting_sample` | No (diagnostic/sample data) |
+| BbbMeteredUsage | `bbb_metered_usage` | No (per-minute metering samples) |
+| SessionAttendance | `session_attendance` | No (session/meeting attendance projection) |
 | BbbOrganizationMembership | `bbb_organization_membership` | No (DL-017) |
 | BbbOrganizationMember | `bbb_organization_member` | No (scoped via organization; distinct from Membership) |
 | BbbEntitlement | `bbb_entitlement` | No (DL-011) |
@@ -138,11 +143,17 @@ None (injects TenantPlugin services for org verification).
 | `LearningDashboardService` | Domain API for student dashboard |
 | `TrialRegistrationService` | Trial registration and conversion |
 | `GrantReaderService` | Abstracted grant resolution (Q-009 seam) |
-| `BbbRoomAccessService` | Shared authorization evaluator for room preview and join; checks membership, legacy member, entitlement, and enrollment sources (INV-027) |
+| `BbbRoomAccessService` | Shared authorization evaluator for room preview and join; checks membership, legacy member, entitlement and enrollment sources (INV-027) |
 | `BbbMeteringService` | Per-minute participant sampling and append-only `BbbMeteredUsage` creation for metered organizations (INV-028) |
-| `SessionAttendanceService` | Scheduled-session attendance facts derived from meeting participant samples/events |
+| `BbbBillingService` | Read-side usage and billing summaries (ADR-047) |
+| `SessionAttendanceService` | Scheduled-session attendance recording |
+| `AttendanceAnalyticsService` | Attendance analytics and summaries |
 | `BbbPlatformCapacityPolicyService` | Resolves plan/platform capacity policy and synchronizes organization capacity limits |
+| `BbbDailyAllowanceService` | Single writer of daily live-allowance grants (ADR-045 / INV-026) |
 | `BbbWebhookProcessorService` | Processes persisted BBB webhook deliveries asynchronously; ingress is handled by `BbbWebhookController` |
+| `BbbHooksService` | BBB webhook subscription lifecycle management |
+| `BbbWebhookRetentionService` | Retention and pruning of processed BBB webhook events |
+| `BbbServerLoadService` | Measured server load/health signals for server selection |
 
 ### Job Queues
 
@@ -164,6 +175,15 @@ None (injects TenantPlugin services for org verification).
 | `bbb-metering` | Every 1 minute | Samples live metered meetings into per-minute learner counts |
 | `bbb-metering-prune` | Daily at 03:30 | Prunes old metered samples to keep the table bounded |
 | `bbb-webhook-retention` | Daily at 03:00 | Prunes processed BBB webhook events |
+
+### Scheduled Tasks
+
+| Task | Schedule / trigger | Purpose |
+|---|---|---|
+| `bbb-metering` | Every minute | Record attendee/minute metering samples (idempotent bucket writes) |
+| `bbb-metering-prune` | Daily at 03:30 | Prune obsolete metering samples when they can no longer be billed |
+| `bbb-daily-allowance` | Hourly | Materialize the current server-day free allowance grant |
+| `bbb-server-health` | Every 5min | Signed health probes; sole recovery writer for server health state |
 
 ---
 
@@ -223,6 +243,10 @@ None (injects TenantPlugin services for org verification).
 |---|---|---|
 | `ProductReviewShopResolver` | Shop API | `canReviewProduct`, `pendingReviewRequests`, `validateReviewToken`; mutations `submitProductReview`, `voteOnReview`, `reportReview`; `ProductReview.userVote` field resolver |
 | `ProductReviewAdminResolver` | Admin API (`SuperAdmin` or review-admin permission) | `productReviews`, `productReview`; moderation mutations `updateProductReview`, `approveProductReview`, `rejectProductReview`, `hideProductReview`, `flagProductReview`, `respondToReview` |
+
+### Key Services / extensions
+
+The plugin registers target, eligibility and aggregation strategy registries plus the ProductReview target/strategy implementations, anti-fraud, aggregation/cache, request/reward/report and customer-deletion services. It also exposes a review upload REST controller and a Vendure dashboard extension.
 
 ---
 
@@ -399,6 +423,8 @@ None (extends `orderOptions.process` with `customerStatusOrderProcess` to block 
 
 Pause and resume are implemented in the provider adapters (`RecurringBillingProvider`) but are not yet exposed through either API surface.
 
+> **ADR-046 status:** tenant self-service plan change and cancellation are implemented on the Shop API through `requestMySubscriptionPlanChange` and `cancelMySubscription`. The tenant is resolved from `ctx.channelId`; plan changes use a per-channel cooldown and the storefront receives a transient authorization URL where provider authorization is required. Live Razorpay authorization/webhook verification remains a separate production-readiness gate.
+
 ### Key Services
 
 | Service | Purpose |
@@ -410,6 +436,9 @@ Pause and resume are implemented in the provider adapters (`RecurringBillingProv
 | `SubscriptionRenewalService` | Renewal discovery — `processRenewals()` selects `status IN ('active','trialing') AND currentPeriodEnd < now`, so **any** `active` row with a past period end becomes a charge candidate (including a provider-free row: see plan §0.19 F-7) — cycle-monotonic FINALIZE CAS (ADR-041), bounded retry (MAX 3), reconcile-after-charge incidents |
 | `SubscriptionRenewalQueueService` | BullMQ-backed `subscription-renewal` queue |
 | `SubscriptionService` | Plan/enrollment lifecycle (depends on `RecurringBillingProvider` interface) |
+| `SubscriptionShopService` | Tenant-facing commercial reads (`mySubscription`, `myLiveUsage`, public plan catalogue) |
+| `TenantSelfServeSubscriptionCooldownService` | Five-minute per-channel plan-change cooldown (ADR-046) |
+| `FreePlanProvisioningService` / listener | Provider-free Free Basic subscription provisioning on `TenantRegisteredEvent` |
 
 ### Razorpay Webhook Flow
 
@@ -518,107 +547,134 @@ attempt 3 fails → failed, attemptCount=3, failedAt populated (terminal)
 | Property | Value |
 |---|---|
 | **Directory** | `src/plugins/learning-plugin/` |
-| **Status** | Active (C-22 through C-28 complete) |
-| **Purpose** | Chamilo-inspired course domain — courses, enrollments, tools, scheduled sessions, announcements. |
+| **Status** | Backend domain and Admin/Shop GraphQL are registered; storefront integration and the full enrollment/commercial workflow remain separate verification items |
+| **Purpose** | Chamilo-inspired course domain — courses, templates/tool snapshots, enrollments, BBB session links and announcements. |
 
 ### Owns
 
-| Entity | Table | ChannelAware |
+| Entity | Table | Channel scope |
 |---|---|---|
-| LearningCourse | `learning_course` | No (scalar `channelId` — ADR-053 D1) |
-| CourseTemplate | `course_template` | No (nullable `channelId` — platform-default templates have `channelId IS NULL`) |
-| CourseTemplateTool | `course_template_tool` | No (scoped via template) |
-| CourseTool | `course_tool` | No (scoped via course; no `channelId` column — channel enforced through parent course) |
-| CourseEnrollment | `course_enrollment` | No (scalar `channelId` — N-03 L2 enforcement) |
-| CourseScheduledSession | `course_scheduled_session` | No (scalar `channelId`) |
-| CourseAnnouncement | `course_announcement` | No (scalar `channelId`) |
+| LearningCourse | `learning_course` | Scalar `channelId`; unique `(channelId, slug)` |
+| CourseTemplate | `course_template` | Nullable scalar `channelId`; NULL denotes platform-default template |
+| CourseTemplateTool | `course_template_tool` | Scalar `templateId`; scoped through template |
+| CourseTool | `course_tool` | Scalar `courseId`; scoped through parent course |
+| CourseEnrollment | `course_enrollment` | Scalar `channelId` plus course/customer identifiers |
+| CourseScheduledSession | `course_scheduled_session` | Scalar `channelId` plus course/session identifiers |
+| CourseAnnouncement | `course_announcement` | Scalar `channelId` plus course identifier |
+
+The course/template/session identifiers are scalar columns in the current entities; they are not TypeORM relation decorators.
 
 ### Publishes
 
-None (currently).
+None at present.
 
-### Consumes
+### Consumes / shared ports
 
-| Port / Module | Source |
+| Port / Module | Provider / contributor |
 |---|---|
-| `LearnerAdmissionPort` (via `LearnerAdmissionModule`) | Platform — backed by `TenantLearnerMembershipService` (TenantPlugin) |
-| `CourseToolRegistry` (via `CourseToolRegistryModule`) | Platform — contributors registered at bootstrap (BBB plugin registers `bbb_session`) |
+| `LearnerAdmissionPort` (`LEARNER_ADMISSION_PORT`) | Platform module backed by `TenantLearnerMembershipService` |
+| `CourseToolRegistry` | Shared platform module; contributors registered during module initialization |
+| Built-in tools | `LearningToolContributor`: `description`, `users`, `agenda`, `announcements` |
+| BBB tool | `BbbVideoconferenceToolContributor`: `videoconference` |
 
-### API Surfaces
+### API surfaces
 
-| Resolver | Scope | Purpose |
+| Resolver | Scope | Actual operations |
 |---|---|---|
-| `LearningAdminResolver` | Admin API | Course CRUD, template management, enrollment admin, announcement management |
-| `LearningShopResolver` | Shop API (Authenticated) | `myCoursePages`, `myCoursePage(slug)`, `coursePageAnnouncements` — no Shop enrollment mutation exists |
+| `LearningAdminResolver` | Admin API | Queries: `learningCourses`, `learningCourse`, `courseEnrollments`, `courseAnnouncements`, `courseTools`, `courseScheduledSessions`, `courseToolDefinitions`; mutations: course create/update/publish/close/archive, learner enroll/suspend/complete/withdraw, announcement create/update/publish, tool update, add/remove course session |
+| `LearningShopResolver` | Shop API (Authenticated) | `myCoursePages`, `myCoursePage(slug)`, `coursePageAnnouncements(courseId)` — no Shop enrollment mutation exists |
+| `CoursePageFieldResolver` | Shop API | Resolves visible `CoursePage.tools` |
 
 Admin operations (`courseManagePermission`, `courseEnrollPermission`, `courseAnnouncementPermission`) are granted to tenant admins via `TENANT_ADMIN_ROLE_PERMISSIONS`.
 
-### Key Services
+No Shop enrollment/invitation-acceptance mutation or template CRUD GraphQL surface is currently exposed. `createLearningCourse` accepts an optional `templateId`; the course creation service snapshots template tools into course tools.
+
+### Key services
 
 | Service | Purpose |
 |---|---|
-| `LearningCourseService` | Course CRUD + FSM (DRAFT → PUBLISHED → CLOSED → ARCHIVED); tool snapshot from template |
-| `CourseEnrollmentService` | Enrollment CRUD + FSM; enforces ACTIVE academy admission via `LearnerAdmissionPort` (C-25) |
-| `CourseAnnouncementService` | Announcement CRUD |
-| `CourseScheduledSessionService` | Course session CRUD |
-| `CourseToolRegistry` | Startup registry of tool definitions; validates tool keys on write |
-| `LearningDeletionService` | GDPR deletion: removes learner enrollments from channel or performs full delete |
+| `LearningCourseService` | Channel-scoped course CRUD and lifecycle; template-tool snapshot |
+| `CourseEnrollmentService` | Channel-scoped enrollment FSM; requires ACTIVE academy admission |
+| `CourseAnnouncementService` | Course announcement lifecycle |
+| `CourseScheduledSessionService` | Link/unlink existing BBB scheduled sessions |
+| `CourseToolRegistry` | Startup tool-definition registry; duplicate-key and settings validation |
+| `LearningDeletionService` | Channel-scoped and full customer-deletion handling |
 
 ### Permissions
 
 | Permission | Grantee |
 |---|---|
-| `courseManagePermission` (CRUD) | Tenant admins |
-| `courseEnrollPermission` (CRUD) | Tenant admins |
-| `courseAnnouncementPermission` (CRUD) | Tenant admins |
+| `CourseManage` (CRUD) | Tenant admins |
+| `CourseEnroll` (CRUD) | Tenant admins |
+| `CourseAnnouncement` (CRUD) | Tenant admins |
 
-> Added to `TENANT_ADMIN_ROLE_PERMISSIONS` in `tenant-plugin/constants.ts`.
+> Permission definitions live in `src/platform/course-permissions.ts` and are granted to new tenant-admin roles through `TENANT_ADMIN_ROLE_PERMISSIONS`.
+
+### Enrollment FSM
+
+```text
+INVITED   -> ENROLLED | WITHDRAWN
+ENROLLED  -> SUSPENDED | COMPLETED | WITHDRAWN
+SUSPENDED -> ENROLLED | COMPLETED | WITHDRAWN
+COMPLETED -> terminal
+WITHDRAWN -> terminal
+```
+
+The current Admin enrollment mutation creates `ENROLLED` directly; invitation creation/acceptance is not yet exposed. BBB course-tool visibility does not grant meeting access; BBB authorization remains authoritative (INV-027).
 
 ---
 
-## PaymentsPlugin (Flow A + Flow B)
+## PaymentsPlugin (Flow A + partial Flow B)
 
-The PaymentsPlugin owns both flow lifecycles. See ADR-051 (Flow A vs Flow B) and ADR-054 (Flow B implementation).
+PaymentsPlugin provides the complete one-time platform payment lifecycle for Flow A and the tenant Razorpay configuration and checkout-order APIs for Flow B.
 
-### Flow A — Platform payments (checkout)
+### Flow A — Platform payments
 
-| Entity | Table | Purpose |
-|---|---|---|
-| `PaymentWebhookEvent` | `payment_webhook_event` | Immutable webhook receipt inbox (UNIQUE(provider, providerEventId)); processing metadata is mutable |
+Flow A uses Saa9vi's platform Razorpay credentials. It has a registered Vendure PaymentMethodHandler, a persist-first webhook inbox and `payment-webhook-reconciliation`.
 
-| Resolver / Controller | Scope | Purpose |
-|---|---|---|
-| `RazorpayShopResolver` | Shop API | `createRazorpayCheckoutOrder` |
-| `RazorpayPaymentsWebhookController` | REST (Public) | `POST /payments/razorpay/checkout-webhook` — HMAC-verified, persist-first, then enqueues |
+### Flow B — Tenant-client collections
 
-| Queue | Schedule | Purpose |
-|---|---|---|
-| `payment-webhook-reconciliation` | On demand | Processes persisted webhook events for Flow A reconciliation |
+Flow B implements per-tenant Razorpay credential configuration, credential verification, account enable/disable operations and tenant-specific checkout-order creation.
 
-### Flow B — Tenant-client collections (Phase 2 additions)
+The tenant-aware `TenantRazorpayService.verifyAndSettle()` method exists, but it is not yet wired through a registered tenant-specific `PaymentMethodHandler`. A complete Flow B settlement and webhook reconciliation lifecycle is therefore not yet implemented.
+
+See ADR-051 and ADR-054.
+
+### Owns
 
 | Entity | Table | Purpose |
 |---|---|---|
-| TenantPaymentAccount | `tenant_payment_account` | Per-tenant Razorpay credentials (keyId plaintext, keySecret AES-256-GCM encrypted); `status` ∈ `pending|active`; `isEnabled` toggle |
+| PaymentWebhookEvent | `payment_webhook_event` | Flow A one-time Razorpay webhook inbox |
+| TenantPaymentAccount | `tenant_payment_account` | One Razorpay account per channel/provider; Key ID plaintext, Key Secret and webhook secret AES-256-GCM encrypted |
 
-### Additional API surfaces (Phase 2)
-
-| Resolver | Scope | Purpose |
-|---|---|---|
 | `TenantPaymentAdminResolver` | Admin API (`ManageTenantPaymentAccount`; `allTenantPaymentAccounts` is SuperAdmin-only) | `tenantPaymentAccount`, `allTenantPaymentAccounts`, `upsertTenantPaymentAccount`, `setTenantPaymentAccountEnabled`, `deleteTenantPaymentAccount`, `verifyTenantPaymentAccount`, `verifyTenantPaymentWebhook` |
-| `TenantRazorpayShopResolver` | Shop API (`Owner`) | `createTenantRazorpayCheckoutOrder` only; payment verification/settlement is performed by the tenant-aware payment handler/service, while credential checks are Admin API operations |
+| `TenantRazorpayShopResolver` | Shop API (`Owner`) | `createTenantRazorpayCheckoutOrder` |
+| `RazorpayShopResolver` | Shop API (authenticated order owner) | `createRazorpayCheckoutOrder`; requires `paymentPurpose = 'platform-service'` |
+| `razorpayPaymentHandler` | Vendure PaymentMethodHandler | One-time platform Razorpay payment; uses platform environment credentials |
+| `RazorpayPaymentsWebhookController` | Public REST | `POST /payments/razorpay/checkout-webhook`; HMAC verification, durable inbox, queue handoff |
 
-### Additional services (Phase 2)
+
+The Admin safe view never returns decrypted secrets. `verifyTenantPaymentAccount` probes Razorpay with `GET /payments?count=1`; `verifyTenantPaymentWebhook` only checks webhook-secret presence/decryption and is not a signed webhook test. The Shop mutation creates a Razorpay order using credentials resolved from `ctx.channelId`.
+
+**Not implemented at this baseline:** a Flow B Vendure `PaymentMethodHandler` that calls `TenantRazorpayService.verifyAndSettle()`, tenant payment settlement through `addPaymentToOrder`, a tenant-specific webhook endpoint/inbox/worker, and live provider validation. The `verifyAndSettle()` method exists but is currently unwired. The explicit-order path should also have an adversarial order-owner test and explicit customer binding verified.
+
+### Key services and secrets
 
 | Service | Purpose |
 |---|---|
-| `TenantPaymentEncryptionService` | AES-256-GCM encrypt/decrypt for `keySecret` |
-| `TenantPaymentAccountService` | Tenant account CRUD + credential resolution |
-| `TenantRazorpayOrdersClient` | Razorpay Orders API client using per-tenant credentials |
-| `TenantRazorpayService` | Flow B checkout orchestration; reuses `razorpay-checkout.policy.ts` for signature verification |
+| `TenantPaymentEncryptionService` | AES-256-GCM; requires 32-byte `TENANT_PAYMENT_ENCRYPTION_KEY` outside dev; optional previous-key decrypt fallback |
+| `TenantPaymentAccountService` | Account CRUD, channel resolution, encryption/decryption and safe GraphQL view |
+| `TenantRazorpayOrdersClient` | Tenant-keyed Razorpay Orders/Payments API calls |
+| `TenantRazorpayService` | Tenant checkout-order creation and currently unwired verify/settle logic |
+| `RazorpayCheckoutService` | Flow A order/payment verification and settlement |
+| `PaymentWebhookQueueService` | Flow A persist-first webhook reconciliation (BullMQ; bounded retries) |
+
+`TENANT_PAYMENT_ENCRYPTION_KEY` is distinct from `VENDURE_ENCRYPTION_KEY`, which configures Vendure's `DefaultEncryptionStrategy` for Stripe secret encryption.
 
 ### Permissions
 
 | Permission | Grantee |
 |---|---|
-| `ManageTenantPaymentAccount` (CRUD) | Tenant admins (added to `TENANT_ADMIN_ROLE_PERMISSIONS`) |
+| `ManageTenantPaymentAccount` (CRUD) | Tenant admins; granted to new roles by TenantPlugin |
+
+Existing tenant roles may lack the permission. `tenant:roles:check` is read-only; the current `tenant:roles:repair` apply path writes Role records directly via repository save and conflicts with the GraphQL-only mutation policy. Do not run it without an approved exception; add a SuperAdmin Admin GraphQL repair path first.

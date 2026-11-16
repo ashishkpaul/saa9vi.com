@@ -51,3 +51,29 @@ The `administrators` Admin API query must never leak administrators from other c
 
 `bbbMyOrganization` provides the channel-derived tenant organization for tenant screens. Explicit-ID paths remain safe only because ownership assertions execute before service operations. The current implementation is in `bbb-meeting.service.ts`, `bbb-organization.service.ts`, `bbb-admin.resolver.ts`, and `bbb-channel-access.service.ts`.
 
+
+
+---
+
+## SEC-009: Tenant Payment Credentials and Flow B Checkout — ⚠️ Partially implemented; not production-ready
+
+**Credential storage (code present):**
+
+- `TenantPaymentAccount` is scoped by scalar `channelId` and unique per channel/provider.
+- Razorpay Key ID is public; Key Secret and optional webhook secret are AES-256-GCM encrypted by `TenantPaymentEncryptionService`.
+- `TENANT_PAYMENT_ENCRYPTION_KEY` is a 32-byte key represented as 64 hex characters. It is required when `APP_ENV !== 'dev'`. `TENANT_PAYMENT_ENCRYPTION_KEY_PREVIOUS` provides prior-key decryption fallback during rotation.
+- Admin GraphQL returns a safe view and never returns decrypted credentials.
+- Tenant account configuration is gated by `ManageTenantPaymentAccount`; new tenant-admin roles receive the permission through `TENANT_ADMIN_ROLE_PERMISSIONS`.
+
+**Open controls / findings at commit `3c245952d57b9ddeb27b9cbd6ee01de5bae0ba71`:**
+
+1. **Flow B settlement is not wired.** PaymentsPlugin registers the platform Flow A `razorpayPaymentHandler`, but no tenant-specific `PaymentMethodHandler` is registered. `TenantRazorpayService.verifyAndSettle()` is currently not connected to `addPaymentToOrder`. Do not enable or advertise tenant Razorpay checkout as end-to-end until this boundary is implemented and tested.
+2. **Explicit order ownership needs proof.** `createTenantRazorpayCheckoutOrder(orderId)` is authenticated and channel-scoped, and uses `@Allow(Permission.Owner)`; however, its service path does not visibly load the order customer and compare the customer's user ID with `ctx.activeUserId`. Verify that Vendure's `Owner` permission is resource-bound for this custom resolver. Otherwise add the service-level owner assertion and cross-customer same-channel regression tests.
+3. **Webhook verification label is too strong.** `verifyTenantPaymentWebhook` currently checks encrypted-secret presence/decryption and returns true. It does not verify a Razorpay signature or prove an endpoint is configured.
+4. **No Flow B webhook recovery path exists.** The current `POST /payments/razorpay/checkout-webhook` inbox/queue is platform Flow A only. Tenant-specific endpoint selection, channel resolution, signature verification, durable inbox, idempotency and reconciliation remain to be designed/implemented.
+5. **Settlement must recheck account state.** When `verifyAndSettle()` is wired, recheck `status = active` and `isEnabled = true` at settlement, not only at order creation.
+
+**Key separation:** `TENANT_PAYMENT_ENCRYPTION_KEY` is distinct from `VENDURE_ENCRYPTION_KEY`, which is supplied to Vendure's `DefaultEncryptionStrategy` for the Stripe plugin's encrypted handler secrets. Both keys must be backed up separately from the database. The tenant-key service includes decrypt fallback but no automated bulk re-encryption command was identified in the reviewed PaymentsPlugin.
+
+**Evidence status:** source/SDL verified; no live merchant checkout, tenant webhook delivery, key-rotation exercise or production configuration verification is claimed.
+
