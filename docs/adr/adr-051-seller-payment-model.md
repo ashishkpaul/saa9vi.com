@@ -1,6 +1,6 @@
 # ADR-051 — Seller Payment Model and Tenant Razorpay Exposure
 
-**Status:** ACCEPTED — per-tenant Razorpay selected; implementation deferred.  
+**Status:** ACCEPTED — Option C selected; Flow B Phase 2 code is present in `PaymentsPlugin` (see ADR-054).  
 **Date:** 1 November 2026  
 **Author:** Kiro CLI baseline (C-05)
 
@@ -15,7 +15,7 @@
 
 - Saa9vi collects tenant-admin service fees (subscription, BBB usage, advertising, optional storefront hosting) using Saa9vi's own Razorpay account.
 - Tenant-client collections belong entirely to the tenant. Saa9vi does not collect, deduct, or withhold commission.
-- Tenants will eventually configure their own Razorpay API keys in the tenant admin UI. Tenant-specific credentials, payment handling, and webhook routing are **not implemented in this phase** — they are deferred to a separate implementation phase.
+- Tenant Razorpay configuration is now implemented through `TenantPaymentAccount` and `TenantPaymentAdminResolver`: tenant admins can store encrypted credentials, enable/disable the account, verify credentials, and verify webhook configuration. The Shop API exposes `createTenantRazorpayCheckoutOrder`; `TenantRazorpayService` contains the server-side verification/settlement path. This implementation does not change Flow A platform credentials or the zero-commission boundary. Treat production rollout as a separate operational verification step; the presence of code alone does not prove live webhook configuration or successful end-to-end payment in the target environment.
 - Marketplace commission is permanently 0% under this business model. Tenants may collect outside Saa9vi entirely; no Vendure payment record is required unless a later decision introduces one.
 
 ## Context (historical)

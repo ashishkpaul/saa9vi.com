@@ -69,28 +69,63 @@ bbb-meeting-provisioning job
 ## Webhook Processing
 
 ```
-BBB POST /bbb/webhook
+BBB POST /bbb/webhook/:serverId
   │
-  ├─ Validate HMAC signature
-  ├─ Persist BbbWebhookEvent { status: PENDING }
-  ├─ Enqueue eventId to BullMQ: bbb-webhook-processor
-  └─ Return { ok: true } immediately
+  ├─ Load the registered server and decrypt its API secret
+  ├─ Reconstruct the configured callback URL (do not trust Host headers)
+  ├─ Verify BBB callback authentication against the raw request body
+  ├─ Parse the event array and discard non-allow-listed event types
+  ├─ Compute a per-server SHA-256 deduplication key
+  ├─ Persist BbbWebhookEvent { status: PENDING | PARSE_FAILED }
+  ├─ If parsing succeeded and an allow-listed event exists:
+  │    enqueue the persisted event ID to BullMQ: bbb-webhook-processor
+  └─ Acknowledge the accepted delivery; persistence failure returns 5xx
 
 bbb-webhook-processor job
   │
   ├─ Load BbbWebhookEvent by id
-  ├─ Call meetingService.handleWebhookEvent()
-  │    ├─ meeting-ended → completeMeetingLifecycle()
-  │    │    ├─ Transition: ACTIVE → COMPLETED
+  ├─ Call BbbWebhookProcessorService / meeting lifecycle handlers
+  │    ├─ meeting-ended → complete meeting lifecycle
+  │    │    ├─ Transition meeting: ACTIVE → COMPLETED
   │    │    ├─ Reset room: Idle, currentMeetingId: null
-  │    │    └─ consumeGrantHours()
-  │    │         ├─ Calculate duration (provisionedAt → completedAt)
-  │    │         ├─ Write BbbUsageLedger row (append-only)
-  │    │         └─ Increment grant.consumedMinutes
-  │    └─ Update trial attendance from attendee data
-  └─ Mark BbbWebhookEvent { status: PROCESSED }
-       OR { status: FAILED } (retryable)
+  │    │    └─ Apply grant consumption where the meeting uses grant billing
+  │    │         ├─ Calculate billable usage
+  │    │         ├─ Write immutable BbbUsageLedger fact
+  │    │         └─ Update the linked grant's consumed minutes
+  │    ├─ metered billing path → write BbbMeteredUsage from per-minute samples
+  │    └─ Update session attendance / recording facts where event data supports it
+  └─ Mark processing outcome; retry failures through the queued worker
 ```
+
+---
+
+## Razorpay Checkout Webhook Processing (Flow A — platform payments)
+
+```
+Razorpay POST /payments/razorpay/checkout-webhook
+  │
+  ├─ Verify X-Razorpay-Signature against the exact raw request body
+  ├─ Resolve the provider event id (header preferred; payload fallback)
+  ├─ Persist PaymentWebhookEvent before processing
+  │    └─ UNIQUE(provider, providerEventId) is the duplicate-delivery boundary
+  ├─ Enqueue only the persisted inbox-row ID to BullMQ:
+  │    payment-webhook-reconciliation
+  └─ Return success only after the inbox event is durable and enqueued
+
+payment-webhook-reconciliation job
+  │
+  ├─ Load the PaymentWebhookEvent by ID
+  ├─ Ignore non-settlement event types and terminal/duplicate deliveries
+  ├─ Resolve the Vendure order from the persisted provider/order binding
+  ├─ Require the order to remain in ArrangingPayment
+  ├─ Re-read Razorpay order/payment server-to-server
+  ├─ Verify payment/order binding, amount, currency and payment state
+  ├─ Settle through Vendure OrderService.addPaymentToOrder()
+  └─ Persist processing outcome; retry non-terminal failures, stop at the
+     configured attempt limit
+```
+
+**Boundary:** Flow A uses Saa9vi's platform Razorpay credentials for tenant-admin payments to Saa9vi. It is separate from the recurring-subscription webhook below and from Flow B tenant-client collections.
 
 ---
 
@@ -243,24 +278,28 @@ registerForTrial(sessionId)
 
 ---
 
-## Reconciliation (Every 60s)
+## Reconciliation (Every 5 minutes)
 
 ```
-bbb-reconciliation scheduled task
+bbb-reconciliation scheduled task (every 5 minutes)
   │
-  ├─ 1. reconcileActiveMeetings()
-  │    └─ For each Active meeting:
-  │         ├─ Call BBB getMeetingInfo
-  │         ├─ If null → markMeetingStale() (no ledger row)
-  │         └─ If duration > maxMeetingDurationMs → force complete
-  │              └─ Publish CapacityExhaustedEvent if billingCapped
-  │
-  ├─ 2. reconcileProvisioning()
-  │    └─ For each Provisioning meeting past timeout:
-  │         └─ Transition to FAILED
-  │
-  └─ 3. reconcileRooms()
-       └─ Fix room/meeting state drift
+  ├─ Snapshot and reset the current BBB metrics window
+  ├─ reconcileProvisioning()
+  │    └─ Recover or fail meetings stuck in PROVISIONING past the timeout/retry policy
+  ├─ reconcileActiveMeetings()
+  │    ├─ Query BBB for meetings beyond the grace period
+  │    ├─ Complete only on a confirmed remote end; transient outages/rejections are not proof
+  │    └─ Force-complete meetings beyond maxMeetingDurationMs (billing ceiling)
+  ├─ reconcileRooms()
+  │    └─ Repair room/meeting state drift (Provisioning/Active → authoritative state)
+  ├─ reconcilePendingBilling()
+  │    └─ Recover completed grant-billed meetings missing their BbbUsageLedger fact
+  ├─ reconcilePendingMeteredBilling()
+  │    └─ Recover completed metered meetings missing BbbMeteredUsage
+  ├─ repairRecordings()
+  │    └─ Repair missing BBB recording IDs/playback URLs for bounded recent candidates
+  └─ scanOrphanMeetings()
+       └─ Report remote BBB meetings with no local row; report-only, never auto-end
 ```
 
 ---
@@ -409,96 +448,6 @@ anything else (DRAFT, FINISHED, CANCELLED, PRIVATE)
 
 ---
 
-## Scheduled Session Lifecycle
-
-> Added 2026-09-20 (DRAFT state + template/recurring sessions).
-
-### Direct session creation
-
-```
-createBbbScheduledSession(input)  [Admin API]
-  │
-  ├─ assert organization/channel access
-  ├─ lock BbbOrganization row FOR UPDATE (same @Transaction() as insert)
-  ├─ count DRAFT + SCHEDULED + LIVE sessions
-  ├─ enforce maxSessionsPerOrg (0 = unlimited)
-  └─ persist BbbScheduledSession  status = DRAFT
-       │
-       └─ SessionCreatedEvent → addIndexSessionJob
-            └─ DRAFT ineligible → no-op / remove
-```
-
-### Template / recurring session generation
-
-```
-createBbbSessionTemplate(input)  [Admin API]
-  │
-  ├─ validate durationMinutes (1–1440)
-  ├─ validate defaultTrainerId is active member of org
-  └─ persist BbbSessionTemplate
-
-createSessionsFromTemplate(templateId, startTimes[])  [Admin API]
-  │
-  ├─ validate batch (1..100, valid ISO-8601, no duplicates)
-  ├─ validate template trainer still active in org
-  ├─ lock BbbOrganization row FOR UPDATE (same @Transaction() as all inserts)
-  ├─ count + enforce cap for entire batch atomically
-  └─ persist each session  status = DRAFT
-       └─ SessionCreatedEvent per session → DRAFT ineligible → no-op
-```
-
-### Publication
-
-```
-publishBbbScheduledSession(id)  [Admin API]
-  │
-  ├─ require status = DRAFT
-  ├─ status → SCHEDULED
-  └─ SessionUpdatedEvent → addIndexSessionJob
-       ├─ PUBLIC + SCHEDULED → indexed
-       └─ PRIVATE → removed
-```
-
-### Session start (trainer, Shop API)
-
-```
-startScheduledSession(sessionId)
-  │
-  ├─ require status = SCHEDULED  (DRAFT → error: publish first)
-  └─ BbbMeetingService.createAndEnqueue()
-       └─ BullMQ provisioning job → BbbApiService.createMeeting()
-            └─ MeetingProvisionedEvent
-                 └─ BbbSessionProvisioningListener
-                      ├─ status → LIVE
-                      └─ SessionStartedEvent → addIndexSessionJob
-                           └─ PUBLIC + LIVE → indexed
-```
-
-### Session completion
-
-```
-BBB meeting ended → MeetingCompletedEvent
-  └─ BbbSessionProvisioningListener
-       ├─ status → FINISHED
-       └─ SessionEndedEvent → addIndexSessionJob
-            └─ FINISHED ineligible → removed from index
-```
-
-### Session cancellation
-
-```
-cancelBbbScheduledSession(id)  [Admin API]
-  ├─ status → CANCELLED
-  └─ SessionCancelledEvent → addIndexSessionJob
-       └─ CANCELLED ineligible → removed from index
-```
-
-**Marketplace eligibility** (sole arbiter: `MarketplaceIndexerService.indexSession()`):
-`visibility === PUBLIC AND status IN (SCHEDULED, LIVE)` → indexed.
-All other states (DRAFT, FINISHED, CANCELLED) or PRIVATE visibility → removed.
-
----
-
 ## Marketplace Indexing
 
 > Corrected 2026-09-04 to match the implemented event→projection contract (see Gate 1.4 matrix in `phase3-audit.md`). All session projection paths pass through `MarketplaceIndexerService.indexSession()`, which is the sole arbiter of public eligibility: `visibility === PUBLIC` AND `status IN (SCHEDULED, LIVE)` — eligible sessions are indexed/updated; everything else is removed from the public index.
@@ -577,17 +526,18 @@ ReviewApprovedEvent / ReviewRejectedEvent / ReviewHiddenEvent
 leaveAcademy() / deleteMyAccount()
   │
   └─ CustomerDeletionService
-       ├─ BBB handler: anonymize enrollments, entitlements; preserve ledger
-       ├─ Tenant handler: anonymize InstructorProfile, MediaResource
-       └─ Reviews handler: anonymize ProductReview.authorName, deactivate ReviewRequest
+       ├─ BBB handler: anonymize enrollments/entitlements and retain immutable billing facts
+       ├─ Tenant handler: anonymize InstructorProfile and MediaResource
+       ├─ Learning handler: remove or anonymize learner/course-enrollment records in scope
+       └─ Reviews handler: anonymize ProductReview.authorName and deactivate ReviewRequest
 ```
 
 ---
 
-## Room Access Evaluation (INV-027 — shared by joinRoom and bbbRoomStatus)
+## Room Access Evaluation (INV-027 — shared by bbbJoinRoom and bbbRoomStatus)
 
 ```
-joinRoom(roomId) / bbbRoomStatus(id)
+bbbJoinRoom(roomId) / bbbRoomStatus(id)
   │
   ├─ BbbRoomAccessService.evaluate() — ONE decision, both surfaces (BUG-045 fix)
   │    ├─ Source 1: BbbOrganizationMembership.findActiveMembership()
@@ -603,9 +553,9 @@ joinRoom(roomId) / bbbRoomStatus(id)
   │         ├─ Valid → allowed (attendee)
   │         └─ Invalid or absent → Access Denied
   │
-  └─ joinRoom only: evaluation runs BEFORE requestProvisioning (BUG-045 #3) —
-     a denied customer never enqueues a meeting;
-     bbbRoomStatus throws ForbiddenError on denial (preview denial ⇔ join denial)
+  └─ bbbJoinRoom delegates to BbbMeetingService.joinRoom(), where evaluation runs
+     BEFORE requestProvisioning (BUG-045 #3) — a denied customer never enqueues a
+     meeting; bbbRoomStatus throws ForbiddenError on denial (preview denial ⇔ join denial)
 ```
 
 

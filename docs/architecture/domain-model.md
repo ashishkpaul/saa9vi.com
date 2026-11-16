@@ -464,7 +464,7 @@ Pending → Provisioning → Active → Completed → Archived
 | Property | Value |
 |---|---|
 | **Plugin** | BigBlueButtonPlugin |
-| **Table** | `trial_registration` |
+| **Table** | `bbb_trial_registration` |
 | **Purpose** | Records a student's registration for a free trial session. |
 
 **Status:** `REGISTERED` → `ATTENDED` | `NO_SHOW`
@@ -554,16 +554,19 @@ Pending → Provisioning → Active → Completed → Archived
 
 **Lifecycle (FSM — ADR-039):**
 - `pending_provider_auth` → `active` → `past_due` → `cancelled`
-- `trialing` retained for non-provider flows
-- Only provider webhooks drive `pending_provider_auth` → `active`; Razorpay is the authoritative activation source (INV-004).
-- **Implemented exception:** the provider-free Free Basic plan is provisioned locally without a provider subscription/binding by the free-plan provisioning path. Tenant self-service plan change and cancellation are exposed by SubscriptionPlugin's ADR-046 Shop API; live provider authorization and webhook evidence remain a separate release gate.
+- `trialing` remains available for trial/non-provider flows. Only provider webhooks drive `pending_provider_auth` → `active`; Razorpay is the authoritative activation source (INV-004).
+- **Implemented provider-free exception:** `FreePlanProvisioningListener` handles `TenantRegisteredEvent` and provisions the configured active Free Basic plan locally as `active`, with no provider subscription, no `SubscriptionProviderBinding`, and NULL `currentPeriodStart`/`currentPeriodEnd`. The operation is idempotent and fail-soft: if the configured provider-free plan is missing, inactive, or has a `providerPlanId`, tenant registration continues without a subscription row.
+- Paid upgrades/downgrades use the plan-change operation on the existing tenant subscription; they do not create a second non-cancelled subscription row.
+- Tenant self-service plan change and cancellation are exposed by SubscriptionPlugin's ADR-046 Shop API; live provider authorization and webhook evidence remain a separate release gate.
 
 **Fields:** `plan`, `channels`, `channelId`, `status`, `currentPeriodStart`, `currentPeriodEnd`, `cancelAtPeriodEnd`, `cancelledAt`, `dunningRetryCount`, `lastDunningAttemptAt`, `billingCustomerId` (provider-neutral customer reference, e.g. Razorpay `customer_id`), `providerStatus`, `providerShortUrl`, `version`
 
 **Invariants:**
 - `UNIQUE(channelId) WHERE status != 'cancelled'` — at most one non-cancelled subscription per tenant.
 - **Any** non-cancelled status occupies the one-subscription slot, not just authorization states: `subscribeToPlan()` rejects a channel whose existing row is in any state other than `cancelled` (its error message says "active or trialing", which understates the real condition).
+- Subscription lifecycle operations are exposed on both APIs: Admin (`changeOrganizationSubscriptionPlan`, `cancelOrganizationSubscription`) and Shop (`requestMySubscriptionPlanChange`, `cancelMySubscription`). Plan creation/update and initial provider-backed subscription creation remain Admin operations. Pause/resume are **not** exposed through either GraphQL API, even though provider adapter methods exist.
 - The Admin API remains the operator/portal management surface; tenant self-service operations are on the Shop API: `requestMySubscriptionPlanChange(planId)` and `cancelMySubscription(atPeriodEnd)` (ADR-046). The implementation uses a tenant business-account ownership check and a five-minute per-channel cooldown for plan changes.
+- `FreePlanProvisioningService` may create the tenant initial provider-free subscription during registration. Because one non-cancelled row is allowed per channel, an existing tenant upgrades through `changeOrganizationSubscriptionPlan` / `requestMySubscriptionPlanChange`, not by creating a second subscription with `subscribeToPlan`.
 - `providerShortUrl` is returned to the admin caller at creation; it is not automatically cleared on activation (documented residual — authoritative post-auth state is `status` + the binding).
 - `version` is a plain CAS token for renewal compare-and-swap (NOT auto-locking); the worker must check affected-rows === 1 before charging.
 - Status column is `varchar`, so adding FSM values is not a DB-enum migration.
@@ -676,7 +679,42 @@ Pending → Provisioning → Active → Completed → Archived
 - Commercially gated (INV-025 / ADR-043 §2.1): create/update/publish/rollback/draft-clone and the storefront read require subscription exists + `plan.whitelabelEnabled = true` + status ∈ {`trialing`, `active`, `past_due`}, evaluated solely by `TenantCommercialEligibilityService`. Ineligible `myTenantTheme` (public Shop read) returns `null` → platform default.
 - `resetTenantTheme` (removing branding) is always permitted.
 - Theme data never applies to the admin portal, marketplace, or other tenants' storefronts.
+---
 
+## Supporting Plugin Entities (registered persistence inventory)
+
+The sections above describe the main domain aggregates. The following supporting records are also registered by the plugins. They are included here because they affect persistence, auditability, billing, or tenant isolation even when they are not modeled as independent aggregate roots.
+
+| Plugin | Entity | Role / ownership note |
+|---|---|---|
+| TenantPlugin | `MediaResource` | Channel-aware tenant-owned media metadata. |
+| TenantPlugin | `TenantRegistrationLog` | Registration workflow/audit record; records provisioning outcome. |
+| TenantPlugin | `TenantLearnerMembership` | Scalar-`channelId` academy admission state; unique per customer and channel. |
+| TenantPlugin | `TenantLearnerMembershipLog` | Append-only learner admission transition audit. |
+| CmsPlugin | `NavigationMenu` | Channel-aware menu configuration; one menu per channel. |
+| BigBlueButtonPlugin | `BbbOrganizationMember` | Legacy organization membership record; distinct from `BbbOrganizationMembership`. |
+| BigBlueButtonPlugin | `BbbEnrollment` | Legacy room enrollment; retained for compatibility/access evaluation alongside entitlements. |
+| BigBlueButtonPlugin | `BbbProductAccess` | Links a Vendure ProductVariant to a BBB room. |
+| BigBlueButtonPlugin | `BbbServer` | Platform-managed BBB server endpoint and encrypted credentials. |
+| BigBlueButtonPlugin | `BbbCapacityAlertLog` | Capacity intelligence alert history. |
+| BigBlueButtonPlugin | `BbbMeteredUsage` | Append-only completed-meeting billing fact; one row per metered meeting (INV-028). |
+| BigBlueButtonPlugin | `BbbMeetingSample` | Per-minute meeting/participant sample used to calculate billable learner minutes. |
+| BigBlueButtonPlugin | `SessionAttendance` | Per-learner scheduled-session attendance facts. |
+| ReviewsPlugin | `ReviewRequest` | Order/product-linked review invitation and token lifecycle. |
+| ReviewsPlugin | `ReviewReport` | Moderation reports for submitted reviews. |
+| ReviewsPlugin | `ReviewReward` | Review incentive/reward lifecycle. |
+| ReviewsPlugin | `ReviewVote` | Customer vote/helpfulness record for a review. |
+| MarketplaceIndexerPlugin | `MarketplaceAdCampaign` | Sponsored listing campaign configuration. |
+| MarketplaceIndexerPlugin | `AdSpendLedger` | Append-only campaign spend facts. |
+| MarketplaceIndexerPlugin | `AdWallet` | Tenant prepaid advertising wallet. |
+| MarketplaceIndexerPlugin | `AdWalletLedger` | Append-only advertising wallet movements. |
+| PaymentsPlugin | `PaymentWebhookEvent` | Immutable Flow A one-time checkout webhook inbox; processing metadata is mutable. |
+| PaymentsPlugin | `TenantPaymentAccount` | Tenant-channel Razorpay account configuration; credentials are encrypted and account status is `pending` or `active`. |
+| CustomerSuspensionPlugin | `CustomerChannelStatus` | Per-customer/per-channel checkout suspension state. |
+| CustomerSuspensionPlugin | `CustomerStatusChangeLog` | Append-only platform/channel suspension audit. |
+| LearningPlugin | `LearningCourse`, `CourseTemplate`, `CourseTemplateTool`, `CourseTool`, `CourseEnrollment`, `CourseScheduledSession`, `CourseAnnouncement` | Course-domain supporting records; see `docs/architecture/learning-domain.md` and ADR-053 for states, relations, and admission rules. |
+
+**Scoping reminder:** entity ownership is not synonymous with `ChannelAware`. Several records deliberately use scalar `channelId` or inherit scope through a parent organization/course/room. The owning plugin resolver/service guard and the relevant ADR/invariant remain authoritative; do not infer tenant isolation from a table name alone.
 
 ---
 

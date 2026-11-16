@@ -41,15 +41,6 @@ These are **not interchangeable**. A customer can be `Suspended` for checkout bu
 
 ---
 
-## Decision required
-
-Define whether an academy admission suspension (`TenantLearnerMembership.status = SUSPENDED`) should additionally:
-
-1. **Block new course enrollment?** — Currently: yes, because C-25 will check `isActiveMember()`. Confirm this is intended.
-2. **Block new BBB joins?** — Currently: yes, because H1/H2 check `isActiveMember()`. Confirm.
-3. **Revoke existing BBB entitlements?** — Currently: no. Existing `BbbEntitlement` rows remain live until expiry. Should academy suspension also revoke or expire live entitlements?
-4. **Block new checkout?** — Currently: no. Should academy suspension also set `CustomerChannelStatus = Suspended` to block checkout?
-
 ## Decision (accepted)
 
 Academy suspension blocks new BBB joins at join time (not only at grant time):

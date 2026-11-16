@@ -53,6 +53,7 @@ The separate `verifyTenantPaymentWebhook` mutation currently checks that an encr
 **Consequences:**
 
 - `TenantRazorpayService.createCheckoutOrder()` fails closed if the account is not `active` or `isEnabled` is false.
+- `verifyTenantPaymentAccount` and `verifyTenantPaymentWebhook` are Admin API mutations on `TenantPaymentAdminResolver`; the Shop API resolver exposes only `createTenantRazorpayCheckoutOrder`.
 - The actual probe is a read-only `GET /payments?count=1`; no test order is created and no payment is attempted.
 
 ---
