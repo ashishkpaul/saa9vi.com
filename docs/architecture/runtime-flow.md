@@ -673,3 +673,30 @@ Shop: createTenantRazorpayCheckoutOrder(orderId?)
 
 **Security follow-up:** the tenant checkout service's explicit `orderId` path checks tenant channel membership but does not visibly compare the order's customer user with `ctx.activeUserId`. The resolver has `@Allow(Permission.Owner)`; prove that this permission is resource-bound for this custom resolver, or add an explicit owner check and cross-customer regression test before completing Flow B.
 
+
+
+---
+
+## Marketplace tenant-channel checkout target — ADR-055 proposal
+
+**Status:** Target design, not current runtime behavior. The reviewed baseline remains marketplace discovery plus tenant-storefront routing; Flow B settlement/webhooks are incomplete per ADR-054.
+
+```text
+Marketplace listing
+  -> trusted server resolves owner Channel and signed marketplace provenance
+  -> marketplace storefront creates/loads tenant-channel cart
+  -> tenant-channel order enters ArrangingPayment
+  -> Shop API returns eligible payment methods for that tenant context
+  -> selected tenant PaymentMethodHandler resolves that tenant's credentials
+  -> provider payment verified and tenant order settled
+  -> fulfilment is selected by product fulfilment model
+
+Digital:
+  -> activate CourseEnrollment / time-bounded BbbEntitlement / content access
+  -> subscription renewal extends paid period; grace/expiry policy applies
+
+Physical:
+  -> stock allocation / physical fulfilment / dispatch / delivery / returns
+```
+
+Constraints: never create a tenant-owned order in the default marketplace channel; never trust browser-supplied channel/payee/credentials; initial cart/order contains one tenant only. Marketplace attribution records origin and does not grant channel/payment authority. See [ADR-055](../adr/adr-055-marketplace-commerce-and-revenue-model.md).
