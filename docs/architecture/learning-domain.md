@@ -1,7 +1,7 @@
-# Learning Domain Mini-Spec (C-21)
+# Learning Domain Mini-Spec (C-21; as-built reconciliation)
 
-**Date:** 1 November 2026  
-**Status:** DESIGN — for owner review before implementation.  
+**Date:** 16 November 2026  
+**Status:** Backend implementation present (C-22 through C-28). Shop enrollment, invitation workflow, template CRUD and storefront integration remain outside the current exposed API.  
 **Plugin:** `LearningPlugin` (new, `src/plugins/learning-plugin/`)
 
 ---
@@ -20,7 +20,7 @@ Tenant-owned course identity. Scalar `channelId` with explicit service-level ass
 | `description` | text, nullable | |
 | `status` | varchar | `DRAFT` / `PUBLISHED` / `CLOSED` / `ARCHIVED` |
 | `templateId` | varchar, nullable | Snapshot source template |
-| `createdByUserId` | varchar | Actor |
+| `createdByUserId` | varchar, nullable | Actor |
 | `createdAt` / `updatedAt` | timestamp | |
 
 ### CourseTemplate
@@ -34,7 +34,7 @@ Platform-default or tenant-specific reusable configuration.
 | `description` | text, nullable | |
 | `isDefault` | boolean | One platform default |
 
-Unique index: `(channelId, name)` where channelId may be null (platform default).
+Current source declares a non-unique index on `(channelId, name)`. It does not enforce uniqueness or guarantee a single platform-default template.
 
 ### CourseTemplateTool
 Ordered tool defaults for a template.
@@ -42,7 +42,7 @@ Ordered tool defaults for a template.
 | Column | Type | Notes |
 |---|---|---|
 | `id` | auto PK | |
-| `templateId` | FK → CourseTemplate | |
+| `templateId` | varchar | Scalar template identifier; no TypeORM relation decorator |
 | `toolKey` | varchar | Registry key (e.g. `videoconference`, `agenda`, `users`) |
 | `order` | int | Display order |
 | `visibility` | varchar | `VISIBLE` / `HIDDEN` |
@@ -54,7 +54,7 @@ Per-course snapshot of template tools. **Snapshot, not reference** — template 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | auto PK | |
-| `courseId` | FK → LearningCourse | |
+| `courseId` | varchar | Scalar course identifier; no TypeORM relation decorator |
 | `toolKey` | varchar | |
 | `order` | int | |
 | `visibility` | varchar | `VISIBLE` / `HIDDEN` |
@@ -68,7 +68,7 @@ Customer/course relationship.
 | Column | Type | Notes |
 |---|---|---|
 | `id` | auto PK | |
-| `courseId` | FK → LearningCourse | |
+| `courseId` | varchar | Scalar course identifier; no TypeORM relation decorator |
 | `customerId` | varchar | Vendure Customer.id |
 | `channelId` | varchar | Denormalized for scoping |
 | `courseRole` | varchar | `LEARNER` / `TRAINER` / `ASSISTANT` |
@@ -85,7 +85,7 @@ Join entity linking courses to existing BBB scheduled sessions (D4 Option B).
 | Column | Type | Notes |
 |---|---|---|
 | `id` | auto PK | |
-| `courseId` | FK → LearningCourse | |
+| `courseId` | varchar | Scalar course identifier; no TypeORM relation decorator |
 | `sessionId` | varchar | BbbScheduledSession.id |
 | `channelId` | varchar | Denormalized for scoping |
 
@@ -127,9 +127,11 @@ Who may archive: SuperAdmin only.
 ### CourseEnrollment lifecycle
 
 ```
-INVITED → ENROLLED → COMPLETED
-                ↘ SUSPENDED → ENROLLED (re-activate)
-                ↘ WITHDRAWN (terminal)
+INVITED → ENROLLED | WITHDRAWN
+ENROLLED → SUSPENDED | COMPLETED | WITHDRAWN
+SUSPENDED → ENROLLED | COMPLETED | WITHDRAWN
+COMPLETED → terminal
+WITHDRAWN → terminal
 ```
 
 - `INVITED`: Invitation sent, not yet accepted.
@@ -157,7 +159,7 @@ INVITED → ENROLLED → COMPLETED
 |---|---|
 | `CourseManage` (CRUD) | Academy staff: create/edit/publish/close courses |
 | `CourseEnroll` | Academy staff: enroll/suspend/withdraw learners |
-| `CourseAnnouncementManage` | Academy staff: create/edit/publish announcements |
+| `CourseAnnouncement` | Academy staff: create/edit/publish announcements |
 
 All course permissions are channel-scoped. SuperAdmin bypasses. Course operations check `LearnerAdmissionPort.isActiveMember()` for enrollment eligibility (ACTIVE academy admission required).
 
@@ -180,9 +182,9 @@ Registry is a typed provider map. BBB plugin contributes the `videoconference` t
 
 | API | Actor | Operations |
 |---|---|---|
-| Admin API | Academy staff | Create/edit/publish/close course, manage enrollments, manage announcements, manage tools |
-| Shop API | Enrolled learner | View course, view tools, view agenda, join videoconference, view announcements |
-| Shop API | Authenticated customer | List available courses (if published), accept invitation |
+| Admin API | Academy staff | Create/edit/publish/close/archive course, enroll/suspend/complete/withdraw learners, manage announcements and tool visibility/order, link/unlink BBB sessions |
+| Shop API | Enrolled learner | `myCoursePages`, `myCoursePage(slug)`, `coursePageAnnouncements(courseId)`; visible course tools are resolved by `CoursePageFieldResolver` |
+
 
 ---
 
@@ -194,3 +196,44 @@ Registry is a typed provider map. BBB plugin contributes the `videoconference` t
 4. Cross-tenant course access is denied at the service level.
 5. Hidden tools are not rendered, but their API endpoints still enforce authorization.
 6. `myLearningDashboard` semantics are preserved — LearningPlugin does not replace the existing BBB entitlement/session projection.
+
+
+---
+
+## 8. As-built GraphQL and workflow boundary (16 November 2026)
+
+### Admin API
+
+The current SDL exposes these query fields:
+
+- `learningCourses`, `learningCourse`
+- `courseEnrollments`, `courseAnnouncements`, `courseTools`, `courseScheduledSessions`
+- `courseToolDefinitions`
+
+The mutations are:
+
+- `createLearningCourse`, `updateLearningCourse`, `publishLearningCourse`, `closeLearningCourse`, `archiveLearningCourse`
+- `enrollLearner`, `suspendLearner`, `completeLearner`, `withdrawLearner`
+- `createCourseAnnouncement`, `publishCourseAnnouncement`, `updateCourseAnnouncement`
+- `updateCourseTool`, `addCourseSession`, `removeCourseSession`
+
+There are no template CRUD fields, no invitation-creation operation and no Shop enrollment/accept-invitation mutation. A template may be supplied by ID during course creation; template tools are copied into CourseTool rows. Without a template, the registry's current definitions seed the new course.
+
+### Shop API access rule
+
+`myCoursePages`, `myCoursePage(slug)` and `coursePageAnnouncements(courseId)` resolve the logged-in User to a Vendure Customer, then require:
+
+1. the course is in the active channel and `PUBLISHED`;
+2. the customer has an `ENROLLED` CourseEnrollment in that channel; and
+3. the customer has an `ACTIVE` TenantLearnerMembership, checked through `LearnerAdmissionPort`.
+
+The Shop field resolver returns only tools with `visibility = VISIBLE`. Tool visibility is not an authorization grant to join BBB; room/session access remains in BigBlueButtonPlugin.
+
+### As-built entity/index notes
+
+- Entity references such as `templateId`, `courseId` and `sessionId` are scalar string columns in the current entity definitions. The current TypeORM entities do not declare relations/foreign keys for these references.
+- `CourseTemplate` has a non-unique `(channelId, name)` index; the model does not enforce exactly one platform-default row.
+- `CourseEnrollment` has a unique `(courseId, customerId)` index and a redundant `channelId` column for tenant-scope assertions.
+- The implemented enrollment transition table additionally permits `INVITED → WITHDRAWN` and `SUSPENDED → COMPLETED`. `enrollLearner` writes `ENROLLED` directly; the `INVITED` state is not currently driven by a public invitation workflow.
+
+**Review baseline:** source and SDL at commit `3c245952d57b9ddeb27b9cbd6ee01de5bae0ba71`; no build, migration or live storefront verification is claimed.
