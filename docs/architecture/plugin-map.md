@@ -41,8 +41,8 @@ None.
 
 | Resolver | Scope | Purpose |
 |---|---|---|
-| `TenantShopResolver` | Shop API (Public) | `registerNewTenant`, `tenantProfile`, `instructorProfiles`, `mediaResources`, `myTenantTheme` (public; entitlement-conditional — returns null → platform default), `verifyTenantAdmin` |
-| `TenantAdminResolver` | Admin API | Tenant profile CRUD, instructor CRUD, media CRUD, theme lifecycle: `tenantThemes`, `tenantTheme(id)`, `createTenantTheme`, `updateTenantTheme`, `publishTenantTheme`, `rollbackTenantTheme`, `resetTenantTheme`; learner admission: `tenantLearners`, `admitTenantLearner`, `readmitTenantLearner` |
+| `TenantShopResolver` | Shop API (Public) | Queries: `tenantProfile`, `instructorProfile(slug)`, `instructorProfiles`, `mediaResources(ownerType, ownerId)`, `myTenantTheme` (entitlement-conditional — returns null → platform default); mutations: `registerNewTenant`, `verifyTenantAdmin` |
+| `TenantAdminResolver` | Admin API | Tenant profile, instructor, and media queries/CRUD; learner admission queries `tenantLearners`, `tenantLearnerMembershipLogs`, `checkChannelRoleAssignments` and mutations `admitTenantLearner`, `activateTenantLearner`, `suspendTenantLearner`, `revokeTenantLearner`, `readmitTenantLearner`, `repairChannelRoleAssignments`; theme lifecycle: `tenantThemes`, `tenantTheme`, `createTenantTheme`, `updateTenantTheme`, `publishTenantTheme`, `rollbackTenantTheme`, `resetTenantTheme` |
 
 ### Key Services
 
@@ -116,9 +116,9 @@ None (injects TenantPlugin services for org verification).
 
 | Resolver | Scope | Purpose |
 |---|---|---|
-| `BbbShopResolver` | Shop API (Authenticated) | `joinRoom`, `myBbbRooms`, `bbbRoomStatus`, `myScheduledSessions`, `myLearningDashboard`, `registerForTrial` |
+| `BbbShopResolver` | Shop API (Authenticated) | Queries: `myBbbMeetings`, `myBbbCapacityGrants`, `myBbbRooms`, `bbbRoomStatus`, `myBbbEnrollments`, `myScheduledSessions`, `publicScheduledSessions`, `myTrialRegistrations`, `myLearningDashboard`, `mySessionAttendance`; mutations: `bbbJoinMeeting`, `bbbJoinRoom`, `startScheduledSession`, `registerForTrial`, `leaveAcademy`, `deleteMyAccount` |
 | `BbbAdminResolver` | Admin API | Room/meeting/session/membership/entitlement CRUD, `poolCapacityDashboard` |
-| `BbbWebhookController` | REST (Public) | BBB webhook ingestion |
+| `BbbWebhookController` | REST (Public) | `POST /bbb/webhook/:serverId` — authenticates the registered callback, deduplicates, persists `BbbWebhookEvent`, then enqueues processing |
 
 ### Key Services
 
@@ -183,8 +183,8 @@ None (injects TenantPlugin services for org verification).
 
 | Resolver | Scope | Purpose |
 |---|---|---|
-| `CmsShopResolver` | Shop API (Public) | `cmsArticles`, `cmsPage`, `cmsBanners` |
-| `CmsAdminResolver` | Admin API | Article/page/banner CRUD |
+| `CmsShopResolver` | Shop API (Public, published content only) | `cmsArticle(slug)`, `cmsArticles`, `cmsPage(slug)`, `cmsBanners(placement)` — read-only |
+| `CmsAdminResolver` | Admin API | `articles`, `article`, `banners`, `banner`, `cmsPages`, `cmsPage`; Article, Banner, and Page CRUD (NavigationMenu is an entity/service, not exposed by these API extensions) |
 
 ### Job Queues
 
@@ -216,8 +216,8 @@ None (injects TenantPlugin services for org verification).
 
 | Resolver | Scope | Purpose |
 |---|---|---|
-| `ReviewsShopResolver` | Shop API | `productReviews`, `canReviewProduct`, `submitReview` |
-| `ReviewsAdminResolver` | Admin API | Review moderation, reports, rewards |
+| `ProductReviewShopResolver` | Shop API (Authenticated) | `canReviewProduct`, `pendingReviewRequests`, `validateReviewToken`; mutations `submitProductReview`, `voteOnReview`, `reportReview`; `ProductReview.userVote` field resolver |
+| `ProductReviewAdminResolver` | Admin API (`SuperAdmin` or review-admin permission) | `productReviews`, `productReview`; moderation mutations `updateProductReview`, `approveProductReview`, `rejectProductReview`, `hideProductReview`, `flagProductReview`, `respondToReview` |
 
 ---
 
@@ -267,7 +267,7 @@ None.
 | `MarketplaceSearchResolver` | Shop API (Public) | `marketplaceSearch` |
 | `MarketplaceAdminResolver` | Admin API (SuperAdmin) | Full reindex |
 | `MarketplaceAdvertisingResolver` | Admin API (MarketplaceAdvertising) | Self-serve campaign management, wallet ledger, spend reports |
-| `MarketplaceCommissionResolver` | Admin API (ReadMarketplaceCommission) | Commission ledger reads for tenant admins |
+| `MarketplaceCommissionResolver` | Shop API (`Owner`) | `applyMarketplaceReference` — validates/applies marketplace attribution to the active order; it is not a commission-collection endpoint |
 | `MarketplaceCommissionReconciliationResolver` | Admin API (ReadMarketplaceCommission) | Read-only `commissionReconciliation` Orders↔CommissionLedger report; channel-scoped, SuperAdmin may pass `allChannels:true` (service-side clamp) |
 
 ### Elasticsearch Indices
@@ -390,7 +390,7 @@ None (extends `orderOptions.process` with `customerStatusOrderProcess` to block 
 | Resolver | Scope | Purpose |
 |---|---|---|
 | `SubscriptionAdminResolver` | Admin API | `subscriptionPlans`, `organizationSubscriptions`, `providerMandates`, `providerPaymentAttempts`, `reconciliationIncidents`, `createSubscriptionPlan`, `updateSubscriptionPlan`, `subscribeToPlan`, `changeOrganizationSubscriptionPlan`, `cancelOrganizationSubscription` |
-| `SubscriptionShopResolver` | Shop API (Authenticated) | `requestMySubscriptionPlanChange`, `cancelMySubscription` |
+| `SubscriptionShopResolver` | Shop API (Authenticated) | Queries `availableSubscriptionPlans`, `mySubscription`, `myLiveUsage`; mutations `requestMySubscriptionPlanChange`, `cancelMySubscription` |
 
 Pause and resume are implemented in the provider adapters (`RecurringBillingProvider`) but are not yet exposed through either API surface.
 
@@ -600,8 +600,8 @@ The PaymentsPlugin owns both flow lifecycles. See ADR-051 (Flow A vs Flow B) and
 
 | Resolver | Scope | Purpose |
 |---|---|---|
-| `TenantPaymentAdminResolver` | Admin API (`ManageTenantPaymentAccount`) | Configure/verify tenant Razorpay account, enable/disable gateway |
-| `TenantRazorpayShopResolver` | Shop API (Authenticated) | `createTenantRazorpayCheckoutOrder`, `verifyTenantPaymentAccount` |
+| `TenantPaymentAdminResolver` | Admin API (`ManageTenantPaymentAccount`; `allTenantPaymentAccounts` is SuperAdmin-only) | `tenantPaymentAccount`, `allTenantPaymentAccounts`, `upsertTenantPaymentAccount`, `setTenantPaymentAccountEnabled`, `deleteTenantPaymentAccount`, `verifyTenantPaymentAccount`, `verifyTenantPaymentWebhook` |
+| `TenantRazorpayShopResolver` | Shop API (`Owner`) | `createTenantRazorpayCheckoutOrder` only; payment verification/settlement is performed by the tenant-aware payment handler/service, while credential checks are Admin API operations |
 
 ### Additional services (Phase 2)
 
