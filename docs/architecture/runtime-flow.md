@@ -281,21 +281,25 @@ registerForTrial(sessionId)
 ## Reconciliation (Every 5 minutes)
 
 ```
-bbb-reconciliation scheduled task
+bbb-reconciliation scheduled task (every 5 minutes)
   │
-  ├─ 1. reconcileActiveMeetings()
-  │    └─ For each Active meeting:
-  │         ├─ Call BBB getMeetingInfo
-  │         ├─ If null → markMeetingStale() (no ledger row)
-  │         └─ If duration > maxMeetingDurationMs → force complete
-  │              └─ Publish CapacityExhaustedEvent if billingCapped
-  │
-  ├─ 2. reconcileProvisioning()
-  │    └─ For each Provisioning meeting past timeout:
-  │         └─ Transition to FAILED
-  │
-  └─ 3. reconcileRooms()
-       └─ Fix room/meeting state drift
+  ├─ Snapshot and reset the current BBB metrics window
+  ├─ reconcileProvisioning()
+  │    └─ Recover or fail meetings stuck in PROVISIONING past the timeout/retry policy
+  ├─ reconcileActiveMeetings()
+  │    ├─ Query BBB for meetings beyond the grace period
+  │    ├─ Complete only on a confirmed remote end; transient outages/rejections are not proof
+  │    └─ Force-complete meetings beyond maxMeetingDurationMs (billing ceiling)
+  ├─ reconcileRooms()
+  │    └─ Repair room/meeting state drift (Provisioning/Active → authoritative state)
+  ├─ reconcilePendingBilling()
+  │    └─ Recover completed grant-billed meetings missing their BbbUsageLedger fact
+  ├─ reconcilePendingMeteredBilling()
+  │    └─ Recover completed metered meetings missing BbbMeteredUsage
+  ├─ repairRecordings()
+  │    └─ Repair missing BBB recording IDs/playback URLs for bounded recent candidates
+  └─ scanOrphanMeetings()
+       └─ Report remote BBB meetings with no local row; report-only, never auto-end
 ```
 
 ---
@@ -441,96 +445,6 @@ visibility === PUBLIC  AND  status IN (SCHEDULED, LIVE)
 anything else (DRAFT, FINISHED, CANCELLED, PRIVATE)
   → removed from public index
 ```
-
----
-
-## Scheduled Session Lifecycle
-
-> Added 2026-09-20 (DRAFT state + template/recurring sessions).
-
-### Direct session creation
-
-```
-createBbbScheduledSession(input)  [Admin API]
-  │
-  ├─ assert organization/channel access
-  ├─ lock BbbOrganization row FOR UPDATE (same @Transaction() as insert)
-  ├─ count DRAFT + SCHEDULED + LIVE sessions
-  ├─ enforce maxSessionsPerOrg (0 = unlimited)
-  └─ persist BbbScheduledSession  status = DRAFT
-       │
-       └─ SessionCreatedEvent → addIndexSessionJob
-            └─ DRAFT ineligible → no-op / remove
-```
-
-### Template / recurring session generation
-
-```
-createBbbSessionTemplate(input)  [Admin API]
-  │
-  ├─ validate durationMinutes (1–1440)
-  ├─ validate defaultTrainerId is active member of org
-  └─ persist BbbSessionTemplate
-
-createSessionsFromTemplate(templateId, startTimes[])  [Admin API]
-  │
-  ├─ validate batch (1..100, valid ISO-8601, no duplicates)
-  ├─ validate template trainer still active in org
-  ├─ lock BbbOrganization row FOR UPDATE (same @Transaction() as all inserts)
-  ├─ count + enforce cap for entire batch atomically
-  └─ persist each session  status = DRAFT
-       └─ SessionCreatedEvent per session → DRAFT ineligible → no-op
-```
-
-### Publication
-
-```
-publishBbbScheduledSession(id)  [Admin API]
-  │
-  ├─ require status = DRAFT
-  ├─ status → SCHEDULED
-  └─ SessionUpdatedEvent → addIndexSessionJob
-       ├─ PUBLIC + SCHEDULED → indexed
-       └─ PRIVATE → removed
-```
-
-### Session start (trainer, Shop API)
-
-```
-startScheduledSession(sessionId)
-  │
-  ├─ require status = SCHEDULED  (DRAFT → error: publish first)
-  └─ BbbMeetingService.createAndEnqueue()
-       └─ BullMQ provisioning job → BbbApiService.createMeeting()
-            └─ MeetingProvisionedEvent
-                 └─ BbbSessionProvisioningListener
-                      ├─ status → LIVE
-                      └─ SessionStartedEvent → addIndexSessionJob
-                           └─ PUBLIC + LIVE → indexed
-```
-
-### Session completion
-
-```
-BBB meeting ended → MeetingCompletedEvent
-  └─ BbbSessionProvisioningListener
-       ├─ status → FINISHED
-       └─ SessionEndedEvent → addIndexSessionJob
-            └─ FINISHED ineligible → removed from index
-```
-
-### Session cancellation
-
-```
-cancelBbbScheduledSession(id)  [Admin API]
-  ├─ status → CANCELLED
-  └─ SessionCancelledEvent → addIndexSessionJob
-       └─ CANCELLED ineligible → removed from index
-```
-
-**Marketplace eligibility** (sole arbiter: `MarketplaceIndexerService.indexSession()`):
-`visibility === PUBLIC AND status IN (SCHEDULED, LIVE)` → indexed.
-All other states (DRAFT, FINISHED, CANCELLED) or PRIVATE visibility → removed.
 
 ---
 
