@@ -141,3 +141,13 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 `TENANT_PAYMENT_ENCRYPTION_KEY_PREVIOUS` is an optional prior key used as a decrypt fallback during rotation. The reviewed service does not provide an automatic bulk re-encryption command; retain the old key until all ciphertext has been deliberately re-encrypted and verified. This key is distinct from `VENDURE_ENCRYPTION_KEY`, which is configured as Vendure's `DefaultEncryptionStrategy` for the Stripe plugin's `encryptSecrets: true` setting. Back up both keys independently of the database.
 
 **Verification boundary:** code and GraphQL SDL were reviewed at commit `3c245952d57b9ddeb27b9cbd6ee01de5bae0ba71`. No live Razorpay merchant checkout, webhook delivery, or production key-rotation test is claimed.
+
+---
+
+## Marketplace checkout clarification — ADR-055 (proposed, 2026-11-16)
+
+Flow B's tenant payee model can be used by two storefront surfaces: the tenant's optional custom-domain storefront and the Saa9vi marketplace storefront. In either case, the active Vendure RequestContext must resolve to the owning tenant's Channel. The marketplace browser must not supply authoritative channel/payee/credential values.
+
+At the reviewed baseline, this ADR's existing gaps remain: no registered tenant PaymentMethodHandler, no settlement call wired through Vendure's payment lifecycle, no tenant-specific webhook inbox/worker/reconciliation, and no live merchant checkout evidence. Do not begin a marketplace checkout launch based only on the existing provider-order creation mutation.
+
+The marketplace checkout target contract, one-tenant-per-order rule, customer identity requirements and separate digital/physical fulfilment workflows are proposed in [ADR-055](adr-055-marketplace-commerce-and-revenue-model.md) and decomposed into [MCR work items](../implementation/marketplace-commerce-revenue-worklist.md). ADR-055 does not supersede or mark complete the Flow B implementation tasks in this ADR.
