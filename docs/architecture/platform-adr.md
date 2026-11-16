@@ -1139,3 +1139,45 @@ The checker is run as part of the standard gate sequence before push (`npm run v
 - Trusting `@Allow` permission checks as the ownership gate (permission checks verify role, not
   tenancy; a tenant admin with `BBBManageRooms` can hold the permission while operating on a
   foreign channel's room).
+
+---
+
+## ADR-053: LearningPlugin — Course Domain Design
+
+**Status:** Active  
+**Full record:** `docs/adr/adr-053-learning-plugin-course-domain.md`
+
+**Core decisions:**
+
+1. **`LearningCourse` uses scalar `channelId`**, not full `ChannelAware` — consistent with ADR-010/011/017 precedents. All queries include an explicit `channelId` WHERE clause. `CourseEnrollment` carries a redundant `channelId` column for enrollment-level channel isolation (N-03 L2 fix). `CourseTemplate` supports a nullable `channelId` for platform-default templates.
+
+2. **Academy admission gate uses `LearnerAdmissionPort`** — an injected interface (`LEARNER_ADMISSION_PORT`) resolved from a platform-level NestJS module (`LearnerAdmissionModule`), not a direct import of `TenantPlugin`. `CourseEnrollmentService` requires `TenantLearnerMembership.status = ACTIVE` before enrolling (C-25 invariant). This pattern is the reference for all future cross-plugin behavioral dependencies — prefer a platform port over a direct plugin import.
+
+3. **Course tools use a startup registry (`CourseToolRegistry`)**, not a polymorphic entity hierarchy. `CourseTool` rows store a stable `toolKey` string referencing a registered definition; tool settings are a JSON column. Adding a new tool type requires only a new `CourseToolContributor` and a new key — no migration.
+
+4. **`CourseEnrollment` status is a strict FSM** with explicit allowed transitions. `COMPLETED` and `WITHDRAWN` are terminal; re-enrollment from terminal states is a documented gap pending a product decision.
+
+**Key additions:** `LearningCourse`, `CourseTemplate`, `CourseTemplateTool`, `CourseTool`, `CourseEnrollment`, `CourseScheduledSession`, `CourseAnnouncement` entities; `LearnerAdmissionPort`; `CourseToolRegistry`; `courseManagePermission`, `courseEnrollPermission`, `courseAnnouncementPermission`.
+
+**Migrations required:** yes — new tables for all LearningPlugin entities.
+
+---
+
+## ADR-054: Per-Tenant Razorpay Integration (Flow B Implementation)
+
+**Status:** Active (implementation phase)  
+**Full record:** `docs/adr/adr-054-per-tenant-razorpay-flow-b.md`
+
+**Context:** ADR-051 (Option C) selected per-tenant Razorpay and deferred implementation. This ADR records the implementation design.
+
+**Core decisions:**
+
+1. **`TenantPaymentAccount` entity stores credentials**: `keyId` plaintext, `keySecret` AES-256-GCM encrypted at rest via `TenantPaymentEncryptionService`. The raw secret is never returned from the API.
+
+2. **Credentials are verified before activation**: `verifyTenantRazorpayCredentials` mutation probes the Razorpay `/orders` endpoint with a ₹1 test order (never captured). Account transitions `pending → active` on success; `TenantRazorpayService.createCheckoutOrder()` fails closed if the account is not `active` or `isEnabled` is `false`.
+
+3. **Flow B reuses `razorpay-checkout.policy.ts` signature helpers** — the same `computeCheckoutSignature`, `assertOrderBinding`, and `assertPaymentBinding` functions used by Flow A. `TenantRazorpayService` resolves keys from `TenantPaymentAccount` rather than environment variables; the policy functions are agnostic to the key source.
+
+4. **`ManageTenantPaymentAccount` custom permission** controls access to per-tenant Razorpay configuration. Added to `TENANT_ADMIN_ROLE_PERMISSIONS` for new tenant registrations; existing tenants require a one-time role repair via `tenant:roles:repair`.
+
+**Migrations required:** yes — `tenant_payment_account` table.
