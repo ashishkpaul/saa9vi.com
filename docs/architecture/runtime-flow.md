@@ -243,7 +243,7 @@ registerForTrial(sessionId)
 
 ---
 
-## Reconciliation (Every 60s)
+## Reconciliation (Every 5 minutes)
 
 ```
 bbb-reconciliation scheduled task

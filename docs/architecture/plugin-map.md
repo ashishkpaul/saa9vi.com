@@ -20,6 +20,8 @@
 | InstructorProfile | `instructor_profile` | No (DL-010) |
 | MediaResource | `media_resource` | Yes |
 | TenantRegistrationLog | `tenant_registration_log` | No |
+| TenantLearnerMembership | `tenant_learner_membership` | No (scalar `channelId`) |
+| TenantLearnerMembershipLog | `tenant_learner_membership_log` | No (append-only admission audit) |
 | TenantTheme | `tenant_theme` | No (scalar `channelId`, ADR-043) |
 
 ### Publishes (key cross-plugin events — not an exhaustive inventory; see `src/plugins/tenant-plugin/events/tenant-events.ts` for the full set)
@@ -39,8 +41,8 @@ None.
 
 | Resolver | Scope | Purpose |
 |---|---|---|
-| `TenantShopResolver` | Shop API (Public) | `registerNewTenant`, `tenantProfile`, `instructorProfiles`, `mediaResources`, `myTenantTheme` (public; entitlement-conditional — returns null → platform default) |
-| `TenantAdminResolver` | Admin API | Tenant profile CRUD, instructor CRUD, media CRUD, theme lifecycle: `tenantThemes`, `tenantTheme(id)`, `createTenantTheme`, `updateTenantTheme`, `publishTenantTheme`, `rollbackTenantTheme`, `resetTenantTheme` |
+| `TenantShopResolver` | Shop API (Public) | `registerNewTenant`, `tenantProfile`, `instructorProfiles`, `mediaResources`, `myTenantTheme` (public; entitlement-conditional — returns null → platform default), `verifyTenantAdmin` |
+| `TenantAdminResolver` | Admin API | Tenant profile CRUD, instructor CRUD, media CRUD, theme lifecycle: `tenantThemes`, `tenantTheme(id)`, `createTenantTheme`, `updateTenantTheme`, `publishTenantTheme`, `rollbackTenantTheme`, `resetTenantTheme`; learner admission: `tenantLearners`, `admitTenantLearner`, `readmitTenantLearner` |
 
 ### Key Services
 
@@ -49,10 +51,15 @@ None.
 | `TenantRegistrationService` | 5-step tenant provisioning (Seller → Channel → Role → Administrator → TenantProfile) |
 | `TenantProfileService` | Tenant profile CRUD with `assignToCurrentChannel` |
 | `InstructorProfileService` | Instructor CRUD with explicit `channelId` filter |
+| `MediaResourceService` | Tenant media CRUD |
+| `TenantLearnerMembershipService` | Academy admission lifecycle: create/activate/suspend/readmit/revoke learners + audit log |
 | `InstructorIndexerService` | Per-tenant Elasticsearch indexing for instructors |
 | `DomainChannelResolverService` | Custom domain → channel token Redis mapping |
+| `ChannelRoleRepairService` | Role repair — reconciles tenant admin roles, adds missing permissions (e.g. `ManageTenantPaymentAccount`) via `tenant:roles:repair` tooling |
+| `TenantRoleReconciliationService` | Role reconciliation — keeps tenant role grants aligned with the current permission set |
 | `TenantThemeService` | ADR-043 L1 theme lifecycle: immutable versioned drafts (draft → active → archived), draft cloning, publish/rollback/reset, advisory-locked version allocation, channel-scoped asset ownership validation |
 | `TenantCommercialEligibilityService` | ADR-043 white-label entitlement gate (`whitelabelEnabled` + status ∈ {trialing, active, past_due}); contributes only the theming window + plan flag and **delegates** the shared evaluation to the platform `CommercialEntitlementService` (`src/platform/commercial/`), which is also ADR-042's `channelMarketplaceEligible()` — one evaluator, window supplied per entitlement |
+| `TenantDeletionService` | GDPR deletion: anonymizes tenant-scoped learner records, instructor profiles and media resources |
 
 ---
 
@@ -80,7 +87,10 @@ None.
 | BbbCapacityGrant | `bbb_capacity_grant` | No |
 | BbbUsageLedger | `bbb_usage_ledger` | No |
 | BbbWebhookEvent | `bbb_webhook_event` | No |
-| BbbTrialRegistration | `trial_registration` | No |
+| BbbTrialRegistration | `bbb_trial_registration` | No |
+| BbbMeteredUsage | `bbb_metered_usage` | No (append-only metered billing fact, ADR-047) |
+| BbbMeetingSample | `bbb_meeting_sample` | No (per-minute metered meeting samples) |
+| SessionAttendance | `session_attendance` | No (per-student attendance facts) |
 | BbbCapacityAlertLog | `bbb_capacity_alert_log` | No |
 | BbbProductAccess | `bbb_product_access` | No |
 | BbbInstructorAssignment | `bbb_instructor_assignment` | No (scoped via organization) |
@@ -135,8 +145,20 @@ None (injects TenantPlugin services for org verification).
 |---|---|---|
 | `bbb-meeting-provisioning` | On demand | Provision BBB meeting |
 | `bbb-webhook-processor` | On demand | Process persisted webhook event |
-| `bbb-reconciliation` | Every 60s | Reconcile active meetings |
-| `bbb-capacity-alert` | Every 15min | Capacity intelligence check |
+
+### Scheduled Tasks
+
+| Task | Schedule | Purpose |
+|---|---|---|
+| `bbb-reconciliation` | Every 5 minutes | Fixes stuck provisioning, reconciles active meetings and room/meeting state drift |
+| `bbb-hooks-reconciliation` | Every 5 minutes | Reconciles BBB webhook subscriptions across enabled, healthy servers |
+| `bbb-capacity-alert` | Every 15 minutes | Capacity intelligence check; builds dashboard and publishes alerts |
+| `bbb-server-health` | Every 5 minutes | Per-server health probe; marks servers healthy/unhealthy |
+| `bbb-server-load` | Every 1 minute | 1-minute measured-load tick for every enabled BBB server |
+| `bbb-daily-allowance` | Every 1 hour | Creates daily capacity grants per server |
+| `bbb-metering` | Every 1 minute | Samples live metered meetings into per-minute learner counts |
+| `bbb-metering-prune` | Daily at 03:30 | Prunes old metered samples to keep the table bounded |
+| `bbb-webhook-retention` | Daily at 03:00 | Prunes processed BBB webhook events |
 
 ---
 
@@ -367,9 +389,10 @@ None (extends `orderOptions.process` with `customerStatusOrderProcess` to block 
 
 | Resolver | Scope | Purpose |
 |---|---|---|
-| `SubscriptionAdminResolver` | Admin API | `subscriptionPlans`, `organizationSubscriptions`, `providerMandates`, `providerPaymentAttempts`, `reconciliationIncidents`, `createSubscriptionPlan`, `updateSubscriptionPlan`, `subscribeToPlan` |
+| `SubscriptionAdminResolver` | Admin API | `subscriptionPlans`, `organizationSubscriptions`, `providerMandates`, `providerPaymentAttempts`, `reconciliationIncidents`, `createSubscriptionPlan`, `updateSubscriptionPlan`, `subscribeToPlan`, `changeOrganizationSubscriptionPlan`, `cancelOrganizationSubscription` |
+| `SubscriptionShopResolver` | Shop API (Authenticated) | `requestMySubscriptionPlanChange`, `cancelMySubscription` |
 
-> **Capability gap (verified 2026-09-22).** There is no cancel, change-plan, pause or resume mutation — those three mutations are the *entire* subscription Admin surface (`subscription-admin.schema.ts:217-227`). Combined with `subscribeToPlan()` rejecting any pre-existing row whose status is not `cancelled`, a channel that acquires a subscription at registration can never be moved to a paid plan until a plan-change operation exists. The provider adapters already implement `cancelSubscription`/`pauseSubscription`/`resumeSubscription` (`RecurringBillingProvider`), but they have **zero call sites**. Programme detail: `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` §0.5, §3.1.
+Pause and resume are implemented in the provider adapters (`RecurringBillingProvider`) but are not yet exposed through either API surface.
 
 ### Key Services
 
@@ -521,7 +544,9 @@ None (currently).
 | Resolver | Scope | Purpose |
 |---|---|---|
 | `LearningAdminResolver` | Admin API | Course CRUD, template management, enrollment admin, announcement management |
-| `LearningShopResolver` | Shop API (Authenticated) | `myCourses`, `enrollInCourse`, `courseAnnouncements` |
+| `LearningShopResolver` | Shop API (Authenticated) | `myCoursePages`, `myCoursePage(slug)`, `coursePageAnnouncements` — no Shop enrollment mutation exists |
+
+Admin operations (`courseManagePermission`, `courseEnrollPermission`, `courseAnnouncementPermission`) are granted to tenant admins via `TENANT_ADMIN_ROLE_PERMISSIONS`.
 
 ### Key Services
 
@@ -546,22 +571,37 @@ None (currently).
 
 ---
 
-## PaymentsPlugin (Phase 2 additions — Flow B)
+## PaymentsPlugin (Flow A + Flow B)
 
-The PaymentsPlugin now owns both flow lifecycles. See ADR-051 (Flow A vs Flow B) and ADR-054 (Flow B implementation).
+The PaymentsPlugin owns both flow lifecycles. See ADR-051 (Flow A vs Flow B) and ADR-054 (Flow B implementation).
 
-### Additional entities (Phase 2)
+### Flow A — Platform payments (checkout)
 
 | Entity | Table | Purpose |
 |---|---|---|
-| TenantPaymentAccount | `tenant_payment_account` | Per-tenant Razorpay credentials (keyId plaintext, keySecret AES-256-GCM encrypted); `status` ∈ `pending\|active\|suspended`; `isEnabled` toggle |
+| `PaymentWebhookEvent` | `payment_webhook_event` | Immutable webhook receipt inbox (UNIQUE(provider, providerEventId)); processing metadata is mutable |
+
+| Resolver / Controller | Scope | Purpose |
+|---|---|---|
+| `RazorpayShopResolver` | Shop API | `createRazorpayCheckoutOrder` |
+| `RazorpayPaymentsWebhookController` | REST (Public) | `POST /payments/razorpay/checkout-webhook` — HMAC-verified, persist-first, then enqueues |
+
+| Queue | Schedule | Purpose |
+|---|---|---|
+| `payment-webhook-reconciliation` | On demand | Processes persisted webhook events for Flow A reconciliation |
+
+### Flow B — Tenant-client collections (Phase 2 additions)
+
+| Entity | Table | Purpose |
+|---|---|---|
+| TenantPaymentAccount | `tenant_payment_account` | Per-tenant Razorpay credentials (keyId plaintext, keySecret AES-256-GCM encrypted); `status` ∈ `pending|active`; `isEnabled` toggle |
 
 ### Additional API surfaces (Phase 2)
 
 | Resolver | Scope | Purpose |
 |---|---|---|
 | `TenantPaymentAdminResolver` | Admin API (`ManageTenantPaymentAccount`) | Configure/verify tenant Razorpay account, enable/disable gateway |
-| `TenantRazorpayShopResolver` | Shop API (Authenticated) | `createTenantCheckoutOrder`, `verifyTenantPayment` |
+| `TenantRazorpayShopResolver` | Shop API (Authenticated) | `createTenantRazorpayCheckoutOrder`, `verifyTenantPaymentAccount` |
 
 ### Additional services (Phase 2)
 

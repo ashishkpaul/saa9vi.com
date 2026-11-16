@@ -464,7 +464,7 @@ Pending → Provisioning → Active → Completed → Archived
 | Property | Value |
 |---|---|
 | **Plugin** | BigBlueButtonPlugin |
-| **Table** | `trial_registration` |
+| **Table** | `bbb_trial_registration` |
 | **Purpose** | Records a student's registration for a free trial session. |
 
 **Status:** `REGISTERED` → `ATTENDED` | `NO_SHOW`

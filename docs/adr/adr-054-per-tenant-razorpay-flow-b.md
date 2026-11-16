@@ -42,7 +42,7 @@ Each tenant channel that wishes to collect payments configures a `TenantPaymentA
 
 ### D2 — Tenant credentials are verified before activation via a live Razorpay API probe
 
-A `TenantPaymentAccount` row starts in `pending` status. The tenant admin triggers a `verifyTenantRazorpayCredentials` mutation, which calls the Razorpay `/orders` endpoint with a minimal test order (₹1, never captured). Success transitions the account to `active`; failure keeps it in `pending` and returns the error.
+A `TenantPaymentAccount` row starts in `pending` status. The tenant admin triggers a `verifyTenantPaymentAccount` mutation, which calls the Razorpay `/orders` endpoint with a minimal test order (₹1, never captured). Success transitions the account to `active`; failure keeps it in `pending` and returns the error.
 
 An `active` account can be toggled `isEnabled: false` to disable checkout without deleting credentials.
 
