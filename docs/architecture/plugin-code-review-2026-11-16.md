@@ -39,6 +39,7 @@ The repository also registers the external `@vendure-community/stripe-plugin`; i
 | **P2** | Learning state | The entity/FSM includes `INVITED`, but current Admin `enrollLearner` writes `ENROLLED` directly and no invitation-create/accept operation is exposed. | Keep the invitation state documented as a model state, not a delivered invitation workflow. |
 | **P2** | Subscription docs | The old plugin map/domain-model text says no tenant self-service plan change/cancellation exists. The current `SubscriptionShopResolver` exposes `requestMySubscriptionPlanChange` and `cancelMySubscription`, alongside `availableSubscriptionPlans`, `mySubscription` and `myLiveUsage`. | Replace the September capability-gap text with the current ADR-046 Shop API, while keeping live-provider verification separate. |
 | **P2** | Tenant admission docs | `TenantPlugin` now registers `TenantLearnerMembership` and `TenantLearnerMembershipLog`, backed by `TenantLearnerMembershipService` and the `LearnerAdmissionPort`. | Add membership/admission entities and service to the plugin map/domain model. |
+| **P1 / operational policy** | Existing tenant-admin role repair | `tenant:roles:repair` invokes `TenantRoleReconciliationService.reconcile(false)`; its apply path assigns `roleEntity.permissions` and saves the Role via `TransactionalConnection` repository access. | This is a direct application-record write, contrary to the stated GraphQL-only mutation rule. Do not run apply mode without explicit policy approval. Add a SuperAdmin-authorized Admin GraphQL repair operation or another approved API path; `tenant:roles:check` remains read-only. |
 
 ## LearningPlugin — verified as-built contract
 
@@ -123,3 +124,10 @@ Re-enrollment from `COMPLETED` or `WITHDRAWN` is rejected. Current Shop SDL does
 
 - No build, unit/e2e suite, migration, database mutation, live Razorpay request, or BBB runtime request was performed as part of this documentation review.
 - Plugin registration and source code reviewed at the baseline commit above; provider credentials, deployed environment values, role-repair execution, database migration application and live checkout/webhook behavior remain separate evidence items.
+
+
+## Additional operational-policy finding — role permission reconciliation
+
+The repository includes `npm run tenant:roles:check` and `npm run tenant:roles:repair`. The check mode is read-only. The repair script bootstraps a worker context, then `TenantRoleReconciliationService.reconcile(dryRun=false)` reads candidate roles through `TransactionalConnection`, mutates `roleEntity.permissions`, and calls repository `save()`. This is not a GraphQL API mutation and conflicts with the operational constraint supplied for this project.
+
+**Action:** retain `tenant:roles:check` for read-only diagnosis. Do not run `tenant:roles:repair` apply mode unless the owner explicitly approves an exception. Prefer a SuperAdmin-authorized Admin GraphQL operation to apply the permission reconciliation; preserve add-only semantics and require explicit approval before removing unexpected permissions.
