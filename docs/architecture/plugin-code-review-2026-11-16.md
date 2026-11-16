@@ -114,11 +114,15 @@ Re-enrollment from `COMPLETED` or `WITHDRAWN` is rejected. Current Shop SDL does
 
 ## Documentation changes made with this review
 
-- Corrected the LearningPlugin API/registry description and added actual Learning entities/flows.
-- Corrected the ADR-054 credential probe, secret verification semantics and Flow B settlement status.
-- Added the current SubscriptionPlugin Shop API and corrected obsolete subscription capability-gap text.
-- Added tenant learner-admission entities to the plugin/domain map.
-- Recorded the Flow B settlement, webhook, and potential order-owner issues as explicit follow-ups.
+- `docs/architecture/plugin-map.md` — updated all plugin ownership/API descriptions for LearningPlugin, PaymentsPlugin and SubscriptionPlugin; added learner-admission entities, the CourseTool contributors, BBB metering/attendance/health services and scheduled tasks.
+- `docs/architecture/learning-domain.md` and `docs/adr/adr-053-learning-plugin-course-domain.md` — changed the original design-only summary to an as-built record; corrected scalar references, enrollment FSM, permission gates, tool registry and actual Shop/Admin API boundaries.
+- `docs/architecture/domain-model.md` — added TenantLearnerMembership/Log, Learning course entities, TenantPaymentAccount and PaymentWebhookEvent; reconciled the ADR-046 subscription lifecycle claims.
+- `docs/architecture/runtime-flow.md` — added Learning course/enrollment flow and distinguished Flow A from partial Flow B.
+- `docs/architecture/security.md` — added SEC-009 for tenant payment credential storage, settlement, ownership and webhook gaps.
+- `docs/architecture/platform-adr.md` and `docs/adr/adr-054-per-tenant-razorpay-flow-b.md` — corrected canonical ADR summaries and actual verification behavior.
+- `docs/implementation/roadmap.md`, `docs/implementation/production-readiness.md`, `docs/implementation/integration-gaps-worklist.md` and `docs/what-next.md` — recorded current implementation status and prioritized follow-up work.
+- `docs/product/glossary.md` and `docs/product/platform-story.md` — added learner admission, LearningPlugin and the Flow A/Flow B commercial boundaries.
+- Added current-source findings and limitations to this review report. No source-code files were changed.
 
 ## Verification limits
 
