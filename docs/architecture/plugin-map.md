@@ -42,7 +42,7 @@ None.
 | Resolver | Scope | Purpose |
 |---|---|---|
 | `TenantShopResolver` | Shop API (Public) | Queries: `tenantProfile`, `instructorProfile(slug)`, `instructorProfiles`, `mediaResources(ownerType, ownerId)`, `myTenantTheme` (entitlement-conditional — returns null → platform default); mutations: `registerNewTenant`, `verifyTenantAdmin` |
-| `TenantAdminResolver` | Admin API | Tenant profile, instructor, and media queries/CRUD; learner admission queries `tenantLearners`, `tenantLearnerMembershipLogs`, `checkChannelRoleAssignments` and mutations `admitTenantLearner`, `activateTenantLearner`, `suspendTenantLearner`, `revokeTenantLearner`, `readmitTenantLearner`, `repairChannelRoleAssignments`; theme lifecycle: `tenantThemes`, `tenantTheme`, `createTenantTheme`, `updateTenantTheme`, `publishTenantTheme`, `rollbackTenantTheme`, `resetTenantTheme` |
+| `TenantAdminResolver` | Admin API | Tenant profile, instructor, and media queries/CRUD; learner admission queries `tenantLearners`, `tenantLearnerMembershipLogs` and mutations `admitTenantLearner`, `activateTenantLearner`, `suspendTenantLearner`, `revokeTenantLearner`, `readmitTenantLearner`; SuperAdmin-only role repair query/mutation: `checkChannelRoleAssignments`, `repairChannelRoleAssignments`; theme lifecycle: `tenantThemes`, `tenantTheme`, `createTenantTheme`, `updateTenantTheme`, `publishTenantTheme`, `rollbackTenantTheme`, `resetTenantTheme` |
 
 ### Key Services
 
@@ -116,8 +116,8 @@ None (injects TenantPlugin services for org verification).
 
 | Resolver | Scope | Purpose |
 |---|---|---|
-| `BbbShopResolver` | Shop API (Authenticated) | Queries: `myBbbMeetings`, `myBbbCapacityGrants`, `myBbbRooms`, `bbbRoomStatus`, `myBbbEnrollments`, `myScheduledSessions`, `publicScheduledSessions`, `myTrialRegistrations`, `myLearningDashboard`, `mySessionAttendance`; mutations: `bbbJoinMeeting`, `bbbJoinRoom`, `startScheduledSession`, `registerForTrial`, `leaveAcademy`, `deleteMyAccount` |
-| `BbbAdminResolver` | Admin API | Room/meeting/session/membership/entitlement CRUD, `poolCapacityDashboard` |
+| `BbbShopResolver` | Shop API | Public query `publicScheduledSessions`; authenticated queries `myBbbMeetings`, `myBbbCapacityGrants`, `myBbbRooms`, `bbbRoomStatus`, `myBbbEnrollments`, `myScheduledSessions`, `myTrialRegistrations`, `myLearningDashboard`, `mySessionAttendance`; authenticated mutations: `myBbbMeetings`, `myBbbCapacityGrants`, `myBbbRooms`, `bbbRoomStatus`, `myBbbEnrollments`, `myScheduledSessions`, `publicScheduledSessions`, `myTrialRegistrations`, `myLearningDashboard`, `mySessionAttendance`; mutations: `bbbJoinMeeting`, `bbbJoinRoom`, `startScheduledSession`, `registerForTrial`, `leaveAcademy`, `deleteMyAccount` |
+| `BbbAdminResolver` | Admin API | Organization/server/member management; room, meeting, scheduled-session, template, entitlement, enrollment, capacity-grant and trial-registration operations; pool/capacity dashboards; attendance and billing summaries; metered-meeting and recording reads; reconciliation actions |
 | `BbbWebhookController` | REST (Public) | `POST /bbb/webhook/:serverId` — authenticates the registered callback, deduplicates, persists `BbbWebhookEvent`, then enqueues processing |
 
 ### Key Services
@@ -395,7 +395,7 @@ None (extends `orderOptions.process` with `customerStatusOrderProcess` to block 
 | Resolver | Scope | Purpose |
 |---|---|---|
 | `SubscriptionAdminResolver` | Admin API | `subscriptionPlans`, `organizationSubscriptions`, `providerMandates`, `providerPaymentAttempts`, `reconciliationIncidents`, `createSubscriptionPlan`, `updateSubscriptionPlan`, `subscribeToPlan`, `changeOrganizationSubscriptionPlan`, `cancelOrganizationSubscription` |
-| `SubscriptionShopResolver` | Shop API (Authenticated) | Queries `availableSubscriptionPlans`, `mySubscription`, `myLiveUsage`; mutations `requestMySubscriptionPlanChange`, `cancelMySubscription` |
+| `SubscriptionShopResolver` | Shop API | Public query `availableSubscriptionPlans`; authenticated queries `mySubscription`, `myLiveUsage`; authenticated mutations `requestMySubscriptionPlanChange`, `cancelMySubscription` |
 
 Pause and resume are implemented in the provider adapters (`RecurringBillingProvider`) but are not yet exposed through either API surface.
 
