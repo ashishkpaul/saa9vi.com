@@ -156,9 +156,9 @@ None (injects TenantPlugin services for org verification).
 | Task | Schedule / trigger | Purpose |
 |---|---|---|
 | `bbb-metering` | Every minute | Record attendee/minute metering samples (idempotent bucket writes) |
-| `bbb-metering-prune` | Scheduled | Prune obsolete metering samples when they can no longer be billed |
+| `bbb-metering-prune` | Daily at 03:30 | Prune obsolete metering samples when they can no longer be billed |
 | `bbb-daily-allowance` | Hourly | Materialize the current server-day free allowance grant |
-| `bbb-server-health` | Scheduled | Signed health probes; sole recovery writer for server health state |
+| `bbb-server-health` | Every 5min | Signed health probes; sole recovery writer for server health state |
 
 ---
 
