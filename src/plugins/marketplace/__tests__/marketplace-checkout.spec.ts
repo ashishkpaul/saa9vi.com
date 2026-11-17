@@ -97,6 +97,7 @@ describe('MarketplaceCheckoutService', () => {
       findOne: vi.fn().mockResolvedValue({
         channelId: tenantChannel.id,
         provider: 'razorpay',
+        keyId: 'rzp_test_tenant_a',
         status: 'active',
         isEnabled: true,
         encryptedKeySecret: 'encrypted-secret',
