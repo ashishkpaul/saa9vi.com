@@ -159,6 +159,19 @@ export class MarketplaceCheckoutService {
     // checkout deliberately does not auto-create or auto-assign memberships.
     const tenantCtx = ctx.copy(channel);
 
+    const customer = await this.customerService.findOneByUserId(
+      tenantCtx,
+      ctx.activeUserId,
+      true,
+    );
+    if (!customer) {
+      throw new UserInputError(
+        'Your account is not registered with this academy. Complete its admission or account-linking process first',
+      );
+    }
+
+
+
     // Check the static tenant PaymentMethod assignment before creating or
     // changing an active Order. This avoids leaving a new empty session cart
     // behind when the Channel has no Flow B PaymentMethod configured.
@@ -182,18 +195,6 @@ export class MarketplaceCheckoutService {
         'No enabled tenant Razorpay PaymentMethod is assigned to this academy Channel',
       );
     }
-
-    const customer = await this.customerService.findOneByUserId(
-      tenantCtx,
-      ctx.activeUserId,
-      true,
-    );
-    if (!customer) {
-      throw new UserInputError(
-        'Your account is not registered with this academy. Complete its admission or account-linking process first',
-      );
-    }
-
 
     // Flow B gateway state is checked before creating or modifying the cart.
     // Only a non-secret account state is read; no credential is returned here.
