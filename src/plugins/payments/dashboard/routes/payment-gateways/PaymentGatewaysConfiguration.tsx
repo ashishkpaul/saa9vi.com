@@ -102,9 +102,12 @@ export function PaymentGatewaysConfiguration() {
   
   const account = data?.tenantPaymentAccount as TenantPaymentAccountData | null;
   const channelToken = data?.activeChannel?.token;
+  const configuredApiOrigin = (import.meta.env.VITE_VENDURE_API_BASE_URL as string | undefined)
+    ?.trim()
+    .replace(/\/+$/, '');
   const webhookUrl =
     typeof window !== 'undefined' && channelToken
-      ? `${window.location.origin}/payments/razorpay/tenant-webhook/${encodeURIComponent(channelToken)}`
+      ? `${configuredApiOrigin || window.location.origin}/payments/razorpay/tenant-webhook/${encodeURIComponent(channelToken)}`
       : '';
   
   // Determine account status for display
@@ -441,6 +444,13 @@ export function PaymentGatewaysConfiguration() {
                 <code className="mx-1">payment.captured</code> only. The webhook secret entered above
                 must exactly match the secret configured in Razorpay.
               </p>
+              {!configuredApiOrigin && (
+                <p className="text-xs text-muted-foreground mb-3">
+                  This URL uses the current Dashboard origin. If your Dashboard and Vendure API use
+                  different public origins, set <code>VITE_VENDURE_API_BASE_URL</code> to the public
+                  API origin and rebuild the Dashboard.
+                </p>
+              )}
               <div className="space-y-2">
                 <Label htmlFor="tenantWebhookUrl">Webhook URL</Label>
                 <Input id="tenantWebhookUrl" value={webhookUrl} readOnly />
