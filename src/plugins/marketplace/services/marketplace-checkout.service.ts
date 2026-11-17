@@ -126,9 +126,12 @@ export class MarketplaceCheckoutService {
     const variantRepo = this.connection.rawConnection.getRepository(ProductVariant);
     const variant = await variantRepo.findOne({
       where: { id: this.decodeId(session.productVariantId) as any },
-      relations: ['channels', 'product'],
+      relations: { channels: true, product: { channels: true } },
     });
     const variantInTenantChannel = (variant?.channels ?? []).some(
+      candidate => String(candidate.id) === owningChannelId,
+    );
+    const productInTenantChannel = (variant?.product?.channels ?? []).some(
       candidate => String(candidate.id) === owningChannelId,
     );
     const linkedSessionId = (variant?.product?.customFields as { bbbSessionId?: string } | undefined)
@@ -138,6 +141,7 @@ export class MarketplaceCheckoutService {
       !variant.product ||
       variant.product.enabled === false ||
       !variantInTenantChannel ||
+      !productInTenantChannel ||
       String(variant.id) !== String(this.decodeId(session.productVariantId)) ||
       String(linkedSessionId ?? '') !== String(session.id)
     ) {
@@ -218,6 +222,14 @@ export class MarketplaceCheckoutService {
       throw new UserInputError('The active cart belongs to a different academy');
     }
 
+    const existingPaymentPurpose = order.customFields?.paymentPurpose;
+    if (existingPaymentPurpose === 'platform-service') {
+      throw new UserInputError('A platform-service cart cannot be used for tenant-client checkout');
+    }
+    if (existingPaymentPurpose && existingPaymentPurpose !== 'tenant-client') {
+      throw new UserInputError('The active cart has an unsupported payment purpose');
+    }
+
     // Defend against legacy or manually-corrupted multi-seller carts. Every
     // existing line must resolve to a variant assigned to this exact Channel.
     for (const line of order.lines ?? []) {
@@ -259,14 +271,6 @@ export class MarketplaceCheckoutService {
     }) ?? order;
 
     order.customFields = order.customFields ?? {};
-    const existingPaymentPurpose = order.customFields.paymentPurpose;
-    if (existingPaymentPurpose === 'platform-service') {
-      throw new UserInputError('A platform-service cart cannot be used for tenant-client checkout');
-    }
-    if (existingPaymentPurpose && existingPaymentPurpose !== 'tenant-client') {
-      throw new UserInputError('The active cart has an unsupported payment purpose');
-    }
-
     let orderNeedsSave = false;
     if (existingPaymentPurpose !== 'tenant-client') {
       // The Flow A / Flow B distinction is server-set. The browser cannot
