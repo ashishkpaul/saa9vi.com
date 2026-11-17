@@ -297,7 +297,16 @@ None.
 | `MarketplaceAdminResolver` | Admin API (SuperAdmin) | Full reindex |
 | `MarketplaceAdvertisingResolver` | Admin API (MarketplaceAdvertising) | Self-serve campaign management, wallet ledger, spend reports |
 | `MarketplaceCommissionResolver` | Shop API (`Owner`) | `applyMarketplaceReference` — validates/applies marketplace attribution to the active order; it is not a commission-collection endpoint |
+| `MarketplaceCheckoutResolver` | Shop API (public resolver; service requires authenticated user) | `createMarketplaceSessionCheckout(sessionId, marketplaceRef?)` — resolves a public BBB session to its tenant Channel, validates target-Channel customer/cart ownership, and returns tenant Razorpay-eligible methods |
 | `MarketplaceCommissionReconciliationResolver` | Admin API (ReadMarketplaceCommission) | Read-only `commissionReconciliation` Orders↔CommissionLedger report; channel-scoped, SuperAdmin may pass `allChannels:true` (service-side clamp) |
+
+### Key Services
+
+| Service | Purpose |
+|---|---|
+| `MarketplaceCheckoutService` | MCR-1.3 first slice: server-resolves BBB session → owning Channel; validates Product/Variant and tenant payment readiness; switches authenticated Shop context; establishes a one-tenant active cart; reprices via Vendure; returns only eligible `tenant-razorpay` methods. No generic product checkout or fulfilment is claimed. |
+
+**MCR checkout verification boundary (17 November 2026):** implementation is on feature branch `feat/marketplace-tenant-channel-checkout`; focused unit tests, codegen, backend build and two-tenant Shop API E2E are pending. No new entity/table/migration is added by this slice.
 
 ### Elasticsearch Indices
 
