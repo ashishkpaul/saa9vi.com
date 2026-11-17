@@ -618,16 +618,31 @@ Regression coverage added in `src/plugins/payments/__tests__/tenant-razorpay-ord
 
 ### G-3 — Implement tenant Flow B webhook/recovery lifecycle
 
-**Priority:** P0 — **Status:** OPEN
+**Priority:** P0 — **Status:** IMPLEMENTED ON THIS PR BRANCH; CLI migration generation and local verification pending
 
-Current `PaymentWebhookEvent`, controller and queue are for platform Flow A. Recurring subscription webhooks are a separate SubscriptionPlugin flow. No tenant-specific Flow B webhook endpoint/inbox/worker exists.
+The branch adds a separate Flow B webhook ingress and worker. It does not reuse the Flow A `PaymentWebhookEvent`/controller/queue or SubscriptionPlugin's recurring `ProviderWebhookEvent` pipeline.
 
-Required:
-- Select a trusted route/tenant resolution contract without trusting arbitrary request headers or caller-supplied channel IDs.
-- Verify HMAC against exact raw request bytes using the correct tenant webhook secret.
-- Persist the immutable receipt before queueing; enforce provider event idempotency and bounded retries.
-- Reconcile order/payment binding and Vendure payment state with the provider as authority.
-- Rename/rework `verifyTenantPaymentWebhook`: it currently checks only that the configured encrypted secret exists and can be decrypted; it does not verify a test event or endpoint.
+Implemented in this slice:
+
+- Public endpoint: `POST /payments/razorpay/tenant-webhook/:channelToken`. The Channel token only selects the tenant account; it is not a webhook credential or proof of authenticity.
+- Resolve the Channel with Vendure `ChannelService.getChannelFromToken()`, then create a tenant Admin RequestContext using `channel.token`.
+- Decrypt only that Channel's configured webhook secret and verify `X-Razorpay-Signature` against the exact captured `req.rawBody` bytes using the shared constant-time HMAC-SHA256 policy helper. Parse JSON only after successful signature verification.
+- Require Razorpay `x-razorpay-event-id`. Persist a ChannelAware `TenantPaymentWebhookEvent` assigned to exactly one Channel, with a per-channel dedupe key derived from provider + Channel ID + provider event ID.
+- INV-004: persist the immutable receipt before enqueuing only its inbox ID. A duplicate pending event is re-enqueued to recover a previous persist-success/enqueue-failure window. Database persistence or queue failures return non-2xx so Razorpay can retry.
+- Worker resolves the owning Channel from the persisted inbox event, then uses a Channel-scoped Admin RequestContext. It processes `payment.captured` only; other event types are durably marked ignored and never create a Vendure Payment.
+- Worker fetches the Razorpay Order and Payment using that tenant's credentials, verifies provider IDs, Vendure receipt/notes, payment-to-order association, amount, currency and captured status, then settles through Vendure `OrderService.addPaymentToOrder()` using the separate `tenant-razorpay` PaymentMethodHandler.
+- Admin-context calls to `TenantRazorpayService.verifyAndSettle()` are gated by the matching persisted, signature-verified, pending tenant inbox event in the same Channel, with the event's payment/order IDs bound to settlement metadata. This prevents the Admin settlement path from becoming a generic bypass.
+- Webhook recovery uses the tenant's key credentials even when new checkout is disabled, so an already-captured payment can still reconcile after a tenant disables checkout. This does not re-enable new checkouts.
+- BullMQ retry limit: 3 worker attempts. Terminal statuses are `processed`, `ignored` and `failed`.
+- Regression suites added: `tenant-razorpay-webhook-controller.spec.ts`, `tenant-payment-webhook-queue.spec.ts`; G-1 settlement spec also gains Admin-inbox gate coverage.
+
+**Important boundaries and remaining work:**
+
+- The new ChannelAware entity and its Channel join table require a schema migration. The migration is deliberately not hand-authored in this branch: run `npx vendure migrate --generate` locally per the repository's migration rule, inspect the generated migration, and include it before merging. Do not merge or deploy until the CLI-generated migration is committed and validated.
+- The tenant endpoint path must be configured in each tenant's Razorpay dashboard as `https://<your-public-api-host>/payments/razorpay/tenant-webhook/<channel-token>`, with the event `payment.captured`. The webhook secret entered in the tenant settings must match Razorpay's webhook secret for this endpoint.
+- `verifyTenantPaymentWebhook` in the existing Admin API still only checks encrypted-secret presence/decryption. It is not a signed endpoint delivery test; the actual test is Razorpay delivering to the route above.
+- A sequential duplicate provider payment is rejected/ignored through the Vendure `Payment.transactionId` check, but the known concurrent first-use reservation race is not made atomic by this inbox. Do not claim concurrent first-use replay safety.
+- This code has not been executed by the PR author. Local TypeScript build, targeted suites, real HTTP webhook delivery, BullMQ retry/replay and tenant isolation checks remain required.
 
 ### G-4 — Bring tenant role permission repair into the GraphQL mutation policy
 
