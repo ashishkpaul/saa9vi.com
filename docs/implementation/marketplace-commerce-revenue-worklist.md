@@ -1,7 +1,7 @@
 # Marketplace Commerce & Revenue — Implementation Worklist
 
 **Status:** Proposed worklist based on ADR-055  
-**Baseline:** repository `main` at `cc374cd`; source review dated 16 November 2026  
+**Baseline:** repository `main` at `1c0a5a7d7c3dece131ae977a5c7416e41815a8a7`; source review dated 16 November 2026  
 **Purpose:** Sequence future engineering work without reimplementing existing foundations. Re-inspect source and the active branch before every implementation slice.
 
 ## Mandatory rules
@@ -44,25 +44,28 @@
 
 ## Phase 1 — Complete one-time tenant payments (Flow B)
 
-### MCR-1.1 — Tenant Razorpay PaymentMethodHandler (P0)
-- [ ] Re-inspect `PaymentsPlugin`, `TenantRazorpayService`, account service, Flow A handler and installed Vendure handler types.
-- [ ] Register tenant-aware handler; resolve credentials only from trusted `ctx.channelId`.
-- [ ] Recheck account active/enabled at checkout and settlement.
-- [ ] Bind provider order to Vendure order, customer, amount, currency and channel; reject cross-order/customer/channel attempts.
-- [ ] Wire verified settlement through Vendure's normal payment lifecycle (`addPaymentToOrder`).
-- [ ] Ensure server-controlled payment purpose and strict separation from Flow A platform credentials.
-- [ ] Test mismatched account/order/customer/channel, amount/currency mismatch, capture, replay, duplicate settle and disabled account.
-- [ ] Acceptance: tenant order reaches correct Vendure payment/order state through supported Shop API.
+### MCR-1.1 — Complete tenant one-time payment settlement (Flow B) (P0)
 
-### MCR-1.2 — Flow B webhooks and reconciliation (P0)
-- [ ] Define tenant webhook routing without trusting unverified Host headers or client tenant IDs.
-- [ ] Verify HMAC using the tenant webhook secret and exact raw request body.
-- [ ] Persist event before processing/acknowledgement (INV-004).
-- [ ] Enforce provider/event uniqueness, idempotency and tenant/order binding.
-- [ ] Re-read provider order/payment and verify merchant account, amount, currency, order code and status.
-- [ ] Reconcile delayed, duplicate, out-of-order and missing webhooks with bounded retries and operator visibility.
-- [ ] Replace/rename current secret-presence check; do not call it live webhook verification.
-- [ ] Acceptance: signed ingress tests cover valid, invalid, duplicate, replay, cross-tenant routing, worker crash/retry and provider-truth re-read.
+**Canonical source-level implementation tasks:** [Integration G-1 — tenant Razorpay settlement](integration-gaps-worklist.md#G-1--complete-tenant-razorpay-flow-b-settlement) and [G-2 — order-customer ownership](integration-gaps-worklist.md#G-2--prove-or-enforce-tenant-checkout-order-ownership). Keep detailed handler/security acceptance criteria in those tasks; do not maintain a second checklist here.
+
+Commerce-programme outcome:
+- Tenant checkout resolves credentials only from the trusted owning Channel.
+- Vendure's normal PaymentMethodHandler / payment lifecycle verifies and settles the tenant order.
+- Flow A platform-service payments and Flow B customer-to-tenant payments remain separate.
+- Tests prove correct customer, order, amount, currency, channel and merchant account binding.
+
+**Acceptance:** a real tenant one-time checkout settles the correct tenant-channel Vendure order through the supported Shop API. Provider-order creation alone is not completion.
+
+### MCR-1.2 — Complete Flow B webhook and recovery lifecycle (P0)
+
+**Canonical source-level implementation task:** [Integration G-3 — tenant Flow B webhook/recovery](integration-gaps-worklist.md#G-3--implement-tenant-flow-b-webhookrecovery-lifecycle). The detailed signature, inbox, idempotency and reconciliation criteria live there; do not duplicate them here.
+
+Commerce-programme outcome:
+- Tenant payment state converges from verified provider facts, not browser return state.
+- Tenant webhook events are durably recorded before processing and are reconciled idempotently.
+- Failures, delayed events and retries do not settle another tenant's order.
+
+**Acceptance:** the tenant payment lifecycle recovers correctly from valid, invalid, duplicate, delayed and replayed provider events, with operator-visible reconciliation.
 
 ### MCR-1.3 — Marketplace tenant-channel checkout (P0)
 - [ ] Resolve a marketplace listing to its authoritative tenant server-side.
