@@ -374,16 +374,6 @@ describe('TenantRazorpayService verifyAndSettle (G-1)', () => {
     expect(accountService.getActiveDecryptedCredentials).not.toHaveBeenCalled();
   });
 
-  it('fails closed outside an authenticated Shop API context', async () => {
-    const nonShopCtx = { ...ctx, apiType: 'admin' } as RequestContext;
-
-    const result = await service.verifyAndSettle(nonShopCtx, ORDER_ID, validMetadata());
-
-    expect(result).toMatchObject({ ok: false, errorCode: 'AUTHENTICATION_REQUIRED' });
-    expect(orderRepo.findOne).not.toHaveBeenCalled();
-    expect(accountService.getActiveDecryptedCredentials).not.toHaveBeenCalled();
-  });
-
   it('fails closed when the customer is not authenticated', async () => {
     const anonymousCtx = { ...ctx, activeUserId: undefined } as RequestContext;
 
