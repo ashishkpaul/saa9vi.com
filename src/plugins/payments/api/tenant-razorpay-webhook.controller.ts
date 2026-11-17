@@ -135,6 +135,7 @@ export class TenantRazorpayWebhookController {
       rawPayload: payload,
       verifiedAt: new Date(),
       processingStatus: 'pending',
+      processingStartedAt: null,
       attemptCount: 0,
       processedAt: null,
       failedAt: null,
@@ -152,19 +153,37 @@ export class TenantRazorpayWebhookController {
       }
 
       const existing = await eventRepo.findOne({ where: { dedupeKey } });
-      if (existing?.processingStatus === 'pending') {
+      if (!existing) {
+        throw new ServiceUnavailableException(
+          'Duplicate tenant webhook receipt was detected but the durable row could not be reloaded',
+        );
+      }
+      if (existing.payloadHash !== payloadHash || existing.eventType !== eventType) {
+        Logger.error(
+          `Tenant Razorpay reused event ID ${providerEventId} with a different payload for Channel ${channel.id}`,
+          loggerCtx,
+        );
+        throw new BadRequestException('Razorpay event ID was previously received with a different payload');
+      }
+
+      const staleProcessing =
+        existing.processingStatus === 'processing' &&
+        existing.processingStartedAt instanceof Date &&
+        existing.processingStartedAt.getTime() < Date.now() - 2 * 60 * 1000;
+      if (existing.processingStatus === 'pending' || staleProcessing) {
         try {
           await this.webhookQueue.enqueueWebhookEvent(existing.id as number);
         } catch (enqueueError) {
           Logger.error(
-            `Could not re-enqueue pending tenant webhook event ${existing.id}: ${String(enqueueError)}`,
+            `Could not re-enqueue pending/stale tenant webhook event ${existing.id}: ${String(enqueueError)}`,
             loggerCtx,
           );
           throw new ServiceUnavailableException('Tenant webhook was stored but could not be queued');
         }
       }
-      // processed/ignored/failed events are terminal. A pending duplicate is
-      // re-enqueued to recover "persisted but enqueue failed" deliveries.
+      // Processed/ignored/failed events are terminal. Pending events recover
+      // persist-success/enqueue-failure; stale processing leases recover a
+      // crashed worker. Fresh processing events already have an active worker.
       return { status: 'ok' };
     }
 
