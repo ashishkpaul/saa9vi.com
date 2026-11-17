@@ -126,15 +126,17 @@ describe('MarketplaceCheckoutService', () => {
       [Channel, channelRepo],
       [ProductVariant, variantRepo],
       [TenantPaymentAccount, accountRepo],
+      [PaymentMethod, paymentMethodRepo],
     ]);
 
     const connection = {
       rawConnection: {
         getRepository: vi.fn((entity: unknown) => rawRepositories.get(entity)),
       },
-      getRepository: vi.fn((_ctx: unknown, entity: unknown) =>
-        entity === Order ? orderRepo : paymentMethodRepo,
-      ),
+      getRepository: vi.fn((_ctx: unknown, entity: unknown) => {
+        if (entity === Order) return orderRepo;
+        throw new Error(`Unexpected tenant checkout repository: ${String(entity)}`);
+      }),
     } as unknown as TransactionalConnection;
 
     ctx = {
