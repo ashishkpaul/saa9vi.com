@@ -273,7 +273,6 @@ export class TenantRazorpayService {
     let credentials: {
       keyId: string;
       keySecret: string;
-      accountMode: string;
     };
     try {
       credentials = await this.accountService.getActiveDecryptedCredentials(ctx, channelId);
