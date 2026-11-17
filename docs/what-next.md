@@ -24,8 +24,6 @@
 
 1. **G-3 schema/release gate:** generate and verify the `TenantPaymentWebhookEvent` + Channel join-table migration using `npx vendure migrate --generate`, then apply it through the Vendure CLI in the target environment. Do not hand-write SQL or mark G-3 production-ready before provider-level verification.
 2. **Flow B provider evidence:** run Razorpay Test Mode checkout, real signed tenant webhook delivery, retry/replay and recovery tests after migration. G-1/G-2/G-3 source foundations and the reported focused tests do not replace these runtime checks.
-3. **Role repair policy:** resolve the existing tenant-role permission repair conflict through an approved Admin GraphQL path before operating repair tooling. See [G-4](implementation/integration-gaps-worklist.md#G-4--bring-tenant-role-permission-repair-into-the-graphql-mutation-policy).
-
 Do not treat provider-order creation, passing unit tests or source registration alone as production checkout evidence.
 
 ### P0 — Marketplace tenant-channel checkout contract
