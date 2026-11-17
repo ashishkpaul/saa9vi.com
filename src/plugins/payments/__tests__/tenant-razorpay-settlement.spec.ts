@@ -68,8 +68,8 @@ describe('TenantRazorpayService verifyAndSettle (G-1)', () => {
       findOne: vi.fn().mockResolvedValue(null),
     };
     connection = {
-      getRepository: vi.fn((_ctx, entity) =>
-        entity === 'Payment' ? paymentRepo : orderRepo,
+      getRepository: vi.fn((_ctx: RequestContext, entity: unknown) =>
+        String(entity) === 'Payment' ? paymentRepo : orderRepo,
       ),
     } as unknown as Pick<TransactionalConnection, 'getRepository'>;
 
@@ -81,7 +81,6 @@ describe('TenantRazorpayService verifyAndSettle (G-1)', () => {
       getActiveDecryptedCredentials: vi.fn().mockResolvedValue({
         keyId: 'rzp_test_public',
         keySecret: KEY_SECRET,
-        webhookSecret: null,
         accountMode: 'test',
       }),
     } as unknown as Pick<TenantPaymentAccountService, 'getActiveDecryptedCredentials'>;
