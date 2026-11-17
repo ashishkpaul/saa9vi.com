@@ -5,6 +5,7 @@ import {
   TransactionalConnection,
 } from '@vendure/core';
 import { TenantPaymentAccountService } from './tenant-payment-account.service';
+import { TenantPaymentWebhookEvent } from '../entities/tenant-payment-webhook-event.entity';
 import {
   TenantRazorpayOrdersClient,
   TenantRazorpayApiError,
@@ -265,6 +266,54 @@ export class TenantRazorpayService {
         errorCode: 'MISSING_METADATA',
         detail: 'Checkout metadata must include Razorpay order and payment IDs',
       };
+    }
+
+    // Admin-context settlement is reserved for the signed tenant webhook
+    // worker. Requiring a matching durable inbox event prevents an arbitrary
+    // Admin API call from using the server-side settlement path directly.
+    if (isWebhookSettlement) {
+      const webhookEventId = (metadata as Record<string, unknown> | null)?.[
+        'tenant_webhook_event_id'
+      ];
+      if (
+        typeof webhookEventId !== 'string' &&
+        typeof webhookEventId !== 'number'
+      ) {
+        return {
+          ok: false,
+          errorCode: 'WEBHOOK_EVENT_REQUIRED',
+          detail: 'Tenant webhook settlement requires a persisted verified event',
+        };
+      }
+
+      const webhookEventRepo = this.connection.getRepository(
+        ctx,
+        TenantPaymentWebhookEvent,
+      );
+      const webhookEvent = await webhookEventRepo.findOne({
+        where: { id: webhookEventId as any },
+        relations: { channels: true },
+      });
+      const webhookPayment = (webhookEvent?.rawPayload as any)?.payload?.payment?.entity;
+      const eventBelongsToChannel = (webhookEvent?.channels ?? []).some(
+        (candidate: { id: string }) => String(candidate.id) === channelId,
+      );
+      if (
+        !webhookEvent ||
+        !webhookEvent.verifiedAt ||
+        webhookEvent.provider !== 'razorpay' ||
+        webhookEvent.eventType !== 'payment.captured' ||
+        webhookEvent.processingStatus !== 'pending' ||
+        !eventBelongsToChannel ||
+        webhookPayment?.id !== md.razorpayPaymentId ||
+        webhookPayment?.order_id !== md.razorpayOrderId
+      ) {
+        return {
+          ok: false,
+          errorCode: 'WEBHOOK_EVENT_BINDING_MISMATCH',
+          detail: 'Persisted tenant webhook event does not match this provider payment/order',
+        };
+      }
     }
 
     // Payment is not ChannelAware in Vendure. This lookup therefore checks
