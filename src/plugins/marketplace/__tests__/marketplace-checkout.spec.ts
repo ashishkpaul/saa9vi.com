@@ -42,10 +42,10 @@ describe('MarketplaceCheckoutService', () => {
   let channelRepo: { findOne: ReturnType<typeof vi.fn> };
   let variantRepo: { findOne: ReturnType<typeof vi.fn> };
   let accountRepo: { findOne: ReturnType<typeof vi.fn> };
-  let orderRepo: { findOne: ReturnType<typeof vi.fn>; save: ReturnType<typeof vi.fn> };
+  let orderRepo: { findOne: ReturnType<typeof vi.fn> };
   let paymentMethodRepo: { find: ReturnType<typeof vi.fn> };
   let activeOrderService: Pick<ActiveOrderService, 'getActiveOrder'>;
-  let orderService: Pick<OrderService, 'addItemToOrder' | 'getEligiblePaymentMethods'>;
+  let orderService: Pick<OrderService, 'addItemToOrder' | 'getEligiblePaymentMethods' | 'updateCustomFields'>;
   let customerService: Pick<CustomerService, 'findOneByUserId'>;
   let channelService: Pick<ChannelService, 'getDefaultChannel'>;
   let configService: Pick<ConfigService, 'entityIdStrategy'>;
@@ -104,7 +104,6 @@ describe('MarketplaceCheckoutService', () => {
     };
     orderRepo = {
       findOne: vi.fn().mockImplementation(async () => order),
-      save: vi.fn().mockImplementation(async value => value),
     };
     paymentMethodRepo = {
       find: vi.fn().mockResolvedValue([
@@ -161,6 +160,10 @@ describe('MarketplaceCheckoutService', () => {
           productVariant: variant,
           quantity: 1,
         });
+        return order;
+      }),
+      updateCustomFields: vi.fn().mockImplementation(async (_ctx, _orderId, customFields) => {
+        order.customFields = { ...order.customFields, ...customFields };
         return order;
       }),
       getEligiblePaymentMethods: vi.fn().mockResolvedValue([
@@ -228,10 +231,10 @@ describe('MarketplaceCheckoutService', () => {
       1,
     );
     expect(attributionService.resolveRef).toHaveBeenCalledWith(ref, tenantChannel.id);
-    expect(orderRepo.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        customFields: { paymentPurpose: 'tenant-client', marketplaceRef: ref },
-      }),
+    expect(orderService.updateCustomFields).toHaveBeenCalledWith(
+      tenantCtx,
+      order.id,
+      { paymentPurpose: 'tenant-client', marketplaceRef: ref },
     );
     expect(result).toMatchObject({
       orderId: order.id,
@@ -293,7 +296,7 @@ describe('MarketplaceCheckoutService', () => {
 
     await expect(service.createSessionCheckout(ctx, sessionId)).rejects.toThrow(/platform-service cart/);
     expect(orderService.addItemToOrder).not.toHaveBeenCalled();
-    expect(orderRepo.save).not.toHaveBeenCalled();
+    expect(orderService.updateCustomFields).not.toHaveBeenCalled();
   });
 
   it('re-checks marketplace commercial eligibility at checkout time', async () => {
@@ -359,12 +362,12 @@ describe('MarketplaceCheckoutService', () => {
     const result = await service.createSessionCheckout(ctx, sessionId, 'invalid-ref');
 
     expect(result.marketplaceAttributionApplied).toBe(false);
-    expect(orderRepo.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        customFields: { paymentPurpose: 'tenant-client' },
-      }),
+    expect(orderService.updateCustomFields).toHaveBeenCalledWith(
+      expect.anything(),
+      order.id,
+      { paymentPurpose: 'tenant-client' },
     );
-    expect(orderRepo.save.mock.calls[0][0].customFields.marketplaceRef).toBeUndefined();
+    expect(order.customFields.marketplaceRef).toBeUndefined();
     expect(result.eligiblePaymentMethods.map(method => method.code)).toEqual(['tenant-a-razorpay']);
   });
 
