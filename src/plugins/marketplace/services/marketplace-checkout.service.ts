@@ -145,6 +145,7 @@ export class MarketplaceCheckoutService {
     if (
       !variant ||
       !variant.product ||
+      variant.enabled === false ||
       variant.product.enabled === false ||
       !variantInTenantChannel ||
       !productInTenantChannel ||
