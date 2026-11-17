@@ -216,6 +216,28 @@ describe('TenantPaymentWebhookQueueService (G-3 recovery)', () => {
     expect(eventRepo.save).toHaveBeenCalled();
   });
 
+  it('does not process an event when another worker already owns the atomic claim', async () => {
+    vi.mocked(eventRepo.update).mockResolvedValue({ affected: 0 } as any);
+
+    await service.processWebhookEvent(91);
+
+    expect(eventRepo.update).toHaveBeenCalledOnce();
+    expect(client.fetchOrder).not.toHaveBeenCalled();
+    expect(client.fetchPayment).not.toHaveBeenCalled();
+    expect(orderService.addPaymentToOrder).not.toHaveBeenCalled();
+  });
+
+  it('reclaims an expired processing lease after a previous worker crash', async () => {
+    event.processingStatus = 'processing';
+    event.processingStartedAt = new Date(Date.now() - 3 * 60 * 1000);
+
+    await service.processWebhookEvent(91);
+
+    expect(eventRepo.update).toHaveBeenCalledOnce();
+    expect(event.processingStatus).toBe('processed');
+    expect(orderService.addPaymentToOrder).toHaveBeenCalledOnce();
+  });
+
   it('records non-settlement event types but never calls Razorpay or creates a Payment', async () => {
     event.eventType = 'payment.failed';
 
@@ -260,7 +282,7 @@ describe('TenantPaymentWebhookQueueService (G-3 recovery)', () => {
     );
   });
 
-  it('ignores a captured payment when the order is no longer payable and has no matching Payment', async () => {
+  it('raises manual review when a captured payment targets an order that is no longer payable', async () => {
     orderRepo.findOne.mockResolvedValue(makeOrder({ state: 'PaymentSettled' }));
 
     await service.processWebhookEvent(91);
