@@ -128,12 +128,18 @@ export class MarketplaceCheckoutService {
       where: { id: this.decodeId(session.productVariantId) as any },
       relations: { channels: true, product: { channels: true } },
     });
-    const variantInTenantChannel = (variant?.channels ?? []).some(
-      candidate => String(candidate.id) === owningChannelId,
+    const variantTenantChannels = (variant?.channels ?? []).filter(
+      candidate => String(candidate.id) !== String(defaultChannel.id),
     );
-    const productInTenantChannel = (variant?.product?.channels ?? []).some(
-      candidate => String(candidate.id) === owningChannelId,
+    const productTenantChannels = (variant?.product?.channels ?? []).filter(
+      candidate => String(candidate.id) !== String(defaultChannel.id),
     );
+    const variantInTenantChannel =
+      variantTenantChannels.length === 1 &&
+      String(variantTenantChannels[0]?.id) === owningChannelId;
+    const productInTenantChannel =
+      productTenantChannels.length === 1 &&
+      String(productTenantChannels[0]?.id) === owningChannelId;
     const linkedSessionId = (variant?.product?.customFields as { bbbSessionId?: string } | undefined)
       ?.bbbSessionId;
     if (
@@ -233,9 +239,12 @@ export class MarketplaceCheckoutService {
     // Defend against legacy or manually-corrupted multi-seller carts. Every
     // existing line must resolve to a variant assigned to this exact Channel.
     for (const line of order.lines ?? []) {
-      const lineChannelMatch = (line.productVariant?.channels ?? []).some(
-        assigned => String(assigned.id) === owningChannelId,
+      const lineTenantChannels = (line.productVariant?.channels ?? []).filter(
+        assigned => String(assigned.id) !== String(defaultChannel.id),
       );
+      const lineChannelMatch =
+        lineTenantChannels.length === 1 &&
+        String(lineTenantChannels[0]?.id) === owningChannelId;
       if (!lineChannelMatch || !line.productVariant) {
         throw new UserInputError('The active cart contains an item from another academy');
       }
