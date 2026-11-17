@@ -154,20 +154,6 @@ export class MarketplaceCheckoutService {
       throw new UserInputError('The session product is not assigned to its owning academy');
     }
 
-    // Flow B gateway state is checked before creating or modifying the cart.
-    // Only a non-secret account state is read; no credential is returned here.
-    const account = await this.connection.rawConnection
-      .getRepository(TenantPaymentAccount)
-      .findOne({ where: { channelId: owningChannelId, provider: 'razorpay' } });
-    if (
-      !account ||
-      account.status !== 'active' ||
-      account.isEnabled !== true ||
-      !account.encryptedKeySecret
-    ) {
-      throw new UserInputError('The academy has not enabled its tenant Razorpay checkout');
-    }
-
     // The Customer must already be a member of the resolved tenant Channel.
     // TenantChannelAssignmentStrategy is not an authorization boundary and
     // checkout deliberately does not auto-create or auto-assign memberships.
@@ -206,6 +192,21 @@ export class MarketplaceCheckoutService {
       throw new UserInputError(
         'Your account is not registered with this academy. Complete its admission or account-linking process first',
       );
+    }
+
+
+    // Flow B gateway state is checked before creating or modifying the cart.
+    // Only a non-secret account state is read; no credential is returned here.
+    const account = await this.connection.rawConnection
+      .getRepository(TenantPaymentAccount)
+      .findOne({ where: { channelId: owningChannelId, provider: 'razorpay' } });
+    if (
+      !account ||
+      account.status !== 'active' ||
+      account.isEnabled !== true ||
+      !account.encryptedKeySecret
+    ) {
+      throw new UserInputError('The academy has not enabled its tenant Razorpay checkout');
     }
 
     // Vendure's active-order strategy finds/creates the target-Channel order
