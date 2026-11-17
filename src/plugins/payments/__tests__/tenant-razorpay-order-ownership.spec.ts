@@ -206,10 +206,15 @@ describe('TenantRazorpayService checkout order ownership (G-2)', () => {
   });
 
   it('fails closed when the service is called without an authenticated user', async () => {
-    ctx.activeUserId = undefined;
+    // RequestContext properties are readonly; construct a distinct context
+    // rather than mutating the authenticated fixture used by other tests.
+    const unauthenticatedCtx = {
+      ...ctx,
+      activeUserId: undefined,
+    } as RequestContext;
 
     await expect(
-      service.createCheckoutOrder(ctx, ORDER_ID),
+      service.createCheckoutOrder(unauthenticatedCtx, ORDER_ID),
     ).rejects.toBeInstanceOf(NotFoundException);
 
     expect(orderRepo.findOne).not.toHaveBeenCalled();
