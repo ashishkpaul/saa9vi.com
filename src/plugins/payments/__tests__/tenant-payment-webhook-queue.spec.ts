@@ -61,6 +61,7 @@ function makeEvent(overrides: Record<string, unknown> = {}) {
     },
     verifiedAt: new Date(),
     processingStatus: 'pending',
+    processingStartedAt: null,
     attemptCount: 0,
     processedAt: null,
     failedAt: null,
@@ -74,7 +75,11 @@ describe('TenantPaymentWebhookQueueService (G-3 recovery)', () => {
   let ctx: RequestContext;
   let event: ReturnType<typeof makeEvent>;
   let rawEventRepo: { findOne: ReturnType<typeof vi.fn> };
-  let eventRepo: { findOne: ReturnType<typeof vi.fn>; save: ReturnType<typeof vi.fn> };
+  let eventRepo: {
+    findOne: ReturnType<typeof vi.fn>;
+    update: ReturnType<typeof vi.fn>;
+    save: ReturnType<typeof vi.fn>;
+  };
   let orderRepo: { findOne: ReturnType<typeof vi.fn> };
   let paymentRepo: { findOne: ReturnType<typeof vi.fn> };
   let connection: Pick<TransactionalConnection, 'getRepository' | 'rawConnection'>;

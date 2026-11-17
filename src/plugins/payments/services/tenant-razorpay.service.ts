@@ -296,7 +296,7 @@ export class TenantRazorpayService {
       });
       const webhookPayment = (webhookEvent?.rawPayload as any)?.payload?.payment?.entity;
       const eventBelongsToChannel = (webhookEvent?.channels ?? []).some(
-        (candidate: { id: string }) => String(candidate.id) === channelId,
+        candidate => String(candidate.id) === channelId,
       );
       if (
         !webhookEvent ||
