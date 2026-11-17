@@ -198,6 +198,7 @@ describe('TenantPaymentWebhookQueueService (G-3 recovery)', () => {
             PROVIDER_PAYMENT_ID,
             KEY_SECRET,
           ),
+          tenant_webhook_event_id: '91',
         }),
       }),
     );
