@@ -10,15 +10,18 @@ import { PaymentWebhookEvent } from './entities/payment-webhook-event.entity';
 import { razorpayShopApiExtensions } from './api/razorpay-shop.schema';
 import { RazorpayShopResolver } from './api/razorpay-shop.resolver';
 import { RazorpayPaymentsWebhookController } from './api/razorpay-payments-webhook.controller';
+import { TenantRazorpayWebhookController } from './api/tenant-razorpay-webhook.controller';
 import { PaymentOpsAlertService } from './services/payment-ops-alert.service';
 // Phase 2 — Per-tenant Razorpay (ADR-051 Option C)
 import { TenantPaymentAccount } from './entities/tenant-payment-account.entity';
+import { TenantPaymentWebhookEvent } from './entities/tenant-payment-webhook-event.entity';
 import { TenantPaymentEncryptionService } from './services/tenant-payment-encryption.service';
 import { TenantPaymentAccountService } from './services/tenant-payment-account.service';
 import { tenantPaymentAdminSchema } from './api/tenant-payment-admin.schema';
 import { TenantPaymentAdminResolver } from './api/tenant-payment-admin.resolver';
 import { TenantRazorpayOrdersClient } from './services/tenant-razorpay-orders.client';
 import { TenantRazorpayService } from './services/tenant-razorpay.service';
+import { TenantPaymentWebhookQueueService } from './services/tenant-payment-webhook-queue.service';
 import { tenantRazorpayShopApiExtensions } from './api/tenant-razorpay-shop.schema';
 import { TenantRazorpayShopResolver } from './api/tenant-razorpay-shop.resolver';
 import { ManageTenantPaymentAccount } from './constants';
@@ -82,7 +85,7 @@ export class PaymentsProductionGuard implements OnApplicationBootstrap {
  */
 @VendurePlugin({
   imports: [PluginCommonModule],
-  entities: [PaymentWebhookEvent, TenantPaymentAccount],
+  entities: [PaymentWebhookEvent, TenantPaymentAccount, TenantPaymentWebhookEvent],
   providers: [
     RazorpayOrdersClient,
     RazorpayCheckoutService,
@@ -93,8 +96,9 @@ export class PaymentsProductionGuard implements OnApplicationBootstrap {
     TenantPaymentAccountService,
     TenantRazorpayOrdersClient,
     TenantRazorpayService,
+    TenantPaymentWebhookQueueService,
   ],
-  controllers: [RazorpayPaymentsWebhookController],
+  controllers: [RazorpayPaymentsWebhookController, TenantRazorpayWebhookController],
   shopApiExtensions: {
     schema: concatApiExtensions(
       razorpayShopApiExtensions,
