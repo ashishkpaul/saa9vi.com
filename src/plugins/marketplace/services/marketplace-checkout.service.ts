@@ -206,6 +206,7 @@ export class MarketplaceCheckoutService {
       !account ||
       account.status !== 'active' ||
       account.isEnabled !== true ||
+      !account.keyId ||
       !account.encryptedKeySecret
     ) {
       throw new UserInputError('The academy has not enabled its tenant Razorpay checkout');
