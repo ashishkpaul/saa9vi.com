@@ -367,6 +367,20 @@ describe('MarketplaceCheckoutService', () => {
     expect(activeOrderService.getActiveOrder).not.toHaveBeenCalled();
   });
 
+  it('rejects a tenant Razorpay account with a missing public Key ID', async () => {
+    accountRepo.findOne.mockResolvedValue({
+      channelId: tenantChannel.id,
+      provider: 'razorpay',
+      status: 'active',
+      isEnabled: true,
+      keyId: '',
+      encryptedKeySecret: 'encrypted-secret',
+    });
+
+    await expect(service.createSessionCheckout(ctx, sessionId)).rejects.toThrow(/has not enabled/);
+    expect(activeOrderService.getActiveOrder).not.toHaveBeenCalled();
+  });
+
   it('does not apply an invalid or wrong-channel attribution reference, but allows direct checkout', async () => {
     vi.mocked(attributionService.resolveRef).mockReturnValue(null);
 
