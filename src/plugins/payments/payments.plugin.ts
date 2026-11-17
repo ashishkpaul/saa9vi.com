@@ -2,6 +2,7 @@ import { PluginCommonModule, RuntimeVendureConfig, VendurePlugin, TransactionalC
 import { DocumentNode, Kind } from 'graphql';
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { razorpayPaymentHandler } from './config/razorpay-payment-handler';
+import { tenantRazorpayPaymentHandler } from './config/tenant-razorpay-payment-handler';
 import { RazorpayOrdersClient } from './services/razorpay-orders.client';
 import { RazorpayCheckoutService } from './services/razorpay-checkout.service';
 import { PaymentWebhookQueueService } from './services/payment-webhook-queue.service';
@@ -72,21 +73,12 @@ export class PaymentsProductionGuard implements OnApplicationBootstrap {
 }
 
 /**
- * R3 — one-time commerce (plan §3.9; ADR-038 "One-time commerce" branch).
+ * R3 — one-time platform payments (Flow A) plus per-tenant payments (Flow B).
  *
- * Boundary: this plugin owns the ONE-TIME payment lifecycle only — Razorpay
- * Orders/Payments API, checkout signature verification, and `PaymentSettled`
- * settlement. Recurring billing stays in `SubscriptionPlugin`
- * (`production-readiness.md` §7/§9 keep the two provider lifecycles separate).
- *
- * Flow A only: this handler uses Saa9vi's platform Razorpay credentials for
- * tenant-admin payments to Saa9vi (Flow A). Tenant-client collections (Flow B)
- * are outside this plugin's scope — tenants collect directly through their
- * own Razorpay account (future phase, ADR-051 Option C).
- *
- * It does not own fulfillment: downstream access (entitlement + capacity grant)
- * is produced by the BigBlueButton plugin from the `PaymentSettled` transition —
- * see `bbbOrderProcess` (Option A, automatic fulfillment).
+ * Flow A uses platform Razorpay credentials and is reserved for tenant-admin
+ * payments to Saa9vi. Flow B uses credentials resolved from the active tenant
+ * Channel and is reserved for learner/customer payments to that tenant. The
+ * two handlers and their credential sources remain strictly separate.
  */
 @VendurePlugin({
   imports: [PluginCommonModule],
@@ -97,7 +89,6 @@ export class PaymentsProductionGuard implements OnApplicationBootstrap {
     PaymentWebhookQueueService,
     PaymentsProductionGuard,
     PaymentOpsAlertService,
-    // Phase 2 — per-tenant Razorpay
     TenantPaymentEncryptionService,
     TenantPaymentAccountService,
     TenantRazorpayOrdersClient,
@@ -117,19 +108,20 @@ export class PaymentsProductionGuard implements OnApplicationBootstrap {
   },
   dashboard: './dashboard/index.tsx',
   configuration: (config: RuntimeVendureConfig) => {
-    // Register custom permission
     config.authOptions.customPermissions.push(ManageTenantPaymentAccount);
 
-    // Register alongside `dummyPaymentHandler`, which stays available for local
-    // development and the existing e2e suites (it is the only handler that can
-    // deterministically decline/error a payment).
     const handlers = config.paymentOptions.paymentMethodHandlers ?? [];
-    if (!handlers.some((h) => h.code === razorpayPaymentHandler.code)) {
-      config.paymentOptions.paymentMethodHandlers = [...handlers, razorpayPaymentHandler];
+    const registered = new Set(handlers.map((handler) => handler.code));
+    const nextHandlers = [...handlers];
+    if (!registered.has(razorpayPaymentHandler.code)) {
+      nextHandlers.push(razorpayPaymentHandler);
     }
+    if (!registered.has(tenantRazorpayPaymentHandler.code)) {
+      nextHandlers.push(tenantRazorpayPaymentHandler);
+    }
+    config.paymentOptions.paymentMethodHandlers = nextHandlers;
     return config;
   },
   compatibility: '^3.0.0',
 })
 export class PaymentsPlugin {}
-
