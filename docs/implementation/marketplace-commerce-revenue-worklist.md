@@ -1,7 +1,7 @@
 # Marketplace Commerce & Revenue — Implementation Worklist
 
 **Status:** Proposed worklist based on ADR-055  
-**Baseline:** repository `main` at `5dddb939c5d21f3830d305e5b8b094dd3ed87e84`; MCR checkout implementation branch based on that commit  
+**Baseline:** repository `main` at `5c225d020214d1d05cb4cb3cfe0aaa73d2fcbed5`; MCR-1.3 first backend slice merged in PR #19  
 **Purpose:** Sequence future engineering work without reimplementing existing foundations. Re-inspect source and the active branch before every implementation slice.
 
 ## Mandatory rules
@@ -25,7 +25,8 @@
 - [x] Implement the initial provider scope as tenant Razorpay only; intersect Vendure's eligible payment-method quote with an enabled PaymentMethod assigned to the owner Channel and using `tenant-razorpay`.
 - [x] Enforce one non-default tenant Channel per order; Flow A `platform-service` carts are rejected and Flow B `paymentPurpose=tenant-client` is stamped server-side.
 - [ ] Reconcile/accept ADR-051, ADR-054 and ADR-055 across the full product/glossary/platform-story contract.
-- [ ] Local focused tests, build and two-tenant Shop API E2E evidence pending.
+- [x] Focused checkout service tests (18/18), `npm run codegen`, and commission E2E (7/7) passed on the merged implementation before the follow-up harness fixes.
+- [ ] Re-run `npm run build` and marketplace projection E2E after the verification fixes; complete two-tenant Shop API E2E.
 
 ### MCR-0.2 — Product and commercial taxonomy (P0)
 - [ ] Audit Product/ProductVariant custom fields, `BbbScheduledSession.productVariantId`, `LearningCourse`, `CourseEnrollment`, `BbbProductAccess` and fulfilment handlers.
@@ -76,7 +77,9 @@ Commerce-programme outcome:
 - [x] Return only eligible tenant Razorpay PaymentMethod codes and the public Channel token needed for subsequent Shop API routing; no secrets are returned.
 - [x] Preserve valid attribution and set `paymentPurpose=tenant-client`; this mutation prepares the cart and does not itself create/capture a provider payment.
 - [ ] Complete the storefront sequence (shipping/address as applicable, tenant Razorpay provider order, `addPaymentToOrder`, confirmation) and real two-tenant Shop API E2E verification.
-- [ ] Local Vitest/build/codegen and commission E2E verification pending.
+- [x] Focused checkout service unit tests (18/18), `npm run codegen`, and commission E2E (7/7) passed on the merged source before the follow-up harness fixes.
+- [ ] Re-run `npm run build` after the explicit repository-map typing fix and `npm run test:e2e:marketplace` after adding `LearningPlugin` to the test plugin registry.
+- [ ] Full two-tenant Shop API E2E (including same-email identities, cart isolation and channel switching) remains pending.
 
 ### MCR-1.4 — Tenant custom-domain storefront parity (P1)
 - [ ] Ensure marketplace and custom-domain storefront share the same product/variant, price, stock, tenant order and payment source of truth.
@@ -217,8 +220,8 @@ Do not start marketplace checkout UI before MCR-1.1/MCR-1.2 establishes a valid 
 
 ## MCR checkout implementation snapshot — 17 November 2026
 
-The feature branch `feat/marketplace-tenant-channel-checkout` adds a source-level first slice for MCR-0.1, MCR-0.3 and MCR-1.3. It does **not** change ADR-055's `PROPOSED` status and does not claim the whole marketplace checkout journey is complete.
+The implementation from `feat/marketplace-tenant-channel-checkout` was merged to `main` in PR #19 at `5c225d020214d1d05cb4cb3cfe0aaa73d2fcbed5`. It is a source-level first slice for MCR-0.1, MCR-0.3 and MCR-1.3. It does **not** change ADR-055's `PROPOSED` status and does not claim the whole marketplace checkout journey is complete.
 
 The GraphQL mutation is `createMarketplaceSessionCheckout(sessionId, marketplaceRef)`. The response establishes the owning Channel's active cart, tenant-calculated total and eligible `tenant-razorpay` PaymentMethod codes. The storefront then continues through the normal tenant Shop API lifecycle. This mutation does not place/settle the order, grant a learner membership, create a course enrollment or issue a BBB entitlement.
 
-No new entity/table or database migration is introduced by this slice. Generated Shop schema/codegen output and local verification must be refreshed after pulling. The G-3 `TenantPaymentWebhookEvent` CLI migration remains an independent Flow B release prerequisite.
+No new entity/table or database migration is introduced by this slice. The preceding verification run recorded 18/18 focused service tests, successful `npm run codegen`, and 7/7 commission E2E tests; `npm run build` exposed a TypeScript inference error in the test repository map, while the marketplace projection E2E stopped during tenant registration because its harness omitted `LearningPlugin` custom permissions. A follow-up test-harness PR addresses those two setup issues; rerun the build and marketplace E2E before treating verification as complete. The full two-tenant Shop API E2E, storefront sequence and provider-level verification remain open. The G-3 `TenantPaymentWebhookEvent` CLI migration remains an independent Flow B release prerequisite.
