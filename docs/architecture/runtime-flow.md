@@ -676,7 +676,7 @@ Shop: createTenantRazorpayCheckoutOrder(orderId?)
 
 **Credential-probe caveat:** `verifyTenantPaymentAccount` performs `GET /payments?count=1`; it does not create a ₹1 test order. `verifyTenantPaymentWebhook` only confirms that the configured encrypted webhook secret exists and decrypts; it does not test a signed webhook delivery or verify a registered endpoint.
 
-**Security follow-up:** the tenant checkout service's explicit `orderId` path checks tenant channel membership but does not visibly compare the order's customer user with `ctx.activeUserId`. The resolver has `@Allow(Permission.Owner)`; prove that this permission is resource-bound for this custom resolver, or add an explicit owner check and cross-customer regression test before completing Flow B.
+**G-2 owner-boundary update (17 November 2026):** service-level ownership enforcement is now implemented in the checkout-order path. Explicit and active-order paths both reload the order with `customer.user`, require exact equality with `ctx.activeUserId`, and fail closed for missing/foreign ownership. Targeted regression tests have been added; execution remains pending. This closes the source-level G-2 finding but does not close Flow B settlement (G-1) or webhook/recovery (G-3).
 
 
 
