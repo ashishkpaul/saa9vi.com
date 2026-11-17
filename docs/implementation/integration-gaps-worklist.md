@@ -573,7 +573,7 @@ Cancellation is exposed symmetrically through `cancelMySubscription(atPeriodEnd)
 
 ### G-1 — Complete tenant Razorpay Flow B settlement
 
-**Priority:** P1 — **Status:** OPEN / BLOCKING FOR TENANT CLIENT COLLECTIONS
+**Priority:** P0 — **Status:** OPEN / BLOCKING FOR TENANT CLIENT COLLECTIONS
 
 Current `TenantRazorpayShopResolver.createTenantRazorpayCheckoutOrder` creates a Razorpay order using credentials resolved from `ctx.channelId`. `TenantRazorpayService.verifyAndSettle()` exists but no tenant-specific Vendure `PaymentMethodHandler` is registered and there is no current handler call site.
 
@@ -586,7 +586,7 @@ Required:
 
 ### G-2 — Prove or enforce tenant checkout order ownership
 
-**Priority:** P1 — **Status:** OPEN SECURITY REVIEW
+**Priority:** P0 — **Status:** OPEN SECURITY REVIEW
 
 The Flow B service verifies the explicit order belongs to the current channel, is in `ArrangingPayment` and has a positive total. Unlike Flow A's resolver, it does not visibly load the order's customer user and compare it with `ctx.activeUserId`. Resolver `@Allow(Permission.Owner)` is present, but resource-binding semantics for this custom resolver must be demonstrated.
 
@@ -597,7 +597,7 @@ Required:
 
 ### G-3 — Implement tenant Flow B webhook/recovery lifecycle
 
-**Priority:** P1 — **Status:** OPEN
+**Priority:** P0 — **Status:** OPEN
 
 Current `PaymentWebhookEvent`, controller and queue are for platform Flow A. Recurring subscription webhooks are a separate SubscriptionPlugin flow. No tenant-specific Flow B webhook endpoint/inbox/worker exists.
 
