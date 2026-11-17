@@ -409,6 +409,6 @@ describe('MarketplaceCheckoutService', () => {
       },
     ]);
 
-    await expect(service.createSessionCheckout(ctx, sessionId)).rejects.toThrow(/No eligible tenant Razorpay/);
+    await expect(service.createSessionCheckout(ctx, sessionId)).rejects.toThrow(/No enabled tenant Razorpay PaymentMethod/);
   });
 });
