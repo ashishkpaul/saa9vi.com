@@ -656,7 +656,7 @@ See ADR-051 and ADR-054.
 
 The Admin safe view never returns decrypted secrets. `verifyTenantPaymentAccount` probes Razorpay with `GET /payments?count=1`; `verifyTenantPaymentWebhook` only checks webhook-secret presence/decryption and is not a signed webhook test. The Shop mutation creates a Razorpay order using credentials resolved from `ctx.channelId`.
 
-**Not implemented at this baseline:** a Flow B Vendure `PaymentMethodHandler` that calls `TenantRazorpayService.verifyAndSettle()`, tenant payment settlement through `addPaymentToOrder`, a tenant-specific webhook endpoint/inbox/worker, and live provider validation. The `verifyAndSettle()` method exists but is currently unwired. The explicit-order path should also have an adversarial order-owner test and explicit customer binding verified.
+**Still not implemented:** a Flow B Vendure `PaymentMethodHandler` that calls `TenantRazorpayService.verifyAndSettle()`, tenant payment settlement through `addPaymentToOrder`, a tenant-specific webhook endpoint/inbox/worker, and live provider validation. The `verifyAndSettle()` method exists but is currently unwired. **G-2 ownership enforcement is now present** in `TenantRazorpayService.createCheckoutOrder()` for both explicit and active-order paths; targeted regression tests have been added, with execution pending.
 
 ### Key services and secrets
 
