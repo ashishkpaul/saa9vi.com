@@ -229,7 +229,7 @@ describe('MarketplaceCheckoutService', () => {
     expect(attributionService.resolveRef).toHaveBeenCalledWith(ref, tenantChannel.id);
     expect(orderRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
-        customFields: { marketplaceRef: ref },
+        customFields: { paymentPurpose: 'tenant-client', marketplaceRef: ref },
       }),
     );
     expect(result).toMatchObject({
@@ -307,7 +307,12 @@ describe('MarketplaceCheckoutService', () => {
     const result = await service.createSessionCheckout(ctx, sessionId, 'invalid-ref');
 
     expect(result.marketplaceAttributionApplied).toBe(false);
-    expect(orderRepo.save).not.toHaveBeenCalled();
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customFields: { paymentPurpose: 'tenant-client' },
+      }),
+    );
+    expect(orderRepo.save.mock.calls[0][0].customFields.marketplaceRef).toBeUndefined();
     expect(result.eligiblePaymentMethods.map(method => method.code)).toEqual(['tenant-a-razorpay']);
   });
 
