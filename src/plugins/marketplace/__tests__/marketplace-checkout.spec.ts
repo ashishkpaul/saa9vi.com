@@ -314,6 +314,24 @@ describe('MarketplaceCheckoutService', () => {
     expect(activeOrderService.getActiveOrder).not.toHaveBeenCalled();
   });
 
+  it('rejects an active cart owned by a different customer', async () => {
+    order.customer.user.id = 'different-user';
+
+    await expect(service.createSessionCheckout(ctx, sessionId)).rejects.toThrow(/does not belong to the authenticated customer/);
+    expect(orderService.addItemToOrder).not.toHaveBeenCalled();
+  });
+
+  it('rejects cancelled sessions and sessions whose end time has passed', async () => {
+    session.status = 'CANCELLED';
+    await expect(service.createSessionCheckout(ctx, sessionId)).rejects.toThrow(/no longer purchasable/);
+
+    session.status = 'SCHEDULED';
+    session.endTime = new Date(Date.now() - 1);
+    await expect(service.createSessionCheckout(ctx, sessionId)).rejects.toThrow(/no longer purchasable/);
+
+    expect(activeOrderService.getActiveOrder).not.toHaveBeenCalled();
+  });
+
   it('rejects a cart that contains another tenant Channel', async () => {
     const foreignChannel = { id: 'channel-tenant-b', code: 'tenant-b' };
     order.channels = [defaultChannel, tenantChannel, foreignChannel];
