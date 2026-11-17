@@ -167,6 +167,21 @@ describe('TenantRazorpayService checkout order ownership (G-2)', () => {
     expect(client.createOrder).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects a foreign customer even if the active-order service returns that order', async () => {
+    vi.mocked(orderService.getActiveOrderForUser).mockResolvedValue({ id: ORDER_ID } as never);
+    orderRepo.findOne.mockResolvedValue(
+      makeOrder({ customer: { user: { id: OTHER_USER_ID } } }),
+    );
+
+    await expect(
+      service.createCheckoutOrder(ctx),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(accountService.findByChannel).not.toHaveBeenCalled();
+    expect(accountService.getDecryptedCredentials).not.toHaveBeenCalled();
+    expect(client.createOrder).not.toHaveBeenCalled();
+  });
+
   it('does not select an arbitrary ArrangingPayment order when no active order exists for the caller', async () => {
     vi.mocked(orderService.getActiveOrderForUser).mockResolvedValue(undefined as never);
 
