@@ -151,14 +151,18 @@ The G-3 PR branch adds a tenant-specific webhook ingress and durable reconciliat
 - Razorpay callback URL: `POST /payments/razorpay/tenant-webhook/:channelToken`.
 - The Channel token selects the tenant's account only; it does not authenticate the request. The endpoint retrieves that Channel's encrypted webhook secret and validates the `X-Razorpay-Signature` HMAC against the exact `req.rawBody` bytes before parsing JSON.
 - `x-razorpay-event-id` is mandatory. The new ChannelAware `TenantPaymentWebhookEvent` belongs to exactly one Channel; the unique dedupe key hashes provider + Channel ID + Razorpay event ID.
-- The controller persists the receipt before queueing only the inbox ID. Duplicate pending events are re-enqueued to recover a prior persist-success/enqueue-failure case. DB or queue errors are non-2xx so Razorpay retries.
+- The controller persists the receipt before queueing only the inbox ID. Duplicate pending events are re-enqueued to recover a prior persist-success/enqueue-failure case; reusing an event ID with a different raw-payload hash/event type is rejected. DB or queue errors are non-2xx so Razorpay retries.
 - The worker processes `payment.captured` only. It resolves the event's owning Channel, uses that Channel's Admin RequestContext, fetches the Razorpay Order/Payment with that tenant's credentials, verifies provider IDs, receipt/notes, order association, amount, currency and captured state, then calls `OrderService.addPaymentToOrder` using `tenant-razorpay`.
 - The internal Admin settlement route inside `TenantRazorpayService.verifyAndSettle()` requires the matching verified, pending, same-Channel inbox event and the same provider order/payment identifiers. It is not a general Admin bypass.
 - Webhook reconciliation can still use tenant key credentials after new checkout has been disabled, because it is recovering a payment that Razorpay has already captured. It does not permit new checkouts.
+- A conditional event claim moves `pending` to `processing` before reconciliation; concurrent copies of the same inbox event cannot both run. A two-minute `processingStartedAt` lease allows a later duplicate delivery to requeue a crashed worker's stale event.
+- A captured payment that cannot be attached to the expected tenant order, is already attached elsewhere, or cannot reach a settled Vendure order is terminally flagged for manual review through `PaymentOpsAlertService`. Transient provider failures retry up to three attempts, then alert.
 
 **Migration rule:** the new ChannelAware entity and Channel join table require a schema migration. The PR does not include a hand-authored migration. Generate it locally using `npx vendure migrate --generate`, inspect it and commit it before merging. Do not merge/deploy without this CLI-generated migration.
 
-**Verification boundary:** the G-3 tests and backend build have not yet been run by the PR author. Real Razorpay HTTP delivery, retry/replay and tenant isolation validation are also pending. The existing `verifyTenantPaymentWebhook` Admin mutation remains a presence/decryption check and is not a signed test delivery.
+**Dashboard setup:** the tenant Payment Gateways page displays the callback URL and the required `payment.captured` event. If the Dashboard and API use different public origins, configure `VITE_VENDURE_API_BASE_URL` to the public API origin before building the Dashboard.
+
+**Verification boundary:** the G-3 tests and backend/dashboard builds have not yet been run by the PR author. Real Razorpay HTTP delivery, retry/replay and tenant isolation validation are also pending. The existing `verifyTenantPaymentWebhook` Admin mutation remains a presence/decryption check and is not a signed test delivery.
 
 ### Credential operations
 
