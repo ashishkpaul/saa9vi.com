@@ -365,6 +365,28 @@ describe('TenantRazorpayService verifyAndSettle (G-1)', () => {
     );
   });
 
+  it('rejects capture response with a different payment ID', async () => {
+    vi.mocked(client.fetchPayment).mockResolvedValue({
+      id: RAZORPAY_PAYMENT_ID,
+      order_id: RAZORPAY_ORDER_ID,
+      amount: 129900,
+      currency: 'INR',
+      status: 'authorized',
+    });
+    vi.mocked(client.capturePayment).mockResolvedValue({
+      id: 'pay_rzp_unexpected',
+      order_id: RAZORPAY_ORDER_ID,
+      amount: 129900,
+      currency: 'INR',
+      status: 'captured',
+      method: 'upi',
+    });
+
+    const result = await service.verifyAndSettle(ctx, ORDER_ID, validMetadata());
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'CAPTURE_PAYMENT_ID_MISMATCH' });
+  });
+
   it('rejects provider states that do not settle even when identifiers and amounts match', async () => {
     vi.mocked(client.fetchPayment).mockResolvedValue({
       id: RAZORPAY_PAYMENT_ID,
