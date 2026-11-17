@@ -3,6 +3,8 @@ import { PluginCommonModule, VendurePlugin, LanguageCode, SettingsStoreScopes } 
 import { MarketplaceBaselineService } from './services/marketplace-baseline.service';
 import { MarketplaceIndexerService } from './services/marketplace-indexer.service';
 import { MarketplaceSearchResolver } from './api/marketplace-search.resolver';
+import { MarketplaceCheckoutResolver } from './api/marketplace-checkout.resolver';
+import { MarketplaceCheckoutService } from './services/marketplace-checkout.service';
 import { MarketplaceAdminResolver } from './api/marketplace-admin.resolver';
 import { MarketplaceEventListener } from './listeners/marketplace-event.listener';
 import { MarketplaceIndexQueueService } from './services/marketplace-index-queue.service';
@@ -104,6 +106,7 @@ import {
   ],
   providers: [
     MarketplaceIndexerService,
+    MarketplaceCheckoutService,
     MarketplaceEventListener,
     MarketplaceIndexQueueService,
     MarketplaceAdService,
@@ -121,7 +124,7 @@ import {
   ],
   shopApiExtensions: {
     schema: shopApiExtensions,
-    resolvers: [MarketplaceSearchResolver, MarketplaceCommissionResolver],
+    resolvers: [MarketplaceSearchResolver, MarketplaceCommissionResolver, MarketplaceCheckoutResolver],
   },
   adminApiExtensions: {
     schema: adminApiExtensions,
