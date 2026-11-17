@@ -182,6 +182,8 @@ describe('TenantRazorpayWebhookController (G-3 ingress)', () => {
     eventRepo.findOne.mockResolvedValue({
       id: 77,
       processingStatus: 'pending',
+      eventType: 'payment.captured',
+      payloadHash: TenantRazorpayWebhookController.hashRawBody(signed.rawBody),
     });
 
     const result = await controller.handleWebhook(
@@ -193,6 +195,26 @@ describe('TenantRazorpayWebhookController (G-3 ingress)', () => {
 
     expect(result).toEqual({ status: 'ok' });
     expect(webhookQueue.enqueueWebhookEvent).toHaveBeenCalledWith(77);
+  });
+
+  it('rejects a duplicate Razorpay event ID when its payload hash changes', async () => {
+    const signed = signedRequest(payload);
+    eventRepo.save.mockRejectedValue({
+      code: '23505',
+      constraint: 'UQ_tenant_payment_webhook_event_dedupe',
+    });
+    eventRepo.findOne.mockResolvedValue({
+      id: 77,
+      processingStatus: 'processed',
+      eventType: 'payment.captured',
+      payloadHash: 'f'.repeat(64),
+    });
+
+    await expect(
+      controller.handleWebhook(CHANNEL_TOKEN, signed.signature, EVENT_ID, signed.req),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(webhookQueue.enqueueWebhookEvent).not.toHaveBeenCalled();
   });
 
   it('does not treat unrelated database failures as duplicate deliveries', async () => {
