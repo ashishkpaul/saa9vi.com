@@ -52,7 +52,8 @@ export const tenantPaymentAdminSchema = gql`
     verifyTenantPaymentAccount: TenantPaymentAccount!
 
     """
-    Verify that the configured webhook secret is valid.
+    Check that the configured webhook secret exists and can be decrypted.
+    This does not send a signed test webhook or verify the public callback URL.
     """
     verifyTenantPaymentWebhook: VerifyTenantPaymentWebhookResult!
   }
