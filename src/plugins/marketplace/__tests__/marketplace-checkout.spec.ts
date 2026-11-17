@@ -303,6 +303,17 @@ describe('MarketplaceCheckoutService', () => {
     expect(activeOrderService.getActiveOrder).not.toHaveBeenCalled();
   });
 
+  it('rejects a variant shared across two non-default tenant Channels', async () => {
+    variant.channels = [
+      defaultChannel,
+      tenantChannel,
+      { id: 'channel-tenant-b', code: 'tenant-b' },
+    ];
+
+    await expect(service.createSessionCheckout(ctx, sessionId)).rejects.toThrow(/not assigned to its owning academy/);
+    expect(activeOrderService.getActiveOrder).not.toHaveBeenCalled();
+  });
+
   it('rejects a cart that contains another tenant Channel', async () => {
     const foreignChannel = { id: 'channel-tenant-b', code: 'tenant-b' };
     order.channels = [defaultChannel, tenantChannel, foreignChannel];
