@@ -269,6 +269,8 @@ describe('MarketplaceCheckoutService', () => {
     vi.mocked(customerService.findOneByUserId).mockResolvedValue(undefined);
 
     await expect(service.createSessionCheckout(ctx, sessionId)).rejects.toThrow(/not registered with this academy/);
+    expect(paymentMethodRepo.find).not.toHaveBeenCalled();
+    expect(accountRepo.findOne).not.toHaveBeenCalled();
     expect(activeOrderService.getActiveOrder).not.toHaveBeenCalled();
   });
 
