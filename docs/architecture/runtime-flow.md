@@ -662,7 +662,12 @@ Admin: setTenantPaymentAccountEnabled(true)
 Shop: createTenantRazorpayCheckoutOrder(orderId?)
   +-- require authenticated caller
   +-- resolve account from ctx.channelId; require active + enabled
-  +-- check order belongs to channel, ArrangingPayment, total > 0
+  +-- require authenticated caller (`ctx.activeUserId`)
+  +-- explicit order ID or OrderService.getActiveOrderForUser(ctx, activeUserId)
+  +-- reload with channels + customer.user
+  +-- require current Channel AND customer.user.id = activeUserId
+  +-- require ArrangingPayment and total > 0
+  +-- only then resolve/decrypt tenant credentials
   +-- create Razorpay order using tenant credentials
   +-- return provider order ID, amount, currency and public Key ID
 ```
