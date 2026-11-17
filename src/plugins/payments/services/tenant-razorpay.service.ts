@@ -70,7 +70,7 @@ export class TenantRazorpayService {
     // An explicit order ID is untrusted input. For the implicit path, use
     // Vendure's active-order lookup for this authenticated user instead of
     // selecting an arbitrary ArrangingPayment order in the current channel.
-    const candidate = orderId
+    const candidate = orderId !== undefined
       ? await orderRepo.findOne({ where: { id: orderId } })
       : await this.orderService.getActiveOrderForUser(ctx, activeUserId);
 
