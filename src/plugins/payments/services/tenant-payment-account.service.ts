@@ -144,7 +144,7 @@ export class TenantPaymentAccountService {
   async getActiveDecryptedCredentials(
     ctx: RequestContext,
     channelId: ID,
-  ): Promise<Pick<TenantRazorpayCredentials, 'keyId' | 'keySecret' | 'accountMode'>> {
+  ): Promise<Pick<TenantRazorpayCredentials, 'keyId' | 'keySecret'>> {
     const account = await this.findByChannel(ctx, channelId);
     if (!account) {
       throw new NotFoundException('Tenant Razorpay account is not configured');
@@ -159,7 +159,6 @@ export class TenantPaymentAccountService {
     return {
       keyId: account.keyId,
       keySecret: this.encryptionService.decrypt(account.encryptedKeySecret),
-      accountMode: account.accountMode,
     };
   }
 
