@@ -305,7 +305,13 @@ export class MarketplaceCheckoutService {
       // payment failure. The customer may still purchase directly.
     }
     if (orderNeedsSave) {
-      await orderRepo.save(order);
+      // Use Vendure's OrderService API so custom-field persistence follows
+      // the normal order update lifecycle and publishes OrderEvent.
+      order = await this.orderService.updateCustomFields(
+        tenantCtx,
+        order.id,
+        { ...order.customFields },
+      );
     }
 
     const [quotes, paymentMethods] = await Promise.all([
