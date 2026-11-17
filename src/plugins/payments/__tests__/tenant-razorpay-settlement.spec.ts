@@ -114,6 +114,39 @@ describe('TenantPaymentAccountService settlement credentials', () => {
     expect(encryption.decrypt).toHaveBeenCalledOnce();
     expect(encryption.decrypt).toHaveBeenCalledWith('key-ciphertext');
   });
+
+  it('decrypts only the webhook secret for signed tenant webhook ingress', async () => {
+    const { service, encryption } = makeService({
+      keyId: 'rzp_test_public',
+      encryptedKeySecret: 'key-ciphertext',
+      encryptedWebhookSecret: 'webhook-ciphertext',
+      status: 'active',
+      isEnabled: false,
+    });
+
+    await expect(service.getWebhookSecret(ctx, CHANNEL_ID))
+      .resolves.toBe('decrypted-tenant-secret');
+    expect(encryption.decrypt).toHaveBeenCalledOnce();
+    expect(encryption.decrypt).toHaveBeenCalledWith('webhook-ciphertext');
+  });
+
+  it('can decrypt the tenant Key Secret for webhook recovery after checkout is disabled', async () => {
+    const { service, encryption } = makeService({
+      keyId: 'rzp_test_public',
+      encryptedKeySecret: 'key-ciphertext',
+      encryptedWebhookSecret: 'webhook-ciphertext',
+      status: 'active',
+      isEnabled: false,
+    });
+
+    await expect(service.getWebhookSettlementCredentials(ctx, CHANNEL_ID))
+      .resolves.toEqual({
+        keyId: 'rzp_test_public',
+        keySecret: 'decrypted-tenant-secret',
+      });
+    expect(encryption.decrypt).toHaveBeenCalledOnce();
+    expect(encryption.decrypt).toHaveBeenCalledWith('key-ciphertext');
+  });
 });
 
 describe('TenantRazorpayService verifyAndSettle (G-1)', () => {
