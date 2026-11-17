@@ -138,8 +138,7 @@ export class MarketplaceCheckoutService {
       !variant.product ||
       variant.product.enabled === false ||
       !variantInTenantChannel ||
-      String(variant.id) !== String(session.productVariantId) &&
-        String(this.decodeId(session.productVariantId)) !== String(variant.id) ||
+      String(variant.id) !== String(this.decodeId(session.productVariantId)) ||
       String(linkedSessionId ?? '') !== String(session.id)
     ) {
       throw new UserInputError('The session product is not assigned to its owning academy');
