@@ -172,6 +172,31 @@ export class MarketplaceCheckoutService {
     // TenantChannelAssignmentStrategy is not an authorization boundary and
     // checkout deliberately does not auto-create or auto-assign memberships.
     const tenantCtx = ctx.copy(channel);
+
+    // Check the static tenant PaymentMethod assignment before creating or
+    // changing an active Order. This avoids leaving a new empty session cart
+    // behind when the Channel has no Flow B PaymentMethod configured.
+    const configuredTenantRazorpayMethods = await this.connection.rawConnection
+      .getRepository(PaymentMethod)
+      .find({
+        where: { enabled: true },
+        relations: ['channels'],
+      });
+    const tenantRazorpayMethodCodes = new Set(
+      configuredTenantRazorpayMethods
+        .filter(method =>
+          method.enabled === true &&
+          (method.handler as { code?: string } | undefined)?.code === TENANT_RAZORPAY_HANDLER_CODE &&
+          (method.channels ?? []).some(assigned => String(assigned.id) === owningChannelId),
+        )
+        .map(method => String(method.code)),
+    );
+    if (!tenantRazorpayMethodCodes.size) {
+      throw new UserInputError(
+        'No enabled tenant Razorpay PaymentMethod is assigned to this academy Channel',
+      );
+    }
+
     const customer = await this.customerService.findOneByUserId(
       tenantCtx,
       ctx.activeUserId,
@@ -314,23 +339,7 @@ export class MarketplaceCheckoutService {
       );
     }
 
-    const [quotes, paymentMethods] = await Promise.all([
-      this.orderService.getEligiblePaymentMethods(tenantCtx, order.id),
-      this.connection.getRepository(tenantCtx, PaymentMethod).find({
-        where: { enabled: true },
-        relations: ['channels'],
-      }),
-    ]);
-
-    const tenantRazorpayMethodCodes = new Set(
-      paymentMethods
-        .filter(method =>
-          method.enabled === true &&
-          (method.handler as { code?: string } | undefined)?.code === TENANT_RAZORPAY_HANDLER_CODE &&
-          (method.channels ?? []).some(assigned => String(assigned.id) === owningChannelId),
-        )
-        .map(method => String(method.code)),
-    );
+    const quotes = await this.orderService.getEligiblePaymentMethods(tenantCtx, order.id);
     const eligiblePaymentMethods = quotes
       .filter(quote => quote.isEligible && tenantRazorpayMethodCodes.has(String(quote.code)))
       .map(quote => ({
