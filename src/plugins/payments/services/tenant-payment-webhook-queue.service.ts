@@ -358,6 +358,7 @@ export class TenantPaymentWebhookQueueService implements OnModuleInit {
         razorpay_order_id: razorpayOrderId,
         razorpay_payment_id: razorpayPaymentId,
         razorpay_signature: checkoutSignature,
+        tenant_webhook_event_id: String(event.id),
       },
     });
 
