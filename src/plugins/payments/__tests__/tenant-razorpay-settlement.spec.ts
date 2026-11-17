@@ -1,6 +1,7 @@
 import type { OrderService, RequestContext, TransactionalConnection } from '@vendure/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeCheckoutSignature } from '../razorpay-checkout.policy';
+import { TenantPaymentWebhookEvent } from '../entities/tenant-payment-webhook-event.entity';
 import { TenantPaymentAccountService } from '../services/tenant-payment-account.service';
 import type { TenantPaymentEncryptionService } from '../services/tenant-payment-encryption.service';
 import type { TenantRazorpayOrdersClient } from '../services/tenant-razorpay-orders.client';
@@ -119,9 +120,13 @@ describe('TenantRazorpayService verifyAndSettle (G-1)', () => {
   let ctx: RequestContext;
   let orderRepo: { findOne: ReturnType<typeof vi.fn> };
   let paymentRepo: { findOne: ReturnType<typeof vi.fn> };
+  let webhookEventRepo: { findOne: ReturnType<typeof vi.fn> };
   let connection: Pick<TransactionalConnection, 'getRepository'>;
   let orderService: Pick<OrderService, 'getActiveOrderForUser'>;
-  let accountService: Pick<TenantPaymentAccountService, 'getActiveDecryptedCredentials'>;
+  let accountService: Pick<
+    TenantPaymentAccountService,
+    'getActiveDecryptedCredentials' | 'getWebhookSettlementCredentials'
+  >;
   let client: Pick<
     TenantRazorpayOrdersClient,
     'fetchOrder' | 'fetchPayment' | 'capturePayment'
@@ -141,10 +146,33 @@ describe('TenantRazorpayService verifyAndSettle (G-1)', () => {
     paymentRepo = {
       findOne: vi.fn().mockResolvedValue(null),
     };
+    webhookEventRepo = {
+      findOne: vi.fn().mockResolvedValue({
+        id: 55,
+        channels: [{ id: CHANNEL_ID }],
+        provider: 'razorpay',
+        providerEventId: 'evt_tenant_55',
+        eventType: 'payment.captured',
+        verifiedAt: new Date(),
+        processingStatus: 'pending',
+        rawPayload: {
+          payload: {
+            payment: {
+              entity: {
+                id: RAZORPAY_PAYMENT_ID,
+                order_id: RAZORPAY_ORDER_ID,
+              },
+            },
+          },
+        },
+      }),
+    };
     connection = {
-      getRepository: vi.fn((_ctx: RequestContext, entity: unknown) =>
-        String(entity) === 'Payment' ? paymentRepo : orderRepo,
-      ),
+      getRepository: vi.fn((_ctx: RequestContext, entity: unknown) => {
+        if (String(entity) === 'Payment') return paymentRepo;
+        if (entity === TenantPaymentWebhookEvent) return webhookEventRepo;
+        return orderRepo;
+      }),
     } as unknown as Pick<TransactionalConnection, 'getRepository'>;
 
     orderService = {
@@ -156,7 +184,14 @@ describe('TenantRazorpayService verifyAndSettle (G-1)', () => {
         keyId: 'rzp_test_public',
         keySecret: KEY_SECRET,
       }),
-    } as unknown as Pick<TenantPaymentAccountService, 'getActiveDecryptedCredentials'>;
+      getWebhookSettlementCredentials: vi.fn().mockResolvedValue({
+        keyId: 'rzp_test_public',
+        keySecret: KEY_SECRET,
+      }),
+    } as unknown as Pick<
+      TenantPaymentAccountService,
+      'getActiveDecryptedCredentials' | 'getWebhookSettlementCredentials'
+    >;
 
     client = {
       fetchOrder: vi.fn().mockResolvedValue({
@@ -214,6 +249,85 @@ describe('TenantRazorpayService verifyAndSettle (G-1)', () => {
     expect(client.fetchOrder).toHaveBeenCalledOnce();
     expect(client.fetchPayment).toHaveBeenCalledOnce();
     expect(client.capturePayment).not.toHaveBeenCalled();
+  });
+
+  it('allows Admin settlement only with a matching persisted verified tenant webhook event', async () => {
+    const adminCtx = {
+      channelId: CHANNEL_ID,
+      apiType: 'admin',
+      activeUserId: undefined,
+    } as RequestContext;
+    orderRepo.findOne.mockResolvedValue(makeOrder({ customer: null }));
+
+    const result = await service.verifyAndSettle(
+      adminCtx,
+      ORDER_ID,
+      validMetadata({ tenant_webhook_event_id: '55' }),
+    );
+
+    expect(result).toMatchObject({ ok: true, paymentId: RAZORPAY_PAYMENT_ID });
+    expect(webhookEventRepo.findOne).toHaveBeenCalledWith({
+      where: { id: '55' },
+      relations: { channels: true },
+    });
+    expect(accountService.getWebhookSettlementCredentials).toHaveBeenCalledWith(
+      adminCtx,
+      CHANNEL_ID,
+    );
+    expect(accountService.getActiveDecryptedCredentials).not.toHaveBeenCalled();
+  });
+
+  it('rejects Admin settlement without a persisted verified tenant webhook event', async () => {
+    const adminCtx = {
+      channelId: CHANNEL_ID,
+      apiType: 'admin',
+      activeUserId: undefined,
+    } as RequestContext;
+
+    const result = await service.verifyAndSettle(adminCtx, ORDER_ID, validMetadata());
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'WEBHOOK_EVENT_REQUIRED' });
+    expect(accountService.getWebhookSettlementCredentials).not.toHaveBeenCalled();
+    expect(client.fetchOrder).not.toHaveBeenCalled();
+  });
+
+  it('rejects Admin settlement when the verified inbox event belongs to another Channel', async () => {
+    const adminCtx = {
+      channelId: CHANNEL_ID,
+      apiType: 'admin',
+      activeUserId: undefined,
+    } as RequestContext;
+    webhookEventRepo.findOne.mockResolvedValue({
+      id: 55,
+      channels: [{ id: 'channel-foreign' }],
+      provider: 'razorpay',
+      eventType: 'payment.captured',
+      verifiedAt: new Date(),
+      processingStatus: 'pending',
+      rawPayload: {
+        payload: {
+          payment: {
+            entity: {
+              id: RAZORPAY_PAYMENT_ID,
+              order_id: RAZORPAY_ORDER_ID,
+            },
+          },
+        },
+      },
+    });
+
+    const result = await service.verifyAndSettle(
+      adminCtx,
+      ORDER_ID,
+      validMetadata({ tenant_webhook_event_id: '55' }),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: 'WEBHOOK_EVENT_BINDING_MISMATCH',
+    });
+    expect(accountService.getWebhookSettlementCredentials).not.toHaveBeenCalled();
+    expect(client.fetchOrder).not.toHaveBeenCalled();
   });
 
   it('rejects an invalid checkout signature before provider reads', async () => {
