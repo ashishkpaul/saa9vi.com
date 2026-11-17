@@ -16,11 +16,23 @@ import {
 } from '../razorpay-checkout.policy';
 import { TenantPaymentAccountService } from './tenant-payment-account.service';
 import { TenantRazorpayOrdersClient } from './tenant-razorpay-orders.client';
+import { PaymentOpsAlertService } from './payment-ops-alert.service';
 
 const loggerCtx = 'TenantPaymentWebhookQueueService';
 const QUEUE_NAME = 'tenant-payment-webhook-reconciliation';
 const MAX_ATTEMPTS = 3;
 const BULLMQ_RETRIES = MAX_ATTEMPTS - 1;
+
+class TenantPaymentWebhookManualReviewError extends Error {
+  constructor(
+    readonly kind: string,
+    message: string,
+    readonly alertPayload: Record<string, unknown> = {},
+  ) {
+    super(message);
+    this.name = 'TenantPaymentWebhookManualReviewError';
+  }
+}
 
 /** Only a captured payment is sufficient to settle a Vendure order. */
 export const TENANT_SETTLING_WEBHOOK_EVENT_TYPES = ['payment.captured'] as const;
@@ -82,6 +94,7 @@ export class TenantPaymentWebhookQueueService implements OnModuleInit {
     private readonly orderService: OrderService,
     private readonly accountService: TenantPaymentAccountService,
     private readonly client: TenantRazorpayOrdersClient,
+    private readonly opsAlert: PaymentOpsAlertService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -162,6 +175,28 @@ export class TenantPaymentWebhookQueueService implements OnModuleInit {
       );
     } catch (err: any) {
       event.errorMessage = String(err?.message ?? 'Unknown tenant webhook reconciliation error');
+      if (err instanceof TenantPaymentWebhookManualReviewError) {
+        event.processingStatus = 'failed';
+        event.failedAt = new Date();
+        await repo.save(event);
+        this.opsAlert.notify(
+          err.kind,
+          String(event.id),
+          err.message,
+          {
+            tenantWebhookEventId: event.id,
+            providerEventId: event.providerEventId,
+            eventType: event.eventType,
+            vendureOrderCode: event.vendureOrderCode,
+            ...err.alertPayload,
+          },
+        );
+        Logger.error(
+          `Tenant webhook event ${event.id} requires manual review: ${err.message}`,
+          loggerCtx,
+        );
+        return;
+      }
       if (event.attemptCount >= MAX_ATTEMPTS) {
         event.processingStatus = 'failed';
         event.failedAt = new Date();
@@ -237,22 +272,22 @@ export class TenantPaymentWebhookQueueService implements OnModuleInit {
       relations: { channels: true },
     });
     if (!order) {
-      Logger.warn(
-        `Tenant webhook event ${event.id} references unknown order code ${vendureOrderCode}`,
-        loggerCtx,
+      throw new TenantPaymentWebhookManualReviewError(
+        'tenant-payment-webhook-order-not-found',
+        `Captured tenant payment ${razorpayPaymentId} references unknown Vendure order code ${vendureOrderCode}`,
+        { razorpayOrderId, razorpayPaymentId, vendureOrderCode },
       );
-      return 'ignored';
     }
 
     const inChannel = (order.channels ?? []).some(
       (candidate: { id: string }) => String(candidate.id) === channelId,
     );
     if (!inChannel) {
-      Logger.error(
-        `Tenant webhook event ${event.id} resolved order ${order.code} outside its Channel`,
-        loggerCtx,
+      throw new TenantPaymentWebhookManualReviewError(
+        'tenant-payment-webhook-channel-mismatch',
+        `Captured tenant payment resolved order ${order.code} outside Channel ${channelId}`,
+        { razorpayOrderId, razorpayPaymentId, orderId: order.id, orderCode: order.code },
       );
-      return 'ignored';
     }
 
     const orderBinding = assertOrderBinding({
@@ -276,6 +311,7 @@ export class TenantPaymentWebhookQueueService implements OnModuleInit {
     const paymentRepo = this.connection.rawConnection.getRepository('Payment' as never) as {
       findOne: (options: unknown) => Promise<{
         id: string;
+        state?: string;
         order?: { id: string } | null;
       } | null>;
     };
@@ -284,33 +320,50 @@ export class TenantPaymentWebhookQueueService implements OnModuleInit {
       relations: { order: true },
     });
     if (recordedPayment) {
-      if (String(recordedPayment.order?.id) === String(order.id)) {
+      if (
+        String(recordedPayment.order?.id) === String(order.id) &&
+        recordedPayment.state === 'Settled'
+      ) {
         return 'ignored';
       }
-      Logger.error(
-        `Razorpay payment ${razorpayPaymentId} is already attached to a different Vendure order; tenant event ${event.id} ignored`,
-        loggerCtx,
+      throw new TenantPaymentWebhookManualReviewError(
+        'tenant-payment-webhook-duplicate-payment',
+        `Razorpay payment ${razorpayPaymentId} is already recorded but is not a settled payment for Vendure order ${order.code}`,
+        {
+          razorpayOrderId,
+          razorpayPaymentId,
+          orderId: order.id,
+          orderCode: order.code,
+          recordedPaymentId: recordedPayment.id,
+          recordedPaymentState: recordedPayment.state,
+          recordedOrderId: recordedPayment.order?.id,
+        },
       );
-      return 'ignored';
     }
 
     if (order.state !== 'ArrangingPayment') {
-      Logger.error(
-        `Captured tenant payment ${razorpayPaymentId} arrived for order ${order.code} in state ${order.state} without a matching Vendure Payment; event ${event.id} needs operator review`,
-        loggerCtx,
+      throw new TenantPaymentWebhookManualReviewError(
+        'tenant-payment-webhook-unmatched-capture',
+        `Captured tenant payment ${razorpayPaymentId} arrived for order ${order.code} in state ${order.state} without a matching Vendure Payment`,
+        {
+          razorpayOrderId,
+          razorpayPaymentId,
+          orderId: order.id,
+          orderCode: order.code,
+          orderState: order.state,
+        },
       );
-      return 'ignored';
     }
 
     if (
       (order.customFields as { paymentPurpose?: string } | null)?.paymentPurpose ===
       'platform-service'
     ) {
-      Logger.error(
-        `Tenant webhook event ${event.id} attempted to settle a platform-service order ${order.code}`,
-        loggerCtx,
+      throw new TenantPaymentWebhookManualReviewError(
+        'tenant-payment-webhook-flow-mismatch',
+        `Tenant webhook event ${event.id} attempted to settle platform-service order ${order.code}`,
+        { razorpayOrderId, razorpayPaymentId, orderId: order.id, orderCode: order.code },
       );
-      return 'ignored';
     }
 
     const payment = await this.client.fetchPayment(
@@ -363,14 +416,21 @@ export class TenantPaymentWebhookQueueService implements OnModuleInit {
     });
 
     const result = addPaymentResult as any;
-    if (result?.errorCode || result?.errorResults?.length) {
-      throw new Error(
-        `Vendure tenant payment settlement failed for order ${order.code}: ${JSON.stringify(result)}`,
-      );
-    }
-    if (result?.state !== 'PaymentSettled') {
-      throw new Error(
-        `Vendure did not settle order ${order.code} after a captured tenant payment (state: ${result?.state ?? 'unknown'})`,
+    if (
+      result?.errorCode ||
+      result?.errorResults?.length ||
+      !['Settled', 'PaymentSettled'].includes(result?.state)
+    ) {
+      throw new TenantPaymentWebhookManualReviewError(
+        'tenant-payment-webhook-settlement-not-completed',
+        `Razorpay captured payment ${razorpayPaymentId}, but Vendure did not settle order ${order.code}: ${JSON.stringify(result)}`,
+        {
+          razorpayOrderId,
+          razorpayPaymentId,
+          orderId: order.id,
+          orderCode: order.code,
+          vendureState: result?.state ?? 'unknown',
+        },
       );
     }
 
