@@ -61,7 +61,7 @@ function makeEvent(overrides: Record<string, unknown> = {}) {
     },
     verifiedAt: new Date(),
     processingStatus: 'pending',
-    processingStartedAt: null,
+    processingStartedAt: null as Date | null,
     attemptCount: 0,
     processedAt: null,
     failedAt: null,
