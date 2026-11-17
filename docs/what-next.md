@@ -1,7 +1,7 @@
 # What Next — Saa9vi
 
 **Updated:** 17 November 2026  
-**Repository baseline:** `main` at `1c0a5a7d7c3dece131ae977a5c7416e41815a8a7`
+**Repository baseline:** `main` at `5dddb939c5d21f3830d305e5b8b094dd3ed87e84`
 
 > **Purpose:** Give the team one current, ordered view of the next actions. This file summarizes priorities; detailed tasks and acceptance criteria remain in the canonical worklists linked below.
 
@@ -13,24 +13,25 @@
 | Saa9vi tenant subscriptions | SubscriptionPlugin and tenant self-service plan-change/cancellation API foundations are present. | Live provider and production verification remain governed by `production-readiness.md`. |
 | BBB access and usage billing | Entitlement, capacity-grant and grant/metered usage foundations exist. | Refund/reversal semantics, usage reconciliation and production evidence remain separate release gates. |
 | Learning platform | LearningPlugin entities, Admin APIs and authenticated learner read APIs exist. | Learner invitation/self-enrollment, template CRUD and the complete learner/instructor storefront remain open. Learner-to-tenant recurring billing is a separate future lifecycle. |
-| Tenant-client payments (Flow B) | Tenant Razorpay account configuration/encryption and tenant-channel provider-order creation exist. | No tenant PaymentMethodHandler is registered; settlement is not wired through Vendure's payment lifecycle; tenant webhook inbox/reconciliation and order-owner proof remain open. |
-| Marketplace | Cross-tenant search projections, signed attribution and zero-commission ledger foundations exist. | Marketplace-hosted tenant-channel checkout is a target, not an implemented capability. It depends on Flow B settlement/webhooks and customer/channel isolation. |
+| Tenant-client payments (Flow B) | Tenant account configuration, G-1 `tenant-razorpay` PaymentMethodHandler and settlement, G-2 order/customer ownership, and G-3 tenant webhook controller/inbox/worker are present in source. User-reported focused regression evidence: 55/55 tests passed; build output showed no TypeScript diagnostics. | CLI-generated migration for `TenantPaymentWebhookEvent` and Channel join table; real Razorpay Test Mode checkout and signed webhook delivery/recovery verification remain open. |
+| Marketplace | Cross-tenant search, signed provenance and zero-commission ledger exist. MCR-0.1/MCR-0.3/MCR-1.3 first backend session-checkout slice is on feature branch `feat/marketplace-tenant-channel-checkout`. | Pull-request local verification, generated Shop schema, same-email/two-tenant and full Shop API E2E, storefront checkout integration and provider-level verification remain open. |
 | Advertising | AdWallet, AdSpendLedger, campaigns, sponsored ranking and banner-scope foundations exist. | Expand approved inventory, define billable impression/click events and complete measurement/reporting. |
 | Physical commerce | Tenant-channel commerce foundations can support seller-owned products. | Marketplace physical-listing readiness and full stock/shipping/returns/refund acceptance need implementation and verification. |
 
 ## 2. Next execution order
 
-### P0 — Complete tenant-client payment collection
+### P0 — Complete tenant-client payment collection and release prerequisites
 
-1. **Flow B settlement:** register the tenant-aware Vendure `PaymentMethodHandler`, resolve credentials only from the trusted tenant Channel, bind customer/order/amount/currency/provider payment and settle through Vendure's normal payment lifecycle. See [G-1](implementation/integration-gaps-worklist.md#G-1--complete-tenant-razorpay-flow-b-settlement).
-2. **Order ownership:** prove or explicitly enforce same-channel customer ownership for the active-order and explicit-order paths. Add adversarial cross-customer tests. See [G-2](implementation/integration-gaps-worklist.md#G-2--prove-or-enforce-tenant-checkout-order-ownership).
-3. **Tenant webhook recovery:** implement tenant-specific signed webhook ingress, persist-first inbox, idempotent processing, provider-truth reconciliation and recovery. See [G-3](implementation/integration-gaps-worklist.md#G-3--implement-tenant-flow-b-webhookrecovery-lifecycle).
+1. **G-3 schema/release gate:** generate and verify the `TenantPaymentWebhookEvent` + Channel join-table migration using `npx vendure migrate --generate`, then apply it through the Vendure CLI in the target environment. Do not hand-write SQL or mark G-3 production-ready before provider-level verification.
+2. **Flow B provider evidence:** run Razorpay Test Mode checkout, real signed tenant webhook delivery, retry/replay and recovery tests after migration. G-1/G-2/G-3 source foundations and the reported focused tests do not replace these runtime checks.
+3. **Role repair policy:** resolve the existing tenant-role permission repair conflict through an approved Admin GraphQL path before operating repair tooling. See [G-4](implementation/integration-gaps-worklist.md#G-4--bring-tenant-role-permission-repair-into-the-graphql-mutation-policy).
 
-Do not enable tenant-client checkout or start marketplace checkout UI on the basis of provider-order creation alone.
+Do not treat provider-order creation, passing unit tests or source registration alone as production checkout evidence.
 
 ### P0 — Marketplace tenant-channel checkout contract
 
-4. Resolve product ownership and customer identity server-side. Implement marketplace cart/order/payment operations in the owning tenant Channel, with channel-eligible payment methods and a one-tenant-per-cart/order initial rule. Preserve signed `marketplaceRef` as attribution only. See [MCR-0.1 to MCR-0.3 and MCR-1.3](implementation/marketplace-commerce-revenue-worklist.md).
+4. **MCR local verification:** pull `feat/marketplace-tenant-channel-checkout`, run its focused Vitest test, `npm run codegen`, `npm run build`, and commission E2E; report failures before merging.
+5. **MCR two-tenant E2E and storefront integration:** verify target Channel switch, Customer association, cart separation, exact tenant PaymentMethod eligibility, order owner and zero-commission attribution. Then wire the Next.js flow to continue through tenant Shop API checkout. See [MCR-0.1 to MCR-0.3 and MCR-1.3](implementation/marketplace-commerce-revenue-worklist.md).
 
 ### P0/P1 — Learner subscription and digital fulfilment
 
