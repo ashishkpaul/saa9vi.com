@@ -97,7 +97,7 @@ A tenant without a custom domain can be reached from the central marketplace thr
 
 The earlier 2026-09-15 B-2 implementation provisioned `{tenantSlug}.saa9vi.com` mappings. That implementation was removed when Saa9vi retired platform-hosted seller subdomains. `tenantSlug` remains an internal identity slug; seller-owned `customDomain` mapping remains supported through the single `DomainChannelResolverService` writer. `TenantRegisteredEvent` remains independent of hostname provisioning so BBB organization provisioning and Free Basic activation continue.
 
-**The detailed G2/G3 implementation and runtime evidence below is a historical record of the retired generated-subdomain path. It is not current acceptance evidence and must not be used as an instruction to recreate generated seller domains.** Current work is defined by B-1 above: central seller route and optional verified seller-owned custom domain.
+**The detailed G2/G3 implementation and runtime evidence below is a historical record of the retired generated-subdomain path. It is not current acceptance evidence and must not be used as an instruction to recreate generated seller domains.** Current work is defined by B-1 above: central seller route and optional verified seller-owned custom domain. The full prior B-2 evidence block is preserved in [the retired seller-subdomain archive](archive/retired-seller-subdomain-work-2026-09.md).
 
 ## B-3 — Multi-tenant storefront isolation E2E
 
