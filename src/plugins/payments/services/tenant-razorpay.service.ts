@@ -392,6 +392,14 @@ export class TenantRazorpayService {
         );
       }
 
+      if (payment.id !== md.razorpayPaymentId) {
+        return {
+          ok: false,
+          errorCode: 'CAPTURE_PAYMENT_ID_MISMATCH',
+          detail: 'Razorpay capture returned a different payment ID',
+        };
+      }
+
       const binding = assertPaymentBinding({
         paymentOrderId: payment.order_id,
         expectedRazorpayOrderId: md.razorpayOrderId,
