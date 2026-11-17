@@ -1,373 +1,124 @@
 # Platform Story
 
-> **Purpose:** Describe the platform from the perspective of each actor and business capability. Organized by lifecycle, not chronology.
+> **Purpose:** Explain Saa9vi through the journeys of the people and businesses using it. This is the product-level narrative; implementation details, state machines and infrastructure flows belong in `docs/architecture/` and the implementation worklists.
 
----
+## What Saa9vi is
 
-## Seller Lifecycle
+Saa9vi is a multi-tenant education business and commerce platform for coaching institutes, tutors, trainers and academies. A tenant manages its own learners, instructors, courses, live teaching, services and physical learning products. Saa9vi provides shared discovery, optional tenant-branded storefront hosting, learning/live-class infrastructure and platform services.
 
-```
-Academy discovers Saa9vi
-  → Registers (registerNewTenant)
-  → Creates organization (automatic)
-  → Invites moderators (BbbOrganizationMembership)
-  → Creates rooms (BbbRoom)
-  → Schedules sessions (BbbScheduledSession)
-  → Publishes sessions to marketplace
-  → Runs live classes (BbbMeeting)
-  → Gets usage billed (BbbUsageLedger)
-```
+The platform follows a zero-commission model: tenants receive payments from their own customers. Saa9vi earns from platform subscriptions, marketplace advertising, optional storefront hosting, BigBlueButton usage and optional platform services.
 
-### Academy owner self-registers
+## The people and their journeys
 
-A coaching institute founder visits `marketplace.saa9vi.com` and calls `registerNewTenant` (public mutation). Vendure provisions a Seller, Channel, Role, Administrator, and TenantProfile in a single transaction. The `BbbOrganization` is created with the channel's `channelId` as a unique index, and a `BbbCapacityGrant` is issued. (Platform admin can also create tenants manually as an override path.)
+### 1. Tenant owner — start and operate an academy
 
-**System/Code Detail:** `TenantRegistrationService.registerTenant()` — 5-step orchestration wrapped in `@Transaction()`.
+An academy owner registers with Saa9vi. The platform provisions the academy's tenant workspace and administrator. The owner completes the academy profile, sets up instructors and staff, configures teaching and learner-admission policies, and chooses how the academy will reach customers.
 
-### Trainer sets up content
+The owner can:
+- Publish courses, scheduled live sessions, recorded learning material, workshops and services.
+- Create or connect product records for books and other physical learning materials.
+- Configure the tenant's own payment gateway for customer collections.
+- Choose whether each eligible product appears on the Saa9vi marketplace, the academy's own storefront, or both.
+- Optionally connect a verified seller-owned custom domain and use a tenant-branded storefront hosted by Saa9vi.
 
-The trainer creates `InstructorProfile` records, CMS pages, banners, BBB rooms, and scheduled sessions through the Admin UI. Slugs are unique per channel, not globally. The session's `productVariantId` field is the commercial bridge — it connects checkout to live class access.
+A custom-domain storefront is optional. A tenant can participate in the central marketplace without buying storefront hosting. Saa9vi no longer provisions generated seller storefronts such as `{tenantSlug}.saa9vi.com`; `tenantSlug` is an internal marketplace identity, with a central seller route such as `/sellers/{tenantSlug}`. A verified seller-owned custom domain is an alternative storefront address.
 
----
+### 2. Tenant administrator — manage the academy
 
-## Participant Lifecycle
+The tenant administrator manages the academy's catalogue, collections and learning content; admits learners; assigns instructors; schedules sessions; communicates with learners; and reviews orders, payments and fulfilment. Staff permissions and tenant data remain isolated to that academy.
 
-```
-Finds session (storefront or marketplace)
-  → Trial or Purchase
-  → Entitlement created
-  → Joins live class
-  → Reviews after session
-```
+Products and services have three separate business dimensions:
 
-### Discovery
+| Dimension | Examples |
+|---|---|
+| Product type | Live course, recorded content, consultation, workshop, book, physical merchandise |
+| Billing model | Free, one-time, recurring subscription, fixed-term subscription, per-session, package |
+| Fulfilment model | Digital enrollment/entitlement, scheduled service/booking, physical order fulfilment |
 
-A student lands on `mehta.saa9vi.com`. Next.js middleware resolves the hostname to a channel token from Redis. Every GraphQL call carries that channel, and Vendure filters all results to that academy.
+The tenant chooses the appropriate billing model. Ongoing coaching and courses should normally offer subscriptions, while a defined-term course may charge upfront and a standalone download, workshop, consultation or book may use a one-time or package price.
 
-### Purchase → Entitlement
+### 3. Instructor — teach and support learners
 
-When the student buys a session, the order reaches `PaymentSettled`. `BbbOrderFulfillmentListener` catches the event, looks up the `BbbScheduledSession` by `productVariantId`, and calls `entitlementService.create({ type: "bbb_session" })`. For room products, it creates `BbbEntitlement { type: "bbb_room" }` instead.
+Instructors create or contribute to course content, prepare live sessions, manage their teaching schedule, conduct classes through BigBlueButton, and follow learner participation and attendance. Academy administrators retain control of course publication, learner admission and staff permissions.
 
-### Trial
+### 4. Learner — discover, try, subscribe and learn
 
-A student clicks "Join free trial". `TrialRegistrationService.register()` validates capacity, creates `BbbTrialRegistration`, and creates `BbbEntitlement { type: "bbb_session", source: "trial" }`.
+A learner discovers an academy, instructor, course or scheduled class through the central marketplace or an academy storefront. They can review the academy, teaching format, schedule, product information and available commercial options.
 
-### Join Live Class
+**Free trial:** Where an academy offers a trial, the learner registers without paying and receives a limited trial access grant. The trial is separate from paid enrollment: no paid order, payment mandate or automatic subscription conversion is created by default. The learner explicitly chooses a paid plan or term after the trial.
 
-`joinRoom()` and `bbbRoomStatus` share **one** room-access evaluation (INV-027, `BbbRoomAccessService.evaluate`) over four sources, in order:
-1. **Source 1**: Organization membership (FEAT-001 staff — `org_admin`/`moderator` → moderator URL, `staff` → viewer)
-2. **Source 2**: Legacy `BbbOrganizationMember` (staff)
-3. **Source 3**: `BbbEntitlement { type: 'bbb_room' }` (purchase)
-4. **Source 4**: `BbbEnrollment` (legacy / admin-created)
+**Paid learning:** The learner chooses the tenant's subscription, fixed-term or other permitted price model. Payment is collected by the tenant through its own configured payment gateway. After payment is verified, Saa9vi provisions the relevant digital access: course enrollment, recorded content access and/or time-bounded BigBlueButton entitlements. Renewal extends the paid access period; expiry, grace and cancellation follow the tenant's published policy.
 
-Authorization runs **before** provisioning is requested (BUG-045): a denied customer never enqueues a meeting, and preview denial ⇔ join denial.
+**Live learning:** The learner joins an eligible scheduled session or room. Access is determined by the relevant enrollment, entitlement and academy-admission rules. Meeting infrastructure usage is tracked separately from the learner's course price.
 
-If granted, `requestProvisioning()` acquires a distributed lock, transitions the room from Idle to Provisioning, and enqueues a BullMQ job. The worker selects the BBB server with the lowest `currentLoad`, resolves the earliest-expiring capacity grant, calls the BBB `createMeeting` API, encrypts passwords with AES-256-GCM, and writes the `grantId` to the meeting. The student gets a HMAC-signed join URL.
+### 5. Marketplace customer — buy from a tenant
 
-### Scheduled Session (Live Class) Start
+The Saa9vi marketplace is both a shared discovery surface and the target shared commerce storefront. It can present product pages, cart and checkout while the tenant remains the seller and payment recipient.
 
-Trainer calls `startScheduledSession(sessionId)` at the session start time. This is an **asynchronous provisioning request**, not an immediate live transition:
+The intended checkout contract is:
 
-```
-Trainer starts scheduled session
-  → meeting provisioning requested (session remains SCHEDULED)
-  → BullMQ worker provisions BBB meeting (createMeeting)
-  → meeting becomes Active
-  → session becomes LIVE (only on provisioning success)
-  → learner authorization becomes joinable (canJoin = true, joinUrl available)
-```
+1. The server resolves the tenant that owns the selected product.
+2. The cart and Vendure order are created in that tenant's Channel, not the default marketplace Channel.
+3. The marketplace displays payment methods eligible for that tenant's checkout context.
+4. The tenant's own payment gateway collects the payment.
+5. The tenant fulfils the order; Saa9vi charges no marketplace commission.
 
-`startScheduledSession` creates a Pending meeting, links it, and enqueues provisioning without changing the session status. `BbbSessionProvisioningListener` transitions the session to LIVE on `MeetingProvisionedEvent` — the only place a session becomes LIVE. If BBB provisioning fails, the meeting becomes `Failed` and the session remains `SCHEDULED` (retryable via `retryBbbMeeting`). Join authorization requires both session status `LIVE` **and** the linked meeting state `Active`.
+The initial checkout scope is one tenant per cart/order. Items from different tenants are handled as separate seller orders. Marketplace attribution records where a sale originated; it does not determine the payee or override tenant ownership.
 
-### Review
+**Current implementation boundary:** cross-tenant marketplace search, attribution and zero-commission ledger foundations exist. Marketplace-hosted tenant-channel checkout is the target described by ADR-055, not a completed feature in the reviewed baseline. Flow B tenant Razorpay configuration and provider-order creation exist, but the tenant PaymentMethodHandler settlement and tenant webhook/reconciliation lifecycle remain incomplete.
 
-Five days after purchase, the review-request workflow prepares the notification intent. The student submits a review. `ReviewAntiFraudService` runs five checks (velocity, duplicate content, account age, rating pattern, unverified purchase). Score ≥ 50 auto-flags the review. When approved, `reviewAggregationService.recalculateForProduct()` updates `Product.customFields.reviewRating`.
+### 6. Physical-product buyer — receive goods from the tenant
 
-> **Implementation note:** review-email services currently prepare/log the notification intent; actual delivery depends on the pending `@vendure/email-plugin` integration.
+Books and other physical products may be sold through the Saa9vi marketplace, the tenant's own storefront, or both. The tenant does not need a custom domain to list physical goods on the marketplace.
 
----
+Before a physical listing is made available, the tenant must opt in and have the operational prerequisites appropriate to the sale: product availability, payment readiness, inventory/stock policy, shipping or delivery coverage, tax handling, and returns/refund information.
 
-## Internal Staff Lifecycle
+After payment is verified, the tenant is responsible for stock allocation, packing, shipping, delivery, customer support, cancellation, returns and refunds. This physical fulfilment lifecycle is distinct from digital access: expiry of a learner subscription does not undo a delivered book order.
 
-```
-Staff member logs in
-  → Enters internal team portal
-  → Selects internal room (productVariantId = null)
-  → Auth waterfall short-circuits on membership (Gate 1)
-  → Joins as moderator
-  → Usage written to internal_overhead grant
-```
+### 7. Advertiser — acquire relevant customers
 
-Internal rooms are `BbbRoom` entities with `productVariantId = null`. They are not Vendure products. Access is granted purely on the basis of organizational membership. The `BbbOrganizationMembership` entity with roles (`org_admin`, `moderator`, `staff`) controls access. Staff members receive moderator join URLs; regular staff receive viewer URLs.
+Tenants and other approved advertisers can purchase visibility through:
+- Homepage banner placements.
+- Collection and sub-collection banners.
+- Sponsored product, course and instructor listings.
+- Product/course detail-page placements.
 
----
+Campaigns have approved placements, a defined period and budget, visible sponsored labels and reporting. Any impression/click-based charging must use explicit, deduplicated and fraud-resistant billable events; an ad being returned by a search API is not by itself a billable impression.
 
-## Marketplace Lifecycle
+### 8. Saa9vi platform operator — provide and monetize infrastructure
 
-**Current as-built baseline:** marketplace search is a cross-channel discovery projection. The shared marketplace checkout described here is the target product contract proposed by ADR-055; it is not claimed as delivered in the reviewed source baseline.
+Saa9vi operates the shared marketplace, tenant platform, hosting, payment integration boundaries, advertising controls and live-class infrastructure. The platform team manages tenant plans, capacity, support, moderation, billing reconciliation and operational readiness without taking ownership of tenant-client revenue.
 
-```text
-Student searches marketplace.saa9vi.com
-  → MarketplaceSearchResolver queries platform ES projections
-  → Listing resolves to its authoritative tenant Channel
-  → Student may continue on marketplace storefront or tenant custom-domain storefront
-  → Cart/order/payment execute through the owning tenant's Shop API context
-  → Digital or physical tenant-owned fulfilment begins
-  → CommissionLedger records $0 row (GMV + attribution history only)
-```
+## Revenue model
 
-The marketplace is a shared storefront and discovery experience. It may host checkout UI, but must not create tenant-owned orders in the Vendure default channel. The trusted server resolves the product/variant owner Channel and performs cart, order, payment-method eligibility and payment mutations in that tenant context. A tenant's custom-domain storefront is optional and uses the same tenant catalogue, stock, prices, payment configuration and order lifecycle.
-
-Initial checkout supports one tenant per cart/order. Products from multiple tenants require separate seller carts/orders; cross-tenant order orchestration is deferred.
-
-**Digital fulfilment:** verified tenant payment or permitted free trial/admission activates course enrollment, time-bounded BBB entitlement, recorded content or scheduled-service access. Subscription renewals extend the applicable paid period; expiry/grace/cancellation follows the learner policy.
-
-**Physical fulfilment:** verified tenant payment and stock checks begin tenant-owned stock allocation, packing, shipping, delivery, cancellation, return and refund. Physical fulfilment is not governed by digital entitlement expiry.
-
-Marketplace commission remains permanently 0% under ADR-051. A zero-value CommissionLedger row preserves GMV and attribution history; it is not a payable fee.
-
-> **Attribution boundary:** `orderSource` is classified and stamped by Vendure-side logic from signed opaque `marketplaceRef`. The server verifies HMAC signature, validity window, channel/resource relationship and single-use replay constraint. The reference proves marketplace provenance; it does not select the payment recipient, override tenant ownership or authorize a channel switch (INV-008; ADR-021).
-
-**Implementation boundary:** Flow B tenant Razorpay credentials and provider order creation exist, but ADR-054 records that tenant PaymentMethodHandler settlement and tenant webhook reconciliation are not yet wired end to end. Marketplace checkout must not be treated as production-ready until those gates are complete. See [ADR-055](../adr/adr-055-marketplace-commerce-and-revenue-model.md), [commerce policy](marketplace-commerce-policy.md) and [implementation worklist](../implementation/marketplace-commerce-revenue-worklist.md).
----
-
-## Subscription Billing Lifecycle
-
-Saa9vi has a separate tenant SaaS subscription lifecycle in addition to BBB usage billing. `SubscriptionPlan` is the platform-global plan catalogue; `OrganizationSubscription` is the channel-scoped tenant subscription. Subscription state governs plan capacity and subscription-backed entitlements, while `BbbUsageLedger` remains the append-only record of actual BBB meeting usage.
-
-```
-Tenant registers
-  → permanent Free Basic subscription provisioned
-  → tenant views available plans
-  → tenant requests plan change or cancellation
-  → Shop API resolves tenant from ctx.channelId
-  → plan-change cooldown acquired
-  → provider authorization required?
-      ├── no → provider-free/local transition
-      └── yes
-            → provider subscription created
-            → transient authorizationUrl returned
-            → tenant authorizes with Razorpay
-            → Razorpay webhook received
-  → OrganizationSubscription converges to provider-confirmed state
-  → plan-derived capacity/entitlement policy converges
-  → renewal becomes due
-  → renewal claim
-  → SubscriptionBillingAttempt created
-  → provider charge initiated
-      ├── success → terminal result reconciled → billing period finalized
-      └── failure → failed attempt → subscription becomes past_due
-            → dunning / grace handling
-            → newer-cycle success may recover past_due → active
-            → valid subscription.halted event bridges to past_due
-  → tenant cancellation
-      ├── at period end → provider cancellation + local flag
-      └── immediate → provider cancellation + immediate local cancellation
-```
-
-### Tenant self-service
-
-Tenant administrators use the Shop API for plan changes and cancellation. Tenant identity is derived exclusively from `ctx.channelId`; the mutation does not accept a client-supplied channel id. `MySubscriptionChangeResult.authorizationUrl` is transient and invocation-scoped: it is returned only when the current provider operation requires authorization and is never persisted on `MySubscription` or sourced from a stored provider URL.
-
-Plan changes use an atomic per-channel Redis cooldown (`SET NX EX 300`) and fail closed when Redis is unavailable. The existing `SubscriptionService` owns the subscription FSM and provider boundary; the Shop resolver performs ownership/provenance checks, channel resolution, cooldown, audit logging, and result shaping.
-
-### Platform-admin billing
-
-The Vendure Admin Dashboard is the platform/operator billing surface. Its Billing section is SuperAdmin-gated and provides operational read views for organization subscriptions, provider mandates, payment attempts, and reconciliation. The Admin API's explicit-channel mutations remain the support/operations path; tenant self-service remains on the Shop API and storefront.
-
-### Renewal and failure semantics
-
-Recurring provider HTTP calls remain outside the narrow local database transactions. An accepted or initiated provider response is not terminal payment success. Terminal outcomes arrive through the Razorpay webhook path: verify the delivery, persist the provider event before processing, enqueue it for BullMQ processing, then reconcile the binding, billing attempt, subscription period, and related incidents.
-
-A fresh provider failure cycle can move a subscription to `past_due`. The freshness guard rejects stale cycles, while a missing authoritative provider cycle start fails closed without a domain transition. A valid `subscription.halted` event mirrors provider binding state, records the halted cycle as a failed billing attempt, and bridges the subscription to `past_due` with the applicable grace window. A later successful charge for a newer provider cycle can recover the subscription to `active`.
-
-### Subscription billing and usage billing are separate
-
-Subscription billing uses `OrganizationSubscription`, provider binding/mandate state, `SubscriptionBillingAttempt`, provider webhook inbox records, and reconciliation incidents. BBB usage billing uses `BbbUsageLedger`, which remains append-only and is driven by completed meeting lifecycle processing. Subscription state may control capacity and entitlements, but it does not replace or rewrite historical BBB usage facts.
-
-## BBB Usage Billing Lifecycle
-
-```
-Meeting ends
-  → BBB fires meeting-ended webhook
-  → BbbWebhookController persists event (INV-004)
-  → BullMQ worker processes
-  → completeMeetingLifecycle()
-  → consumeGrantHours()
-  → BbbUsageLedger row written (append-only, INV-002)
-  → grant.consumedMinutes incremented
-```
-
-### Capacity Intelligence
-
-Every 15 minutes, `CapacityIntelligenceService.buildDashboard()` computes live pool health, a 48-hour load forecast from scheduled session data, and a capacity recommendation. If urgency is `soon` or `immediate`, a `CapacityAlertEvent` is published. Meetings are **never blocked** for capacity reasons (INV-012).
-
-### Reconciliation
-
-Every 60 seconds, `BbbReconciliationService` runs three loops:
-1. `reconcileActiveMeetings` — checks BBB `getMeetingInfo` for every Active meeting; marks stale if BBB has no record
-2. `reconcileProvisioning` — resets or fails meetings stuck in Provisioning past timeout
-3. `reconcileRooms` — fixes room/meeting state drift
-
----
-
-## Revenue Model
-
-Saa9vi has three distinct commercial/usage streams. Tenant subscription billing and BBB usage billing are separate lifecycles and records; marketplace commission is permanently 0% under ADR-051 (Option C).
-
-| Stream | What it charges | Control mechanism | Ledger / source of truth |
+| Revenue stream | Payer | Payee | Commercial basis |
 |---|---|---|---|
-| **1 — SaaS Subscription** | Tenant plan / recurring subscription | `SubscriptionPlan` + Razorpay recurring lifecycle | `OrganizationSubscription` + provider binding/mandate + `SubscriptionBillingAttempt` + webhook inbox/reconciliation |
-| **2 — BBB Usage** | Actual live-teaching / BBB usage | Capacity grants and usage policy | `BbbUsageLedger` append-only usage facts |
-| **3 — Marketplace Commission** | 0% permanently — no commission on tenant-client collections | `MARKETPLACE_COMMISSION_PERCENT` env var (must be 0; non-zero aborts boot) | `CommissionLedger` always records marketplace attribution, including $0 rows (GMV + history only) |
-| **4 — Advertising** | Sponsored listings / campaign spend | Tenant-initiated `AdWallet` funding and campaign controls | `AdSpendLedger` actual spend facts |
+| Tenant SaaS subscription | Tenant admin | Saa9vi | Recurring plan for platform capabilities |
+| BigBlueButton usage/capacity | Tenant admin | Saa9vi | Included quota, prepaid capacity or metered usage |
+| Marketplace advertising | Tenant/advertiser | Saa9vi | Campaign fee, fixed placement and later validated CPC/CPM |
+| Optional tenant-domain storefront hosting | Tenant admin | Saa9vi | Recurring hosting plan |
+| Optional platform services | Tenant admin | Saa9vi | Agreed service fee |
+| Tenant-client course, service and product sales | Learner/customer | Tenant | Tenant's own pricing and gateway; 0% Saa9vi commission |
 
-## Workflow Diagram
+Tenant SaaS subscription, learner-to-tenant payment, advertising spend and BBB usage are separate commercial lifecycles and must not be mixed into one ledger or payment purpose.
 
-```mermaid
-flowchart TD
+## Product and architecture guardrails
 
-    %% Tenant Registration
-    S[Academy Owner / Seller] -->|registerNewTenant| B[Create Tenant]
-    PA[Platform Admin] -.->|Manual override| B
-    B --> C[Vendure Channel]
-    C --> D[TenantProfile]
-    D --> E[BbbOrganization]
+- **Channel = Tenant (INV-001):** tenant-owned products, carts, orders, payment methods and fulfilment are handled in the owning tenant Channel. Do not create tenant-owned marketplace orders in the default Channel.
+- **Zero commission:** Saa9vi does not deduct or withhold a share of tenant-client payments. A zero-value attribution record is analytics history, not a payable commission.
+- **Optional storefront:** custom-domain hosting is an optional Saa9vi service, not a requirement for marketplace listing, checkout or physical-product sales.
+- **Digital vs physical fulfilment:** learning access is provisioned through enrollment and time-bounded entitlements; physical goods use stock and shipping fulfilment.
+- **Separate subscriptions:** the tenant's subscription to Saa9vi (`OrganizationSubscription`) is not the learner's subscription to a tenant course or service.
+- **Trusted payment routing:** the server resolves the tenant and its payment configuration. A browser-provided channel or payee value is never authoritative.
 
-    E --> F[Capacity Grants]
-    E --> G[Organization Memberships]
-    E --> H[Rooms]
-    E --> I[Scheduled Sessions]
+## Where to find implementation detail
 
-    %% Internal Staff Flow
-    G --> J[Moderator / Staff]
-    J --> K{Organization Membership Valid?}
-    K -->|Yes| L[Join Internal Room]
-    K -->|No| X[Access Denied]
-
-    %% Public Session Flow
-    I --> M[Publish Session]
-    M --> N[Marketplace Index]
-    N --> O[Participant discovers session]
-    O --> P{Session Type}
-
-    P -->|Trial| Q[Register Trial]
-    Q --> R[BbbTrialRegistration]
-    R --> S[BbbEntitlement]
-
-    P -->|Paid| T[Checkout]
-    T --> U[Order Fulfillment]
-    U --> S
-
-    P -->|Internal| K
-
-    %% Join Flow
-    S --> V{Has Valid Entitlement?}
-    V -->|Yes| W[Generate Join URL]
-    W --> Y[BBB Meeting]
-    V -->|No| X
-
-    %% Runtime
-    Y --> Z[Meeting Running]
-    Z --> AA[Webhook Events]
-    AA --> AB[Persist Webhook]
-    AB --> AC[BullMQ Processing]
-    AC --> AD[Usage Ledger]
-    AC --> AE[Meeting Status]
-    AC --> AF[Reconciliation]
-
-    %% Discovery
-    I -.updates.-> N
-```
-
----
-
-## Sequence Diagram
-
-```mermaid
-sequenceDiagram
-
-    participant S as Seller / Academy Owner
-    participant PA as Platform Admin
-    participant TA as Tenant Admin
-    participant M as Moderator
-    participant P as Participant
-    participant V as Vendure
-    participant BBB as BigBlueButton
-
-    S->>V: registerNewTenant (self-service)
-    alt Manual override
-        PA->>V: Create Tenant (admin)
-    end
-    V->>V: Create Channel
-    V->>V: Create TenantProfile
-    V->>V: Create BbbOrganization
-
-    TA->>V: Create Room
-    TA->>V: Create Scheduled Session
-
-    alt Trial Session
-        P->>V: Register Trial
-        V->>V: Create Trial Registration
-        V->>V: Create Entitlement
-    else Paid Session
-        P->>V: Purchase Session
-        V->>V: Order Fulfillment
-        V->>V: Create Entitlement
-    else Internal Meeting
-        M->>V: Join using Organization Membership
-    end
-
-    M->>V: Request Join URL
-    P->>V: Request Join URL
-    V->>V: Validate Entitlement / Membership
-    V->>BBB: Create / Join Meeting
-    BBB-->>M: Join URL
-    BBB-->>P: Join URL
-
-    BBB->>V: Webhook Events
-    V->>V: Persist Event
-    V->>V: Queue Processing
-    V->>V: Usage Ledger
-```
-
----
-
-## Known Gaps
-
-- **Session provisioning state semantics** — `LIVE` now means "BBB provisioning succeeded" (not "trainer clicked start"). The session may remain `SCHEDULED` while its linked meeting is `Pending`/`Provisioning`. A true persisted session FSM (e.g. a `PROVISIONING` state with explicit transitions) is deferred — no migration yet. If a persisted intermediate state is introduced, use the Vendure CLI migration workflow.
-- **Resolved: duplicate provisioning consumers** — `BbbMeetingService` is now **enqueue-only** (it delegates to `BbbProvisioningWorkerService.enqueueProvisioning`); the BBB provisioning queue has a **single** consumer (`BbbProvisioningWorkerService.doProvisionMeeting`) and a single implementation. The old queue field, dead `doProvisionMeeting`, and legacy imports were removed from `BBB_PROVISIONING_QUEUE` usage.
-- **Entitlement channel stamping** — `createBbbEntitlement` now persists `channelId = ctx.channelId`; before this fix, admin-created entitlements had a null channel and were invisible to the shop's `hasAccess()` (which matches on channel), so learners with valid entitlements saw `canJoin=false`. Verified end-to-end.
-- **Live-session lifecycle** — a session now transitions `LIVE → FINISHED` when its linked meeting completes (`MeetingCompletedEvent`, incl. a startup reconciliation pass for sessions left LIVE by earlier events).
-- **Retry relink** — `retryBbbMeeting` now relinks any scheduled session whose `activeMeeting` was the failed meeting, so the provisioning listener still transitions the session to LIVE on retry.
-- **BBB `getMeetingInfo` returning `error.forbidden`** (observed against `meeting.saa9vi.com`) blocks join-URL generation. The existence validator now treats only explicit `notFound` as "meeting gone" and otherwise fails open with a structured log. Exact BBB semantics for `error.forbidden` on provisioning-created rooms still need to be confirmed against the live BBB; a join can also be blocked legitimately if BBB auto-destroys an un-joined meeting (default expiry).
-
-(Historical BUG-022/023 were fixed in v1.10–v1.11; see `docs/implementation/release-notes.md`.)
-
-
----
-
-## Course learner lifecycle (LearningPlugin / ADR-053)
-
-A tenant academy admits a customer through its own `TenantLearnerMembership`. The membership is channel-scoped and is distinct from the global Vendure User/Customer identity. A learner's course enrollment additionally records course role and course status.
-
-At the current backend baseline:
-
-- Tenant staff can create/update/publish/close courses and manage enrollments, announcements, course tools and links to existing BBB scheduled sessions through the Admin API.
-- Course enrollment requires ACTIVE academy admission. The course Shop reads require both an ENROLLED course row and active academy admission.
-- Learners can read their published course pages and published course announcements through `myCoursePages`, `myCoursePage(slug)` and `coursePageAnnouncements(courseId)`.
-- The current Shop API does not expose self-enrollment or invitation acceptance. The Admin enrollment operation writes ENROLLED directly; the INVITED state exists in the model but is not yet a delivered invitation workflow.
-- Course templates and tool snapshots exist in the backend, but template CRUD is not exposed by the current GraphQL contract.
-- A course's `videoconference` tool declaration does not authorize joining a BBB room. BBB access remains controlled by the BBB entitlement/membership access evaluation (INV-027).
-
-This is backend capability, not proof of a complete Next.js learner/instructor storefront.
-
-## Payment responsibilities — Flow A vs Flow B (ADR-051 / ADR-054)
-
-The platform keeps the payee boundary explicit:
-
-**Flow A — tenant admin pays Saa9vi.** Saa9vi's platform Razorpay account is used for platform services such as SaaS subscriptions, BBB usage, advertising and optional hosting. The platform one-time payment handler checks the server-controlled `paymentPurpose = 'platform-service'`. Recurring subscription billing runs separately through SubscriptionPlugin.
-
-**Flow B — tenant customer pays the tenant.** The tenant's own Razorpay account is used for the tenant's client collections (for example, future course/session fees). Saa9vi does not take marketplace commission from tenant-client payments under the accepted Option C model.
-
-At the reviewed backend baseline, Flow B supports per-tenant credential configuration/encryption, credential API probing, enable/disable, and Razorpay order creation using the tenant channel's credentials. It does **not** yet register a tenant-specific Vendure PaymentMethodHandler or connect `TenantRazorpayService.verifyAndSettle()` to Vendure order settlement. It also lacks a tenant-specific webhook inbox/worker. Therefore Flow B should be described as partially implemented, not as a working end-to-end collection flow.
+| Topic | Canonical document |
+|---|---|
+| Marketplace commerce and revenue decisions | [ADR-055](../adr/adr-055-marketplace-commerce-and-revenue-model.md) and [Marketplace Commerce Policy](marketplace-commerce-policy.md) |
+| Detailed marketplace commerce tasks | [MCR implementation worklist](../implementation/marketplace-commerce-revenue-worklist.md) |
+| Plugin ownership and responsibilities | [Plugin map](../architecture/plugin-map.md) |
+| Event-driven backend flows | [Runtime flow](../architecture/runtime-flow.md) |
+| Learning domain | [Learning architecture](../architecture/learning-domain.md) and [ADR-053](../adr/adr-053-learning-plugin-course-domain.md) |
+| Tenant hostname and storefront routing | [G1 hostname decision](../implementation/g1-hostname-contract-decision.md) and [integration gaps](../implementation/integration-gaps-worklist.md) |
+| Production release evidence | [Production readiness](../implementation/production-readiness.md) |
