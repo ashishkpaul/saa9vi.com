@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
+  OrderService,
   RequestContext,
   TransactionalConnection,
 } from '@vendure/core';
@@ -36,6 +37,7 @@ export interface TenantCheckoutMetadata {
 export class TenantRazorpayService {
   constructor(
     private readonly connection: TransactionalConnection,
+    private readonly orderService: OrderService,
     private readonly accountService: TenantPaymentAccountService,
     private readonly client: TenantRazorpayOrdersClient,
   ) {}
@@ -54,14 +56,68 @@ export class TenantRazorpayService {
     orderId?: string,
   ): Promise<TenantCheckoutOrderHandle> {
     const channelId = String(ctx.channelId);
+    const activeUserId = ctx.activeUserId;
 
-    // Resolve tenant credentials — throws if not configured.
-    const credentials = await this.accountService.getDecryptedCredentials(
-      ctx,
-      channelId,
+    // Enforce authentication in the service as well as the GraphQL resolver.
+    // This protects any future internal caller from accidentally bypassing the
+    // Shop resolver's login guard.
+    if (!activeUserId) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const orderRepo = this.connection.getRepository(ctx, 'Order');
+
+    // An explicit order ID is untrusted input. For the implicit path, use
+    // Vendure's active-order lookup for this authenticated user instead of
+    // selecting an arbitrary ArrangingPayment order in the current channel.
+    const candidate = orderId
+      ? await orderRepo.findOne({ where: { id: orderId } })
+      : await this.orderService.getActiveOrderForUser(ctx, activeUserId);
+
+    if (!candidate) {
+      throw new NotFoundException('Order not found');
+    }
+
+    // Always reload the candidate with the relations needed for the security
+    // decision. Do not rely on Permission.Owner to resource-bind a custom
+    // resolver argument: the service itself proves customer ownership.
+    const order = await orderRepo.findOne({
+      where: { id: candidate.id },
+      relations: { channels: true, customer: { user: true } },
+    });
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const inChannel = (order.channels ?? []).some(
+      (c: { id: string }) => String(c.id) === channelId,
     );
+    if (!inChannel) {
+      throw new NotFoundException('Order not found');
+    }
 
-    // Only allow checkout if account is active AND enabled.
+    const orderOwnerUserId = order.customer?.user?.id;
+    if (
+      orderOwnerUserId == null ||
+      String(orderOwnerUserId) !== String(activeUserId)
+    ) {
+      // Use the same not-found response for missing and foreign ownership so
+      // callers cannot use this mutation to enumerate another customer's
+      // order IDs within the same tenant.
+      throw new NotFoundException('Order not found');
+    }
+
+    if (order.state !== 'ArrangingPayment') {
+      throw new Error(`Order must be in ArrangingPayment state (got ${order.state})`);
+    }
+
+    if (order.totalWithTax <= 0) {
+      throw new Error('Order total must be greater than zero');
+    }
+
+    // Only resolve/decrypt tenant secrets after the order's channel and owner
+    // have been proven. This prevents unauthorized order IDs from triggering
+    // credential access or external Razorpay calls.
     const account = await this.accountService.findByChannel(ctx, channelId);
     if (!account) {
       throw new NotFoundException('No Razorpay payment account found');
@@ -77,36 +133,10 @@ export class TenantRazorpayService {
       );
     }
 
-    // Find the order and verify it belongs to this channel.
-    const orderRepo = this.connection.getRepository(ctx, 'Order');
-    const order = orderId
-      ? await orderRepo.findOne({
-          where: { id: orderId },
-          relations: { channels: true },
-        })
-      : await orderRepo.findOne({
-          where: { state: 'ArrangingPayment' },
-          relations: { channels: true },
-        });
-
-    if (!order) {
-      throw new NotFoundException('Order not found');
-    }
-
-    const inChannel = (order.channels ?? []).some(
-      (c: { id: string }) => String(c.id) === channelId,
+    const credentials = await this.accountService.getDecryptedCredentials(
+      ctx,
+      channelId,
     );
-    if (!inChannel) {
-      throw new NotFoundException('Order not found');
-    }
-
-    if (order.state !== 'ArrangingPayment') {
-      throw new Error(`Order must be in ArrangingPayment state (got ${order.state})`);
-    }
-
-    if (order.totalWithTax <= 0) {
-      throw new Error('Order total must be greater than zero');
-    }
 
     // Create Razorpay order using tenant credentials.
     const razorpayOrder = await this.client.createOrder(
