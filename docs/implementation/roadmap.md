@@ -1,351 +1,57 @@
-# Roadmap
-
-> **Purpose:** Track future work only. Organized by phase. When work is completed, move it to `release-notes.md`.
-
----
-
-## Phase 1 — Commercial Operability
-
-**Status:** Substantially complete. Remaining items before first tenant onboarding:
-
-- [x] `BbbWebhookEvent` persist-first pipeline
-- [x] `BbbScheduledSession` connected in fulfillment path
-- [x] `BbbEntitlement` entity + service for `bbb_session`
-- [x] Trial registration creates `Entitlement` automatically
-- [x] `BbbMeetingService.getJoinUrl` checks Entitlement for session access
-- [x] `BbbScheduledSession` `(organizationId, slug)` composite index
-- [x] Rate limiting on public mutations (SEC-005)
-- [x] Custom domain → channel token Redis mapping (SEC-006)
-
----
-
-## Phase 1.5 — Trust Engine & Discovery
-
-**Status:** Complete (2026-08-23). The BUG-033 root cause (e2e `requireVerification` default) is fixed, unblocking the customer-deletion login path; the customer-deletion suit now surfaces separate Flow A/B fixture issues (see below).
-
-### Completed
-
-- [x] `BbbEntitlement` entity + service for `bbb_session` access checks
-- [x] `BbbMeetingService.joinRoom()` migrated to `BbbEntitlement` for room access
-- [x] Elasticsearch indexing for instructors (`InstructorIndexerService`)
-- [x] `BbbEntitlement` admin UI (GraphQL queries/mutations + dashboard route)
-- [x] Scheduled Sessions admin UI
-- [x] FEAT-001 (`BbbOrganizationMembership`) — code complete
-- [x] FEAT-002 (`internal_overhead` capacity grant) — code complete, migration verified applied
-- [x] `myLearningDashboard` Shop API query
-- [x] Rate limiting on `registerNewTenant` mutation
-- [x] Custom domain → channel token Redis mapping
-- [x] **FEAT-002 schema migration** — verified already applied (`sourceType` + `isUnbounded` confirmed in DB)
-- [x] **Next.js public instructor/CMS pages** — CMS page route (`/[locale]/page/[slug]`) added; instructor page already existed
-- [x] **Email verification for tenant admins** — `verifyTenantAdmin` Shop API mutation + unverified admin creation
-- [x] **End-to-end customer deletion test** — covers Flow A + Flow B across BBB/Tenant/Reviews. **Login-handler blocker (BUG-033) resolved** (`requireVerification:false`); `leaveAcademy` mutate+Flow B login now execute. ~~2 further Flow A/B issues surfaced that need separate fixes: (1) Flow B fixture seeds `BbbEnrollment.roomId`/`BbbTrialRegistration.scheduledSessionId` with non-numeric ids into integer FK columns; (2) Flow A "BBB entitlements deactivated" assertion fails.~~ **Both issues FIXED 2026-10-03 in `d2e3035`**: (1) the Flow B fixture now seeds DB-allocated PKs (`String(seedRoom.id)` etc., never string sentinels like `room-1`), (2) the Flow A `validUntil` assertion now anchors to the deletion service's write window (`<= tenSecondsFromNow` and `< twentyDaysFromNow`) instead of racing `Date.now()`. Production paths are TypeScript-verified. **Baseline update 2026-10-05:** the customer-deletion suite passes in the full battery — the only documented failing pair left is BUG-043's two `myLiveUsage` assertions.
-- [x] **Load estimation ratios tuning** — PILOS ratios configurable via `BigBlueButtonPluginOptions` + env vars
-
----
-
-## Phase 2 — Subscription Billing & Capacity Policy
-
-### Subscription and capacity policy — complete
-
-- [x] `SubscriptionPlan` and `OrganizationSubscription` entities — platform-global plan catalogue + channel-scoped organization subscriptions.
-- [x] `BbbPlatformCapacityPolicy` entity and Portal Admin API — `upsertPlatformCapacityPolicy`, `platformCapacityPolicies`, `effectiveCapacityPolicy`.
-- [x] Plan-based capacity tiers — represented as policy data rows keyed by `subscriptionPlanId`, not hard-coded control-flow branches. **No seed ships** (Portal Admin creates rows through `upsertPlatformCapacityPolicy`); the in-code reference defaults are `PLAN_TIER_DEFAULTS` (25/100/250 · 100/300/1000 · 250/1000/5000) plus the entity column defaults 25/100/250. The earlier "Starter 50 / Growth 200 / Enterprise 500" figures were **recommendations that were never encoded** — corrected 2026-09-25 (second review pass) to remove the overclaim.
-- [x] `BbbRoom.maxParticipants` policy enforcement — effective policy resolved on room creation; tenant value may not exceed the policy ceiling. Zero policy rows preserve legacy INV-014 behaviour.
-- [x] `BbbOrganization.maxParticipantsPerMeeting` write-through policy cache — synchronized from effective policy during organization creation / room provisioning.
-- [x] Portal Admin capacity-policy dashboard and infrastructure permission boundary.
-- [x] `BbbCapacityGrant.sourceType` discriminator and subscription-sourced grants on `SubscriptionRenewedEvent`.
-- [x] Monthly subscription invoice-generation path — current implementation publishes `SubscriptionInvoicePaidEvent` from the renewal worker; provider-backed settlement is the Razorpay work below.
-
-### Razorpay recurring billing — renewal-charge execution implemented; authorization-onboarding seam pending (per ADR-038; legacy Juspay removed — ADR-040)
-
-> **Reading note (added 2026-09-24):** the `[x]` steps below are *delivered history*, listed in build order, not pending work. Steps 1–2 name Juspay-era entities (`JuspaySubscriptionMandate`, `JuspayPaymentAttempt`, webhook tables) that **no longer exist in the runtime**: the Juspay runtime implementation and those entities were removed (`9a31beb`) and the `juspay_*` tables dropped (`466a4ef`, **ADR-040**), with the historical migration files kept as immutable history. **Razorpay is the sole active recurring-billing provider** (ADR-038). Read "Juspay" in these bullets as "the mandate/attempt/webhook architecture that Razorpay now implements" — never as current code or outstanding work.
-
-- [x] Step 0 — BuyLits reference analysis (`reference/buylits/`; port patterns, not files).
-- [x] Step 1 — vestigial Juspay surface inventory and subscription-aware integration seam.
-- [x] Step 2 — `JuspaySubscriptionMandate`, `JuspayPaymentAttempt` (INV-019), `JuspayWebhookEvent`, `JuspayWebhookEndpoint`, reconciliation incident record; migrations generated/applied.
-- [x] Step 2 — renewal CLAIM CAS → attempt → charge → FINALIZE CAS state model.
-- [x] Step 2 — mandate cardinality and payment-attempt channel isolation.
-- [x] **Step 3 — webhook ingestion** — fail-closed Basic Auth + HMAC, raw-body verification, persist-before-process, BullMQ processing, idempotent existing-attempt reconciliation, and per-tenant endpoint routing.
-- [x] **Step 4 — recurring charge implementation** — SDK boundary, mandate charge initiation, asynchronous `initiated` semantics, webhook-authoritative terminal result, success finalization, failure `past_due`, and reconciliation incident handling.
-- [x] **Step 5 — Portal Admin billing surface** — read-only mandate status, payment-attempt ledger, webhook/reconciliation incidents, operational filters.
-- [x] **Step 6 — production hardening** — encrypt stored webhook credentials, final secrets review, production credential validation, regression/e2e coverage.
-- [x] **M1.1 — Merchant/account capability verification** — ✅ complete (2026-09-08): authentication ✅, Session API ✅ (action + return_url required), payment methods discovered (via Session API `options.add_emandate_payment_methods=true`, not a separate endpoint), mandate params echoed in sdk_payload ✅. Sandbox gateway = DUMMY (real PG needed for full mandate flow).
-
-### Razorpay Pivot (ADR-038)
-
-Juspay → Razorpay routing was **rejected** by Razorpay (ticket #20876157). Direct Razorpay integration completed instead:
-
-- [x] **R1 — Provider-neutral boundary** — `RecurringBillingProvider` interface, both Razorpay + Juspay providers
-- [x] **R2-A through R2-E** — Razorpay test plan, webhook config, subscription creation, authorization
-- [x] **R2-F — Durable processing** — BullMQ inbox worker, channel resolution, idempotency *(runtime evidence pre-refactor; post-refactor code hardening done, runtime recapture pending — see `production-readiness.md`)*
-- [x] **R2-G — Failure semantics + concurrent idempotency** — `pending` → `retry` → `failed`, UNIQUE constraint *(pre-refactor runtime evidence; post-refactor failure-state bridge is CODE VERIFIED, runtime pending, halted-recovery open as D-5)*
-- [x] **ADR-038 — Provider freeze** — ADR-038 formally ACCEPTED 2026-09-12 (see `docs/what-next.md` and `docs/architecture/adr-038-direct-razorpay-provider.md`). *Note: the gate id "R3" refers exclusively to one-time commerce, not this freeze.*
-
-### Remaining Phase 2 product/platform work
-
-- [x] `NavigationMenu` entity in CMS — entity, service, migration generated/applied
-- [x] Banner BullMQ scheduling (CMS-002) — banner-activator task registered (BUG-005)
-- [x] Dunning flow — scheduled task with retry schedule + auto-cancellation (RFC-001 §4.2)
-- [ ] Tenant onboarding flow in storefront
-- [ ] Custom domain routing via Caddy
-
-### Free Basic plan + storefront commercial integration (programme — **IN PROGRESS**, reconciled 2026-09-24)
-
-Every tenant lands on a permanent **Free Basic** plan at registration (no card, no trial clock); paid plans add capacity and entitlements. Sequenced slices, gates, and the product decisions still outstanding live in `docs/implementation/saa9vi-comprehensive-integration-and-commercial-plan.md` (worklist entry **FREE-1**) — that plan is the canonical source for slice state; completed slices are recorded in `what-next.md` and `release-notes.md` per this document's purpose.
-
-**Blocking prerequisite — ✅ RESOLVED 2026-09-23** (previously: "the subscription Admin API has no cancel/change-plan mutation"). Shipped as **ADR-044** (`docs/architecture/adr-044-local-plan-change-and-cancellation.md`) plus `changeOrganizationSubscriptionPlan` / `cancelOrganizationSubscription` (commits `66e6cd4` feature, `5d3d2d9` harness repair). `subscribeToPlan()` still rejects a channel whose existing row is not `cancelled` — which is exactly why that capability had to land *before* registration-time activation, not after it.
-
-**Position (plan §4 order):** **slices 1–10 are all done** (slice 6 included). **Slice 5 — grant-selection correctness + plan-derived concurrency ✅ DONE 2026-09-25**: BUG-036 (`d711940` — which in the same pass removed the dead `findEarliestValidGrant` seam), BUG-037 (`30d245a`) closed earlier, and the remaining plan-derived `concurrentMeetingLimit` sync was delivered — `BbbPlatformCapacityPolicy.maxConcurrentMeetings` (CLI migration `1790319702564`), `syncConcurrentMeetingLimit()` called from org create/update + a `SubscriptionPlanChangedEvent` consumer + a startup reconciliation pass (convergence rather than listener ordering, ADR-031 Decision 5), Admin field with `>= 1` validation, and a new `plan-derived-concurrency.e2e-spec.ts` **5/5**. Producing it surfaced and fixed **BUG-039** — Tier 2's raw subscription lookup was schema-blind (`search_path` vs `schema`), so plan-derived concurrency silently resolved to `fallback` whenever a schema was configured; pre-fix the spec was **2/5**. `scripts/verify/free-basic-activation.sh` gained seed/assert + convergence steps and now reports **24 passed / 0 failed / 3 skipped** (was 19/0/3). **Slice 10 — R4 runtime evidence ✅ DONE 2026-09-25** (commit `4870251`): one infrastructure-gated spec, `R4_E2E=true` → **10/10** on real Postgres, and producing it found and fixed **BUG-038** — `bbbFulfillmentHandler` resolved lines from the never-loaded `order.lines`, so the purchase path had never once written an `order`-source capacity grant. R4 evidence lives in §10 of `production-readiness.md`; refund/reversal semantics and reconciliation remain open there. **Slice 6 — daily live allowance ✅ DONE 2026-09-25** (commit `07aa9d6`): ADR-045 + INV-026 — the free tier's 60-min-per-server-day allowance materialised as an ordinary `BbbCapacityGrant(sourceType='subscription')` by **one writer** (`BbbDailyAllowanceService`, read-then-insert under a per-key `pg_advisory_xact_lock` instead of DDL) with **two triggers** (hourly `bbb-daily-allowance` task + fail-soft `SubscriptionPlanChangedEvent` consumer), the `providerPlanId IS NULL` discriminator reused rather than a new flag, disjoint day windows ending 1 ms before the next midnight, and plan decisions **D-6/D-7/D-8 resolved** (terminal `Failed` at provisioning, hourly/server-clock/no-backfill, free = daily-only). Policy spec **14/14**; gated e2e `daily-allowance.e2e-spec.ts` **7/7** on real Postgres (`npm run test:e2e:daily-allowance`; **7 skipped / exit 0** without the env var); `AdrChecker.dailyAllowanceInvariants()` registered and mutation-tested (a second writer fails the run); `build` 0, `verify:invariants` 0 errors / convergence 100 — **no migration, no SDL, no codegen** (`findMyLiveUsage` untouched). **Slice 11 (R3 one-time payment handler) ✅ DONE**: `PaymentsPlugin` with `razorpayPaymentHandler`, Shop checkout mutation, webhook reconciliation controller, and Option A auto-fulfillment runtime-proven in R4 (10/10).
-
----
-
-### ADR-046 — Tenant self-serve subscription lifecycle
-
-**Accepted 2026-09-26; implementation complete. Code/test evidence is verified; production-provider/runtime closure remains governed by `production-readiness.md`.**
-
-- [x] Shop API contract: `requestMySubscriptionPlanChange(planId)` and
-  `cancelMySubscription(atPeriodEnd)`, tenant resolved exclusively from
-  `ctx.channelId`.
-- [x] Provider-internals boundary: dedicated `MySubscriptionChangeResult` with
-  transient `authorizationUrl`; `MySubscription` remains provider-internal-safe.
-- [x] Five-minute Redis `SET NX EX 300` per-channel cooldown, fail-closed on Redis outage.
-- [x] Tenant business-account/provenance guard distinguishes
-  `tenant-self-serve` from `platform-superadmin`.
-- [x] Storefront billing mutations and controls added to the ADR-046 frontend branch.
-- [x] Code/test evidence: ownership boundary, cooldown/idempotency, transient redirect origin,
-  read-boundary regression, cancellation, and build/test gates verified by the ADR-046 Shop API
-  suite and subsequent backend/frontend gates. Production-provider/live-environment evidence
-  remains a separate release gate.
-
----
-
-## Phase 3 — Marketplace & Retention
-
-> **Status framing (verified against code 2026-09-05, reconciliation closure 2026-09-07):** the *projection layer* of `MarketplaceIndexerPlugin` is implemented (ES indices, BullMQ queue, event listener, public `marketplaceSearch` with bayesian + sponsored function-score). Phase 3A discovery gates complete; **Phase 3B attribution + commission + reconciliation complete and E2E-verified** (reconciliation R1–R3: 7/7 real-PostgreSQL GraphQL E2E, `fab9969`); **Phase 3C advertising is now COMPLETE** (3C.1 wallet ledger → 3C.2 wallet service → 3C.3 campaign spend → 3C.4 banner scope → 3C.5 bounded bid-boost → 3C.6 E2E → 3C.7a Admin API → 3C.7b React dashboard). **Remaining: Phase 3D retention/aggregation surfaces.** See `docs/implementation/phase3-audit.md` for the verified capability table (note: that audit is a pre-3C historical snapshot — see its header).
-
-### Phase 3A — Discovery correctness (complete)
-
-- [x] **Latent defect closure:** migration `1788265440266-MarketplaceAdEntities` generated via Vendure CLI, applied, and PostgreSQL-verified (`marketplace_ad_campaign`, `ad_wallet`, `ad_spend_ledger` — schemas match entity definitions; tables previously existed out-of-band, see `phase3-audit.md` F2). AdSpendLedger immutability (INV-010) is verified by the Phase 3A/3C infrastructure-gated E2E (UPDATE/DELETE rejection — see Gate 1.5 and 3C.6 below).
-- [x] `MarketplaceIndexerPlugin` projection infrastructure — ES indices, BullMQ queue, event listener, public search resolver *(code-verified; E2E coverage added at Gate 1.5 below)*
-- [x] Canonical marketplace document contract — `customDomain` added to both documents + ES mappings (F3/Gate 1.2); session `subjectTags` sourced from new `BbbScheduledSession.subjectTags` column via migration `1788266256055` (F4/Gate 1.3); instructor tags from `expertiseAreas`. `MarketplaceCategory` entity deferred until category-browsing UI exists. Field→event matrix completed at Gate 1.4 (see below)
-- [x] **Public-index leak fix (F7):** `indexSession()` gates on `visibility === 'PUBLIC'` + `status IN ('SCHEDULED','LIVE')`, removing non-conforming documents
-- [x] Projection completeness (Gate 1.4): field→event matrix codified in `phase3-audit.md`; session lifecycle events added (`SessionCreated/Updated/Started/CancelledEvent`) + `updateBbbScheduledSession` mutation; `TenantProfileUpdatedEvent` published on academy profile update → bulk channel reindex; review aggregate transitions (approved/rejected/hidden) → affected-session reindex. ⚠️ Two matrix rows remain open: `BbbOrganizationUpdatedEvent` (org-edit API doesn't exist) and campaign-lifecycle triggers (Phase 3C)
-- [x] E2E suite (Gate 1.5, **infrastructure-gated**: `MARKETPLACE_E2E=true` fails unless PG + Redis + ES are all reachable — no silent fallback): multi-channel indexing + channel-free `marketplaceSearch` + F7 removal cases (PUBLIC→PRIVATE, SCHEDULED→CANCELLED) + sponsored/bayesian ordering + tenant isolation + **AdSpendLedger immutability (INV-010)**. **All 7 tests pass** (`commit 2e74020` + follow-up) — unblocked by the BUG-033 root-cause fix (`requireVerification:false` in the e2e harness; see `known-bugs.md`).
-- [ ] `MarketplaceAcademyPage` — aggregated view (projection only — never a second tenant-profile DB)
-- [ ] `MarketplaceCategoryIndex` — subject taxonomy as data (`MarketplaceCategory` entity), not hardcoded in resolver
-- [ ] `RankingMaterializedView` (Postgres) — ranking inputs computed in PG, consumed by ES documents
-
-### Phase 3B — Attribution & Commission
-
-**Status:** Complete (2026-09-04; reconciliation closed 2026-09-07). All attribution, commission, and reconciliation work shipped and e2e-verified.
-
-> **Scope note (2026-09-15):** Phase 3B refers to the **backend** attribution/commission subsystem, which is E2E-verified (see cases above). The subsequent marketplace → tenant storefront deep-link and browser `marketplaceRef` transport integration is tracked separately in `docs/implementation/integration-gaps-worklist.md` (A-1–A-5) and remains **runtime-unverified** until the live storefront/ES/Vendure verification gates pass.
-
-- [x] **Attribution ADR-021 + signed `marketplaceRef` mechanism** — shipped (`750da49`); resource referred to (session/academy/result), validity window, navigation persistence (marketplace → academy → different session), precedence vs existing direct/referral attribution, order vs order-line attachment, replay prevention, verification without exposing signing secrets to Next.js; contract settled in ADR-021 addendum.
-- [x] **`Order.customFields.orderSource`** — `'marketplace' | 'direct' | 'referral'`, stamped **server-side** by Vendure from a signed referrer signal (INV-008; storefront never classifies). Governed migration applied.
-- [x] **`CommissionLedger` $0-row pattern** (DL-030) — entity, service, listener, `MARKETPLACE_COMMISSION_PERCENT` env var, append-only; governed migration with UNIQUE constraints on `marketplaceRef` and `orderId`. Even at 0% commission, a row is written with `commissionAmountInPaise: 0` so GMV history survives rate changes.
-- [x] **Server-side classification listener** (`CommissionListener`) — re-verifies HMAC/TTL/channel at placement, resource-in-order check (Decision 8), single-use replay via UNIQUE index (Decision 6), stamps `orderSource` (INV-008), records ledger row.
-- [x] **Commission E2E** (`commission.e2e-spec.ts`) — 6 cases pass: positive, $0-row, INV-008 forge, replay, no-ref, single-use ref.
-- [x] Commission reconciliation/admin reporting — **Gate R1 contract adopted** (`commission-reconciliation.md`): read-only Orders↔CommissionLedger comparison; ledger = sole authority (never recalculated, never mutated); discrepancy classes MISSING / REPLAYED_REF (informational) / AMOUNT_MISMATCH (stored-row internal consistency, never vs current env rate) / ORPHAN_LEDGER_ROW; ZERO_RATE rows are valid facts; `from`/`to` filters bind to `Order.orderPlacedAt`. **Gate R2 implemented**: `CommissionReconciliationService` (read-only, 4-phase: PG marketplace population → ledger population → reconciliation → pure report; channel-scoped via ctx.channelId, SuperAdmin may pass `allChannels` — service-side clamp, not just permission gating), `commissionReconciliation` Admin query in a dedicated `MarketplaceCommissionReconciliationResolver` with a new `MarketplaceCommission` read permission (separate from advertising grants), full diagnostics (missing/replayedRef/amountMismatch/orphan/rateDrift) + financial aggregates (GMV, commission, zeroRate, effectiveCommissionPercent=null-when-no-GMV). **Gate R3 complete**: `commission-reconciliation.e2e-spec.ts` — 7/7 acceptance cases through Admin GraphQL on real PostgreSQL (`npm run test:e2e:reconciliation`): MATCH (exact count semantics: `commissionLedgerOrderCount` = ledger rows vs `marketplaceOrdersExpected` = order population), MISSING (missingCount=1, no repair), REPLAYED_REF (period-scoped, informational), DIRECT excluded, ZERO_RATE (effective 0% with GMV>0, not null), AMOUNT_MISMATCH (stored value never rewritten — read-only verified), CHANNEL_ISOLATION (A↔B both directions + SuperAdmin allChannels + tenant-admin clamp proven at service level). Channel filtering uses TypeORM relation joins; custom-field predicates use the flattened physical columns emitted by Vendure 3.6.5.
-
-### Phase 3C — Advertising (Stream 3)
-
-- [x] `MarketplaceAdCampaign` + `AdSpendLedger` + `AdWallet` entities *(code + migration `1788265440266` applied; Phase 3A migration blocker resolved)*
-- [x] **`AdWalletLedger` (3C.1)** — immutable wallet-movement financial fact (ADR FEAT-003): `walletId`, `type` (`topup`/`spend`/`refund`), signed `amountInPaise` (positive=topup/refund, negative=spend), `occurredAt`, nullable `campaignId`/`orderId` attribution, nullable UNIQUE `reference` idempotency key (NULL rows exempt). Append-only enforced by `AdWalletLedgerImmutableSubscriber` (registered in `vendure-config.ts` `dbConnectionOptions.subscribers`). `AdWallet.balanceInPaise` is explicitly a derived cache — truth is `SUM(amountInPaise)` per wallet. Migration `1788582400033-AddAdWalletLedger` generated via Vendure CLI, applied, and PostgreSQL-verified (4 indexes incl. UNIQUE reference). E2E: `wallet-ledger.e2e-spec.ts` (WALLET_E2E=true) verifies insert / UPDATE-reject / DELETE-reject / duplicate-reference-reject / multiple-NULL-references. Campaign debit wiring intentionally NOT yet implemented (3C.2/3C.3).
-- [x] **Wallet service boundary (3C.2)** — `AdWalletService` (`creditWallet` / `debitWallet` / `getBalance` / `ensureWallet`): balance truth is `SUM(AdWalletLedger)` (never the cache column); debits serialize via pessimistic `FOR UPDATE` lock on the wallet row; duplicate `reference` is DB-arbitrated idempotent no-op; cache refresh recomputes from the ledger (self-healing, not increment). E2E covers credit/debit/overdraft/duplicate-ref/cache-drift-healing/concurrent-debit race.
-- [x] **`MarketplaceAdService.recordCampaignSpend()` (3C.3)** — connects the two financial ledgers in ONE transaction: campaign validation (exists, channel ownership vs `ctx.channelId`, `active` status + date window, budget cap on INV-010 truth) → `debitWalletInTxn` (same transaction — Vendure's wrapper does NOT safely nest, so the debit core runs on the caller's txn) → `AdSpendLedger` insert (failure THROWS, atomically rolling back the wallet debit — no `wallet debited / spend fact missing` divergence) → `spentInPaise` cache recompute. `getWalletBalance()` now delegates to `AdWalletService.getBalance()` (ledger authority). Idempotency spans BOTH ledgers via the single `reference` key. E2E: 5/5 across two consecutive runs — valid spend, cross-ledger duplicate-ref replay, insufficient funds, paused campaign, cross-channel refusal, budget exceeded, invalid amount, cache-poisoned spend (follows ledger), and the debit-rollback atomicity primitive.
-- [x] **`Banner.scope` discriminator (3C.4)** — `Banner.scope: 'tenant' | 'marketplace'` (default `'tenant'`, so existing rows/behavior are unchanged) + nullable `targetSubject`/`targetCity` targeting and `campaignId` (FK → MarketplaceAdCampaign). Governed migration `1788587251305-AddBannerScope` generated via Vendure CLI, applied, PostgreSQL-verified. `BannerService.findActiveForPlacement()` filters to `scope='tenant'` (existing storefront behavior preserved); marketplace banners are served exclusively by new `MarketplaceBannerService.findActiveForPlacement()` (scope='marketplace', ordered by campaign wallet balance DESC — higher spenders win a slot, campaign-backed before standalone; wallet cache used for ordering only, all financial decisions remain ledger-based). SuperAdmin-only guard: tenant admins are always forced to `'tenant'` on create AND update (a scope flip never silently elevates; demoting to tenant clears targeting/campaignId). E2E (wallet-ledger.e2e-spec.ts): tenant surface never returns marketplace banners and vice-versa, ordering by wallet balance dominates priority, create-blocked by non-SuperAdmin, demotion clears targeting.
-- [x] **Configurable, bounded sponsored bid-boost (3C.5)** — replaced the hardcoded `weight: 3.0` in the search resolver. New `SponsoredBoostConfigService` reads fail-closed `SPONSORED_BOOST_MIN`/`SPONSORED_BOOST_MAX` (defaults 1.0/5.0; any non-numeric/inconsistent value aborts boot — same pattern as `MARKETPLACE_COMMISSION_PERCENT`). The F7-gated `MarketplaceIndexerService` clamps each campaign's raw `boostWeight` into `[MIN,MAX]` at write time, so a listing is never suppressed below MIN nor pushed above MAX — organic ranking integrity holds regardless of what an admin sets `boostWeight` to. The resolver now applies `field_value_factor` on the per-document `sponsorBoost` (per-campaign scaling; `missing:1.0` treats legacy docs as neutral; non-sponsored docs carry 1.0 → untouched). Unit-tested clamp contract: 6/6 (defaults, in-window/capped/floor, pathological→1.0, custom window, fail-closed on non-numeric / MIN<1 / inverted window). Live search query needs the infra-gated marketplace e2e (ES).
-- [x] **Full advertising E2E (3C.6)** — `advertising.e2e-spec.ts` (ADVERTISING_E2E=true, real Postgres, isolated `e2e_advertising` schema, both immutability subscribers registered): **14/14 pass, EXIT=0**. Coverage: wallet credit + ledger-derived balance, duplicate credit reference (idempotent no-op), campaign creation, valid spend (wallet debit + AdSpendLedger row + INV-010 cache refresh), ledger-not-cache authority, insufficient wallet (no spend row, no debit), duplicate spend reference (idempotent across both ledgers), AdWalletLedger append-only (UPDATE/DELETE rejected), AdSpendLedger INV-010 (UPDATE/DELETE rejected), cross-channel spend (tenant isolation), paused/expired campaign refusal, budget exceeded, zero/negative/invalid amount. Two bugs caught and fixed during verification: `beforeEach` cleanup used invalid `repo.delete({})` (switched to `.clear()` with child-first FK ordering), and `campaign.spentInPaise` cache refresh used `rawConnection` outside the transaction (stale 0) — fixed to use the txn context's repo so the just-inserted spend row is visible.
-#### 3C.6/3C.7 — Self-serve advertising Admin API + dashboard (completed under 3C, listed here for continuity)
-
-- [x] **`MarketplaceAdvertisingService`** — channel-scoped boundary over the proven `AdWalletService` / `MarketplaceAdService` financial authorities: `createCampaign` (channel ownership, SuperAdmin scope guard, fail-closed boost clamp via `SponsoredBoostConfigService`), `updateCampaign` (status transitions with immutability-once-active, re-clamp boost), `activateCampaign`, `pauseCampaign`, `getCampaigns` (channel-filtered), `getCampaign` (channel ownership enforced), `getWalletBalance` (delegates to `AdWalletService.getBalance()` — ledger authority), `getWalletLedger` (wallet-scoped, channel ownership via wallet join), `getSpendReport` (INV-010 truth from `AdSpendLedger`). Wallet top-up intentionally NOT exposed — it is a financial-origin operation that requires a verified payment-origin/settlement boundary (R3 one-time payment, not yet implemented), not a permission-gated mutation.
-- [x] **`MarketplaceAdvertisingResolver`** — tenant-scoped Admin API with `MarketplaceAdvertising` permission (authenticated channel context; no SuperAdmin gate — self-serve for academy managers): `campaigns`, `campaign`, `createCampaign`, `updateCampaign`, `activateCampaign`, `pauseCampaign`, `getWalletBalance`, `getWalletLedger`, `getSpendReport`. `topUpWallet` deliberately excluded from the self-serve surface.
-- [x] **Schema extensions** (`marketplace-schema.ts`) — admin types: `MarketplaceAdvertisement`, `AdvertisedCampaign`, `AdvertisedWallet`, `AdvertisedWalletLedgerEntry`, `AdvertisedSpendReport` + inputs `CreateCampaignInput`, `UpdateCampaignInput` + `AdvertisedCampaignStatus` enum. No `TopUpWalletInput` (top-up is a payment-settlement boundary, not a client-authorized operation).
-- [x] **Plugin registration** — resolver + service added to `MarketplaceIndexerPlugin` providers/apiExt `adminApiExtensions.resolvers`.
-
-#### 3C.7b — Self-serve campaign dashboard
-
-- [x] **Dashboard UI consuming the Admin API (3C.7b)** — React `.tsx` dashboard registered via `defineDashboardExtension` (Vendure v3 dashboard). Routes: `campaign-list` (ListPage with `GetCampaigns` query, status badges, budget/spent columns, "New campaign" action), `campaign-detail` (create/edit form via `useDetailPage`, activate/pause mutations, stats sidebar), `wallet` (balance card + ledger table via `@tanstack/react-query` + `api.query`), `spend-report` (per-campaign spend table). Nav section "Marketplace" (MegaphoneIcon, order 200). All pages require `MarketplaceAdvertising` permissions and consume the Admin GraphQL API — no direct entity access. Wired into `MarketplaceIndexerPlugin` via `dashboard: './dashboard/index.tsx'`.
-
-### Phase 3D — Engagement & Retention
-
-- [x] **Review → marketplace ranking propagation** — ReviewApproved/Rejected/Hidden → `MarketplaceEventListener.handleReviewAggregateChange()` → BullMQ session reindex → `BayesianRatingService.computeForVariant()` → `MarketplaceSessionDocument.bayesianRating` → ES `function_score`. Already implemented and E2E-verified (marketplace E2E suite).
-- [x] **3D.1a Bayesian Ranking Scope Decision** — signed off. Global prior, periodic baseline (daily default), Vendure Settings Store, two-path invalidation (product-local + global), two-tier ES freshness SLA.
-- [x] **3D.1b Bayesian Invalidation Contract** — accepted. Two-path invalidation, frozen-G enforcement, versioned convergence, failure/recovery semantics, eligible-population convergence, queue/ES failure-domain distinction.
-- [x] **3D.1b Steps 1–4 (first controlled slice)** — implemented (`52d50e1`) and **verified live**: `MarketplaceBaselineService` reads the authoritative `{G,V}` from the Settings Store (global scope, fail-closed when unset); `BayesianRatingService.computeForProduct()` consumes the passed snapshot instead of deriving `G` live; `indexSession()` resolves exactly one `{G,V}` snapshot per indexing run and writes `bayesianRating` + `baselineVersion` to the ES document (additive mapping applied at runtime); baseline-resolution failure rejects the indexing job (no silent `bayesianRating = 0`). Verification: baseline-service unit spec 5/5 (fail-closed contract, global scope), marketplace E2E 7/7 with new `baselineVersion: 1` assertion on the review-triggered reindexed document (`baselineVersion` now exposed on `MarketplaceSession` for mixed-version detectability), tsc + build clean.
-- [x] **3D.1b Step 5 (refresh operation + retry-generation guard)** — implemented and unit-verified. `MarketplaceBaselineService` gains the baseline-refresh operation (`refreshBaseline(ctx, generation, {claimedFromVersion})`): computes `G` live from the approved-review population (permitted only on this refresh path), persists `{globalMean, baselineVersion=V+1, computedAt, refreshGeneration}` together (generation written last), and guards crash/retry transitions via the durable `refreshGeneration` identity — same-gen retry resumes the same version (no V+2), newer-gen retry is superseded (older job never overwrites a later baseline), pre-persist retry commits the next generation. The 4th Settings Store field `marketplace.bayesianRefreshGeneration` (global scope) is registered in the plugin `configuration`; `getCurrentBaseline` also returns `refreshGeneration`. Verification: baseline-service unit spec 13/13 (incl. committed/resumed/superseded transitions, post-write supersede race, re-run same-gen → same version, approved-state filter), marketplace E2E 7/7 regression, tsc + build clean. **ScheduledTask wiring completed in Step 6 below.**
-- [x] **3D.1b Step 6 (ScheduledTask wiring)** — implemented and verified. New `bayesianBaselineRefreshTask` (`marketplace-bayesian-baseline-refresh`, daily `0 2 * * *`, configurable via `MARKETPLACE_BASELINE_INTERVAL`) registered in the plugin `configuration.schedulerOptions.tasks` (Vendure ScheduledTask single-execution locking; no raw Nest @Cron). The task orchestrates only: generates a UUID `refreshGeneration`, reads `getCurrentVersion()` (new helper, non-throwing when unset) as `claimedFromVersion`, and enqueues exactly one job via the new `BaselineRefreshQueueService` (`marketplace-baseline-refresh` BullMQ queue, retries:3). The queue worker performs the refresh (compute G → persist {G,V,computedAt,generation}) using the Step 5 retry-generation guard; it logs the resulting status/version and is the hook point for the Step 7 global target-version reindex. Verification: task unit spec 5/5 (UUID generation, claimedFromVersion capture, single enqueue, no inline refresh), baseline 13/13 + boost 6/6 (24/24 unit), marketplace E2E 7/7 regression (queue + task register at boot), tsc + build clean. **Global target-version reindex completed in Step 7 below.**
-- [x] **3D.1b Step 7 (global target-version reindex)** — implemented and verified. `MarketplaceIndexerService.globalReindex(targetVersion, ctx)` conducts Path B convergence: resolves the authoritative baseline, **aborts without reindexing if a newer refresh advanced the baseline past the target** (the newer generation's reindex owns convergence), else loads the F7-eligible population (PUBLIC + SCHEDULED/LIVE via `In`) and reindexes each session (each `indexSession()` resolves one frozen `{G,V}` and writes that exact `baselineVersion`). New `global-reindex` job type added to `MarketplaceIndexQueueService` (processor case + `addGlobalReindexJob(baselineVersion)`, retries:3). The `BaselineRefreshQueueService` worker now enqueues a global reindex on `committed` or `resumed` refresh results (superseded → no enqueue; newer refresh owns convergence). Verification: global-reindex unit spec 5/5 (enqueue on committed/resumed, no enqueue on superseded, target-version abort, F7 eligibility), baseline 13 + task 5 + boost 6 + reindex 5 = 29/29 unit, marketplace E2E 7/7 regression, tsc + build clean. **Convergence measurement/recovery completed in Step 8 below.**
-- [x] **3D.1b Step 8 (convergence measurement/recovery)** — implemented and verified. `MarketplaceIndexerService.measureConvergence(targetVersion, ctx)` is the **read-only convergence oracle**: authoritative population = F7-eligible PostgreSQL sessions (ADR-007), `total` = that count, `converged` = eligible sessions whose ES `doc.baselineVersion === targetVersion` (queried via `terms` on public ids), `stale = total - converged` (a missing ES doc counts as stale, never dropped from the denominator; a doc for a now-ineligible session never inflates total). It only observes PG + ES — no writes/deletes, no baseline mutation — giving Step 9 a real convergence/recovery oracle rather than a job-count approximation. Also added a **mid-run version-advance guard to `globalReindex`**: before each `indexSession()` it re-reads the authoritative baseline and stops if a newer refresh committed V43 mid-window, so a V42 job never writes mixed-version documents (the newer generation owns remaining convergence). Verification: global-reindex unit spec 8/8 (Step 7 5/5 + Step 8: correct converged/stale accounting incl. missing-doc, read-only — no `index`/`delete` called, mid-run V43 advance stops after 1 reindex), baseline 13 + task 5 + boost 6 + reindex 8 = 32/32 unit, marketplace E2E 7/7 regression, tsc + build clean. **Step 9 (failure/recovery + convergence E2E) verified below.**
-- [x] **3D.1b Step 9 (failure/recovery + convergence E2E)** — implemented and **verified 4/4** (2026-09-06, real PostgreSQL + Redis/BullMQ + Elasticsearch via cloudflared tunnels, isolated schema `e2e_convergence` + isolated ES index `e2e_convergence_sessions`). `convergence.e2e-spec.ts` proves: (1) **full convergence** — refresh commits V1, `globalReindex(V1)` writes V1 into every eligible session doc, `measureConvergence(V1)` = `{total:3, converged:3, stale:0}` with per-doc `baselineVersion` asserted; (2) **self-healing** — deleting an eligible session's ES doc yields `stale=1` (missing doc never drops from the denominator), and re-running `globalReindex(V1)` restores `stale=0`; (3) **ineligible isolation** — a planted ES doc for a PRIVATE session does not inflate `total`; (4) **supersession** — after the baseline advances to V2, a V1-targeted reindex writes nothing (`converged(V1)=0`) and the V2 reindex converges everything to V2. Initial run showed 1/4 with `expected undefined to be defined` + `no-configurable-operation-def` signatures; root cause was stale ES index state from an interrupted run (dirty `e2e_convergence` index), not a contract violation — clean bootstrap passes 4/4. `findDocId` now logs available doc ids on mismatch for future debuggability. tsc + build clean. **3D.1b = COMPLETE.** Scale note: `globalReindex` remains sequential per-session; bounded concurrency/bulk indexing deferred to Phase 4.
-
-- [x] **3D.1b = COMPLETE** — all steps (1–9) implemented and verified: baseline contract (frozen G, Settings Store), refresh + retry-generation guard, ScheduledTask orchestration → BullMQ refresh queue, target-version global reindex with supersession abort + mid-run version-advance guard, read-only convergence oracle, and a 4/4 convergence/recovery E2E on real PostgreSQL + Redis/BullMQ + Elasticsearch. Scale note (Phase 4): `globalReindex` is sequential per-session — bounded concurrency / bulk ES indexing deferred. **Independent re-verification (2026-09-07): 32/32 unit (baseline 13 + task 5 + boost 6 + reindex 8), marketplace E2E 7/7, convergence E2E 4/4 — all re-run from a clean state over cloudflared tunnels, all exit 0.**
-- [ ] **Ranking materialization** — `RankingMaterializedView` (Postgres) for ranking-history audit / stable snapshot / multi-signal ranking. Deferred until ranking-history audit or multi-signal ranking requires it; not needed for the 3D.1a/3D.1b contract.
-- [x] 3D.2 — Elasticsearch instructor/session search refinement
-    - Note on terminology: the marketplace's course representation *is* the scheduled session (BbbScheduledSession + product variant); there is no separate MarketplaceCourse entity. If a distinct course surface is ever added, this becomes its foundation.
-    - **Breaking Shop API change:** removed the dead `city` input from `MarketplaceSearchInput` (never consumed; no location data exists in the model). External callers must not send `city`.
-    - Removed dead `city` input; added `priceMin/priceMax/startFrom/startTo` range filters (filter context) and `MarketplaceSessionSort` (RELEVANCE, PRICE_ASC, PRICE_DESC, SOONEST) with `_score` tiebreak for field sorts.
-    - Sort semantics: under `PRICE_*`/`SOONEST`, the explicit field is the **primary** ordering — Bayesian/sponsored score only breaks ties within equal field values. Global ranking dominance applies only under `RELEVANCE`.
-    - Fuzzy `multi_match` (fuzziness AUTO) for sessions and instructors — typo-tolerant matching.
-    - Instructor docs enriched with `upcomingSessionsCount`, `minPriceInPaise`, `nextSessionStart` (F7-eligible sessions via BbbInstructorAssignment); mapping ensured on existing instructor indices.
-    - Boundary: these instructor aggregate fields are **projection data only** — never authoritative application facts.
-    - Verified: `tsc --noEmit`, `npm run build`, marketplace unit suite, and full gated marketplace E2E (7/7) on real PostgreSQL + Redis + Elasticsearch.
-- [x] **3D.3b — `SessionAttendance` entity + idempotent aggregation service**
-  - `SessionAttendance` entity (PG authority, derived/recomputable fact)
-  - `SessionAttendanceService.recordMeetingEndedAttendance()` — v1 aggregation from MEETING_ENDED attendee snapshot
-  - Idempotent via raw-event watermark (`lastProcessedWebhookEventId`)
-  - ChannelId derived server-side from linked `BbScheduledSession`
-  - Wired into `BbbMeetingService.handleWebhookEvent` → `MEETING_ENDED` case (try/catch isolated — attendance failure can't break meeting lifecycle)
-  - Vendure CLI governed migration (`1788681926219-AddSessionAttendance`, verified live in PostgreSQL)
-  - Build + tsc green; E2E tests pending real BBB infrastructure
-- [x] **3D.3a — Attendance analytics design gate COMPLETE** (`docs/implementation/phase3-attendance.md`): two-layer fact model (immutable `BbbWebhookEvent` raw events → derived, recomputable `SessionAttendance` PG fact), `UNIQUE (scheduledSessionId, customerId, channelId)` identity, idempotent webhook aggregation with raw-event watermark, late-event `MANUAL_CORRECTION` path, channel isolation, NO connection to Bayesian ranking in 3D.3, and full E2E acceptance matrix. Implementation checkpoints 3D.3b–3D.3g follow.
-- [x] **3D.3c — `AttendanceAnalyticsService`** (read-only query layer)
-  - `getSessionAttendance(ctx, sessionId)` — per-student facts, channel-scoped
-  - `getSessionAttendanceSummary(ctx, sessionId)` — registered/attended/noShow/attendanceRate/avgDuration/completionRate
-  - `getCustomerAttendance(ctx, customerId)` — student's own history, channel-scoped
-  - `getChannelAttendanceSummary(ctx, from, to)` — operational reporting window (filters on lastEventAt)
-  - Metrics: attendanceRate = attended/registered, averageDurationSeconds = mean(totalDurationSeconds) over attended rows
-  - v1: completionRate == attendanceRate (any join = completed; future threshold will diverge)
-  - Channel scoping on every query (security boundary enforced at API layer, 3D.3d)
-  - Build + tsc green
-- [x] **3D.3d — Admin + Shop (self-view) attendance APIs**
-  - Admin schema: `SessionAttendanceAdmin`, `SessionAttendanceSummary`, `ChannelAttendanceSummary` types
-  - Admin queries: `scheduledSessionAttendance`, `scheduledSessionAttendanceSummary`, `channelAttendanceSummary`
-    - Require `BbbManageSessionsPermission`, channel-scoped via `ctx.channelId`
-  - Shop schema: `SessionAttendancePublic` type (limited fields — no channelId/meetingId/watermark)
-  - Shop query: `mySessionAttendance(sessionId)` — self-view only (filtered by `ctx.activeUserId`)
-  - Build + tsc green
-- [x] **3D.3e — real-infrastructure attendance E2E** (4/4 pass on real PostgreSQL)
-  - PRESENT for attendees, NO_SHOW for registered non-attendees
-  - Idempotent: reprocessing same webhook event does not double-count
-  - Late event recomputes status with updated watermark
-  - Admin channel-scoped summary aggregates
-  - Fix: BbScheduledSession has no channelId — resolved via linked organization (Channel=Tenant invariant)
-- [x] **3D.3f — attendance dashboard extension** (`@vendure/dashboard`, new Marketplace/Attendance route)
-  - `attendance-overview.tsx` — Channel summary with 30-day window (sessions/registered/attended/noShow/rate)
-  - `attendance-session-detail.tsx` — Per-student table (status/duration/cycles/source)
-  - Registered under `Marketplace` nav section
-  - CORRECTION: `ListPage` replaced with `Page` + `useQuery` + `api.query` in both files — summary/detail queries are single objects/collections, not `PaginatedList`, so `ListPage`'s generated-variables contract did not apply. Verified via `tsc --noEmit` + `build:dashboard` (both exit 0).
-- [x] **3D.3g — documentation + release notes**
-  - `phase3-attendance.md` status → ALL CHECKPOINTS COMPLETE
-  - `release-notes.md` → 3D.3 entry added
-- [ ] Certificate generation on `Entitlement` completion
-- [ ] `bbbSession` CMS section type (CMS-004)
-- [ ] `ArticleEvent` / `PageEvent` → Elasticsearch indexer
-
-### Phase 3 Exit Criteria
-
-- [ ] Marketplace discovery is cross-channel but read-only (INV-009)
-- [ ] Every marketplace result resolves to the correct academy storefront (redirect contract verified in e2e, not just release notes)
-- [ ] Marketplace orders are server-classified (INV-008)
-- [ ] Every marketplace order creates an immutable commission fact (DL-030)
-- [ ] Advertising spend is ledger-backed (INV-010)
-- [ ] Sponsored ranking cannot corrupt organic ranking (ADR-022)
-- [ ] Review changes propagate into ranking deterministically
-- [ ] Tenant isolation e2e passes
-
----
-
-## Phase 4 — Scale & Premium
-
-- [ ] White-label theming — **superseded by ADR-043**: L1 `TenantTheme` backend implemented (entity, migrations, Admin/Shop API, `whitelabelEnabled` entitlement gating, INV-025); `edu-frontend` L1 consumption **shipped 2026-09-24** (`7561643`; positive themed-tenant render still unproven in dev fixtures — no active theme row exists there); L2 layout presets pending; L3 custom CSS pending. The old `TenantProfile.theme` concept is abandoned.
-- [ ] TimescaleDB for BBB event-heavy analytics
-- [ ] AI features (meeting summary, CMS content writer, review summarisation)
-- [ ] Multi-BBB-server geographic routing
-- [ ] Student Corner (CMS-native)
-- [ ] Cross-academy placement network
-- [ ] 3CX telephony bridge for academy CRM
-
----
-
-## Deferred / Tracked Items
-
-**Storefront channel-isolation cache gaps** (`nextjs-starter-vendure`)
-- [ ] `getActiveChannelCached()` / `getAvailableCountriesCached()` still resolve channel token from env-var fallback, not per-request header.
-- [ ] `cart.tsx` private cache tags do not include a channel dimension; lower risk because the scope is per-user.
-
-**Storefront template contract Phase A — ESLint guardrail** (`nextjs-starter-vendure`)
-- [ ] §4a lint guardrail remains unimplemented. Land the mechanical channel-isolation checks before expanding storefront onboarding.
-
-**Customer-deletion e2e (Flow A/B)**
-- [x] Resolved 2026-10-03 by `d2e3035` (security(bbb): enforce organization ownership on mutations): (1) Flow B fixture seeds DB-allocated PKs instead of persisting non-numeric `roomId`/`scheduledSessionId` into integer FK columns; (2) the Flow A "BBB entitlements deactivated" `validUntil` assertion is anchored to the deletion service's write window. Verified 2026-10-05: the full battery's only failing pair is BUG-043 (see baseline note at roadmap.md:41). Production code is TypeScript-verified.
-
-**Development infrastructure verification**
-- [ ] Local PostgreSQL tunnel (`127.0.0.1:5435`) and Redis tunnel (`127.0.0.1:6385`) must be reachable before runtime verification. If either is unavailable, the application intentionally falls back to pg-mem / `DefaultJobQueuePlugin`; that fallback is suitable for development diagnostics, not production verification.
-
-**Simulation-harness grant-model alignment** (reconcile before either harness is promoted into CI)
-- [ ] `src/platform/stress-test/lifecycle-simulator.ts` (L67/73/77) and `src/plugins/load-simulation-plugin/engine/causal-mapper.ts` (L26) still label the subscription grant `RecurringCapacityGrant` / `RecurringCapacityGrantCreatedEvent`. Both are plain string labels — no such entity or event class exists — and they sit outside the `verify:invariants` scan, so they do not fail any gate today. Reconcile them to the authoritative `BbbCapacityGrant(sourceType='subscription')` / `SubscriptionCapacityGrant` model (RFC-001 v4, `f0e5ece`) before either harness is promoted into CI.
-
-
----
-
-## 16 November 2026 — LearningPlugin and tenant Razorpay Flow B code-state reconciliation
-
-This section records current code presence separately from product completion and runtime verification. Baseline: branch `saa9vi_com`, commit `3c245952d57b9ddeb27b9cbd6ee01de5bae0ba71`.
-
-### LearningPlugin — backend foundation present; workflow gaps remain
-
-- [x] LearningPlugin registered with course, template/tool, enrollment, course-session-link and announcement entities.
-- [x] Admin GraphQL for course lifecycle, learner enrollment state, announcements, course tools and BBB scheduled-session association.
-- [x] Shop read APIs for enrolled, active-admission learners: `myCoursePages`, `myCoursePage`, `coursePageAnnouncements`.
-- [x] Cross-plugin admission check through `LearnerAdmissionPort`; tool registry contributed by LearningPlugin and BigBlueButtonPlugin.
-- [ ] Shop enrollment / invitation acceptance workflow (not exposed by current SDL).
-- [ ] CourseTemplate CRUD GraphQL and dashboard workflow (entities and template snapshotting exist; CRUD is not exposed by current SDL).
-- [ ] Full Next.js storefront course experience and end-to-end acceptance evidence.
-- [ ] Runtime verification against the deployed PostgreSQL/Redis/BBB environment.
-
-### Per-tenant Razorpay Flow B — configuration and order creation present; settlement incomplete
-
-- [x] `TenantPaymentAccount` with channel/provider uniqueness and AES-256-GCM encrypted Key Secret / optional webhook secret.
-- [x] Tenant Admin account configuration, enable/disable, safe account view and credential probe (`GET /payments?count=1`).
-- [x] Authenticated Shop mutation `createTenantRazorpayCheckoutOrder` using credentials resolved from the current channel.
-- [ ] Register a tenant-specific Vendure `PaymentMethodHandler` and wire `TenantRazorpayService.verifyAndSettle()` through `addPaymentToOrder`. The current plugin registers only the platform Flow A handler.
-- [ ] Explicit order-customer ownership binding and cross-customer regression coverage for the explicit `orderId` path.
-- [ ] Proper tenant webhook signature test; the current `verifyTenantPaymentWebhook` only checks secret presence/decryption.
-- [ ] Tenant-specific webhook route, durable inbox, idempotent worker and recovery/reconciliation.
-- [ ] Test/live merchant end-to-end checkout, capture/settlement, webhook, failure/replay and key-rotation evidence.
-
-**Commercial boundary:** Flow A remains tenant-admin → Saa9vi for platform services. Flow B is tenant-client → tenant admin using tenant credentials and remains a separate lifecycle. The current one-time Razorpay handler enforces `paymentPurpose = 'platform-service'`; it must not be treated as the Flow B handler.
-
-See `docs/architecture/plugin-code-review-2026-11-16.md`, ADR-053 and ADR-054 for source-level details. No migration or runtime operation is implied by this documentation status update.
-
-
----
-
-## Marketplace Commerce & Revenue model — proposed next programme (ADR-055)
-
-**Status:** Proposed work; do not interpret these entries as implementation evidence. Canonical details and acceptance criteria are in `docs/implementation/marketplace-commerce-revenue-worklist.md`.
-
-### P0 — Tenant-channel commerce foundation
-
-- [ ] Complete Flow B tenant Razorpay PaymentMethodHandler and normal Vendure payment settlement.
-- [ ] Implement tenant-specific webhook inbox, signature verification, idempotency and reconciliation.
-- [ ] Define trusted tenant owner-channel resolution, marketplace customer identity and cross-channel isolation.
-- [ ] Implement marketplace-hosted checkout using tenant-channel carts/orders and eligible payment methods. Do not use the default marketplace channel for tenant orders.
-- [ ] Enforce one tenant per initial cart/order.
-
-### P0 — Learner subscription and digital access
-
-- [ ] Design learner-to-tenant recurring subscription lifecycle separately from `OrganizationSubscription` (tenant-to-Saa9vi).
-- [ ] Link verified subscription/payment periods to course enrollment and bounded BBB/content entitlements.
-- [ ] Define renewal, failure, grace, cancellation, expiry, refund and reconciliation rules.
-
-### P1 — Trial, fulfilment and physical marketplace
-
-- [ ] Harden free trial entitlement creation so registration cannot succeed with missing trial access.
-- [ ] Preserve trial as no-payment/no-mandate by default, with explicit learner conversion after the trial.
-- [ ] Separate digital fulfilment from physical fulfilment.
-- [ ] Allow physical listings on marketplace, tenant storefront, or both; do not require a tenant custom domain.
-- [ ] Gate physical listings on tenant opt-in, payment readiness, inventory, shipping, tax and return/refund policy.
-
-### P1/P2 — Monetization and release readiness
-
-- [ ] Expand homepage, collection/sub-collection, sponsored listing and product/course detail advertising inventory.
-- [ ] Define deduplicated, fraud-resistant impression/click billing before charging CPC/CPM.
-- [ ] Keep custom-domain storefront hosting optional and separately billable.
-- [ ] Preserve ADR-047 BBB billing modes and define included, prepaid and metered plan packaging.
-- [ ] Run two-tenant end-to-end tests across marketplace checkout, tenant storefront, digital access, trial, physical fulfilment, payments, webhooks and advertising.
-
-**Business invariant:** tenant-client commerce remains zero-commission; Saa9vi revenue comes from tenant platform subscriptions, advertising, optional tenant-domain storefront hosting, BBB usage and optional platform services.
-
+# Saa9vi Product & Engineering Roadmap
+
+**Updated:** 17 November 2026  
+**Baseline:** `main` at `1c0a5a7d7c3dece131ae977a5c7416e41815a8a7`
+
+> **Purpose:** Show the strategic programmes, their current state and their exit outcomes. This file is not a task tracker and does not repeat detailed implementation checklists.
+
+## How to read this roadmap
+
+- **Implemented foundation** means the repository contains the relevant backend/UI capability; it does not imply production readiness.
+- **Open** means a known implementation or verification gap remains.
+- **Proposed** means an agreed product direction or target architecture has not yet been implemented.
+- Detailed work and acceptance criteria belong in the linked worklists. Production evidence belongs only in `production-readiness.md`.
+
+## Programme roadmap
+
+| Programme | Target outcome | Current state | Canonical execution source |
+|---|---|---|---|
+| **1. Tenant foundation and reachability** | A tenant can register, configure its academy and be reached through the central marketplace route or its verified custom domain. | Registration, Channel=Tenant and custom-domain mapping foundations exist. Storefront onboarding, route contract and deployed proxy verification remain open. Generated `*.saa9vi.com` seller storefront subdomains are retired. | [Integration gaps — Tracks A/B](integration-gaps-worklist.md), [G1 hostname decision](g1-hostname-contract-decision.md) |
+| **2. Saa9vi subscriptions and BBB operations** | Tenants subscribe to Saa9vi plans and receive capacity/services; BBB usage is measured and billed according to the tenant plan. | Subscription and BBB capacity/usage foundations exist. Provider/runtime and production release evidence remains separately gated. | [Production readiness](production-readiness.md), [ADR-047](../architecture/adr-047-bbb-attendee-hour-billing.md), [RFC-001](../adr/rfc-001-continuous-commerce-loop.md) |
+| **3. Learning and digital delivery** | Tenants manage courses and services; learners trial, subscribe/enroll, attend classes and access content for the valid period. | LearningPlugin backend entities, Admin APIs and authenticated learner reads exist. Learner invitation/self-enrollment, the complete learner storefront, and learner-to-tenant recurring subscriptions remain open. | [ADR-053](../adr/adr-053-learning-plugin-course-domain.md), [Learning domain](../architecture/learning-domain.md), [MCR worklist](marketplace-commerce-revenue-worklist.md) |
+| **4. Zero-commission marketplace commerce** | Learners and customers discover tenant products and can check out on the marketplace while orders and payments remain in the owning tenant Channel. | Search, attribution and zero-commission ledger foundations exist. Marketplace-hosted tenant-channel checkout is a proposed target; Flow B tenant payment settlement/webhooks are incomplete. | [ADR-055](../adr/adr-055-marketplace-commerce-and-revenue-model.md), [MCR worklist](marketplace-commerce-revenue-worklist.md), [Integration Track G](integration-gaps-worklist.md#track-g--current-code-audit-follow-ups-baseline-2026-11-16) |
+| **5. Marketplace advertising** | Tenants/advertisers buy homepage, collection, sub-collection, sponsored listing and product/course detail placements with auditable spend. | AdWallet, AdSpendLedger, campaign spend, banner scope, sponsored boost and Admin/dashboard foundations are present. Remaining placement inventory, impression/click semantics and reporting are tracked separately. | [Phase 3 audit](phase3-audit.md), [MCR worklist](marketplace-commerce-revenue-worklist.md) |
+| **6. Physical commerce and fulfilment** | Tenants can sell books and physical goods on the marketplace, their own storefront, or both, while fulfilling orders themselves. | Product discovery and Vendure commerce foundations exist; marketplace listing-readiness policy and complete physical fulfilment acceptance need implementation/verification. Custom-domain hosting is not a prerequisite for marketplace sales. | [ADR-055](../adr/adr-055-marketplace-commerce-and-revenue-model.md), [MCR worklist](marketplace-commerce-revenue-worklist.md) |
+| **7. Premium services and scale** | Saa9vi monetizes optional tenant-domain storefront hosting, premium capacity/support and future platform capabilities. | Some theming and capacity foundations exist. Commercial packaging, operational limits and scale features remain staged work. | [Subscription/hosting ADRs](../architecture/), [MCR worklist](marketplace-commerce-revenue-worklist.md) |
+
+## Delivery order
+
+1. **Establish reliable tenant reachability and onboarding.** Keep the retired generated-subdomain model retired. The central `/sellers/{tenantSlug}` route is the fallback storefront identity; a seller-owned verified custom domain is optional.
+2. **Complete tenant-client payment collection (Flow B).** Finish the tenant PaymentMethodHandler, settlement, order-customer ownership proof and tenant webhook/reconciliation path before enabling real tenant checkout.
+3. **Implement marketplace tenant-channel checkout.** Marketplace UI may host checkout, but each initial cart/order belongs to one tenant Channel. Do not create tenant-owned orders in the default marketplace Channel.
+4. **Build the learner subscription and digital fulfilment lifecycle.** Keep learner subscriptions separate from tenant-to-Saa9vi `OrganizationSubscription`; retain free trials as no-payment, bounded access by default.
+5. **Complete physical listing readiness and fulfilment.** Allow marketplace, tenant storefront or both, gated by tenant opt-in, payment readiness, inventory, shipping, tax and returns policy.
+6. **Expand advertising inventory and measurement.** Define valid billable impressions/clicks before enabling CPC/CPM charging.
+7. **Package optional hosting and BBB commercial plans.** Keep tenant-domain hosting optional; preserve separate BBB usage facts and billing modes.
+
+## Release and completion rules
+
+- A roadmap programme may be implementation-complete while its live-provider or production-readiness gates remain open.
+- Do not treat code presence, schema presence or unit tests as production evidence.
+- Keep cross-tenant marketplace purchases out of the initial scope until independent tenant orders, payment attempts, refunds and fulfilment are designed.
+- Keep tenant-client commission at 0%. Saa9vi revenue streams are tenant SaaS subscriptions, advertising, optional tenant-domain storefront hosting, BBB usage/capacity and optional platform services.
+
+## Source-of-truth documents
+
+| Question | Document |
+|---|---|
+| What does the product do? | [Platform story](../product/platform-story.md) |
+| What is the marketplace commerce policy? | [ADR-055](../adr/adr-055-marketplace-commerce-and-revenue-model.md) and [policy](../product/marketplace-commerce-policy.md) |
+| What should engineering implement next in commerce? | [MCR implementation worklist](marketplace-commerce-revenue-worklist.md) |
+| What are the broader integration gaps? | [Integration gaps worklist](integration-gaps-worklist.md) |
+| Is the system ready to release? | [Production readiness](production-readiness.md) |
+| What has shipped? | [Release notes](release-notes.md) |
+
+## Historical detail
+
+The detailed build-order checklists and status narrative formerly embedded in this roadmap are preserved in [the 16 November 2026 roadmap archive](archive/roadmap-2026-11-16.md). That snapshot is historical and must not be used as the current task list.
