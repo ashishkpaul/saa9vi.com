@@ -123,7 +123,7 @@ There is no `verifyTenantPayment` Shop mutation in the current SDL. More importa
 
 The current one-time webhook controller and `PaymentWebhookEvent`/queue belong to Flow A at `POST /payments/razorpay/checkout-webhook`; the recurring subscription webhook belongs to SubscriptionPlugin at `POST /payments/razorpay/webhook`. There is no tenant-specific Flow B webhook endpoint or tenant webhook reconciliation worker in the current PaymentsPlugin.
 
-### Security items that remain open
+### Security boundaries and remaining gaps
 
 1. **Order owner binding — implementation added; verification pending:** `TenantRazorpayService.createCheckoutOrder()` now performs an explicit service-level `order.customer.user.id === ctx.activeUserId` assertion after reloading the order with the required relations, for both explicit and active-order paths. Missing or foreign ownership fails closed with `Order not found`. Regression tests cover same-channel cross-customer IDs and the active-order path; run the targeted suite before closing G-2.
 2. **Webhook status semantics:** rename/rework the current `verifyTenantPaymentWebhook` behavior before it is relied on operationally; it only checks secret presence/decryption.
