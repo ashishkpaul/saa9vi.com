@@ -332,11 +332,22 @@ export class MarketplaceCheckoutService {
     if (orderNeedsSave) {
       // Use Vendure's OrderService API so custom-field persistence follows
       // the normal order update lifecycle and publishes OrderEvent.
-      order = await this.orderService.updateCustomFields(
+      await this.orderService.updateCustomFields(
         tenantCtx,
         order.id,
         { ...order.customFields },
       );
+      // Reload the relations used for the response and quote calculation;
+      // updateCustomFields is an entity write and need not hydrate Order.lines.
+      order = await orderRepo.findOne({
+        where: { id: order.id },
+        relations: {
+          channels: true,
+          customer: { user: true },
+          lines: { productVariant: { channels: true } },
+          surcharges: true,
+        },
+      }) ?? order;
     }
 
     const quotes = await this.orderService.getEligiblePaymentMethods(tenantCtx, order.id);
