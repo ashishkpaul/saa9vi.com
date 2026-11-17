@@ -65,10 +65,12 @@ The `administrators` Admin API query must never leak administrators from other c
 - Admin GraphQL returns a safe view and never returns decrypted credentials.
 - Tenant account configuration is gated by `ManageTenantPaymentAccount`; new tenant-admin roles receive the permission through `TENANT_ADMIN_ROLE_PERMISSIONS`.
 
-**Open controls / findings at commit `3c245952d57b9ddeb27b9cbd6ee01de5bae0ba71`:**
+**Open controls / findings at commit `3c245952d57b9ddeb27b9cbd6ee01de5bae0ba71` (historical source baseline):**
+
+**G-2 follow-up (17 November 2026):** the explicit-order ownership finding below has since been addressed in `TenantRazorpayService.createCheckoutOrder()`. Both explicit and active-order paths now reload the order with `customer.user`, require exact equality with `ctx.activeUserId`, and return a non-enumerating not-found response on ownership failure. Tests were added for same-channel cross-customer access and related fail-closed cases; their execution is pending. The remaining current Flow B blockers are settlement wiring (G-1) and tenant webhook/reconciliation (G-3).
 
 1. **Flow B settlement is not wired.** PaymentsPlugin registers the platform Flow A `razorpayPaymentHandler`, but no tenant-specific `PaymentMethodHandler` is registered. `TenantRazorpayService.verifyAndSettle()` is currently not connected to `addPaymentToOrder`. Do not enable or advertise tenant Razorpay checkout as end-to-end until this boundary is implemented and tested.
-2. **Explicit order ownership needs proof.** `createTenantRazorpayCheckoutOrder(orderId)` is authenticated and channel-scoped, and uses `@Allow(Permission.Owner)`; however, its service path does not visibly load the order customer and compare the customer's user ID with `ctx.activeUserId`. Verify that Vendure's `Owner` permission is resource-bound for this custom resolver. Otherwise add the service-level owner assertion and cross-customer same-channel regression tests.
+2. **Explicit order ownership — RESOLVED IN FOLLOW-UP IMPLEMENTATION.** At this historical baseline, the tenant service did not load the order customer user. The 17 November 2026 follow-up adds the service-level check and cross-customer regression coverage; see the G-2 follow-up above.
 3. **Webhook verification label is too strong.** `verifyTenantPaymentWebhook` currently checks encrypted-secret presence/decryption and returns true. It does not verify a Razorpay signature or prove an endpoint is configured.
 4. **No Flow B webhook recovery path exists.** The current `POST /payments/razorpay/checkout-webhook` inbox/queue is platform Flow A only. Tenant-specific endpoint selection, channel resolution, signature verification, durable inbox, idempotency and reconciliation remain to be designed/implemented.
 5. **Settlement must recheck account state.** When `verifyAndSettle()` is wired, recheck `status = active` and `isEnabled = true` at settlement, not only at order creation.

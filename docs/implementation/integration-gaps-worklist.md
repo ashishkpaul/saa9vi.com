@@ -586,14 +586,21 @@ Required:
 
 ### G-2 — Prove or enforce tenant checkout order ownership
 
-**Priority:** P0 — **Status:** OPEN SECURITY REVIEW
+**Priority:** P0 — **Status:** IMPLEMENTED IN THIS BRANCH; focused test execution pending
 
-The Flow B service verifies the explicit order belongs to the current channel, is in `ArrangingPayment` and has a positive total. Unlike Flow A's resolver, it does not visibly load the order's customer user and compare it with `ctx.activeUserId`. Resolver `@Allow(Permission.Owner)` is present, but resource-binding semantics for this custom resolver must be demonstrated.
+The tenant checkout service now enforces ownership itself rather than relying on `@Allow(Permission.Owner)` to resource-bind a custom resolver argument:
 
-Required:
-- Add an adversarial same-channel cross-customer test for both explicit `orderId` and active-order paths.
-- If Vendure's permission decorator does not prove order ownership for this resource, add a service-level customer/user assertion before creating a provider order.
-- Confirm that order ID guessing cannot create an order under another customer's identity.
+- The service requires `ctx.activeUserId`, including for any future internal caller of the service.
+- An explicit `orderId` is treated as untrusted input. The service reloads the candidate order with `channels` and `customer.user` relations.
+- The implicit path uses Vendure's `OrderService.getActiveOrderForUser(ctx, activeUserId)`; it no longer selects an arbitrary `ArrangingPayment` order by state.
+- Both paths verify current-channel membership and require `order.customer.user.id === ctx.activeUserId`.
+- Missing customer/user ownership and foreign orders return the same `Order not found` result to avoid order-ID enumeration.
+- Tenant account lookup/decryption and the external Razorpay order-creation call happen only after authentication, channel and customer ownership checks pass.
+- The resolver's `@Allow(Permission.Owner)` remains as an additional authorization layer.
+
+Regression coverage added in `src/plugins/payments/__tests__/tenant-razorpay-order-ownership.spec.ts` includes explicit same-channel cross-customer order IDs, foreign active-order results, missing customer/user links, cross-channel orders, valid owner success, no active order and unauthenticated service calls.
+
+**Verification boundary:** the focused tests are added but have not yet been executed in this environment. Do not mark G-2 fully verified until `npm run test:e2e -- src/plugins/payments/__tests__/tenant-razorpay-order-ownership.spec.ts` (or the equivalent targeted Vitest command) and the TypeScript build pass.
 
 ### G-3 — Implement tenant Flow B webhook/recovery lifecycle
 

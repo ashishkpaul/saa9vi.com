@@ -37,8 +37,11 @@ export class TenantRazorpayShopResolver {
       throw new UserInputError('Login required to start Razorpay checkout');
     }
 
-    // Delegate to tenant-aware service — it validates channel membership,
-    // order state, and resolves tenant credentials.
-    return this.checkoutService.createCheckoutOrder(ctx, orderId ? String(orderId) : undefined);
+    // Delegate to tenant-aware service — it independently proves channel
+    // membership and customer ownership before resolving tenant credentials.
+    return this.checkoutService.createCheckoutOrder(
+      ctx,
+      orderId !== undefined && orderId !== null ? String(orderId) : undefined,
+    );
   }
 }

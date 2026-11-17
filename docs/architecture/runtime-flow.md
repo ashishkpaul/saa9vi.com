@@ -660,9 +660,13 @@ Admin: verifyTenantPaymentAccount
 Admin: setTenantPaymentAccountEnabled(true)
   |
 Shop: createTenantRazorpayCheckoutOrder(orderId?)
-  +-- require authenticated caller
+  +-- require authenticated caller (`ctx.activeUserId`)
   +-- resolve account from ctx.channelId; require active + enabled
-  +-- check order belongs to channel, ArrangingPayment, total > 0
+  +-- explicit order ID or OrderService.getActiveOrderForUser(ctx, activeUserId)
+  +-- reload with channels + customer.user
+  +-- require current Channel AND customer.user.id = activeUserId
+  +-- require ArrangingPayment and total > 0
+  +-- only then resolve/decrypt tenant credentials
   +-- create Razorpay order using tenant credentials
   +-- return provider order ID, amount, currency and public Key ID
 ```
@@ -671,7 +675,7 @@ Shop: createTenantRazorpayCheckoutOrder(orderId?)
 
 **Credential-probe caveat:** `verifyTenantPaymentAccount` performs `GET /payments?count=1`; it does not create a ₹1 test order. `verifyTenantPaymentWebhook` only confirms that the configured encrypted webhook secret exists and decrypts; it does not test a signed webhook delivery or verify a registered endpoint.
 
-**Security follow-up:** the tenant checkout service's explicit `orderId` path checks tenant channel membership but does not visibly compare the order's customer user with `ctx.activeUserId`. The resolver has `@Allow(Permission.Owner)`; prove that this permission is resource-bound for this custom resolver, or add an explicit owner check and cross-customer regression test before completing Flow B.
+**G-2 owner-boundary update (17 November 2026):** service-level ownership enforcement is now implemented in the checkout-order path. Explicit and active-order paths both reload the order with `customer.user`, require exact equality with `ctx.activeUserId`, and fail closed for missing/foreign ownership. Targeted regression tests have been added; execution remains pending. This closes the source-level G-2 finding but does not close Flow B settlement (G-1) or webhook/recovery (G-3).
 
 
 
