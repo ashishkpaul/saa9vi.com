@@ -81,7 +81,6 @@ describe('TenantRazorpayService verifyAndSettle (G-1)', () => {
       getActiveDecryptedCredentials: vi.fn().mockResolvedValue({
         keyId: 'rzp_test_public',
         keySecret: KEY_SECRET,
-        accountMode: 'test',
       }),
     } as unknown as Pick<TenantPaymentAccountService, 'getActiveDecryptedCredentials'>;
 
