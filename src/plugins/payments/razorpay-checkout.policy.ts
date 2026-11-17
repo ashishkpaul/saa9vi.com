@@ -188,13 +188,11 @@ export function verifyWebhookSignature(input: {
   if (!input.signature) {
     return { ok: false, reason: 'missing-signature' };
   }
-  const body = Buffer.isBuffer(input.rawBody)
-    ? input.rawBody.toString('utf8')
-    : input.rawBody;
-
+  // Pass Buffer input directly to HMAC. Do not decode/re-encode raw bytes
+  // before signature verification; JSON parsing belongs after this check.
   const expected = crypto
     .createHmac('sha256', input.webhookSecret)
-    .update(body)
+    .update(input.rawBody)
     .digest('hex');
 
   const sigBuf = Buffer.from(input.signature, 'utf8');
