@@ -11,6 +11,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Request } from 'express';
+import * as crypto from 'crypto';
 import {
   ChannelService,
   RequestContextService,
@@ -183,6 +184,6 @@ export class TenantRazorpayWebhookController {
   }
 
   static hashRawBody(rawBody: Buffer): string {
-    return require('crypto').createHash('sha256').update(rawBody).digest('hex');
+    return crypto.createHash('sha256').update(rawBody).digest('hex');
   }
 }
