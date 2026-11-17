@@ -39,6 +39,13 @@ export interface TenantPaymentAccountSafeView {
   webhookSecretConfigured: boolean;
 }
 
+export interface TenantRazorpayCredentials {
+  keyId: string;
+  keySecret: string;
+  webhookSecret: string | null;
+  accountMode: string;
+}
+
 @Injectable()
 export class TenantPaymentAccountService {
   constructor(
@@ -126,15 +133,39 @@ export class TenantPaymentAccountService {
     }
   }
 
+  /**
+   * Settlement-only credential resolver.
+   *
+   * Unlike the general-purpose credential read used by the Admin verification
+   * workflow, this method checks the persisted account state immediately before
+   * decrypting any tenant secret. Flow B settlement must not continue for a
+   * pending, suspended, disabled or incompletely configured account.
+   */
+  async getActiveDecryptedCredentials(
+    ctx: RequestContext,
+    channelId: ID,
+  ): Promise<Pick<TenantRazorpayCredentials, 'keyId' | 'keySecret'>> {
+    const account = await this.findByChannel(ctx, channelId);
+    if (!account) {
+      throw new NotFoundException('Tenant Razorpay account is not configured');
+    }
+    if (account.status !== 'active' || account.isEnabled !== true) {
+      throw new Error('Tenant Razorpay account must be active and enabled');
+    }
+    if (!account.encryptedKeySecret) {
+      throw new Error('Tenant Razorpay credentials are not configured');
+    }
+
+    return {
+      keyId: account.keyId,
+      keySecret: this.encryptionService.decrypt(account.encryptedKeySecret),
+    };
+  }
+
   async getDecryptedCredentials(
     ctx: RequestContext,
     channelId: ID,
-  ): Promise<{
-    keyId: string;
-    keySecret: string;
-    webhookSecret: string | null;
-    accountMode: string;
-  }> {
+  ): Promise<TenantRazorpayCredentials> {
     const account = await this.findByChannel(ctx, channelId);
     if (!account) {
       throw new NotFoundException(
@@ -151,7 +182,7 @@ export class TenantPaymentAccountService {
       keyId: account.keyId,
       keySecret: this.encryptionService.decrypt(account.encryptedKeySecret),
       webhookSecret: account.encryptedWebhookSecret
-        ? this.encryptionService.decrypt(account.encryptedWebhookSecret!)
+        ? this.encryptionService.decrypt(account.encryptedWebhookSecret)
         : null,
       accountMode: account.accountMode,
     };

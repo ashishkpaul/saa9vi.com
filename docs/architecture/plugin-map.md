@@ -624,9 +624,9 @@ The current Admin enrollment mutation creates `ENROLLED` directly; invitation cr
 
 ---
 
-## PaymentsPlugin (Flow A + partial Flow B)
+## PaymentsPlugin (Flow A + Flow B synchronous settlement)
 
-PaymentsPlugin provides the complete one-time platform payment lifecycle for Flow A and the tenant Razorpay configuration and checkout-order APIs for Flow B.
+PaymentsPlugin provides the platform one-time payment lifecycle for Flow A and per-tenant Razorpay configuration, checkout-order creation and synchronous Shop settlement for Flow B. Tenant webhook recovery remains G-3.
 
 ### Flow A — Platform payments
 
@@ -636,7 +636,7 @@ Flow A uses Saa9vi's platform Razorpay credentials. It has a registered Vendure 
 
 Flow B implements per-tenant Razorpay credential configuration, credential verification, account enable/disable operations and tenant-specific checkout-order creation.
 
-The tenant-aware `TenantRazorpayService.verifyAndSettle()` method exists, but it is not yet wired through a registered tenant-specific `PaymentMethodHandler`. A complete Flow B settlement and webhook reconciliation lifecycle is therefore not yet implemented.
+The G-1 PR branch registers `tenantRazorpayPaymentHandler` (code `tenant-razorpay`) and wires `TenantRazorpayService.verifyAndSettle()` through Vendure's Shop `addPaymentToOrder` lifecycle. It enforces tenant account active/enabled state, customer/channel ownership, HMAC and provider order/payment bindings before returning Settled. Tenant webhook reconciliation remains open under G-3.
 
 See ADR-051 and ADR-054.
 
@@ -650,13 +650,14 @@ See ADR-051 and ADR-054.
 | `TenantPaymentAdminResolver` | Admin API (`ManageTenantPaymentAccount`; `allTenantPaymentAccounts` is SuperAdmin-only) | `tenantPaymentAccount`, `allTenantPaymentAccounts`, `upsertTenantPaymentAccount`, `setTenantPaymentAccountEnabled`, `deleteTenantPaymentAccount`, `verifyTenantPaymentAccount`, `verifyTenantPaymentWebhook` |
 | `TenantRazorpayShopResolver` | Shop API (`Owner`) | `createTenantRazorpayCheckoutOrder` |
 | `RazorpayShopResolver` | Shop API (authenticated order owner) | `createRazorpayCheckoutOrder`; requires `paymentPurpose = 'platform-service'` |
-| `razorpayPaymentHandler` | Vendure PaymentMethodHandler | One-time platform Razorpay payment; uses platform environment credentials |
+| `razorpayPaymentHandler` | Vendure PaymentMethodHandler (`razorpay`) | One-time platform Razorpay payment; uses platform environment credentials and is restricted to `paymentPurpose = 'platform-service'` |
+| `tenantRazorpayPaymentHandler` | Vendure PaymentMethodHandler (`tenant-razorpay`) | Flow B Shop settlement; resolves tenant credentials from the active Channel |
 | `RazorpayPaymentsWebhookController` | Public REST | `POST /payments/razorpay/checkout-webhook`; HMAC verification, durable inbox, queue handoff |
 
 
 The Admin safe view never returns decrypted secrets. `verifyTenantPaymentAccount` probes Razorpay with `GET /payments?count=1`; `verifyTenantPaymentWebhook` only checks webhook-secret presence/decryption and is not a signed webhook test. The Shop mutation creates a Razorpay order using credentials resolved from `ctx.channelId`.
 
-**Still not implemented:** a Flow B Vendure `PaymentMethodHandler` that calls `TenantRazorpayService.verifyAndSettle()`, tenant payment settlement through `addPaymentToOrder`, a tenant-specific webhook endpoint/inbox/worker, and live provider validation. The `verifyAndSettle()` method exists but is currently unwired. **G-2 ownership enforcement is now present** in `TenantRazorpayService.createCheckoutOrder()` for both explicit and active-order paths; targeted regression tests have been added, with execution pending.
+**Still not implemented:** tenant-specific webhook endpoint/inbox/worker/reconciliation (G-3), live provider validation, and marketplace owner-channel checkout (MCR-1.3). G-1 synchronous settlement is implemented on its PR branch; its focused tests and backend build require local verification. G-2 ownership tests were reported by the user as 10/10 passing.
 
 ### Key services and secrets
 
@@ -665,7 +666,7 @@ The Admin safe view never returns decrypted secrets. `verifyTenantPaymentAccount
 | `TenantPaymentEncryptionService` | AES-256-GCM; requires 32-byte `TENANT_PAYMENT_ENCRYPTION_KEY` outside dev; optional previous-key decrypt fallback |
 | `TenantPaymentAccountService` | Account CRUD, channel resolution, encryption/decryption and safe GraphQL view |
 | `TenantRazorpayOrdersClient` | Tenant-keyed Razorpay Orders/Payments API calls |
-| `TenantRazorpayService` | Tenant checkout-order creation and currently unwired verify/settle logic |
+| `TenantRazorpayService` | Tenant checkout-order creation and synchronous Shop verify/settle logic for G-1 |
 | `RazorpayCheckoutService` | Flow A order/payment verification and settlement |
 | `PaymentWebhookQueueService` | Flow A persist-first webhook reconciliation (BullMQ; bounded retries) |
 

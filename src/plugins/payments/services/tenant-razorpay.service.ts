@@ -8,14 +8,13 @@ import { TenantPaymentAccountService } from './tenant-payment-account.service';
 import {
   TenantRazorpayOrdersClient,
   TenantRazorpayApiError,
-  RazorpayOrder,
-  RazorpayPayment,
 } from './tenant-razorpay-orders.client';
 import {
-  computeCheckoutSignature,
   assertOrderBinding,
   assertPaymentBinding,
+  extractCheckoutMetadata,
   isCapturableProviderStatus,
+  verifyCheckoutSignature,
 } from '../razorpay-checkout.policy';
 
 const loggerCtx = 'TenantRazorpayService';
@@ -27,11 +26,16 @@ export interface TenantCheckoutOrderHandle {
   keyId: string;
 }
 
-export interface TenantCheckoutMetadata {
-  razorpayOrderId: string;
-  razorpayPaymentId: string;
-  razorpaySignature?: string;
-}
+export type TenantSettleOutcome =
+  | {
+      ok: true;
+      paymentId: string;
+      method?: string;
+      providerStatus: string;
+      razorpayOrderId: string;
+      signatureVerified: boolean;
+    }
+  | { ok: false; errorCode: string; detail: string };
 
 @Injectable()
 export class TenantRazorpayService {
@@ -101,10 +105,11 @@ export class TenantRazorpayService {
       orderOwnerUserId == null ||
       String(orderOwnerUserId) !== String(activeUserId)
     ) {
-      // Use the same not-found response for missing and foreign ownership so
-      // callers cannot use this mutation to enumerate another customer's
-      // order IDs within the same tenant.
       throw new NotFoundException('Order not found');
+    }
+
+    if ((order.customFields as { paymentPurpose?: string } | null)?.paymentPurpose === 'platform-service') {
+      throw new Error('Tenant Razorpay cannot be used for Saa9vi platform-service orders');
     }
 
     if (order.state !== 'ArrangingPayment') {
@@ -174,88 +179,142 @@ export class TenantRazorpayService {
   }
 
   /**
-   * Verify and settle a payment created through tenant checkout.
-   * Resolves tenant credentials from ctx.channelId.
+   * Verify and settle a tenant-funded payment for the current Shop API customer.
    *
-   * This is the settlement path called by the tenant Razorpay payment handler
-   * via addPaymentToOrder. It verifies the checkout signature, re-reads the
-   * payment from the tenant's Razorpay account, and binds it to the order.
+   * This method is invoked only by the Flow B PaymentMethodHandler from
+   * Vendure's addPaymentToOrder lifecycle. It deliberately does not provide an
+   * admin/webhook bypass; tenant webhook reconciliation belongs to G-3.
    */
   async verifyAndSettle(
     ctx: RequestContext,
     orderId: string,
     metadata: unknown,
-  ): Promise<
-    | {
-        ok: true;
-        paymentId: string;
-        method?: string;
-        providerStatus: string;
-        razorpayOrderId: string;
-        signatureVerified: boolean;
-      }
-    | { ok: false; errorCode: string; detail: string }
-  > {
+  ): Promise<TenantSettleOutcome> {
     const channelId = String(ctx.channelId);
+    const activeUserId = ctx.activeUserId;
 
-    // Resolve tenant credentials — fail-closed if not configured.
-    const credentials = await this.accountService.getDecryptedCredentials(
-      ctx,
-      channelId,
-    );
+    if (ctx.apiType !== 'shop' || !activeUserId) {
+      return {
+        ok: false,
+        errorCode: 'AUTHENTICATION_REQUIRED',
+        detail: 'Tenant payment settlement requires an authenticated Shop API customer',
+      };
+    }
 
-    // Verify the order belongs to this channel.
+    // Bind the payment request to a freshly-loaded order in the active Channel
+    // and to the authenticated customer. The handler receives an Order object,
+    // but the service does not trust its possibly-stale relations.
     const orderRepo = this.connection.getRepository(ctx, 'Order');
     const order = await orderRepo.findOne({
       where: { id: orderId },
-      relations: { channels: true },
+      relations: { channels: true, customer: { user: true } },
     });
     if (!order) {
       return { ok: false, errorCode: 'ORDER_NOT_FOUND', detail: 'Order not found' };
     }
+
     const inChannel = (order.channels ?? []).some(
       (c: { id: string }) => String(c.id) === channelId,
     );
     if (!inChannel) {
       return { ok: false, errorCode: 'ORDER_NOT_FOUND', detail: 'Order not found' };
     }
+    if (
+      order.customer?.user?.id == null ||
+      String(order.customer.user.id) !== String(activeUserId)
+    ) {
+      return { ok: false, errorCode: 'ORDER_NOT_FOUND', detail: 'Order not found' };
+    }
+    if (order.state !== 'ArrangingPayment') {
+      return {
+        ok: false,
+        errorCode: 'ORDER_NOT_PAYABLE',
+        detail: `Order is not awaiting payment (state: ${order.state})`,
+      };
+    }
+    if (order.totalWithTax <= 0) {
+      return { ok: false, errorCode: 'INVALID_ORDER_AMOUNT', detail: 'Order total must be positive' };
+    }
 
-    // Extract and verify checkout metadata.
-    const md = this.extractMetadata(metadata);
+    const paymentPurpose = (order.customFields as { paymentPurpose?: string } | null)?.paymentPurpose;
+    if (paymentPurpose === 'platform-service') {
+      return {
+        ok: false,
+        errorCode: 'PAYMENT_FLOW_MISMATCH',
+        detail: 'Platform-service orders must use the platform payment method',
+      };
+    }
+
+    const md = extractCheckoutMetadata(metadata);
     if (!md) {
       return {
         ok: false,
         errorCode: 'MISSING_METADATA',
-        detail: 'Checkout metadata missing',
+        detail: 'Checkout metadata must include Razorpay order and payment IDs',
       };
     }
 
-    // Layer 1: verify checkout signature using tenant's key secret.
-    const expectedSig = computeCheckoutSignature(
-      md.razorpayOrderId,
-      md.razorpayPaymentId,
-      credentials.keySecret,
-    );
-    const signatureVerified =
-      md.razorpaySignature !== undefined &&
-      md.razorpaySignature.length > 0 &&
-      md.razorpaySignature === expectedSig;
+    // Payment is not ChannelAware in Vendure. This lookup therefore checks
+    // transaction IDs globally, preventing a previously-recorded provider
+    // payment from being attached to a second Vendure order or tenant.
+    const existingPayment = await this.connection
+      .getRepository(ctx, 'Payment')
+      .findOne({ where: { transactionId: md.razorpayPaymentId } });
+    if (existingPayment) {
+      return {
+        ok: false,
+        errorCode: 'PAYMENT_ALREADY_USED',
+        detail: 'This Razorpay payment has already been recorded',
+      };
+    }
 
-    if (!signatureVerified && ctx.apiType === 'shop') {
+    // The account state is re-read at settlement time and checked before any
+    // tenant secret is decrypted or provider API is called.
+    let credentials: {
+      keyId: string;
+      keySecret: string;
+    };
+    try {
+      credentials = await this.accountService.getActiveDecryptedCredentials(ctx, channelId);
+    } catch {
+      return {
+        ok: false,
+        errorCode: 'TENANT_ACCOUNT_UNAVAILABLE',
+        detail: 'Tenant Razorpay account must be configured, active and enabled',
+      };
+    }
+
+    // Browser-returned identifiers are untrusted. Shop settlement always
+    // requires a valid HMAC; unlike the platform webhook worker, Flow B has no
+    // internal/admin caller path in this G-1 slice.
+    const signature = verifyCheckoutSignature({
+      orderId: md.razorpayOrderId,
+      paymentId: md.razorpayPaymentId,
+      signature: md.razorpaySignature,
+      keySecret: credentials.keySecret,
+    });
+    if (!signature.ok) {
       return {
         ok: false,
         errorCode: 'SIGNATURE_INVALID',
-        detail: 'Checkout signature verification failed',
+        detail: 'Razorpay checkout signature verification failed',
       };
     }
 
-    // Layer 2: provider truth — re-read order and payment from tenant's Razorpay account.
     try {
       const razorpayOrder = await this.client.fetchOrder(
         credentials.keyId,
         credentials.keySecret,
         md.razorpayOrderId,
       );
+
+      if (razorpayOrder.id !== md.razorpayOrderId) {
+        return {
+          ok: false,
+          errorCode: 'PROVIDER_ORDER_ID_MISMATCH',
+          detail: 'Razorpay returned a different provider order ID',
+        };
+      }
 
       const orderBinding = assertOrderBinding({
         receipt: razorpayOrder.receipt,
@@ -269,6 +328,20 @@ export class TenantRazorpayService {
           detail: orderBinding.detail ?? '',
         };
       }
+      if (razorpayOrder.amount !== order.totalWithTax) {
+        return {
+          ok: false,
+          errorCode: 'ORDER_AMOUNT_MISMATCH',
+          detail: 'Razorpay order amount does not match the Vendure order total',
+        };
+      }
+      if (razorpayOrder.currency !== order.currencyCode) {
+        return {
+          ok: false,
+          errorCode: 'ORDER_CURRENCY_MISMATCH',
+          detail: 'Razorpay order currency does not match the Vendure order currency',
+        };
+      }
 
       let payment = await this.client.fetchPayment(
         credentials.keyId,
@@ -276,17 +349,55 @@ export class TenantRazorpayService {
         md.razorpayPaymentId,
       );
 
-      // Single-step settlement: capture an authorization before asserting.
+      // Do not capture an authorization until its provider payment ID, order,
+      // exact amount and currency have all been checked against Vendure.
+      if (payment.id !== md.razorpayPaymentId) {
+        return {
+          ok: false,
+          errorCode: 'PROVIDER_PAYMENT_ID_MISMATCH',
+          detail: 'Razorpay returned a different provider payment ID',
+        };
+      }
+      if (payment.order_id !== md.razorpayOrderId) {
+        return {
+          ok: false,
+          errorCode: 'PAYMENT_ORDER_MISMATCH',
+          detail: 'Razorpay payment belongs to a different provider order',
+        };
+      }
+      if (payment.amount !== order.totalWithTax) {
+        return {
+          ok: false,
+          errorCode: 'PAYMENT_AMOUNT_MISMATCH',
+          detail: 'Razorpay payment amount does not match the Vendure order total',
+        };
+      }
+      if (payment.currency !== order.currencyCode) {
+        return {
+          ok: false,
+          errorCode: 'PAYMENT_CURRENCY_MISMATCH',
+          detail: 'Razorpay payment currency does not match the Vendure order currency',
+        };
+      }
+
       if (isCapturableProviderStatus(payment.status)) {
         payment = await this.client.capturePayment(
           credentials.keyId,
           credentials.keySecret,
           {
             razorpayPaymentId: payment.id,
-            amountMinor: payment.amount,
-            currency: payment.currency,
+            amountMinor: order.totalWithTax,
+            currency: order.currencyCode,
           },
         );
+      }
+
+      if (payment.id !== md.razorpayPaymentId) {
+        return {
+          ok: false,
+          errorCode: 'CAPTURE_PAYMENT_ID_MISMATCH',
+          detail: 'Razorpay capture returned a different payment ID',
+        };
       }
 
       const binding = assertPaymentBinding({
@@ -316,7 +427,7 @@ export class TenantRazorpayService {
         method: payment.method,
         providerStatus: payment.status,
         razorpayOrderId: md.razorpayOrderId,
-        signatureVerified,
+        signatureVerified: true,
       };
     } catch (err: any) {
       if (err instanceof TenantRazorpayApiError) {
@@ -326,30 +437,4 @@ export class TenantRazorpayService {
     }
   }
 
-  private extractMetadata(
-    metadata: unknown,
-  ): TenantCheckoutMetadata | null {
-    if (!metadata || typeof metadata !== 'object') return null;
-    const m = metadata as Record<string, unknown>;
-    const razorpayOrderId = m.razorpay_order_id ?? m.razorpayOrderId;
-    const razorpayPaymentId = m.razorpay_payment_id ?? m.razorpayPaymentId;
-    const signatureRaw = m.razorpay_signature ?? m.razorpaySignature;
-    if (
-      typeof razorpayOrderId !== 'string' ||
-      razorpayOrderId.length === 0
-    ) {
-      return null;
-    }
-    if (
-      typeof razorpayPaymentId !== 'string' ||
-      razorpayPaymentId.length === 0
-    ) {
-      return null;
-    }
-    const razorpaySignature =
-      typeof signatureRaw === 'string' && signatureRaw.length > 0
-        ? signatureRaw
-        : undefined;
-    return { razorpayOrderId, razorpayPaymentId, razorpaySignature };
-  }
 }

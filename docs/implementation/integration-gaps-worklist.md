@@ -573,20 +573,34 @@ Cancellation is exposed symmetrically through `cancelMySubscription(atPeriodEnd)
 
 ### G-1 — Complete tenant Razorpay Flow B settlement
 
-**Priority:** P0 — **Status:** OPEN / BLOCKING FOR TENANT CLIENT COLLECTIONS
+**Priority:** P0 — **Status:** IMPLEMENTED ON THIS PR BRANCH; local test/build verification pending
 
-Current `TenantRazorpayShopResolver.createTenantRazorpayCheckoutOrder` creates a Razorpay order using credentials resolved from `ctx.channelId`. `TenantRazorpayService.verifyAndSettle()` exists but no tenant-specific Vendure `PaymentMethodHandler` is registered and there is no current handler call site.
+The branch adds and registers a dedicated Vendure `PaymentMethodHandler` with code `tenant-razorpay`. Flow B settlement is invoked through Vendure's normal Shop API `addPaymentToOrder` lifecycle; the handler returns `Settled` only after tenant-specific verification and any required capture have succeeded.
 
-Required:
-- Define a tenant-aware PaymentMethodHandler contract that can resolve the tenant account securely at checkout/settlement time.
-- Wire server-side order/payment fetch, HMAC verification, order/payment binding, capture semantics and settlement through Vendure's `addPaymentToOrder` lifecycle.
-- Re-check account `status = active` and `isEnabled = true` at settlement.
-- Preserve the hard separation from platform Flow A (`paymentPurpose = 'platform-service'` and platform credentials).
-- Add tests for success, failed signature, mismatched provider order/payment, amount/currency mismatch, already-used payment, disabled/suspended account and replay.
+Implemented in this slice:
+
+- Keep Flow A's existing `razorpay` handler and platform `RAZORPAY_KEY_ID/SECRET` unchanged. The separate `tenant-razorpay` handler resolves credentials only from `TenantPaymentAccount` for `ctx.channelId`.
+- Require an authenticated Shop API caller. Reload the order and bind it to the current Channel and `order.customer.user.id === ctx.activeUserId`.
+- Reject `paymentPurpose = 'platform-service'` from the tenant handler and also reject that purpose in tenant checkout-order creation.
+- Verify the checkout HMAC using the tenant Key Secret and shared constant-time policy helper.
+- Re-read Razorpay's order and payment server-to-server. Verify returned provider IDs, Vendure receipt/notes binding, payment-to-provider-order binding, exact amount and currency.
+- Check the tenant account is still `status = active` and `isEnabled = true` before decrypting the settlement Key Secret or contacting Razorpay.
+- Do not capture an `authorized` payment until its provider IDs, order binding, amount and currency have passed validation; confirm the final provider status is `captured` before returning `Settled`.
+- Reject a Razorpay payment ID already present as a Vendure `Payment.transactionId`; the duplicate lookup is global because Vendure Payment is not ChannelAware.
+- Regression coverage added in `tenant-razorpay-settlement.spec.ts` for success, signature failure, ownership/channel failure, account state, Flow A/Flow B separation, prior transaction reuse, provider order/payment identity, order binding, amount/currency and pre-capture validation.
+
+**Important boundaries:**
+
+- The existing Shop checkout-order creation mutation still supplies the Razorpay provider order and public Key ID; the client must pass the resulting provider identifiers and checkout signature to `addPaymentToOrder(method: "tenant-razorpay")`.
+- This G-1 handler is Shop API only. Tenant webhook routing, persist-first inbox, idempotent worker and recovery/reconciliation are G-3 and remain open. A provider payment captured successfully just before a client/network failure is not automatically recovered by this G-1 handler.
+- The existing transaction-ID lookup rejects sequential reuse, but is not a database-level atomic reservation against two concurrent requests racing before either Vendure Payment is persisted. Do not claim concurrent replay safety until that race is addressed and tested.
+- No entity, migration, direct database mutation, marketplace checkout, or live merchant validation is included. Flow B must not be described as production-ready from this slice alone.
+
+**Verification boundary:** the branch adds focused tests but they have not been executed by the PR author. Run the focused suite and backend build before merging. Local execution and live Razorpay validation remain required.
 
 ### G-2 — Prove or enforce tenant checkout order ownership
 
-**Priority:** P0 — **Status:** IMPLEMENTED IN THIS BRANCH; focused test execution pending
+**Priority:** P0 — **Status:** IMPLEMENTED; focused regression suite passed locally (10/10 tests, user-reported)
 
 The tenant checkout service now enforces ownership itself rather than relying on `@Allow(Permission.Owner)` to resource-bind a custom resolver argument:
 
@@ -600,7 +614,7 @@ The tenant checkout service now enforces ownership itself rather than relying on
 
 Regression coverage added in `src/plugins/payments/__tests__/tenant-razorpay-order-ownership.spec.ts` includes explicit same-channel cross-customer order IDs, foreign active-order results, missing customer/user links, cross-channel orders, valid owner success, no active order and unauthenticated service calls.
 
-**Verification boundary:** the focused tests are added but have not yet been executed in this environment. Do not mark G-2 fully verified until `npm run test:e2e -- src/plugins/payments/__tests__/tenant-razorpay-order-ownership.spec.ts` (or the equivalent targeted Vitest command) and the TypeScript build pass.
+**Verification boundary:** the user ran `npx vitest run --config vitest.config.mts src/plugins/payments/__tests__/tenant-razorpay-order-ownership.spec.ts` and reported 10/10 tests passing. The full backend TypeScript build has not yet been confirmed.
 
 ### G-3 — Implement tenant Flow B webhook/recovery lifecycle
 

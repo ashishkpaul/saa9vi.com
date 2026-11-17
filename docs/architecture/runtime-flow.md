@@ -129,6 +129,46 @@ payment-webhook-reconciliation job
 
 ---
 
+## Tenant Razorpay Checkout and Settlement (Flow B — G-1)
+
+```
+Authenticated tenant customer in the owning Channel
+  │
+  ├─ createTenantRazorpayCheckoutOrder(orderId)
+  │    ├─ Require authenticated user
+  │    ├─ Reload order with channels + customer.user
+  │    ├─ Require current Channel + exact customer owner
+  │    ├─ Require ArrangingPayment + positive total
+  │    ├─ Reject paymentPurpose = 'platform-service'
+  │    ├─ Require tenant account active + enabled
+  │    └─ Create Razorpay Order with that Channel's credentials
+  │
+  ├─ Browser opens Razorpay Checkout with public tenant Key ID
+  │
+  └─ addPaymentToOrder(method: 'tenant-razorpay', metadata)
+       │
+       ├─ tenantRazorpayPaymentHandler.createPayment()
+       │    └─ TenantRazorpayService.verifyAndSettle()
+       │         ├─ Require authenticated Shop API user
+       │         ├─ Reload/order-owner/channel/state checks
+       │         ├─ Reject Flow A platform-service purpose
+       │         ├─ Reject previously persisted Payment.transactionId
+       │         ├─ Re-read tenant account; require active + enabled
+       │         ├─ Decrypt tenant Key Secret only after account check
+       │         ├─ Verify Razorpay Checkout HMAC (constant-time)
+       │         ├─ Fetch Razorpay Order/Payment server-to-server
+       │         ├─ Verify provider IDs, Vendure receipt/notes, amount/currency
+       │         ├─ Capture authorized payment only after pre-capture checks
+       │         └─ Require final provider payment status = captured
+       │
+       └─ Return Settled to Vendure PaymentMethodHandler
+            └─ Vendure records the Payment through addPaymentToOrder
+```
+
+**Boundary:** Flow B uses only the tenant's Razorpay credentials resolved from the active Vendure Channel. Flow A remains a separate `razorpay` handler using platform credentials and `paymentPurpose = 'platform-service'`. G-1 handles synchronous Shop settlement only; it does not yet provide tenant webhook recovery. A payment captured by Razorpay just before a browser/network failure can require manual recovery until G-3 adds the tenant webhook inbox and reconciler. The duplicate transaction lookup rejects previously persisted payment IDs but is not an atomic concurrent-payment reservation.
+
+---
+
 ## Razorpay Webhook Processing
 
 ```

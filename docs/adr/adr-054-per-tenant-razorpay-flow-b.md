@@ -1,6 +1,6 @@
 # ADR-054 — Per-Tenant Razorpay Integration (Flow B Implementation)
 
-**Status:** ACCEPTED — backend implementation partial; Flow B settlement is not yet wired  
+**Status:** ACCEPTED — Flow B Shop settlement handler is implemented on the G-1 PR branch; local verification pending and G-3 webhook recovery remains open  
 **Date:** 16 November 2026  
 **Author:** Kiro CLI baseline (C-05 follow-up)
 
@@ -66,8 +66,9 @@ Flow B checkout uses the same HMAC signature verification helpers (`computeCheck
 
 **Consequences:**
 
-- Flow A and the future Flow B handler are intended to share the same pure signature/binding policy. The Flow B `verifyAndSettle()` call path is currently unwired, so do not claim equivalent end-to-end protection until its PaymentMethodHandler integration and regression tests exist.
-`TenantRazorpayService.verifyAndSettle()` contains the common signature/order/payment checks, but at the reviewed commit it has no registered tenant `PaymentMethodHandler` or call site. Therefore the existence of the shared helpers is not evidence of a working Flow B settlement path.
+- Flow A and Flow B share the pure signature/order/payment binding policy, while resolving their secrets from separate credential sources.
+- On the G-1 PR branch, `TenantRazorpayService.verifyAndSettle()` is invoked by the registered `tenant-razorpay` PaymentMethodHandler. It checks tenant account activation, authenticated Shop customer/order/channel ownership, signature, provider IDs, receipt/notes, amount and currency. An authorized payment is captured only after all pre-capture bindings pass.
+- This handler intentionally has no Admin/webhook bypass. G-3 must add tenant-specific webhook recovery separately.
 
 ---
 
@@ -115,20 +116,33 @@ The current Admin SDL exposes:
 
 Tenant mutations use `ManageTenantPaymentAccount`. Newly registered tenant-admin roles receive this permission through `TENANT_ADMIN_ROLE_PERMISSIONS`; existing roles may lack it. The safe GraphQL view exposes the public Key ID and configuration metadata, never decrypted secrets. The existing repair CLI is not approved under the current GraphQL-only data-mutation rule because its apply path saves Role entities directly; use the read-only `tenant:roles:check` for diagnosis and add an approved Admin API repair path before changing existing role records.
 
-### Shop API currently exposed
+### Shop API and PaymentMethodHandler — G-1 branch implementation
 
-The only Flow B Shop mutation is `createTenantRazorpayCheckoutOrder(orderId)`. It requires an authenticated customer, resolves credentials from `ctx.channelId`, and validates channel membership, customer ownership, `ArrangingPayment` state and a positive total before it reads/decrypts tenant credentials or calls Razorpay. For an explicit `orderId`, the service reloads the order with `customer.user` and requires `order.customer.user.id === ctx.activeUserId`. For the implicit path it calls Vendure's `OrderService.getActiveOrderForUser(ctx, activeUserId)` and applies the same service-level ownership check to the reloaded order. Missing/foreign orders fail with the same `Order not found` response. Focused regression tests are added in `tenant-razorpay-order-ownership.spec.ts`; test execution is still pending.
+The Flow B Shop API exposes `createTenantRazorpayCheckoutOrder(orderId)`. It requires an authenticated customer, resolves credentials from `ctx.channelId`, and validates current-channel membership, customer ownership, `ArrangingPayment` state and a positive total before provider-order creation. The service reloads the order with `customer.user` and requires `order.customer.user.id === ctx.activeUserId` for explicit and active-order paths. G-2's focused regression suite was run by the user and reported 10/10 tests passing; the full backend build remains to be confirmed.
 
-There is no `verifyTenantPayment` Shop mutation in the current SDL. More importantly, `PaymentsPlugin` registers only the platform `razorpayPaymentHandler` (Flow A); it does not register a tenant-specific `PaymentMethodHandler`. `TenantRazorpayService.verifyAndSettle()` exists but is not wired to Vendure's `addPaymentToOrder` lifecycle. Accordingly, Flow B can currently create a provider order but cannot complete the intended tenant-funded Vendure payment/settlement lifecycle through this plugin. Do not describe Flow B as end-to-end implemented or production-ready.
+The G-1 PR branch adds and registers the separate Vendure PaymentMethodHandler code `tenant-razorpay`. It is used by `addPaymentToOrder` in an authenticated Shop API context. The handler calls `TenantRazorpayService.verifyAndSettle()` and reports `Settled` only after:
+- the reloaded order belongs to the active Channel and authenticated customer;
+- `paymentPurpose = 'platform-service'` is rejected;
+- a valid Razorpay Checkout HMAC has been verified with the tenant Key Secret;
+- the server-fetched Razorpay order ID, receipt/notes, amount and currency match the Vendure order;
+- the server-fetched payment ID, provider-order association, amount and currency match;
+- the tenant account is active and enabled, checked before decrypting the Key Secret;
+- an already-recorded Vendure `Payment.transactionId` is rejected; and
+- any authorized payment is captured only after the pre-capture provider bindings pass, then confirmed as captured before Vendure settlement.
 
-The current one-time webhook controller and `PaymentWebhookEvent`/queue belong to Flow A at `POST /payments/razorpay/checkout-webhook`; the recurring subscription webhook belongs to SubscriptionPlugin at `POST /payments/razorpay/webhook`. There is no tenant-specific Flow B webhook endpoint or tenant webhook reconciliation worker in the current PaymentsPlugin.
+Flow A is unchanged: the existing `razorpay` handler uses only Saa9vi's platform credentials and continues to require `paymentPurpose = 'platform-service'`. The tenant handler uses only tenant credentials from the active Channel and is not a fallback for Flow A.
+
+G-1 regression coverage is added in `tenant-razorpay-settlement.spec.ts`; tests/build have not yet been run by the PR author. The existing transaction lookup rejects previously persisted payment IDs but does not provide an atomic reservation against two simultaneous requests racing before a Payment row exists.
+
+The Flow B tenant webhook endpoint/inbox/worker/reconciliation is still absent (G-3). Therefore the G-1 slice wires the synchronous Shop checkout settlement lifecycle but does not make Flow B end-to-end recoverable or production-ready. No live Razorpay merchant test is claimed.
 
 ### Security boundaries and remaining gaps
 
-1. **Order owner binding — implementation added; verification pending:** `TenantRazorpayService.createCheckoutOrder()` now performs an explicit service-level `order.customer.user.id === ctx.activeUserId` assertion after reloading the order with the required relations, for both explicit and active-order paths. Missing or foreign ownership fails closed with `Order not found`. Regression tests cover same-channel cross-customer IDs and the active-order path; run the targeted suite before closing G-2.
-2. **Webhook status semantics:** rename/rework the current `verifyTenantPaymentWebhook` behavior before it is relied on operationally; it only checks secret presence/decryption.
-3. **Settlement guard:** when wiring `verifyAndSettle()`, ensure the account is rechecked as active and enabled at settlement time, not only when the checkout order is created.
-4. **Webhook design:** decide and implement the tenant webhook route, tenant/channel resolution, signature verification, durable inbox, idempotency and reconciliation semantics before claiming webhook-backed recovery.
+1. **Order owner binding (G-2):** implemented at service level for explicit and active-order checkout paths; user-reported focused result is 10/10 passing.
+2. **Tenant settlement (G-1):** handler and settlement verification added on the G-1 PR branch; local tests/build remain to be confirmed.
+3. **Payment replay:** previously recorded provider payment IDs are rejected through the global Vendure Payment `transactionId` lookup. Concurrent first-use races are not claimed solved.
+4. **Webhook status semantics:** `verifyTenantPaymentWebhook` checks secret presence/decryption only; do not represent it as a signed endpoint test.
+5. **Webhook recovery (G-3):** trusted tenant route/channel resolution, raw-body HMAC verification, durable inbox, idempotent worker and reconciliation remain required.
 
 ### Credential operations
 
@@ -148,6 +162,6 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 Flow B's tenant payee model can be used by two storefront surfaces: the tenant's optional custom-domain storefront and the Saa9vi marketplace storefront. In either case, the active Vendure RequestContext must resolve to the owning tenant's Channel. The marketplace browser must not supply authoritative channel/payee/credential values.
 
-At the reviewed baseline, this ADR's existing gaps remain: no registered tenant PaymentMethodHandler, no settlement call wired through Vendure's payment lifecycle, no tenant-specific webhook inbox/worker/reconciliation, and no live merchant checkout evidence. Do not begin a marketplace checkout launch based only on the existing provider-order creation mutation.
+The G-1 branch wires synchronous tenant Shop settlement through the registered tenant PaymentMethodHandler. The remaining blockers still include tenant-specific webhook inbox/worker/reconciliation, marketplace owner-channel checkout and live merchant verification. Do not begin a marketplace checkout launch based only on provider-order creation or the G-1 handler.
 
 The marketplace checkout target contract, one-tenant-per-order rule, customer identity requirements and separate digital/physical fulfilment workflows are proposed in [ADR-055](adr-055-marketplace-commerce-and-revenue-model.md) and decomposed into [MCR work items](../implementation/marketplace-commerce-revenue-worklist.md). ADR-055 does not supersede or mark complete the Flow B implementation tasks in this ADR.
