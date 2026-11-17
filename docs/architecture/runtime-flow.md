@@ -660,9 +660,8 @@ Admin: verifyTenantPaymentAccount
 Admin: setTenantPaymentAccountEnabled(true)
   |
 Shop: createTenantRazorpayCheckoutOrder(orderId?)
-  +-- require authenticated caller
-  +-- resolve account from ctx.channelId; require active + enabled
   +-- require authenticated caller (`ctx.activeUserId`)
+  +-- resolve account from ctx.channelId; require active + enabled
   +-- explicit order ID or OrderService.getActiveOrderForUser(ctx, activeUserId)
   +-- reload with channels + customer.user
   +-- require current Channel AND customer.user.id = activeUserId
