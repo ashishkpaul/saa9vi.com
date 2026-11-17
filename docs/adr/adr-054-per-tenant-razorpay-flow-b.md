@@ -125,7 +125,7 @@ The current one-time webhook controller and `PaymentWebhookEvent`/queue belong t
 
 ### Security items that remain open
 
-1. **Order owner binding:** when an explicit `orderId` is passed to `createTenantRazorpayCheckoutOrder`, the service verifies channel membership but does not visibly compare `order.customer.user.id` with `ctx.activeUserId`. The resolver is decorated with `@Allow(Permission.Owner)`, but add an adversarial cross-customer test and an explicit service-level owner assertion unless Vendure's resolver permission semantics are proven to bind this argument to the order resource. Flow A performs an explicit owner comparison in its resolver.
+1. **Order owner binding — implementation added; verification pending:** `TenantRazorpayService.createCheckoutOrder()` now performs an explicit service-level `order.customer.user.id === ctx.activeUserId` assertion after reloading the order with the required relations, for both explicit and active-order paths. Missing or foreign ownership fails closed with `Order not found`. Regression tests cover same-channel cross-customer IDs and the active-order path; run the targeted suite before closing G-2.
 2. **Webhook status semantics:** rename/rework the current `verifyTenantPaymentWebhook` behavior before it is relied on operationally; it only checks secret presence/decryption.
 3. **Settlement guard:** when wiring `verifyAndSettle()`, ensure the account is rechecked as active and enabled at settlement time, not only when the checkout order is created.
 4. **Webhook design:** decide and implement the tenant webhook route, tenant/channel resolution, signature verification, durable inbox, idempotency and reconciliation semantics before claiming webhook-backed recovery.
