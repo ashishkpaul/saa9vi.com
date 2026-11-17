@@ -181,9 +181,12 @@ export class TenantRazorpayService {
   /**
    * Verify and settle a tenant-funded payment for the current Shop API customer.
    *
-   * This method is invoked only by the Flow B PaymentMethodHandler from
-   * Vendure's addPaymentToOrder lifecycle. It deliberately does not provide an
-   * admin/webhook bypass; tenant webhook reconciliation belongs to G-3.
+   * This method is invoked by the Flow B PaymentMethodHandler from
+   * Vendure's addPaymentToOrder lifecycle. Shop calls require exact customer
+   * ownership and an enabled account. The verified webhook worker uses an
+   * Admin RequestContext and a server-derived Checkout HMAC; it may reconcile
+   * a payment already captured before checkout was disabled. Provider state,
+   * order binding, amount and currency are re-read for both call paths.
    */
   async verifyAndSettle(
     ctx: RequestContext,
@@ -193,11 +196,14 @@ export class TenantRazorpayService {
     const channelId = String(ctx.channelId);
     const activeUserId = ctx.activeUserId;
 
-    if (ctx.apiType !== 'shop' || !activeUserId) {
+    const isShopSettlement = ctx.apiType === 'shop';
+    const isWebhookSettlement = ctx.apiType === 'admin';
+
+    if ((!isShopSettlement && !isWebhookSettlement) || (isShopSettlement && !activeUserId)) {
       return {
         ok: false,
         errorCode: 'AUTHENTICATION_REQUIRED',
-        detail: 'Tenant payment settlement requires an authenticated Shop API customer',
+        detail: 'Tenant payment settlement requires an authenticated Shop customer or the verified webhook worker',
       };
     }
 
@@ -219,9 +225,16 @@ export class TenantRazorpayService {
     if (!inChannel) {
       return { ok: false, errorCode: 'ORDER_NOT_FOUND', detail: 'Order not found' };
     }
+    // Shop calls must prove customer ownership. The Admin context is used
+    // only by the tenant webhook worker after it verifies the tenant webhook
+    // HMAC and derives a Checkout HMAC with the tenant Key Secret; provider
+    // order/payment truth is fetched again below before settlement.
     if (
-      order.customer?.user?.id == null ||
-      String(order.customer.user.id) !== String(activeUserId)
+      isShopSettlement &&
+      (
+        order.customer?.user?.id == null ||
+        String(order.customer.user.id) !== String(activeUserId)
+      )
     ) {
       return { ok: false, errorCode: 'ORDER_NOT_FOUND', detail: 'Order not found' };
     }
@@ -275,7 +288,9 @@ export class TenantRazorpayService {
       keySecret: string;
     };
     try {
-      credentials = await this.accountService.getActiveDecryptedCredentials(ctx, channelId);
+      credentials = isShopSettlement
+        ? await this.accountService.getActiveDecryptedCredentials(ctx, channelId)
+        : await this.accountService.getWebhookSettlementCredentials(ctx, channelId);
     } catch {
       return {
         ok: false,
