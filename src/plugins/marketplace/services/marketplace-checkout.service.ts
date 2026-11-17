@@ -258,6 +258,24 @@ export class MarketplaceCheckoutService {
       },
     }) ?? order;
 
+    order.customFields = order.customFields ?? {};
+    const existingPaymentPurpose = order.customFields.paymentPurpose;
+    if (existingPaymentPurpose === 'platform-service') {
+      throw new UserInputError('A platform-service cart cannot be used for tenant-client checkout');
+    }
+    if (existingPaymentPurpose && existingPaymentPurpose !== 'tenant-client') {
+      throw new UserInputError('The active cart has an unsupported payment purpose');
+    }
+
+    let orderNeedsSave = false;
+    if (existingPaymentPurpose !== 'tenant-client') {
+      // The Flow A / Flow B distinction is server-set. The browser cannot
+      // choose paymentPurpose, and the platform razorpay handler requires
+      // 'platform-service' while this marketplace route is tenant-client only.
+      order.customFields.paymentPurpose = 'tenant-client';
+      orderNeedsSave = true;
+    }
+
     let marketplaceAttributionApplied = false;
     if (marketplaceRef) {
       const verified = this.attributionService.resolveRef(marketplaceRef, owningChannelId);
@@ -266,13 +284,15 @@ export class MarketplaceCheckoutService {
         verified.resourceType === 'session' &&
         verified.resourceId === String(session.productVariantId)
       ) {
-        order.customFields = order.customFields ?? {};
         order.customFields.marketplaceRef = marketplaceRef;
-        await orderRepo.save(order);
+        orderNeedsSave = true;
         marketplaceAttributionApplied = true;
       }
       // A bad/expired/wrong-resource reference is provenance failure, not a
       // payment failure. The customer may still purchase directly.
+    }
+    if (orderNeedsSave) {
+      await orderRepo.save(order);
     }
 
     const [quotes, paymentMethods] = await Promise.all([
