@@ -8,6 +8,9 @@ import { graphql } from '@/gql';
 
 export const GET_TENANT_PAYMENT_ACCOUNT = graphql(`
   query GetTenantPaymentAccount {
+    activeChannel {
+      token
+    }
     tenantPaymentAccount {
       id
       channelId

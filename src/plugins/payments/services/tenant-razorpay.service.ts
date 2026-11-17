@@ -5,6 +5,7 @@ import {
   TransactionalConnection,
 } from '@vendure/core';
 import { TenantPaymentAccountService } from './tenant-payment-account.service';
+import { TenantPaymentWebhookEvent } from '../entities/tenant-payment-webhook-event.entity';
 import {
   TenantRazorpayOrdersClient,
   TenantRazorpayApiError,
@@ -181,9 +182,12 @@ export class TenantRazorpayService {
   /**
    * Verify and settle a tenant-funded payment for the current Shop API customer.
    *
-   * This method is invoked only by the Flow B PaymentMethodHandler from
-   * Vendure's addPaymentToOrder lifecycle. It deliberately does not provide an
-   * admin/webhook bypass; tenant webhook reconciliation belongs to G-3.
+   * This method is invoked by the Flow B PaymentMethodHandler from
+   * Vendure's addPaymentToOrder lifecycle. Shop calls require exact customer
+   * ownership and an enabled account. The verified webhook worker uses an
+   * Admin RequestContext and a server-derived Checkout HMAC; it may reconcile
+   * a payment already captured before checkout was disabled. Provider state,
+   * order binding, amount and currency are re-read for both call paths.
    */
   async verifyAndSettle(
     ctx: RequestContext,
@@ -193,11 +197,14 @@ export class TenantRazorpayService {
     const channelId = String(ctx.channelId);
     const activeUserId = ctx.activeUserId;
 
-    if (ctx.apiType !== 'shop' || !activeUserId) {
+    const isShopSettlement = ctx.apiType === 'shop';
+    const isWebhookSettlement = ctx.apiType === 'admin';
+
+    if ((!isShopSettlement && !isWebhookSettlement) || (isShopSettlement && !activeUserId)) {
       return {
         ok: false,
         errorCode: 'AUTHENTICATION_REQUIRED',
-        detail: 'Tenant payment settlement requires an authenticated Shop API customer',
+        detail: 'Tenant payment settlement requires an authenticated Shop customer or the verified webhook worker',
       };
     }
 
@@ -219,9 +226,16 @@ export class TenantRazorpayService {
     if (!inChannel) {
       return { ok: false, errorCode: 'ORDER_NOT_FOUND', detail: 'Order not found' };
     }
+    // Shop calls must prove customer ownership. The Admin context is used
+    // only by the tenant webhook worker after it verifies the tenant webhook
+    // HMAC and derives a Checkout HMAC with the tenant Key Secret; provider
+    // order/payment truth is fetched again below before settlement.
     if (
-      order.customer?.user?.id == null ||
-      String(order.customer.user.id) !== String(activeUserId)
+      isShopSettlement &&
+      (
+        order.customer?.user?.id == null ||
+        String(order.customer.user.id) !== String(activeUserId)
+      )
     ) {
       return { ok: false, errorCode: 'ORDER_NOT_FOUND', detail: 'Order not found' };
     }
@@ -254,6 +268,54 @@ export class TenantRazorpayService {
       };
     }
 
+    // Admin-context settlement is reserved for the signed tenant webhook
+    // worker. Requiring a matching durable inbox event prevents an arbitrary
+    // Admin API call from using the server-side settlement path directly.
+    if (isWebhookSettlement) {
+      const webhookEventId = (metadata as Record<string, unknown> | null)?.[
+        'tenant_webhook_event_id'
+      ];
+      if (
+        typeof webhookEventId !== 'string' &&
+        typeof webhookEventId !== 'number'
+      ) {
+        return {
+          ok: false,
+          errorCode: 'WEBHOOK_EVENT_REQUIRED',
+          detail: 'Tenant webhook settlement requires a persisted verified event',
+        };
+      }
+
+      const webhookEventRepo = this.connection.getRepository(
+        ctx,
+        TenantPaymentWebhookEvent,
+      );
+      const webhookEvent = await webhookEventRepo.findOne({
+        where: { id: webhookEventId as any },
+        relations: { channels: true },
+      });
+      const webhookPayment = (webhookEvent?.rawPayload as any)?.payload?.payment?.entity;
+      const eventBelongsToChannel = (webhookEvent?.channels ?? []).some(
+        (candidate: { id: string }) => String(candidate.id) === channelId,
+      );
+      if (
+        !webhookEvent ||
+        !webhookEvent.verifiedAt ||
+        webhookEvent.provider !== 'razorpay' ||
+        webhookEvent.eventType !== 'payment.captured' ||
+        webhookEvent.processingStatus !== 'pending' ||
+        !eventBelongsToChannel ||
+        webhookPayment?.id !== md.razorpayPaymentId ||
+        webhookPayment?.order_id !== md.razorpayOrderId
+      ) {
+        return {
+          ok: false,
+          errorCode: 'WEBHOOK_EVENT_BINDING_MISMATCH',
+          detail: 'Persisted tenant webhook event does not match this provider payment/order',
+        };
+      }
+    }
+
     // Payment is not ChannelAware in Vendure. This lookup therefore checks
     // transaction IDs globally, preventing a previously-recorded provider
     // payment from being attached to a second Vendure order or tenant.
@@ -275,7 +337,9 @@ export class TenantRazorpayService {
       keySecret: string;
     };
     try {
-      credentials = await this.accountService.getActiveDecryptedCredentials(ctx, channelId);
+      credentials = isShopSettlement
+        ? await this.accountService.getActiveDecryptedCredentials(ctx, channelId)
+        : await this.accountService.getWebhookSettlementCredentials(ctx, channelId);
     } catch {
       return {
         ok: false,

@@ -188,6 +188,42 @@ export class TenantPaymentAccountService {
     };
   }
 
+  /**
+   * Decrypt only the tenant webhook secret for ingress authentication.
+   * This is intentionally independent of the account's checkout enabled flag:
+   * already-captured payments must still be authenticated and reconciled after
+   * a tenant temporarily disables new checkout.
+   */
+  async getWebhookSecret(
+    ctx: RequestContext,
+    channelId: ID,
+  ): Promise<string> {
+    const account = await this.findByChannel(ctx, channelId);
+    if (!account?.encryptedWebhookSecret) {
+      throw new NotFoundException('Tenant Razorpay webhook secret is not configured');
+    }
+    return this.encryptionService.decrypt(account.encryptedWebhookSecret);
+  }
+
+  /**
+   * Credentials used only by the signed webhook worker to reconcile money
+   * already captured at Razorpay. Do not apply the checkout enabled gate here:
+   * disabling new checkout must not strand an already-captured payment.
+   */
+  async getWebhookSettlementCredentials(
+    ctx: RequestContext,
+    channelId: ID,
+  ): Promise<Pick<TenantRazorpayCredentials, 'keyId' | 'keySecret'>> {
+    const account = await this.findByChannel(ctx, channelId);
+    if (!account?.encryptedKeySecret) {
+      throw new NotFoundException('Tenant Razorpay credentials are not configured');
+    }
+    return {
+      keyId: account.keyId,
+      keySecret: this.encryptionService.decrypt(account.encryptedKeySecret),
+    };
+  }
+
   async markVerified(
     ctx: RequestContext,
     accountId: string,

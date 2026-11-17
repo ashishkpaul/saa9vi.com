@@ -142,7 +142,27 @@ The Flow B tenant webhook endpoint/inbox/worker/reconciliation is still absent (
 2. **Tenant settlement (G-1):** handler and settlement verification added on the G-1 PR branch; local tests/build remain to be confirmed.
 3. **Payment replay:** previously recorded provider payment IDs are rejected through the global Vendure Payment `transactionId` lookup. Concurrent first-use races are not claimed solved.
 4. **Webhook status semantics:** `verifyTenantPaymentWebhook` checks secret presence/decryption only; do not represent it as a signed endpoint test.
-5. **Webhook recovery (G-3):** trusted tenant route/channel resolution, raw-body HMAC verification, durable inbox, idempotent worker and reconciliation remain required.
+5. **Webhook recovery (G-3):** the feature branch adds `POST /payments/razorpay/tenant-webhook/:channelToken`, tenant-secret HMAC verification over raw request bytes, a ChannelAware tenant inbox with Channel-scoped delivery deduplication, persist-before-enqueue recovery and a bounded `payment.captured` worker. The worker re-reads provider truth and settles through the `tenant-razorpay` handler. Admin settlement is gated by the matching persisted verified inbox event. The Channel token is routing only; HMAC is the authentication boundary. The CLI-generated migration and local/runtime validation remain pending.
+
+### Tenant webhook recovery — G-3 branch implementation
+
+The G-3 PR branch adds a tenant-specific webhook ingress and durable reconciliation path:
+
+- Razorpay callback URL: `POST /payments/razorpay/tenant-webhook/:channelToken`.
+- The Channel token selects the tenant's account only; it does not authenticate the request. The endpoint retrieves that Channel's encrypted webhook secret and validates the `X-Razorpay-Signature` HMAC against the exact `req.rawBody` bytes before parsing JSON.
+- `x-razorpay-event-id` is mandatory. The new ChannelAware `TenantPaymentWebhookEvent` belongs to exactly one Channel; the unique dedupe key hashes provider + Channel ID + Razorpay event ID.
+- The controller persists the receipt before queueing only the inbox ID. Duplicate pending events are re-enqueued to recover a prior persist-success/enqueue-failure case; reusing an event ID with a different raw-payload hash/event type is rejected. DB or queue errors are non-2xx so Razorpay retries.
+- The worker processes `payment.captured` only. It resolves the event's owning Channel, uses that Channel's Admin RequestContext, fetches the Razorpay Order/Payment with that tenant's credentials, verifies provider IDs, receipt/notes, order association, amount, currency and captured state, then calls `OrderService.addPaymentToOrder` using `tenant-razorpay`.
+- The internal Admin settlement route inside `TenantRazorpayService.verifyAndSettle()` requires the matching verified, pending, same-Channel inbox event and the same provider order/payment identifiers. It is not a general Admin bypass.
+- Webhook reconciliation can still use tenant key credentials after new checkout has been disabled, because it is recovering a payment that Razorpay has already captured. It does not permit new checkouts.
+- A conditional event claim moves `pending` to `processing` before reconciliation; concurrent copies of the same inbox event cannot both run. A two-minute `processingStartedAt` lease allows a later duplicate delivery to requeue a crashed worker's stale event.
+- A captured payment that cannot be attached to the expected tenant order, is already attached elsewhere, or cannot reach a settled Vendure order is terminally flagged for manual review through `PaymentOpsAlertService`. Transient provider failures retry up to three attempts, then alert.
+
+**Migration rule:** the new ChannelAware entity and Channel join table require a schema migration. The PR does not include a hand-authored migration. Generate it locally using `npx vendure migrate --generate`, inspect it and commit it before merging. Do not merge/deploy without this CLI-generated migration.
+
+**Dashboard setup:** the tenant Payment Gateways page displays the callback URL and the required `payment.captured` event. If the Dashboard and API use different public origins, configure `VITE_VENDURE_API_BASE_URL` to the public API origin before building the Dashboard.
+
+**Verification boundary:** the G-3 tests and backend/dashboard builds have not yet been run by the PR author. Real Razorpay HTTP delivery, retry/replay and tenant isolation validation are also pending. The existing `verifyTenantPaymentWebhook` Admin mutation remains a presence/decryption check and is not a signed test delivery.
 
 ### Credential operations
 
