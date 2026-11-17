@@ -70,6 +70,10 @@ export class TenantPaymentWebhookEvent extends VendureEntity implements ChannelA
   @Column({ type: 'varchar', default: 'pending' })
   processingStatus: string;
 
+  /** Lease timestamp for atomic worker claims; stale claims can be recovered. */
+  @Column({ type: 'timestamp', nullable: true })
+  processingStartedAt: Date | null;
+
   @Column({ type: 'int', default: 0 })
   attemptCount: number;
 
