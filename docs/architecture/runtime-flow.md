@@ -99,6 +99,43 @@ bbb-webhook-processor job
 
 ---
 
+## Tenant Razorpay Webhook Recovery (Flow B — G-3)
+
+```
+Razorpay POST /payments/razorpay/tenant-webhook/:channelToken
+  │
+  ├─ Resolve Channel from public channel token (routing only)
+  ├─ Create Admin RequestContext for that Channel
+  ├─ Decrypt that Channel's webhook secret
+  ├─ Verify X-Razorpay-Signature against exact req.rawBody bytes
+  ├─ Parse JSON only after successful signature verification
+  ├─ Require x-razorpay-event-id
+  ├─ Compute dedupeKey = SHA256('razorpay|channelId|eventId')
+  ├─ Persist TenantPaymentWebhookEvent assigned to exactly one Channel
+  ├─ Enqueue only the persisted inbox row ID
+  └─ Return 200 only after persistence + enqueue succeed
+
+tenant-payment-webhook-reconciliation
+  │
+  ├─ Load inbox event by ID and discover its single owning Channel
+  ├─ Create tenant Admin RequestContext using channel.token
+  ├─ Ignore terminal events; process payment.captured only
+  ├─ Decrypt tenant Key ID/Secret for already-captured payment recovery
+  ├─ Fetch Razorpay Order and Payment server-to-server
+  ├─ Validate provider IDs, Vendure receipt/notes, amount, currency and captured status
+  ├─ Verify Vendure order belongs to the same Channel and is still ArrangingPayment
+  ├─ Check provider transaction ID has not already been recorded
+  ├─ Derive checkout HMAC on the server
+  ├─ addPaymentToOrder(method: 'tenant-razorpay', metadata includes inbox event ID)
+  │    └─ TenantRazorpayService re-checks matching verified pending Channel inbox event
+  ├─ Mark inbox processed only after Vendure reports PaymentSettled
+  └─ Retry transient errors up to 3 attempts; terminally mark failed
+```
+
+**Boundaries:** This path is Flow B only. The channel token is a routing identifier; the per-tenant webhook HMAC is the authentication boundary. The Flow A `checkout-webhook` and SubscriptionPlugin recurring webhook remain separate. Non-`payment.captured` events are stored but ignored; no refund, failed-payment or order reversal behavior is implemented here. The new ChannelAware entity requires a migration generated locally with `npx vendure migrate --generate`; no hand-written migration is permitted. Runtime tests and the backend build are pending.
+
+---
+
 ## Razorpay Checkout Webhook Processing (Flow A — platform payments)
 
 ```
