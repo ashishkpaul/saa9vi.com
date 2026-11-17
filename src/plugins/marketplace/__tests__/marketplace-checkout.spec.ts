@@ -288,6 +288,13 @@ describe('MarketplaceCheckoutService', () => {
     expect(activeOrderService.getActiveOrder).not.toHaveBeenCalled();
   });
 
+  it('rejects a disabled ProductVariant even when its Product is enabled', async () => {
+    variant.enabled = false;
+
+    await expect(service.createSessionCheckout(ctx, sessionId)).rejects.toThrow(/not assigned to its owning academy/);
+    expect(activeOrderService.getActiveOrder).not.toHaveBeenCalled();
+  });
+
   it('rejects a product that is not assigned to the persisted owning Channel', async () => {
     variant.product.channels = [defaultChannel];
 
