@@ -10,7 +10,6 @@ import {
   TenantRazorpayApiError,
 } from './tenant-razorpay-orders.client';
 import {
-  computeCheckoutSignature,
   assertOrderBinding,
   assertPaymentBinding,
   extractCheckoutMetadata,
@@ -25,12 +24,6 @@ export interface TenantCheckoutOrderHandle {
   amountMinor: number;
   currency: string;
   keyId: string;
-}
-
-export interface TenantCheckoutMetadata {
-  razorpayOrderId: string;
-  razorpayPaymentId: string;
-  razorpaySignature?: string;
 }
 
 export type TenantSettleOutcome =
@@ -280,7 +273,6 @@ export class TenantRazorpayService {
     let credentials: {
       keyId: string;
       keySecret: string;
-      webhookSecret: string | null;
       accountMode: string;
     };
     try {
@@ -317,6 +309,14 @@ export class TenantRazorpayService {
         md.razorpayOrderId,
       );
 
+      if (razorpayOrder.id !== md.razorpayOrderId) {
+        return {
+          ok: false,
+          errorCode: 'PROVIDER_ORDER_ID_MISMATCH',
+          detail: 'Razorpay returned a different provider order ID',
+        };
+      }
+
       const orderBinding = assertOrderBinding({
         receipt: razorpayOrder.receipt,
         notes: razorpayOrder.notes,
@@ -350,8 +350,15 @@ export class TenantRazorpayService {
         md.razorpayPaymentId,
       );
 
-      // Do not capture an authorization until its provider order, exact amount
-      // and currency have all been checked against the Vendure order.
+      // Do not capture an authorization until its provider payment ID, order,
+      // exact amount and currency have all been checked against Vendure.
+      if (payment.id !== md.razorpayPaymentId) {
+        return {
+          ok: false,
+          errorCode: 'PROVIDER_PAYMENT_ID_MISMATCH',
+          detail: 'Razorpay returned a different provider payment ID',
+        };
+      }
       if (payment.order_id !== md.razorpayOrderId) {
         return {
           ok: false,
@@ -423,30 +430,4 @@ export class TenantRazorpayService {
     }
   }
 
-  private extractMetadata(
-    metadata: unknown,
-  ): TenantCheckoutMetadata | null {
-    if (!metadata || typeof metadata !== 'object') return null;
-    const m = metadata as Record<string, unknown>;
-    const razorpayOrderId = m.razorpay_order_id ?? m.razorpayOrderId;
-    const razorpayPaymentId = m.razorpay_payment_id ?? m.razorpayPaymentId;
-    const signatureRaw = m.razorpay_signature ?? m.razorpaySignature;
-    if (
-      typeof razorpayOrderId !== 'string' ||
-      razorpayOrderId.length === 0
-    ) {
-      return null;
-    }
-    if (
-      typeof razorpayPaymentId !== 'string' ||
-      razorpayPaymentId.length === 0
-    ) {
-      return null;
-    }
-    const razorpaySignature =
-      typeof signatureRaw === 'string' && signatureRaw.length > 0
-        ? signatureRaw
-        : undefined;
-    return { razorpayOrderId, razorpayPaymentId, razorpaySignature };
-  }
 }
