@@ -184,6 +184,20 @@ Not claimed:
 - No marketplace shared checkout or multi-seller orchestration is claimed complete.
 - No physical shipping/return production lifecycle is claimed complete.
 
+## Implementation note — 17 November 2026
+
+The feature branch `feat/marketplace-tenant-channel-checkout` adds an initial source implementation for MCR-0.1, MCR-0.3 and MCR-1.3:
+
+- Marketplace checkout resolves a publicly purchasable `BbbScheduledSession` to its persisted tenant Channel; the browser does not choose the payee, channel, variant or order.
+- Checkout requires an authenticated user with an existing Customer association in the resolved Channel. It does not auto-create or auto-admit a tenant learner.
+- The service creates/retrieves the active cart through Vendure's target-Channel active-order strategy, validates the owner and tenant scope of the cart, and recalculates the price through Vendure.
+- The service stamps `paymentPurpose=tenant-client` server-side and returns only eligible tenant `tenant-razorpay` PaymentMethod codes. It does not settle the provider payment or grant learning access.
+- The current implementation is intentionally limited to marketplace BBB sessions with a valid ProductVariant mapping. Generic product checkout, guest checkout, multi-seller parent carts, storefront integration and fulfilment remain out of scope.
+- The signed `marketplaceRef` remains provenance only. It is verified against the owner Channel ID and the session's product variant. The attribution apply resolver and order-placement listener now use that same persisted Channel ID contract.
+- No new database entity or schema migration is introduced by this slice.
+
+This is an implementation snapshot, not acceptance of the proposed ADR decisions and not proof of production readiness. Local build, generated Shop schema, two-tenant Shop API E2E and provider-level payment verification remain required. The G-3 `TenantPaymentWebhookEvent` migration is a separate release prerequisite.
+
 ## Consequences
 
 - Marketplace checkout is tenant-channel commerce, not a default-channel payment flow.
