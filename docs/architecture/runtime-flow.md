@@ -771,9 +771,9 @@ Marketplace session selection (sessionId; optional marketplaceRef)
   -> load BbbScheduledSession and persisted organization/channel mapping
   -> reject private/cancelled/finished/expired or non-commercially-eligible listing
   -> validate Product + ProductVariant ownership and bbbSessionId back-reference
-  -> require active/enabled tenant Razorpay account
   -> copy authenticated Shop context to persisted owner Channel
   -> require existing Customer assignment in that Channel (no implicit admission)
+  -> require enabled tenant-razorpay PaymentMethod + active/enabled tenant Razorpay account
   -> ActiveOrderService resolves/creates the session's tenant-channel active cart
   -> validate cart owner, channel set and all existing line owners
   -> add ProductVariant and reprice through Vendure OrderService
