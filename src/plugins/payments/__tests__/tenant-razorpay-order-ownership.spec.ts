@@ -182,6 +182,18 @@ describe('TenantRazorpayService checkout order ownership (G-2)', () => {
     expect(client.createOrder).not.toHaveBeenCalled();
   });
 
+  it('treats an explicitly supplied empty order ID as an invalid ID, not as an active-order request', async () => {
+    orderRepo.findOne.mockResolvedValue(null);
+
+    await expect(
+      service.createCheckoutOrder(ctx, ''),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(orderRepo.findOne).toHaveBeenCalledWith({ where: { id: '' } });
+    expect(orderService.getActiveOrderForUser).not.toHaveBeenCalled();
+    expect(client.createOrder).not.toHaveBeenCalled();
+  });
+
   it('does not select an arbitrary ArrangingPayment order when no active order exists for the caller', async () => {
     vi.mocked(orderService.getActiveOrderForUser).mockResolvedValue(undefined as never);
 
