@@ -73,6 +73,7 @@ describe('MarketplaceCheckoutService', () => {
       channels: [defaultChannel, tenantChannel],
       product: {
         enabled: true,
+        channels: [defaultChannel, tenantChannel],
         customFields: { bbbSessionId: sessionId },
       },
     };
@@ -277,6 +278,28 @@ describe('MarketplaceCheckoutService', () => {
     variant.channels = [defaultChannel];
 
     await expect(service.createSessionCheckout(ctx, sessionId)).rejects.toThrow(/not assigned to its owning academy/);
+    expect(activeOrderService.getActiveOrder).not.toHaveBeenCalled();
+  });
+
+  it('rejects a product that is not assigned to the persisted owning Channel', async () => {
+    variant.product.channels = [defaultChannel];
+
+    await expect(service.createSessionCheckout(ctx, sessionId)).rejects.toThrow(/not assigned to its owning academy/);
+    expect(activeOrderService.getActiveOrder).not.toHaveBeenCalled();
+  });
+
+  it('rejects a platform-service cart before adding the marketplace product', async () => {
+    order.customFields.paymentPurpose = 'platform-service';
+
+    await expect(service.createSessionCheckout(ctx, sessionId)).rejects.toThrow(/platform-service cart/);
+    expect(orderService.addItemToOrder).not.toHaveBeenCalled();
+    expect(orderRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('re-checks marketplace commercial eligibility at checkout time', async () => {
+    vi.mocked(commercialEntitlements.channelMarketplaceEligible).mockResolvedValue(false);
+
+    await expect(service.createSessionCheckout(ctx, sessionId)).rejects.toThrow(/not currently eligible/);
     expect(activeOrderService.getActiveOrder).not.toHaveBeenCalled();
   });
 
