@@ -122,13 +122,12 @@ describe('MarketplaceCheckoutService', () => {
         },
       ]),
     };
-    rawRepositories = new Map([
-      [BbbScheduledSession, sessionRepo],
-      [Channel, channelRepo],
-      [ProductVariant, variantRepo],
-      [TenantPaymentAccount, accountRepo],
-      [PaymentMethod, paymentMethodRepo],
-    ]);
+    rawRepositories = new Map<unknown, unknown>();
+    rawRepositories.set(BbbScheduledSession, sessionRepo);
+    rawRepositories.set(Channel, channelRepo);
+    rawRepositories.set(ProductVariant, variantRepo);
+    rawRepositories.set(TenantPaymentAccount, accountRepo);
+    rawRepositories.set(PaymentMethod, paymentMethodRepo);
 
     const connection = {
       rawConnection: {
