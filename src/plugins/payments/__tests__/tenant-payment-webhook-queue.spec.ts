@@ -12,6 +12,7 @@ import { TenantPaymentWebhookEvent } from '../entities/tenant-payment-webhook-ev
 import { computeCheckoutSignature } from '../razorpay-checkout.policy';
 import type { TenantPaymentAccountService } from '../services/tenant-payment-account.service';
 import type { TenantRazorpayOrdersClient } from '../services/tenant-razorpay-orders.client';
+import { PaymentOpsAlertService } from '../services/payment-ops-alert.service';
 import { TenantPaymentWebhookQueueService } from '../services/tenant-payment-webhook-queue.service';
 
 const CHANNEL_ID = 'channel-tenant-11';
@@ -81,6 +82,7 @@ describe('TenantPaymentWebhookQueueService (G-3 recovery)', () => {
   let orderService: Pick<OrderService, 'addPaymentToOrder'>;
   let accountService: Pick<TenantPaymentAccountService, 'getWebhookSettlementCredentials'>;
   let client: Pick<TenantRazorpayOrdersClient, 'fetchOrder' | 'fetchPayment'>;
+  let opsAlert: Pick<PaymentOpsAlertService, 'notify'>;
   let service: TenantPaymentWebhookQueueService;
 
   beforeEach(() => {
@@ -152,6 +154,10 @@ describe('TenantPaymentWebhookQueueService (G-3 recovery)', () => {
       }),
     } as unknown as Pick<TenantRazorpayOrdersClient, 'fetchOrder' | 'fetchPayment'>;
 
+    opsAlert = {
+      notify: vi.fn(),
+    };
+
     service = new TenantPaymentWebhookQueueService(
       {} as JobQueueService,
       connection as TransactionalConnection,
@@ -159,6 +165,7 @@ describe('TenantPaymentWebhookQueueService (G-3 recovery)', () => {
       orderService as OrderService,
       accountService as TenantPaymentAccountService,
       client as TenantRazorpayOrdersClient,
+      opsAlert as PaymentOpsAlertService,
     );
   });
 
@@ -222,6 +229,7 @@ describe('TenantPaymentWebhookQueueService (G-3 recovery)', () => {
   it('treats a payment already recorded against the same order as a harmless replay', async () => {
     paymentRepo.findOne.mockResolvedValue({
       id: 'vendure-payment-1',
+      state: 'Settled',
       order: { id: ORDER_ID },
     });
 
@@ -234,13 +242,21 @@ describe('TenantPaymentWebhookQueueService (G-3 recovery)', () => {
   it('does not attach a provider payment already recorded against another order', async () => {
     paymentRepo.findOne.mockResolvedValue({
       id: 'vendure-payment-elsewhere',
+      state: 'Settled',
       order: { id: 'order-foreign' },
     });
 
     await service.processWebhookEvent(91);
 
-    expect(event.processingStatus).toBe('ignored');
+    expect(event.processingStatus).toBe('failed');
+    expect(event.failedAt).toBeInstanceOf(Date);
     expect(orderService.addPaymentToOrder).not.toHaveBeenCalled();
+    expect(opsAlert.notify).toHaveBeenCalledWith(
+      'tenant-payment-webhook-duplicate-payment',
+      '91',
+      expect.stringContaining('already recorded'),
+      expect.objectContaining({ razorpayPaymentId: PROVIDER_PAYMENT_ID }),
+    );
   });
 
   it('ignores a captured payment when the order is no longer payable and has no matching Payment', async () => {
@@ -248,8 +264,33 @@ describe('TenantPaymentWebhookQueueService (G-3 recovery)', () => {
 
     await service.processWebhookEvent(91);
 
-    expect(event.processingStatus).toBe('ignored');
+    expect(event.processingStatus).toBe('failed');
+    expect(event.failedAt).toBeInstanceOf(Date);
     expect(orderService.addPaymentToOrder).not.toHaveBeenCalled();
+    expect(opsAlert.notify).toHaveBeenCalledWith(
+      'tenant-payment-webhook-unmatched-capture',
+      '91',
+      expect.stringContaining('without a matching Vendure Payment'),
+      expect.objectContaining({ orderState: 'PaymentSettled' }),
+    );
+  });
+
+  it('alerts when Vendure records the payment but does not settle the order', async () => {
+    vi.mocked(orderService.addPaymentToOrder).mockResolvedValue({
+      ...makeOrder(),
+      state: 'ArrangingPayment',
+    } as any);
+
+    await service.processWebhookEvent(91);
+
+    expect(event.processingStatus).toBe('failed');
+    expect(event.failedAt).toBeInstanceOf(Date);
+    expect(opsAlert.notify).toHaveBeenCalledWith(
+      'tenant-payment-webhook-settlement-not-completed',
+      '91',
+      expect.stringContaining('did not settle order'),
+      expect.objectContaining({ vendureState: 'ArrangingPayment' }),
+    );
   });
 
   it('rejects provider amount/currency/status mismatches and leaves the event retryable', async () => {
