@@ -101,7 +101,11 @@ describe('TenantRazorpayService verifyAndSettle (G-1)', () => {
         status: 'captured',
         method: 'upi',
       }),
-      capturePayment: vi.fn().mockImplementation(async (_keyId, _secret, input) => ({
+      capturePayment: vi.fn().mockImplementation(async (
+        _keyId: string,
+        _secret: string,
+        input: { razorpayPaymentId: string; amountMinor: number; currency: string },
+      ) => ({
         id: input.razorpayPaymentId,
         order_id: RAZORPAY_ORDER_ID,
         amount: input.amountMinor,
@@ -265,6 +269,37 @@ describe('TenantRazorpayService verifyAndSettle (G-1)', () => {
     const currencyResult = await service.verifyAndSettle(ctx, ORDER_ID, validMetadata());
     expect(currencyResult).toMatchObject({ ok: false, errorCode: 'ORDER_CURRENCY_MISMATCH' });
     expect(client.fetchPayment).not.toHaveBeenCalled();
+  });
+
+  it('rejects a provider order response with a different ID', async () => {
+    vi.mocked(client.fetchOrder).mockResolvedValue({
+      id: 'order_rzp_unexpected',
+      amount: 129900,
+      currency: 'INR',
+      receipt: ORDER_CODE,
+      status: 'paid',
+      notes: { vendureOrderCode: ORDER_CODE },
+    });
+
+    const result = await service.verifyAndSettle(ctx, ORDER_ID, validMetadata());
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PROVIDER_ORDER_ID_MISMATCH' });
+    expect(client.fetchPayment).not.toHaveBeenCalled();
+  });
+
+  it('rejects a provider payment response with a different ID before capture', async () => {
+    vi.mocked(client.fetchPayment).mockResolvedValue({
+      id: 'pay_rzp_unexpected',
+      order_id: RAZORPAY_ORDER_ID,
+      amount: 129900,
+      currency: 'INR',
+      status: 'authorized',
+    });
+
+    const result = await service.verifyAndSettle(ctx, ORDER_ID, validMetadata());
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PROVIDER_PAYMENT_ID_MISMATCH' });
+    expect(client.capturePayment).not.toHaveBeenCalled();
   });
 
   it('rejects a payment attached to a different Razorpay order before capture', async () => {
