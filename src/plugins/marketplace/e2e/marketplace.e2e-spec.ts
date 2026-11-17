@@ -60,6 +60,7 @@ import { MarketplaceIndexerPlugin } from '../marketplace-indexer.plugin';
 // policy reads) and seed an eligible subscription per publishing channel.
 import { SubscriptionPlugin } from '../../subscription/subscription.plugin';
 import { LearningPlugin } from '../../learning-plugin/learning-plugin.plugin';
+import { PaymentsPlugin } from '../../payments/payments.plugin';
 import { seedMarketplaceSubscription, clearMarketplaceSubscription } from './marketplace-entitlement.fixture';
 import { MarketplaceIndexerService } from '../services/marketplace-indexer.service';
 import { MarketplaceBaselineService } from '../services/marketplace-baseline.service';
@@ -298,16 +299,21 @@ const { server, adminClient, shopClient } = createTestEnvironment(
     // SubscriptionPlugin: ADR-042/INV-024 — the marketplace listing gate reads
     // subscription_plan / organization_subscription; without these entities in
     // this schema every PUBLIC session would fail closed on missing metadata.
-    // LearningPlugin registers the course-management permissions granted by
-    // TenantRegistrationService to new tenant administrators. Keep it in this
-    // harness so tenant registration uses the same custom-permission registry
-    // as the production Vendure configuration.
+    // PaymentsPlugin registers ManageTenantPaymentAccount, which is granted
+    // by TENANT_ADMIN_ROLE_PERMISSIONS. It also registers the production
+    // Flow A / Flow B payment handlers; no provider request is made by this
+    // marketplace projection suite.
+    // SubscriptionPlugin registers the listing-entitlement entities.
+    // LearningPlugin registers the course permissions granted to tenant admins.
+    // Keep all three in this harness so permission validation and plugin config
+    // match the production Vendure configuration.
     plugins: [
       TenantPlugin,
       BigBlueButtonPlugin,
       CmsPlugin,
       ReviewsPlugin,
       MarketplaceIndexerPlugin,
+      PaymentsPlugin,
       SubscriptionPlugin.init({}) as any,
       LearningPlugin,
     ],

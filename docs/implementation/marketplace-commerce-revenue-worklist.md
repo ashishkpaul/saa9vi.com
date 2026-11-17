@@ -1,7 +1,7 @@
 # Marketplace Commerce & Revenue — Implementation Worklist
 
 **Status:** Proposed worklist based on ADR-055  
-**Baseline:** repository `main` at `5c225d020214d1d05cb4cb3cfe0aaa73d2fcbed5`; MCR-1.3 first backend slice merged in PR #19  
+**Baseline:** repository `main` at `e7d3bf3db0b855a6d56a6cc47de6f72ce148d9f0`; MCR-1.3 backend slice merged in PR #19 and test-harness fixes merged in PR #20  
 **Purpose:** Sequence future engineering work without reimplementing existing foundations. Re-inspect source and the active branch before every implementation slice.
 
 ## Mandatory rules
@@ -25,8 +25,8 @@
 - [x] Implement the initial provider scope as tenant Razorpay only; intersect Vendure's eligible payment-method quote with an enabled PaymentMethod assigned to the owner Channel and using `tenant-razorpay`.
 - [x] Enforce one non-default tenant Channel per order; Flow A `platform-service` carts are rejected and Flow B `paymentPurpose=tenant-client` is stamped server-side.
 - [ ] Reconcile/accept ADR-051, ADR-054 and ADR-055 across the full product/glossary/platform-story contract.
-- [x] Focused checkout service tests (18/18), `npm run codegen`, and commission E2E (7/7) passed on the merged implementation before the follow-up harness fixes.
-- [ ] Re-run `npm run build` and marketplace projection E2E after the verification fixes; complete two-tenant Shop API E2E.
+- [x] Focused checkout service tests (18/18), `npm run codegen`, `npm run build`, and commission E2E (7/7) passed after PR #20.
+- [ ] Re-run marketplace projection E2E after registering `PaymentsPlugin`; the latest run reaches tenant registration but fails because `ManageTenantPaymentAccount` is not registered in the test VendureConfig. Complete the full two-tenant Shop API E2E separately.
 
 ### MCR-0.2 — Product and commercial taxonomy (P0)
 - [ ] Audit Product/ProductVariant custom fields, `BbbScheduledSession.productVariantId`, `LearningCourse`, `CourseEnrollment`, `BbbProductAccess` and fulfilment handlers.
@@ -77,8 +77,8 @@ Commerce-programme outcome:
 - [x] Return only eligible tenant Razorpay PaymentMethod codes and the public Channel token needed for subsequent Shop API routing; no secrets are returned.
 - [x] Preserve valid attribution and set `paymentPurpose=tenant-client`; this mutation prepares the cart and does not itself create/capture a provider payment.
 - [ ] Complete the storefront sequence (shipping/address as applicable, tenant Razorpay provider order, `addPaymentToOrder`, confirmation) and real two-tenant Shop API E2E verification.
-- [x] Focused checkout service unit tests (18/18), `npm run codegen`, and commission E2E (7/7) passed on the merged source before the follow-up harness fixes.
-- [ ] Re-run `npm run build` after the explicit repository-map typing fix and `npm run test:e2e:marketplace` after adding `LearningPlugin` to the test plugin registry.
+- [x] Focused checkout service unit tests (18/18), `npm run codegen`, `npm run build`, and commission E2E (7/7) passed after PR #20.
+- [ ] Re-run `npm run test:e2e:marketplace` after adding `PaymentsPlugin` so its `ManageTenantPaymentAccount` custom permission is registered in the test VendureConfig.
 - [ ] Full two-tenant Shop API E2E (including same-email identities, cart isolation and channel switching) remains pending.
 
 ### MCR-1.4 — Tenant custom-domain storefront parity (P1)
@@ -224,4 +224,4 @@ The implementation from `feat/marketplace-tenant-channel-checkout` was merged to
 
 The GraphQL mutation is `createMarketplaceSessionCheckout(sessionId, marketplaceRef)`. The response establishes the owning Channel's active cart, tenant-calculated total and eligible `tenant-razorpay` PaymentMethod codes. The storefront then continues through the normal tenant Shop API lifecycle. This mutation does not place/settle the order, grant a learner membership, create a course enrollment or issue a BBB entitlement.
 
-No new entity/table or database migration is introduced by this slice. The preceding verification run recorded 18/18 focused service tests, successful `npm run codegen`, and 7/7 commission E2E tests; `npm run build` exposed a TypeScript inference error in the test repository map, while the marketplace projection E2E stopped during tenant registration because its harness omitted `LearningPlugin` custom permissions. A follow-up test-harness PR addresses those two setup issues; rerun the build and marketplace E2E before treating verification as complete. The full two-tenant Shop API E2E, storefront sequence and provider-level verification remain open. The G-3 `TenantPaymentWebhookEvent` CLI migration remains an independent Flow B release prerequisite.
+No new entity/table or database migration is introduced by this slice. After PR #20, the local run recorded 18/18 focused checkout service tests, successful `npm run codegen`, a successful TypeScript build, and 7/7 commission E2E tests. The marketplace projection E2E progressed through plugin startup after `LearningPlugin` was added, but tenant registration then failed because the harness omitted `PaymentsPlugin`, which registers `ManageTenantPaymentAccount` through its configuration hook. The current follow-up adds `PaymentsPlugin` to match production plugin registration; the marketplace E2E must be rerun before verification is complete. The full two-tenant Shop API E2E, storefront sequence and provider-level verification remain open. The G-3 `TenantPaymentWebhookEvent` CLI migration remains an independent Flow B release prerequisite.

@@ -1,7 +1,7 @@
 # What Next — Saa9vi
 
 **Updated:** 17 November 2026  
-**Repository baseline:** `main` at `5c225d020214d1d05cb4cb3cfe0aaa73d2fcbed5`
+**Repository baseline:** `main` at `e7d3bf3db0b855a6d56a6cc47de6f72ce148d9f0`
 
 > **Purpose:** Give the team one current, ordered view of the next actions. This file summarizes priorities; detailed tasks and acceptance criteria remain in the canonical worklists linked below.
 
@@ -14,7 +14,7 @@
 | BBB access and usage billing | Entitlement, capacity-grant and grant/metered usage foundations exist. | Refund/reversal semantics, usage reconciliation and production evidence remain separate release gates. |
 | Learning platform | LearningPlugin entities, Admin APIs and authenticated learner read APIs exist. | Learner invitation/self-enrollment, template CRUD and the complete learner/instructor storefront remain open. Learner-to-tenant recurring billing is a separate future lifecycle. |
 | Tenant-client payments (Flow B) | Tenant account configuration, G-1 `tenant-razorpay` PaymentMethodHandler and settlement, G-2 order/customer ownership, and G-3 tenant webhook controller/inbox/worker are present in source. User-reported focused regression evidence: 55/55 tests passed; build output showed no TypeScript diagnostics. | CLI-generated migration for `TenantPaymentWebhookEvent` and Channel join table; real Razorpay Test Mode checkout and signed webhook delivery/recovery verification remain open. |
-| Marketplace | Cross-tenant search, signed provenance and zero-commission ledger exist. The MCR-0.1/MCR-0.3/MCR-1.3 first backend session-checkout slice was merged to `main` in PR #19 (`5c225d0`). | Focused checkout tests (18/18), codegen and commission E2E (7/7) passed in the preceding verification run. Build and marketplace projection E2E exposed test-harness issues addressed by the current follow-up PR; rerun both. Full two-tenant Shop API E2E, storefront checkout integration and provider-level verification remain open. |
+| Marketplace | Cross-tenant search, signed provenance and zero-commission ledger exist. The MCR-0.1/MCR-0.3/MCR-1.3 first backend session-checkout slice was merged to `main` in PR #19 (`5c225d0`); the repository-map typing and LearningPlugin test setup fixes were merged in PR #20 (`e7d3bf3`). | Focused checkout tests (18/18), codegen, TypeScript build and commission E2E (7/7) pass in the latest supplied run. Marketplace projection E2E still fails at tenant registration because the harness omits PaymentsPlugin's `ManageTenantPaymentAccount` permission registration; the current follow-up adds PaymentsPlugin and requires rerun. Full two-tenant Shop API E2E, storefront checkout integration and provider-level verification remain open. |
 | Advertising | AdWallet, AdSpendLedger, campaigns, sponsored ranking and banner-scope foundations exist. | Expand approved inventory, define billable impression/click events and complete measurement/reporting. |
 | Physical commerce | Tenant-channel commerce foundations can support seller-owned products. | Marketplace physical-listing readiness and full stock/shipping/returns/refund acceptance need implementation and verification. |
 
@@ -28,7 +28,7 @@ Do not treat provider-order creation, passing unit tests or source registration 
 
 ### P0 — Marketplace tenant-channel checkout contract
 
-4. **MCR test-harness verification:** rerun `npm run build` and `npm run test:e2e:marketplace` after the follow-up fixes for the TypeScript repository map and missing `LearningPlugin` permission registration. The preceding run recorded 18/18 focused service tests, successful `npm run codegen`, and 7/7 commission E2E tests.
+4. **MCR test-harness verification:** rerun `npm run build` and `npm run test:e2e:marketplace` after adding `PaymentsPlugin` to register `ManageTenantPaymentAccount` in the test VendureConfig. The latest supplied run recorded 18/18 focused service tests, successful `npm run codegen`, successful `npm run build`, and 7/7 commission E2E tests.
 5. **MCR two-tenant E2E and storefront integration:** verify target Channel switch, Customer association, cart separation, exact tenant PaymentMethod eligibility, order owner and zero-commission attribution. Then wire the Next.js flow to continue through tenant Shop API checkout. See [MCR-0.1 to MCR-0.3 and MCR-1.3](implementation/marketplace-commerce-revenue-worklist.md).
 
 ### P0/P1 — Learner subscription and digital fulfilment
