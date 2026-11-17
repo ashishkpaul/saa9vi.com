@@ -91,7 +91,9 @@ export function PaymentGatewaysConfiguration() {
   const verifyWebhookMutation = useMutation({
     mutationFn: () => api.mutate(VERIFY_TENANT_PAYMENT_WEBHOOK, {}),
     onSuccess: () => {
-      toast.success('Webhook secret verified');
+      toast.success('Webhook secret is configured', {
+        description: 'This checks local secret decryption only; it does not send a signed test webhook.',
+      });
     },
     onError: (error: any) => {
       toast.error('Webhook verification failed', { description: error.message });
@@ -99,6 +101,11 @@ export function PaymentGatewaysConfiguration() {
   });
   
   const account = data?.tenantPaymentAccount as TenantPaymentAccountData | null;
+  const channelToken = data?.activeChannel?.token;
+  const webhookUrl =
+    typeof window !== 'undefined' && channelToken
+      ? `${window.location.origin}/payments/razorpay/tenant-webhook/${encodeURIComponent(channelToken)}`
+      : '';
   
   // Determine account status for display
   const getDisplayStatus = (): AccountStatus => {
@@ -181,6 +188,18 @@ export function PaymentGatewaysConfiguration() {
       await verifyWebhookMutation.mutateAsync();
     } finally {
       setIsVerifyingWebhook(false);
+    }
+  };
+
+  const handleCopyWebhookUrl = async () => {
+    if (!webhookUrl) return;
+    try {
+      await navigator.clipboard.writeText(webhookUrl);
+      toast.success('Tenant webhook URL copied');
+    } catch {
+      toast.error('Could not copy webhook URL', {
+        description: 'Select and copy the URL manually.',
+      });
     }
   };
   
@@ -414,6 +433,34 @@ export function PaymentGatewaysConfiguration() {
         
         {/* Right column: Information and actions */}
         <div className="space-y-6">
+          {account && webhookUrl && (
+            <Card className="p-6">
+              <h2 className="text-lg font-semibold mb-2">Tenant Razorpay Webhook</h2>
+              <p className="text-sm text-muted-foreground mb-3">
+                Configure this URL in the tenant's Razorpay Dashboard webhook settings. Subscribe to
+                <code className="mx-1">payment.captured</code> only. The webhook secret entered above
+                must exactly match the secret configured in Razorpay.
+              </p>
+              <div className="space-y-2">
+                <Label htmlFor="tenantWebhookUrl">Webhook URL</Label>
+                <Input id="tenantWebhookUrl" value={webhookUrl} readOnly />
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={handleCopyWebhookUrl}
+                  disabled={!account.webhookSecretConfigured}
+                >
+                  Copy Webhook URL
+                </Button>
+                {!account.webhookSecretConfigured && (
+                  <p className="text-xs text-amber-700">
+                    Configure and save the webhook secret before enabling this endpoint in Razorpay.
+                  </p>
+                )}
+              </div>
+            </Card>
+          )}
+
           <Card className="p-6">
             <h2 className="text-lg font-semibold mb-4">Gateway Information</h2>
             
