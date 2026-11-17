@@ -1,7 +1,8 @@
 import type { OrderService, RequestContext, TransactionalConnection } from '@vendure/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeCheckoutSignature } from '../razorpay-checkout.policy';
-import type { TenantPaymentAccountService } from '../services/tenant-payment-account.service';
+import { TenantPaymentAccountService } from '../services/tenant-payment-account.service';
+import type { TenantPaymentEncryptionService } from '../services/tenant-payment-encryption.service';
 import type { TenantRazorpayOrdersClient } from '../services/tenant-razorpay-orders.client';
 import { TenantRazorpayService } from '../services/tenant-razorpay.service';
 
@@ -40,6 +41,79 @@ function validMetadata(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+describe('TenantPaymentAccountService settlement credentials', () => {
+  const ctx = {
+    channelId: CHANNEL_ID,
+    apiType: 'shop',
+  } as RequestContext;
+
+  function makeService(account: Record<string, unknown>) {
+    const repository = {
+      findOne: vi.fn().mockResolvedValue(account),
+    };
+    const connection = {
+      getRepository: vi.fn().mockReturnValue(repository),
+    } as unknown as TransactionalConnection;
+    const encryption = {
+      decrypt: vi.fn().mockReturnValue('decrypted-tenant-secret'),
+    } as unknown as TenantPaymentEncryptionService;
+    return {
+      service: new TenantPaymentAccountService(connection, encryption),
+      repository,
+      encryption,
+    };
+  }
+
+  it('does not decrypt any credential for a disabled account', async () => {
+    const { service, encryption } = makeService({
+      keyId: 'rzp_test_public',
+      encryptedKeySecret: 'ciphertext',
+      encryptedWebhookSecret: 'webhook-ciphertext',
+      status: 'active',
+      isEnabled: false,
+    });
+
+    await expect(service.getActiveDecryptedCredentials(ctx, CHANNEL_ID))
+      .rejects.toThrow('active and enabled');
+    expect(encryption.decrypt).not.toHaveBeenCalled();
+  });
+
+  it('does not decrypt any credential for a pending or suspended account', async () => {
+    for (const status of ['pending', 'suspended']) {
+      const { service, encryption } = makeService({
+        keyId: 'rzp_test_public',
+        encryptedKeySecret: 'ciphertext',
+        encryptedWebhookSecret: 'webhook-ciphertext',
+        status,
+        isEnabled: true,
+      });
+
+      await expect(service.getActiveDecryptedCredentials(ctx, CHANNEL_ID))
+        .rejects.toThrow('active and enabled');
+      expect(encryption.decrypt).not.toHaveBeenCalled();
+    }
+  });
+
+  it('decrypts only the tenant Key Secret for an active enabled account', async () => {
+    const { service, encryption } = makeService({
+      keyId: 'rzp_test_public',
+      encryptedKeySecret: 'key-ciphertext',
+      encryptedWebhookSecret: 'webhook-ciphertext',
+      status: 'active',
+      isEnabled: true,
+      accountMode: 'test',
+    });
+
+    await expect(service.getActiveDecryptedCredentials(ctx, CHANNEL_ID))
+      .resolves.toEqual({
+        keyId: 'rzp_test_public',
+        keySecret: 'decrypted-tenant-secret',
+      });
+    expect(encryption.decrypt).toHaveBeenCalledOnce();
+    expect(encryption.decrypt).toHaveBeenCalledWith('key-ciphertext');
+  });
+});
 
 describe('TenantRazorpayService verifyAndSettle (G-1)', () => {
   let ctx: RequestContext;
