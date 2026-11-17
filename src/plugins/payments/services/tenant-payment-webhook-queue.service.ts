@@ -17,6 +17,7 @@ import {
 import { TenantPaymentAccountService } from './tenant-payment-account.service';
 import { TenantRazorpayOrdersClient } from './tenant-razorpay-orders.client';
 import { PaymentOpsAlertService } from './payment-ops-alert.service';
+import { LessThan } from 'typeorm';
 
 const loggerCtx = 'TenantPaymentWebhookQueueService';
 const QUEUE_NAME = 'tenant-payment-webhook-reconciliation';
@@ -63,8 +64,8 @@ export function isTenantPaymentWebhookDuplicateViolation(err: any): boolean {
     const detail = String(err?.detail ?? '') + String(err?.message ?? '');
     return (
       constraint.includes('UQ_tenant_payment_webhook_event_dedupe') ||
-      /tenant_payment_webhook_event.*dedupeKey/i.test(detail) ||
-      /dedupeKey/i.test(detail)
+      (/tenant_payment_webhook_event/i.test(detail) &&
+        /dedupeKey|dedupe_key/i.test(detail))
     );
   }
   const message = String(err?.message ?? '') + String(err?.detail ?? '');
@@ -161,10 +162,46 @@ export class TenantPaymentWebhookQueueService implements OnModuleInit {
       return;
     }
 
-    event.attemptCount = (event.attemptCount ?? 0) + 1;
+    // Claim a pending or lease-expired event atomically before provider calls.
+    // Concurrent duplicate jobs for the same Razorpay event cannot both run
+    // reconciliation. A crashed worker leaves a lease that a later duplicate
+    // delivery can reclaim after the maximum request timeout window.
+    const now = new Date();
+    const staleBefore = new Date(now.getTime() - 2 * 60 * 1000);
+    const claimWhere =
+      event.processingStatus === 'pending'
+        ? { id: event.id as any, processingStatus: 'pending' }
+        : event.processingStatus === 'processing' && event.processingStartedAt
+          ? {
+              id: event.id as any,
+              processingStatus: 'processing',
+              processingStartedAt: LessThan(staleBefore),
+            }
+          : null;
+
+    if (!claimWhere) {
+      return;
+    }
+
+    const attemptCount = (event.attemptCount ?? 0) + 1;
+    const claim = await repo.update(claimWhere as any, {
+      processingStatus: 'processing',
+      processingStartedAt: now,
+      attemptCount,
+    });
+    if (!claim.affected) {
+      // Another worker claimed it between the read and conditional update.
+      return;
+    }
+
+    event.processingStatus = 'processing';
+    event.processingStartedAt = now;
+    event.attemptCount = attemptCount;
+
     try {
       const outcome = await this.reconcileEvent(ctx, event);
       event.processingStatus = outcome;
+      event.processingStartedAt = null;
       event.processedAt = new Date();
       event.failedAt = null;
       event.errorMessage = null;
@@ -175,6 +212,7 @@ export class TenantPaymentWebhookQueueService implements OnModuleInit {
       );
     } catch (err: any) {
       event.errorMessage = String(err?.message ?? 'Unknown tenant webhook reconciliation error');
+      event.processingStartedAt = null;
       if (err instanceof TenantPaymentWebhookManualReviewError) {
         event.processingStatus = 'failed';
         event.failedAt = new Date();
@@ -201,11 +239,24 @@ export class TenantPaymentWebhookQueueService implements OnModuleInit {
         event.processingStatus = 'failed';
         event.failedAt = new Date();
         await repo.save(event);
+        this.opsAlert.notify(
+          'tenant-payment-webhook-terminal-failure',
+          String(event.id),
+          `Tenant payment webhook event ${event.id} exhausted ${event.attemptCount} attempts: ${event.errorMessage}`,
+          {
+            tenantWebhookEventId: event.id,
+            providerEventId: event.providerEventId,
+            eventType: event.eventType,
+            vendureOrderCode: event.vendureOrderCode,
+          },
+        );
         Logger.error(
           `Tenant webhook event ${event.id} permanently failed after ${event.attemptCount} attempts: ${event.errorMessage}`,
           loggerCtx,
         );
       } else {
+        event.processingStatus = 'pending';
+        event.failedAt = null;
         await repo.save(event);
         Logger.warn(
           `Tenant webhook event ${event.id} attempt ${event.attemptCount} failed; BullMQ will retry: ${event.errorMessage}`,
