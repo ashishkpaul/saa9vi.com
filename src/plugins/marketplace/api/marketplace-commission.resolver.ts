@@ -38,11 +38,12 @@ export class MarketplaceCommissionResolver {
     if (!ctx.activeUserId) {
       return { ok: false, code: 'FORBIDDEN' };
     }
-    const channelToken = ctx.channel?.token;
-    if (!channelToken) {
+    const channelId = ctx.channelId;
+    if (channelId == null || String(channelId) === '') {
       return { ok: false, code: 'NO_CHANNEL' };
     }
-    const verified = this.attributionService.resolveRef(ref, channelToken);
+    // marketplaceRef signs the persisted Channel ID, not its public token.
+    const verified = this.attributionService.resolveRef(ref, String(channelId));
     if (!verified) {
       return { ok: false, code: 'INVALID_OR_STALE_REF' };
     }

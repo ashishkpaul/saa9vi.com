@@ -39,6 +39,7 @@ import {
   ProductService,
   ProductVariant,
   ProductVariantService,
+  ChannelService,
 } from '@vendure/core';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { getSuperadminContext } from '@vendure/testing/lib/utils/get-superadmin-context';
@@ -217,10 +218,11 @@ async function createVariant(priceInPaise: number): Promise<string> {
 
 async function issueRef(resourceId: string): Promise<string> {
   const attribution = server.app.get(MarketplaceAttributionService);
+  const channel = await server.app.get(ChannelService).getChannelFromToken(E2E_DEFAULT_CHANNEL_TOKEN);
   return attribution.issueRef({
     resourceType: 'session',
     resourceId,
-    channelId: E2E_DEFAULT_CHANNEL_TOKEN,
+    channelId: String(channel.id),
   });
 }
 

@@ -752,36 +752,39 @@ Shop: createTenantRazorpayCheckoutOrder(orderId?)
   +-- return provider order ID, amount, currency and public Key ID
 ```
 
-**Current stopping point:** the reviewed `PaymentsPlugin` does not register a tenant-specific Vendure `PaymentMethodHandler`. `TenantRazorpayService.verifyAndSettle()` contains signature/provider-binding logic but has no registered handler/call site, so the order-creation path is not yet connected to `addPaymentToOrder` and Vendure order settlement. No tenant-specific Flow B webhook controller, inbox or reconciliation worker exists. The platform `razorpayPaymentHandler` is Flow A only and rejects orders whose `paymentPurpose` is not `platform-service`.
+**Current source-level state (17 November 2026):** `PaymentsPlugin` registers the separate `tenant-razorpay` Vendure `PaymentMethodHandler`; Shop settlement is wired through `OrderService.addPaymentToOrder()` and the tenant `TenantRazorpayService.verifyAndSettle()`. G-2 service-level owner enforcement is implemented. G-3 tenant-specific webhook controller, persist-first inbox, BullMQ worker and recovery paths are present in source.
+
+**Verification boundary:** the user reported 55/55 passing across the four focused Flow B files and a clean `npm run build` output on 17 November 2026. The generated CLI migration for `TenantPaymentWebhookEvent` and its Channel join table is still pending, as are provider-level Razorpay Test Mode checkout and signed webhook-delivery tests. Therefore Flow B is not yet a production release claim.
 
 **Credential-probe caveat:** `verifyTenantPaymentAccount` performs `GET /payments?count=1`; it does not create a ₹1 test order. `verifyTenantPaymentWebhook` only confirms that the configured encrypted webhook secret exists and decrypts; it does not test a signed webhook delivery or verify a registered endpoint.
-
-**G-2 owner-boundary update (17 November 2026):** service-level ownership enforcement is now implemented in the checkout-order path. Explicit and active-order paths both reload the order with `customer.user`, require exact equality with `ctx.activeUserId`, and fail closed for missing/foreign ownership. Targeted regression tests have been added; execution remains pending. This closes the source-level G-2 finding but does not close Flow B settlement (G-1) or webhook/recovery (G-3).
 
 
 
 ---
 
-## Marketplace tenant-channel checkout target — ADR-055 proposal
+## Marketplace tenant-channel checkout — MCR-1.3 source implementation
 
-**Status:** Target design, not current runtime behavior. The reviewed baseline remains marketplace discovery plus tenant-storefront routing; Flow B settlement/webhooks are incomplete per ADR-054.
+**Status:** Initial backend source slice implemented on `feat/marketplace-tenant-channel-checkout`; local tests, build, generated Shop schema and two-tenant E2E verification are pending. This does not mark ADR-055 accepted or claim full storefront payment/fulfilment completion.
 
 ```text
-Marketplace listing
-  -> trusted server resolves owner Channel and signed marketplace provenance
-  -> marketplace storefront creates/loads tenant-channel cart
-  -> tenant-channel order enters ArrangingPayment
-  -> Shop API returns eligible payment methods for that tenant context
-  -> selected tenant PaymentMethodHandler resolves that tenant's credentials
-  -> provider payment verified and tenant order settled
-  -> fulfilment is selected by product fulfilment model
-
-Digital:
-  -> activate CourseEnrollment / time-bounded BbbEntitlement / content access
-  -> subscription renewal extends paid period; grace/expiry policy applies
-
-Physical:
-  -> stock allocation / physical fulfilment / dispatch / delivery / returns
+Marketplace session selection (sessionId; optional marketplaceRef)
+  -> load BbbScheduledSession and persisted organization/channel mapping
+  -> reject private/cancelled/finished/expired or non-commercially-eligible listing
+  -> validate Product + ProductVariant ownership and bbbSessionId back-reference
+  -> copy authenticated Shop context to persisted owner Channel
+  -> require existing Customer assignment in that Channel (no implicit admission)
+  -> require enabled tenant-razorpay PaymentMethod + active/enabled tenant Razorpay account
+  -> ActiveOrderService resolves/creates the session's tenant-channel active cart
+  -> validate cart owner, channel set and all existing line owners
+  -> add ProductVariant and reprice through Vendure OrderService
+  -> set paymentPurpose = tenant-client (server-side)
+  -> verify optional marketplaceRef against owner Channel ID and exact session variant
+  -> return tenant-channel token, tenant-calculated total and eligible tenant-razorpay method
+  -> storefront continues normal Shop API checkout/tenant Razorpay settlement
 ```
 
-Constraints: never create a tenant-owned order in the default marketplace channel; never trust browser-supplied channel/payee/credentials; initial cart/order contains one tenant only. Marketplace attribution records origin and does not grant channel/payment authority. See [ADR-055](../adr/adr-055-marketplace-commerce-and-revenue-model.md).
+The checkout service accepts no browser-supplied channel ID, channel token, product variant ID, cart ID or payment recipient. The Channel token in the result is a public Shop API routing selector only; G-2 and Flow B settlement still enforce customer/order/channel ownership and resolve credentials server-side. Flow A `razorpay` is never returned as an eligible method by this marketplace mutation.
+
+The current slice supports only publicly purchasable BBB sessions with a valid ProductVariant mapping. It does not support generic Product checkout, guest checkout, self-service tenant admission, multi-tenant parent carts, storefront UI wiring, order settlement by this mutation, learner admission/enrollment or digital/physical fulfilment. Purchase and learning access remain distinct.
+
+Constraints: never create a tenant-owned order in the default marketplace Channel; never trust browser-supplied seller/payment authority; one tenant per cart/order; marketplace attribution records origin only; commission remains 0%. See [ADR-055](../adr/adr-055-marketplace-commerce-and-revenue-model.md) and [MCR worklist](../implementation/marketplace-commerce-revenue-worklist.md).

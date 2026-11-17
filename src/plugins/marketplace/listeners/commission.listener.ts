@@ -49,12 +49,13 @@ export class CommissionListener implements OnApplicationBootstrap {
     const ref: string | null = (order.customFields?.marketplaceRef as string | undefined) ?? null;
     let outcome: 'marketplace' | 'direct' = 'direct';
     if (ref) {
-      // HMAC channel binding uses ctx.channel.token — the SAME value the 3B.2
-      // resolver verified against when storing the ref. Never mix token/id here.
-      const channelToken = ctx.channel?.token;
-      const verified: MarketplaceAttributionRef | null = channelToken
-        ? this.attributionService.resolveRef(ref, channelToken)
-        : null;
+      // marketplaceRef is bound to the persisted Channel ID, not the public
+      // Channel token. Use the same ID contract as checkout and the apply resolver.
+      const channelId = ctx.channelId;
+      const verified: MarketplaceAttributionRef | null =
+        channelId != null && String(channelId) !== ''
+          ? this.attributionService.resolveRef(ref, String(channelId))
+          : null;
       if (verified && this.resourceInOrder(order, verified)) {
         // Insert-first: the UNIQUE (marketplaceRef) index is the atomic
         // Decision-6 arbiter (no app-level check-then-insert race).

@@ -86,7 +86,37 @@ export const shopApiExtensions = gql`
     code: String
   }
 
+  type MarketplaceCheckoutPaymentMethod {
+    code: String!
+    name: String!
+    description: String
+  }
+
+  type MarketplaceSessionCheckoutResult {
+    orderId: ID!
+    orderCode: String!
+    orderState: String!
+    tenantChannelId: String!
+    tenantChannelToken: String!
+    totalWithTax: Int!
+    currencyCode: String!
+    eligiblePaymentMethods: [MarketplaceCheckoutPaymentMethod!]!
+    marketplaceAttributionApplied: Boolean!
+  }
+
   extend type Mutation {
+    """
+    Create or retrieve the authenticated customer's cart in the persisted
+    owning tenant Channel for a publicly purchasable marketplace session.
+    The browser cannot supply the payee Channel, variant or cart/order ID.
+    The optional marketplaceRef is provenance only, never checkout authority.
+    Only tenant-razorpay PaymentMethods eligible in the owning Channel are returned.
+    """
+    createMarketplaceSessionCheckout(
+      sessionId: ID!
+      marketplaceRef: String
+    ): MarketplaceSessionCheckoutResult!
+
     """
     Attach a server-verified marketplace attribution reference to the active order.
     Discriminated result object (not a union):

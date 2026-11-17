@@ -1,7 +1,7 @@
 # Marketplace Commerce & Revenue — Implementation Worklist
 
 **Status:** Proposed worklist based on ADR-055  
-**Baseline:** repository `main` at `1c0a5a7d7c3dece131ae977a5c7416e41815a8a7`; source review dated 16 November 2026  
+**Baseline:** repository `main` at `5dddb939c5d21f3830d305e5b8b094dd3ed87e84`; MCR checkout implementation branch based on that commit  
 **Purpose:** Sequence future engineering work without reimplementing existing foundations. Re-inspect source and the active branch before every implementation slice.
 
 ## Mandatory rules
@@ -19,12 +19,13 @@
 ## Phase 0 — Contract and security design
 
 ### MCR-0.1 — Payment ownership and order provenance (P0)
-- [ ] Reconcile ADR-051, ADR-054 and ADR-055; correct stale wording without erasing historical decisions.
-- [ ] Define authoritative product/variant owner-channel resolution.
-- [ ] Define signed `marketplaceRef` as origin/provenance only, never as payment recipient or channel authority.
-- [ ] Decide initial tenant gateway scope: Razorpay-only or provider-neutral handler contract.
-- [ ] Define one-tenant-per-cart/order and seller-cart UX for multi-tenant browsing.
-- [ ] Acceptance: ADR, glossary, platform story and runtime flow use a consistent trust boundary.
+- [x] Implement server-side owner resolution from persisted `BbbScheduledSession` → owning organization → Vendure Channel; reject the default Channel.
+- [x] Verify Product and ProductVariant Channel assignments and the Product `bbbSessionId` back-reference.
+- [x] Keep signed `marketplaceRef` as provenance only; checkout verifies it against the persisted Channel ID and exact session variant, never as payee authority.
+- [x] Implement the initial provider scope as tenant Razorpay only; intersect Vendure's eligible payment-method quote with an enabled PaymentMethod assigned to the owner Channel and using `tenant-razorpay`.
+- [x] Enforce one non-default tenant Channel per order; Flow A `platform-service` carts are rejected and Flow B `paymentPurpose=tenant-client` is stamped server-side.
+- [ ] Reconcile/accept ADR-051, ADR-054 and ADR-055 across the full product/glossary/platform-story contract.
+- [ ] Local focused tests, build and two-tenant Shop API E2E evidence pending.
 
 ### MCR-0.2 — Product and commercial taxonomy (P0)
 - [ ] Audit Product/ProductVariant custom fields, `BbbScheduledSession.productVariantId`, `LearningCourse`, `CourseEnrollment`, `BbbProductAccess` and fulfilment handlers.
@@ -35,12 +36,12 @@
 - [ ] Acceptance: every sellable product is classifiable without conflicting payment or fulfilment behavior.
 
 ### MCR-0.3 — Customer identity and channel handoff (P0)
-- [ ] Audit `CustomerChannelAssignmentStrategy` and current storefront auth/channel token behavior.
-- [ ] Specify marketplace guest/register/login behavior and tenant learner admission.
-- [ ] Define identity linkage without exposing another tenant's profile, addresses, orders or entitlements.
-- [ ] Verify tenant admin reads remain restricted to its own channel.
-- [ ] Test same email across two tenant channels, authenticated/guest cart, suspension, leave/revoke and channel switching.
-- [ ] Acceptance: no cross-tenant customer/order/address/payment/access leakage; marketplace attribution cannot elevate authority.
+- [x] Reject guest checkout in the service even though the entry resolver is reachable on the public Shop API.
+- [x] Re-scope the authenticated context using the server-resolved Channel and require an existing Customer assigned to that Channel through `CustomerService.findOneByUserId(ctx, userId, true)`.
+- [x] Do not rely on `TenantChannelAssignmentStrategy` as API authorization; do not auto-create a Customer or learner membership.
+- [x] Verify the loaded active Order belongs to the authenticated user and exactly one non-default tenant Channel; reject foreign-tenant line items.
+- [x] Keep payment purchase separate from academic admission/enrollment/entitlements; this checkout mutation grants no learning access.
+- [ ] Same-email multi-Channel, suspension/leave/revoke and channel-switching tests plus storefront login/admission UX E2E remain pending.
 
 ## Phase 1 — Complete one-time tenant payments (Flow B)
 
@@ -68,14 +69,14 @@ Commerce-programme outcome:
 **Acceptance:** the tenant payment lifecycle recovers correctly from valid, invalid, duplicate, delayed and replayed provider events, with operator-visible reconciliation.
 
 ### MCR-1.3 — Marketplace tenant-channel checkout (P0)
-- [ ] Resolve a marketplace listing to its authoritative tenant server-side.
-- [ ] Create/retrieve tenant-channel cart/order while checkout UI remains on marketplace domain.
-- [ ] Query `eligiblePaymentMethods` in that tenant channel context.
-- [ ] Invoke `addPaymentToOrder` in the same tenant context; never create a marketplace/default-channel order.
-- [ ] Preserve signed attribution without using it as payee/channel authority.
-- [ ] Enforce one tenant per cart/order; direct a second seller's product to a separate seller cart.
-- [ ] Provide order confirmation and learner handoff without exposing tenant credentials or channel authority.
-- [ ] Acceptance: marketplace-hosted order is owned, priced, paid and visible only in the correct tenant channel.
+- [x] Add `createMarketplaceSessionCheckout(sessionId, marketplaceRef?)` backed by a dedicated Checkout service/resolver; this first cut intentionally supports only public BBB sessions with a valid variant mapping.
+- [x] Retrieve/validate seller, current listing state, Commercial Entitlement, Channel and Product/Variant mapping from persisted data; ignore any browser-supplied seller/channel/variant claim.
+- [x] Use `RequestContext.copy(ownerChannel)`, target-Channel Customer validation and Vendure `ActiveOrderService.getActiveOrder` to establish/retrieve the authenticated buyer's target-Channel cart.
+- [x] Reprice with Vendure `OrderService.addItemToOrder`; do not use the Elasticsearch price snapshot as checkout authority.
+- [x] Return only eligible tenant Razorpay PaymentMethod codes and the public Channel token needed for subsequent Shop API routing; no secrets are returned.
+- [x] Preserve valid attribution and set `paymentPurpose=tenant-client`; this mutation prepares the cart and does not itself create/capture a provider payment.
+- [ ] Complete the storefront sequence (shipping/address as applicable, tenant Razorpay provider order, `addPaymentToOrder`, confirmation) and real two-tenant Shop API E2E verification.
+- [ ] Local Vitest/build/codegen and commission E2E verification pending.
 
 ### MCR-1.4 — Tenant custom-domain storefront parity (P1)
 - [ ] Ensure marketplace and custom-domain storefront share the same product/variant, price, stock, tenant order and payment source of truth.
@@ -212,3 +213,12 @@ Commerce-programme outcome:
 7. MCR-6 end-to-end release gates and operating playbooks.
 
 Do not start marketplace checkout UI before MCR-1.1/MCR-1.2 establishes a valid tenant-channel settlement contract. Do not ship recurring learner checkout before MCR-2.1 defines subscription and entitlement-period semantics.
+
+
+## MCR checkout implementation snapshot — 17 November 2026
+
+The feature branch `feat/marketplace-tenant-channel-checkout` adds a source-level first slice for MCR-0.1, MCR-0.3 and MCR-1.3. It does **not** change ADR-055's `PROPOSED` status and does not claim the whole marketplace checkout journey is complete.
+
+The GraphQL mutation is `createMarketplaceSessionCheckout(sessionId, marketplaceRef)`. The response establishes the owning Channel's active cart, tenant-calculated total and eligible `tenant-razorpay` PaymentMethod codes. The storefront then continues through the normal tenant Shop API lifecycle. This mutation does not place/settle the order, grant a learner membership, create a course enrollment or issue a BBB entitlement.
+
+No new entity/table or database migration is introduced by this slice. Generated Shop schema/codegen output and local verification must be refreshed after pulling. The G-3 `TenantPaymentWebhookEvent` CLI migration remains an independent Flow B release prerequisite.
