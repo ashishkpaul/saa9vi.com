@@ -97,6 +97,7 @@ describe('TenantPaymentWebhookQueueService (G-3 recovery)', () => {
     };
     eventRepo = {
       findOne: vi.fn().mockResolvedValue(event),
+      update: vi.fn().mockResolvedValue({ affected: 1 }),
       save: vi.fn().mockImplementation(async (value) => value),
     };
     orderRepo = {
