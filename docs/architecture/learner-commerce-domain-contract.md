@@ -1,26 +1,26 @@
 # Learner Commerce Domain Contract — MCR-2.1 / MCR-2.2
 
-**Status:** PROPOSED — architecture and contract review; not an implementation authorization  
+**Status:** PROPOSED — corrected business sequence; architecture and policy review before implementation  
 **Scope:** MCR-2.1 Learner-to-tenant recurring lifecycle and MCR-2.2 Course enrollment / entitlement convergence  
 **Baseline:** `main` at `840a7a4240348f23ea5c61829c8686d37a59fe7a` (the `saa9vi_com` branch tree at `9c3942eb1bedbc7a5fa3490d1a73eddca5422180` was identical at review time)  
 **Canonical worklist:** [Marketplace Commerce & Revenue](../implementation/marketplace-commerce-revenue-worklist.md)  
 **As-built learning contract:** [Learning Domain Mini-Spec](learning-domain.md)  
 **Related payment contract:** [ADR-054 — Per-Tenant Razorpay Flow B](../adr/adr-054-per-tenant-razorpay-flow-b.md)
 
-> This document proposes boundaries and acceptance contracts. It deliberately does not add entities, GraphQL fields, migrations, provider calls, or database changes. The decisions in §12 must be reviewed before implementation begins.
+> This document proposes boundaries and acceptance contracts. It deliberately does not add entities, GraphQL fields, migrations, provider calls, or database changes. It supersedes the payment-first interpretation of initial learner enrollment in PR #24. The decisions in §13 must be reviewed before implementation begins.
 
 ---
 
 ## 1. Purpose and outcome
 
-Saa9vi needs a learner-to-tenant commercial lifecycle that is separate from the existing tenant-to-Saa9vi subscription lifecycle. A verified learner purchase must be able to activate the intended course access for a bounded period, and renewals must extend that access only when the tenant's provider confirms the relevant payment.
+Saa9vi needs a learner-to-tenant commercial lifecycle that is separate from the existing tenant-to-Saa9vi subscription lifecycle. The tenant controls whether, when and how learners are charged. **Initial learner admission/enrollment is an academic/tenant decision and is not payment-gated by default.** A tenant may admit learners at a zero-cost stage, let them begin or continue the course, and later offer a paid continuation, paid period, or other commercial option. Once the learner accepts a paid offer, verified payment or confirmed third-party collection can create or extend a bounded commercial access period according to the tenant's policy.
 
 The programme has two connected but distinct responsibilities:
 
 - **MCR-2.1 — Commercial lifecycle:** learner offer/plan, tenant-owned recurring subscription, provider binding, billing attempts, renewal, failure, dunning, grace, cancellation, expiry and reconciliation.
-- **MCR-2.2 — Learning access convergence:** map verified commercial facts to academic enrollment and time-bounded course/session entitlements without turning payment state into academic enrollment state.
+- **MCR-2.2 — Enrollment and access convergence:** preserve tenant-controlled zero-cost/manual admission, and independently apply optional paid-continuation entitlements when the tenant offers a commercial term. Never turn payment state into academic enrollment state.
 
-The outcome is not simply “a payment succeeded”. It is a tenant-scoped, auditable relationship between a learner, an offer, verified provider facts, an enrollment decision and an access period.
+The outcome is a tenant-scoped learner journey with two independently managed concerns: (1) academic admission/enrollment, which can exist before any payment; and (2) optional commercial collection/access periods, which begin only when the tenant offers a paid continuation and the learner accepts it.
 
 ## 2. Current source baseline — existing capabilities and gaps
 
@@ -87,8 +87,10 @@ The learner recurring domain must resolve provider credentials from the owning t
 5. **Provider is authoritative for money.** Browser redirects, client callbacks, a local “success” flag, `subscription.activated` by itself, or an order being created are not proof of a paid period.
 6. **Tenant account authority.** Provider account and credentials are resolved from server-side Channel context and the matching tenant account. Never accept a client-supplied payee, Channel ID, Key Secret, provider plan ID or amount as authority.
 7. **No cross-tenant order/cart.** Keep each Vendure order within one non-default tenant Channel.
-8. **Academic and commercial state remain separate.** Payment does not automatically mean academic admission, and an academic status such as `COMPLETED` or `WITHDRAWN` is not a payment status.
-9. **Access is bounded.** Paid access is valid only for a verified period or explicitly granted policy window. A single payment must not silently create indefinite access.
+8. **Admission-first, tenant-controlled charging.** A tenant may create an invitation/enrollment and grant initial zero-cost course participation without payment, mandate or payment gateway setup. No learner payment is required to create the initial academic enrollment unless the tenant explicitly configures a paid-first offer for that course/cohort.
+9. **Academic and commercial state remain separate.** Payment does not automatically create academic admission; lack of a payment does not automatically block an already admitted learner. Academic statuses such as `COMPLETED` or `WITHDRAWN` are not payment statuses.
+10. **Tenant chooses collection method.** For a paid continuation, the tenant may request collection through its configured online gateway (including its own Razorpay account) or record an approved external method such as bank transfer, UPI/GPay, cash or another tenant-supported method. Saa9vi must distinguish provider-verified collections from tenant-attested/offline collections; never represent a manual attestation as a provider webhook/payment verification.
+11. **Access is policy-bounded.** Free/manual admission is governed by the tenant's academic policy. Paid continuation is governed by the purchased/recorded commercial term. One payment must not silently create indefinite paid access.
 10. **No direct business-data SQL mutations.** Runtime business mutations use the Shop/Admin GraphQL APIs or approved application services invoked by those APIs. Schema changes use `npx vendure migrate`.
 
 ## 4. Proposed bounded-context split
@@ -109,7 +111,7 @@ Names below are provisional. They describe the information the domain must own, 
 
 ### 5.1 Tenant learner offer / plan
 
-A tenant-managed offer should contain:
+A tenant-managed offer should contain. Offers are optional and need not exist when a learner is first admitted:
 
 - owning `channelId`;
 - stable tenant-scoped code/name and publication/availability status;
@@ -123,7 +125,7 @@ A tenant-managed offer should contain:
 
 A plan price or billing interval change must not silently rewrite an existing learner's purchased terms. Snapshot the accepted commercial terms onto the subscription/purchase record.
 
-**MVP scope proposal:** course-specific offers only. General services, bundles, multi-course packs and physical goods remain outside MCR-2.1/2.2 until the product taxonomy in MCR-0.2 defines their fulfilment contract.
+**MVP scope proposal:** course-specific paid-continuation offers only. A course may start with no offer/price and no payment collection. General services, bundles, multi-course packs and physical goods remain outside MCR-2.1/2.2 until the product taxonomy in MCR-0.2 defines their fulfilment contract.
 
 ### 5.2 Learner subscription
 
@@ -225,15 +227,17 @@ A webhook worker must:
 
 Disabling a tenant account for new checkout must not prevent recovery/reconciliation of a payment already captured by that tenant.
 
-## 7. Fixed-term and one-time purchase distinction
+## 7. Tenant-directed collection methods and purchase distinction
 
-The commercial contract must not force every learner purchase through a recurring subscription.
+The commercial contract must not force every learner through a purchase or recurring subscription. Enrollment may precede any commercial offer. When a tenant decides to charge for continuation, the learner may accept a recurring plan, a fixed-term/one-time offer, or a collection request using an approved external method.
 
 | Purchase mode | Payment source of truth | Access period |
 |---|---|---|
 | Recurring course plan | Tenant Razorpay subscription; qualifying provider-confirmed charge per cycle | Provider-confirmed paid cycle, plus only an explicitly configured grace window |
 | Fixed-term course offer | Tenant Flow B Vendure order settled through `tenant-razorpay` | Explicit term purchased in the offer/order snapshot |
-| Free/manual admission | Explicit tenant policy or staff-authorized grant, with audit attribution | Explicitly bounded or policy-defined; not inferred from a missing payment |
+| Zero-cost initial admission | Tenant-admin invitation/enrollment or approved free admission; no payment transaction required | Access follows the tenant's initial-course/cohort policy; no paid term is inferred |
+| Manual/offline collection | Tenant staff records bank transfer, UPI/GPay, cash or other configured external collection with reference/evidence and actor/time attribution | Paid continuation begins only after the tenant's authorized collection-confirmation policy is satisfied; record source as manual/offline, not provider-verified |
+| Gateway collection | Tenant's own configured gateway; for Razorpay, resolve the correct tenant account and verified provider facts | Paid continuation begins only after confirmed settlement/collection according to the provider contract |
 
 For ordinary one-time orders, use Vendure's normal order/payment lifecycle and the existing tenant handler. Vendure's `addPaymentToOrder` / `PaymentMethodHandler` contract is distinct from the recurring subscription lifecycle. Do not create a fake Vendure order/payment for a recurring charge unless a separate invoicing/accounting decision requires one.
 
@@ -243,7 +247,42 @@ References:
 
 ## 8. MCR-2.2 — Course enrollment and access convergence
 
-### 8.1 Preserve the academic enrollment state machine
+### 8.1 Admission and enrollment are not payment-gated by default
+
+The initial learner journey is admission-first:
+
+```text
+Tenant admin creates invitation / enrolls learner
+                 |
+                 v
+     Learner joins the course (zero stage)
+                 |
+                 v
+       Initial learning participation
+                 |
+                 v
+ Tenant decides whether to offer paid continuation
+                 |
+                 v
+ Learner accepts an offer or collection request
+                 |
+       +---------+----------------------+
+       |                                |
+       v                                v
+Online tenant payment             External collection
+(Razorpay / other PG)             (bank transfer / UPI-GPay / cash)
+       |                                |
+       v                                v
+Provider-verified fact          Tenant-attested receipt fact
+       +---------------+----------------+
+                       |
+                       v
+        Commercial period / continuation access
+```
+
+The tenant may choose not to charge, may charge later, or may offer a paid continuation to selected learners/cohorts. The initial admission must not automatically create a mandate or subscription. The tenant's decision to charge is explicit and separate from initial enrollment.
+
+### 8.2 Preserve the academic enrollment state machine
 
 Keep the existing academic states and their meanings:
 
@@ -255,7 +294,7 @@ Do not add payment states such as `PAID`, `PAST_DUE` or `EXPIRED` to `CourseEnro
 
 MCR-2.2 adds a commercial-access eligibility check alongside academic admission/enrollment; it does not replace the existing FSM.
 
-### 8.2 Proposed course access grant
+### 8.3 Proposed course access grant
 
 A conceptual `CourseAccessGrant` (name provisional) represents a time-bounded right to access one tenant course. It should contain:
 
@@ -269,7 +308,7 @@ A successful renewal adds the next confirmed period; it does not mutate the earl
 
 Do not create a second generic BBB entitlement system. Course-level access and BBB session/meeting access remain separate checks. MCR-2.2 must explicitly map a course access grant to the existing BBB entitlement contract and preserve the existing BBB join authorization path.
 
-### 8.3 Access predicate
+### 8.4 Access predicate
 
 For a paid course page, lesson or course-scoped tool, access should require all applicable conditions:
 
@@ -283,24 +322,33 @@ For a paid course page, lesson or course-scoped tool, access should require all 
 
 The browser cannot supply or extend the access period. Every Shop resolver and BBB join boundary must enforce the server-side predicate; hiding a button or tool is not authorization.
 
-### 8.4 Enrollment convergence trigger
+### 8.5 Enrollment and commercial convergence triggers
 
-Proposed convergence rule:
+Two separate triggers exist and must not be conflated:
 
-- A qualifying fixed-term order settlement or recurring billing event first creates the durable commercial fact.
-- A separate idempotent convergence operation evaluates academy admission and course policy.
-- If admission requirements are satisfied, it creates/activates the permitted academic enrollment through the Learning domain service and creates the time-bounded course access grant.
-- If admission/approval is absent, preserve the verified payment fact but do not grant learning access; create an operator-visible pending/reconciliation outcome and follow the approved refund/manual-admission policy.
-- Free/manual enrollment remains available only through an explicit tenant policy or authorized staff action; it must create an auditable grant source rather than bypassing the access service.
+**A. Initial admission/enrollment (zero stage):**
+- A tenant administrator may invite/enroll a learner using the existing LearningPlugin academic workflow, subject to the current ACTIVE academy-admission requirement and tenant permissions.
+- This action does not require a learner offer, payment method, provider account, mandate or payment transaction.
+- The resulting initial learning access follows an explicitly defined tenant course/cohort policy. It must not be mislabeled as paid access.
 
-The purchase transaction and entitlement convergence may not be one database transaction across the provider. Design for retry/reconciliation and idempotent convergence rather than assuming distributed atomicity.
+**B. Paid continuation / commercial access:**
+- A tenant administrator publishes/offers a paid continuation or requests collection from an already admitted learner.
+- The learner accepts the offer/collection request and chooses one of the methods enabled by that tenant.
+- For an online PG, the provider-confirmed transaction creates the durable collection fact. For offline/external collection, an authorized tenant actor records a manual collection fact with method, amount, currency, reference/evidence, actor and timestamp; it must be marked `MANUAL_CONFIRMED` (or equivalent), never `PROVIDER_VERIFIED`.
+- A separate idempotent convergence operation applies the paid term to the learner's commercial access period and updates/creates the relevant course continuation entitlement. It does not create the initial academic admission retroactively.
+- If collection is pending/unverified, preserve the request/attempt but do not mark the paid continuation as collected. Tenant policy may leave existing zero-stage/current access unchanged until its configured boundary; an unverified payment must not extend a paid term.
 
-## 9. Failure, cancellation, refund and recovery contract
+The provider/manual collection fact and access convergence may not be one database transaction. Design for retry/reconciliation and idempotent convergence rather than assuming distributed atomicity.
+
+## 9. Collection, continuation, cancellation, refund and recovery contract
 
 | Situation | Commercial result | Access result |
 |---|---|---|
-| Authorization started, no qualifying payment | Pending authorization | No paid access |
-| Verified qualifying initial payment | Active subscription / successful attempt | Grant only the verified purchased period |
+| Learner admitted at zero stage; no payment request exists | No commercial subscription/collection record required | Initial access follows tenant course/cohort policy |
+| Paid continuation offered but not yet accepted | Offer/collection request remains pending | Existing zero-stage/current access is not silently converted to paid access |
+| Authorization started, no qualifying collection | Pending authorization | No new paid period; existing permitted access is not retroactively revoked solely because an offer is pending |
+| Provider-verified qualifying gateway payment | Active subscription / successful attempt or paid collection | Grant/extend only the verified purchased period |
+| Tenant confirms an external/offline payment | Append a manual collection fact with method and actor attribution | Grant/extend only the term authorized by the tenant's offline-collection policy; label its provenance accurately |
 | Renewal payment succeeds | New immutable successful attempt | Append/extend by the confirmed provider period |
 | Renewal payment fails | Past due / pending | Do not extend paid-through; apply only an explicitly approved bounded grace policy |
 | Provider halts after retries | Halted | No new paid period; grace handling follows approved policy |
@@ -356,8 +404,11 @@ Permission names and role grants should be decided in implementation review and 
 
 ### MCR-2.2 — enrollment and entitlement
 
-- Payment success without required ACTIVE academy admission does not leak course content.
-- An ENROLLED row without the required paid/free/manual grant cannot access a paid course.
+- Tenant admin can invite/enroll a learner at the zero stage without creating a payment, mandate or provider subscription.
+- An admitted learner can participate in the initial course period according to the tenant's zero-stage/course policy.
+- Offering or requesting payment for continuation does not require the learner's initial enrollment to be recreated.
+- Provider-verified and tenant-attested/offline collection facts remain distinguishable and auditable.
+- An ENROLLED row without a paid continuation grant may still access the tenant-approved zero-stage/current initial course scope; it cannot access an additional paid continuation period unless a qualifying provider or authorized manual collection fact exists.
 - A valid grant without ENROLLED academic status cannot bypass academic suspension/withdrawal.
 - Expired grant is denied at the exclusive `validUntil` boundary.
 - Confirmed renewal creates the next period exactly once.
@@ -383,22 +434,22 @@ The following are proposed defaults for review. An unchecked decision is a stop 
 
 | ID | Decision | Proposed default | Review required |
 |---|---|---|---|
-| LC-01 | Learner admission | Require existing ACTIVE `TenantLearnerMembership`; purchase does not silently create academy admission | Yes |
+| LC-01 | Initial admission | Tenant admin can invite/enroll at zero stage without a payment or PG. Preserve existing ACTIVE `TenantLearnerMembership` requirement unless a separate admission policy is approved. Initial admission and commercial continuation are separate operations. | Yes |
 | LC-02 | Initial target | One `LearningCourse` per offer/subscription; service offers and bundles deferred until MCR-0.2 taxonomy is accepted | Yes |
 | LC-03 | Billing modes | Recurring via tenant Razorpay Subscriptions; fixed-term via one-time tenant Flow B Vendure order; no lifetime access in MVP | Yes |
 | LC-04 | Provider scope | Razorpay only for MVP; use the tenant's own `TenantPaymentAccount`; verify recurring capability separately from the existing one-time credential probe | Yes |
-| LC-05 | Initial access | Grant only after a verified payment amount that satisfies the plan's first-period policy; mandate/authorization alone is not enough unless the payment is explicitly the purchased upfront amount | Yes |
+| LC-05 | Zero-stage and continuation | Initial tenant-approved enrollment/access is available without payment. A later paid continuation is activated only after provider-verified gateway collection or an authorized tenant-attested external collection under explicit policy. | Yes |
 | LC-06 | Grace/dunning | No implicit grace; tenant/plan policy must specify bounded grace and retry schedule before activation | Yes |
 | LC-07 | Cancellation | Cancel-at-period-end as default; immediate cancellation is explicit and does not imply automatic refund | Yes |
 | LC-08 | Refund/chargeback | Preserve payment facts; create adjustment/revocation facts; access treatment must be defined before live launch | Yes |
 | LC-09 | Recurring accounting | Decide whether each recurring charge needs a Vendure Order/invoice; proposal is learner billing attempt as recurring billing fact, with Vendure Order used for fixed-term/one-time commerce | Yes |
 | LC-10 | Webhook inbox | First assess extending `TenantPaymentWebhookEvent` with a separate subscription event processor; add a new inbox only if the existing contract cannot safely support it | Yes |
-| LC-11 | Free/manual access | Explicit grant source and staff/policy authorization; no implicit access from a missing subscription | Yes |
+| LC-11 | Zero-stage and offline collection | Support tenant-authorized zero-stage admission without payment and separate audited external collection methods (bank transfer, UPI/GPay, cash, etc.). Never represent manual confirmation as provider verification. | Yes |
 | LC-12 | Plan changes/proration/pause | Defer from MVP; support only clearly defined next-cycle or cancellation behavior initially | Yes |
 
 ## 13. Delivery slices after this contract is accepted
 
-1. **MCR-2.1A — learner offer and subscription domain foundation:** entity/schema design, tenant-scoped service, Admin/Shop contracts, immutable commercial-term snapshot and tests.
+1. **MCR-2.1A — learner commercial-offer and collection-request foundation:** tenant-admin configurable paid continuation offers/requests, collection-method policy and audit facts. Initial zero-stage admission remains in the existing LearningPlugin workflow and requires no payment subscription.
 2. **MCR-2.1B — tenant recurring provider adapter:** tenant credential resolution, provider plan/subscription binding, authorization flow and reconciliation.
 3. **MCR-2.1C — recurring webhook and billing attempts:** extend the tenant persist-first inbox/typed processor, idempotent attempts, state machine, renewal/failure/cancellation tests.
 4. **MCR-2.2A — course access grant and eligibility service:** explicit grant source, period boundaries, LearningPlugin integration and Shop authorization.
@@ -430,3 +481,44 @@ Every schema change is generated and applied through the Vendure CLI migration w
 - [Vendure OrderService](https://docs.vendure.io/current/framework/reference/typescript-api/services/order-service)
 - [Vendure PaymentMethodHandler](https://docs.vendure.io/current/framework/reference/typescript-api/payment/payment-method-handler)
 - [Razorpay subscription webhook events](https://github.com/razorpay/markdown-docs/blob/master/webhooks/subscriptions.md)
+
+
+## Business-model correction — admission first, tenant-directed collection
+
+This section supersedes any wording elsewhere in this contract or prior PR #24 that implies a verified payment is a precondition for initial learner admission/enrollment.
+
+- **Zero stage:** a tenant administrator may enroll/admit a learner so the learner can begin the course. No payment, mandate, subscription, payment gateway or collection method is required at this stage.
+- **Tenant decides when to charge:** after the learner has enrolled and is ready to continue, the tenant may offer a paid continuation/term or request payment. The tenant may also choose not to charge.
+- **Tenant chooses the collection rail:** the tenant may use its own configured payment gateway (for example, its own Razorpay account) or an external method such as bank transfer, UPI/GPay, cash or another method the tenant supports.
+- **Provenance is mandatory:** gateway-confirmed collection and tenant-attested offline collection are different fact types. Store method, amount/currency, reference/evidence, confirmer and time for offline collection; never label it as provider-verified.
+- **No implicit downgrade of initial learning:** a pending or failed paid-continuation request must not retroactively convert the zero-stage admission into an unpaid/invalid enrollment. The tenant's stated course/cohort policy governs the initial access boundary and any later paid continuation boundary.
+- **Recurring subscription is optional:** recurring Razorpay subscription is one possible tenant collection choice, not a universal prerequisite for learner admission or all paid continuations.
+
+Required user journey:
+
+```text
+Tenant admin admits learner (zero stage; no payment)
+                  |
+                  v
+         Learner starts course
+                  |
+                  v
+       Tenant offers paid continuation
+                  |
+                  v
+       Learner accepts / payment requested
+                  |
+          +-------+--------+
+          |                |
+          v                v
+  Tenant online PG    External collection
+  (tenant account)    (bank / UPI-GPay / cash)
+          |                |
+          v                v
+ Provider-confirmed   Tenant-attested
+ collection fact      collection fact
+          +-------+--------+
+                  |
+                  v
+     Paid continuation period/access
+```
