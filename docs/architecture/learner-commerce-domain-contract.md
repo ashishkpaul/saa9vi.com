@@ -269,26 +269,29 @@ Prospective learner selects "Interested" on a course
      Tenant admin contacts learner by phone
                        |
                        v
-       Discuss course and agree joining session time
+        Discuss course and agree joining time
                        |
                        v
              Learner confirms agreement
                        |
                        v
         Trainer reviews and decides learner lifecycle
-             /          |           \
-            v           v            v
-         ENROLL       INVITE     FOLLOW-UP / WAITLIST /
-          now         learner      DECLINE / CLOSE
-            |           |            |
-            v           v            v
-     CourseEnrollment is created or updated only
-       through the authorized Learning workflow
-                       |
-                       v
-        Initial participation at zero cost
-                       |
-                       v
+             /          |             \
+            v           v              v
+         ENROLL       INVITE       FOLLOW-UP /
+          now         learner      WAITLIST /
+            |           |          DECLINE / CLOSE
+            v           v              |
+     Create ENROLLED   Create          v
+      enrollment      INVITED      Keep/close
+            |         enrollment    enquiry only
+            |           |
+            +-----+-----+
+                  |
+                  v
+      Initial participation at zero cost
+                  |
+                  v
      Tenant may later offer paid continuation,
          or may choose not to charge at all
 ```
@@ -349,10 +352,14 @@ The browser cannot supply or extend the access period. Every Shop resolver and B
 
 Two separate triggers exist and must not be conflated:
 
-**A. Initial admission/enrollment (zero stage):**
-- A tenant administrator may invite/enroll a learner using the existing LearningPlugin academic workflow, subject to the current ACTIVE academy-admission requirement and tenant permissions.
-- This action does not require a learner offer, payment method, provider account, mandate or payment transaction.
-- The resulting initial learning access follows an explicitly defined tenant course/cohort policy. It must not be mislabeled as paid access.
+**A. Interest-led initial admission/enrollment (zero stage):**
+- The learner submits an interest/enquiry for a published course in the current tenant Channel. This is not an academic enrollment and creates no access grant.
+- After the interest is durably recorded, emit `CourseInterestSubmitted` and send a retryable, idempotent email notification to the responsible tenant administrator.
+- The tenant admin calls the learner, discusses the course and records the joining session time agreed with the learner, including an explicit timezone.
+- Once the learner agrees, an authorized trainer/instructor explicitly chooses the learner's next lifecycle action: enroll, invite, follow up, waitlist or decline/close.
+- Only the explicit trainer/admin disposition invokes the existing LearningPlugin invite/enrollment workflow. Follow-up, waitlist and decline do not create CourseEnrollment or course/BBB access.
+- No payment, offer, payment method, provider account, mandate or payment transaction is required for an approved zero-cost admission.
+- Initial learning access follows the tenant's approved course/cohort policy and existing academy-admission checks; it must not be mislabeled as paid access.
 
 **B. Paid continuation / commercial access:**
 - A tenant administrator publishes/offers a paid continuation or requests collection from an already admitted learner.
@@ -468,7 +475,8 @@ The following are proposed defaults for review. An unchecked decision is a stop 
 | LC-09 | Recurring accounting | Decide whether each recurring charge needs a Vendure Order/invoice; proposal is learner billing attempt as recurring billing fact, with Vendure Order used for fixed-term/one-time commerce | Yes |
 | LC-10 | Webhook inbox | First assess extending `TenantPaymentWebhookEvent` with a separate subscription event processor; add a new inbox only if the existing contract cannot safely support it | Yes |
 | LC-11 | Zero-stage and offline collection | Support tenant-authorized zero-stage admission without payment and separate audited external collection methods (bank transfer, UPI/GPay, cash, etc.). Never represent manual confirmation as provider verification. | Yes |
-| LC-12 | Plan changes/proration/pause | Defer from MVP; support only clearly defined next-cycle or cancellation behavior initially | Yes |\n| LC-13 | Interest and admission tracking | Use a tenant-scoped course-interest record or verified existing enquiry capability; keep it separate from `CourseEnrollment`. Define enquiry statuses and trainer dispositions without expanding the academic FSM for CRM states. | Yes |\n| LC-14 | Admin email notification | Emit `CourseInterestSubmitted` only after durable interest creation; deliver to the owning tenant admin through retryable, idempotent notification handling. Confirm recipient rules, templates and outbox capability. | Yes |\n| LC-15 | Joining session time | Record the joining time agreed during the admin/learner call with an explicit timezone and course/session association. Decide whether it maps to an existing scheduled BBB session or is only a requested time pending trainer assignment. | Yes |
+| LC-12 | Plan changes/proration/pause | Defer from MVP; support only clearly defined next-cycle or cancellation behavior initially | Yes |
+| LC-13 | Interest and admission tracking | Use a tenant-scoped course-interest record or verified existing enquiry capability; keep it separate from `CourseEnrollment`. Define enquiry statuses and trainer dispositions without expanding the academic FSM for CRM states. | Yes |\n| LC-14 | Admin email notification | Emit `CourseInterestSubmitted` only after durable interest creation; deliver to the owning tenant admin through retryable, idempotent notification handling. Confirm recipient rules, templates and outbox capability. | Yes |\n| LC-15 | Joining session time | Record the joining time agreed during the admin/learner call with an explicit timezone and course/session association. Decide whether it maps to an existing scheduled BBB session or is only a requested time pending trainer assignment. | Yes |
 
 ## 13. Delivery slices after this contract is accepted
 
