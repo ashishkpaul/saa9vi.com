@@ -82,6 +82,16 @@ registerInitializer('postgres', new SchemaPostgresInitializer());
 
 const MARKETPLACE_E2E = process.env.MARKETPLACE_E2E === 'true';
 
+function createMarketplaceTestEsClient(): EsClient {
+  const node = process.env.ELASTICSEARCH_NODE ?? 'http://localhost:9200';
+  return new EsClient({
+    node,
+    ...(process.env.ELASTICSEARCH_PASSWORD
+      ? { auth: { username: 'elastic', password: process.env.ELASTICSEARCH_PASSWORD } }
+      : {}),
+  });
+}
+
 async function assertInfrastructure(): Promise<void> {
   const pgHost = process.env.DB_HOST ?? '127.0.0.1';
   const pgPort = Number(process.env.DB_PORT ?? 5435);
@@ -105,17 +115,16 @@ async function assertInfrastructure(): Promise<void> {
   const failures: string[] = [];
   await tcp(pgPort, pgHost).catch((e: Error) => failures.push(`PostgreSQL (${pgHost}:${pgPort}): ${e.message}`));
   await tcp(redisPort, pgHost).catch((e: Error) => failures.push(`Redis (${pgHost}:${redisPort}): ${e.message}`));
+  const es = createMarketplaceTestEsClient();
   try {
-    const es = new EsClient({
-      node: esNode,
-      ...(process.env.ELASTICSEARCH_PASSWORD
-        ? { auth: { username: 'elastic', password: process.env.ELASTICSEARCH_PASSWORD } }
-        : {}),
-    });
     const ping = await es.ping();
     if (!ping) failures.push(`Elasticsearch (${esNode}): ping returned false`);
   } catch (e: any) {
     failures.push(`Elasticsearch (${esNode}): ${e.message}`);
+  } finally {
+    await es.close().catch((e: Error) => {
+      failures.push(`Elasticsearch client close: ${e.message}`);
+    });
   }
 
   if (failures.length) {
@@ -127,11 +136,40 @@ async function assertInfrastructure(): Promise<void> {
 
 // ─── Test indices (isolated from live projections) ──────────────────────────
 
+const TEST_SESSIONS_INDEX = 'e2e_marketplace_sessions';
+const TEST_INSTRUCTORS_INDEX = 'e2e_marketplace_instructors';
+const TEST_MARKETPLACE_INDICES = [TEST_SESSIONS_INDEX, TEST_INSTRUCTORS_INDEX];
+
 // Set BEFORE plugin construction — the indexer and search resolver read
 // these at construction time.
-process.env.MARKETPLACE_SESSIONS_INDEX = 'e2e_marketplace_sessions';
-process.env.MARKETPLACE_INSTRUCTORS_INDEX = 'e2e_marketplace_instructors';
-const TEST_SESSIONS_INDEX = 'e2e_marketplace_sessions';
+process.env.MARKETPLACE_SESSIONS_INDEX = TEST_SESSIONS_INDEX;
+process.env.MARKETPLACE_INSTRUCTORS_INDEX = TEST_INSTRUCTORS_INDEX;
+
+/**
+ * Deletes only this suite's concrete indices. Elasticsearch defaults
+ * action.destructive_requires_name=true, so wildcard deletion is rejected
+ * unless the cluster setting is weakened. Missing test indices are expected
+ * on a fresh run; every other deletion/verification error must fail the suite.
+ */
+async function clearMarketplaceTestIndices(es: EsClient): Promise<void> {
+  await es.indices.delete({
+    index: TEST_MARKETPLACE_INDICES,
+    ignore_unavailable: true,
+  });
+
+  const remaining = await Promise.all(
+    TEST_MARKETPLACE_INDICES.map(async index => ({
+      index,
+      exists: await es.indices.exists({ index }),
+    })),
+  );
+  const remainingNames = remaining.filter(item => item.exists).map(item => item.index);
+  if (remainingNames.length) {
+    throw new Error(
+      `Marketplace E2E Elasticsearch indices still exist after cleanup: ${remainingNames.join(', ')}`,
+    );
+  }
+}
 
 // ─── GraphQL documents ───────────────────────────────────────────────────────
 
@@ -335,22 +373,15 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
     // Gate 1.5 acceptance rule: fail hard, never fall back.
     await assertInfrastructure();
 
-    // V1.0.9 evidence hygiene: the e2e Postgres schema is recreated per run
-    // (session PKs restart at 1), but the ES indices were only cleaned in
-    // afterAll (best-effort). A stale session doc from a previous run with a
-    // recycled PK satisfies waitFor() immediately and carries that run's
-    // channelToken — an order/state-dependent false failure. Clean FIRST so
-    // setup is idempotent regardless of how the previous run ended.
+    // The e2e Postgres schema is recreated per run, so session PKs restart
+    // from the beginning. Clear both concrete ES indices before any startup
+    // events can enqueue projections; never hide a failed cleanup, otherwise
+    // a stale document can satisfy waitFor() with a previous run's channelToken.
+    const es = createMarketplaceTestEsClient();
     try {
-      const es = new EsClient({
-        node: process.env.ELASTICSEARCH_NODE ?? 'http://localhost:9200',
-        ...(process.env.ELASTICSEARCH_PASSWORD
-          ? { auth: { username: 'elastic', password: process.env.ELASTICSEARCH_PASSWORD } }
-          : {}),
-      });
-      await es.indices.delete({ index: 'e2e_marketplace_*', ignore_unavailable: true });
-    } catch {
-      // pre-clean is best-effort; assertInfrastructure() already proved ES is up
+      await clearMarketplaceTestIndices(es);
+    } finally {
+      await es.close();
     }
 
     await startOnFreePort({ server, adminClient, shopClient }, {
@@ -568,17 +599,27 @@ describe('MarketplaceIndexerPlugin (Gate 1.5)', () => {
   }, 180_000);
 
   afterAll(async () => {
-    await server.destroy();
+    const cleanupErrors: string[] = [];
+
     try {
-      const es = new EsClient({
-        node: process.env.ELASTICSEARCH_NODE ?? 'http://localhost:9200',
-        ...(process.env.ELASTICSEARCH_PASSWORD
-          ? { auth: { username: 'elastic', password: process.env.ELASTICSEARCH_PASSWORD } }
-          : {}),
-      });
-      await es.indices.delete({ index: 'e2e_marketplace_*', ignore_unavailable: true });
-    } catch {
-      // cleanup is best-effort
+      await server.destroy();
+    } catch (error) {
+      cleanupErrors.push(`Vendure test server shutdown: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    try {
+      const es = createMarketplaceTestEsClient();
+      try {
+        await clearMarketplaceTestIndices(es);
+      } finally {
+        await es.close();
+      }
+    } catch (error) {
+      cleanupErrors.push(`Elasticsearch test-index cleanup: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    if (cleanupErrors.length) {
+      throw new Error(`Marketplace E2E teardown failed:\n- ${cleanupErrors.join('\n- ')}`);
     }
   });
 
