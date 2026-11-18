@@ -102,8 +102,14 @@ Commerce-programme outcome:
 - [ ] Acceptance: tests cover tenant isolation, duplicate/out-of-order webhooks, renewal, failure, recovery, cancellation and expiry.
 
 ### MCR-2.2 — Course enrollment and entitlement convergence (P0)
-- [ ] Audit CourseEnrollment FSM, TenantLearnerMembership admission and BbbEntitlement contracts.
-- [ ] Define verified subscription/order -> enrollment and entitlement activation.
+- [ ] Audit CourseEnrollment FSM, TenantLearnerMembership admission and BbbEntitlement contracts; keep enquiry/contact states outside the academic enrollment FSM.
+- [ ] Design learner course-interest capture and a tenant-scoped `CourseInterestSubmitted` event.
+- [ ] Notify the responsible tenant admin by retryable/idempotent email after the enquiry is durably saved.
+- [ ] Design admin call/contact outcome, agreed joining-session time (timezone-aware) and explicit trainer disposition (enroll, invite, follow-up, waitlist or decline).
+- [ ] Ensure interest submission, email delivery, admin contact and learner agreement do not themselves create CourseEnrollment or grant course/BBB access.
+- [ ] Define the authorized trainer/admin transition from accepted enquiry into the existing invite/enroll workflow, preserving current academy-membership admission checks.
+- [ ] Keep initial zero-cost admission independent from commercial collection; only a trainer-approved disposition creates the academic enrollment.
+- [ ] Define paid-continuation eligibility and grant convergence separately; verified or authorized manual collection may extend a commercial period but is not a prerequisite for initial admission.
 - [ ] Define paid-period boundaries and past_due, grace, cancellation-at-period-end, immediate cancellation, refund/chargeback semantics.
 - [ ] Extend entitlement on confirmed renewal; never issue indefinite access from a single payment.
 - [ ] Ensure course access and BBB join authorization use server-side eligibility and tenant assertions.
