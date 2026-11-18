@@ -90,7 +90,7 @@ Commerce-programme outcome:
 
 ## Phase 2 — Learner subscriptions and digital fulfilment
 
-> **Design contract:** [Learner Commerce Domain Contract](../architecture/learner-commerce-domain-contract.md) is the review proposal for MCR-2.1 and MCR-2.2. **Business sequence: admission first, collection later.** A tenant admin can enroll a learner at a zero-cost stage without payment; the tenant may later offer paid continuation and choose the collection rail (tenant PG or external/manual method). The contract distinguishes provider-verified and tenant-attested collections. The checklist remains open pending agreement on policy; do not add entities, API fields or migrations until the decisions are accepted.
+> **Design contract:** [Learner Commerce Domain Contract](../architecture/learner-commerce-domain-contract.md) is the review proposal for MCR-2.1 and MCR-2.2. **Business sequence: interest → admin contact/call → learner agreement on joining time → trainer-controlled zero-cost admission → optional tenant-directed collection later.** Interest submission triggers an email to the owning tenant admin but does not enroll the learner or grant access. Only an authorized trainer/admin disposition invokes the existing invite/enroll workflow. Paid continuation remains optional; collection can use the tenant PG or an external/manual method with distinct provenance. The checklist remains open pending policy agreement; do not add entities, API fields or migrations until the decisions are accepted.
 
 ### MCR-2.1 — Learner-to-tenant recurring lifecycle (P0)
 - [ ] Keep `OrganizationSubscription` for tenant-to-Saa9vi only.
@@ -107,7 +107,7 @@ Commerce-programme outcome:
 - [ ] Define paid-period boundaries and past_due, grace, cancellation-at-period-end, immediate cancellation, refund/chargeback semantics.
 - [ ] Extend entitlement on confirmed renewal; never issue indefinite access from a single payment.
 - [ ] Ensure course access and BBB join authorization use server-side eligibility and tenant assertions.
-- [ ] Acceptance: no paid access before verified payment/authorization; only relevant tenant resources extend; expiry revokes at policy boundary.
+- [ ] Acceptance: interest notification is tenant-scoped and retryable/idempotent; no enrollment/access is granted before trainer disposition; zero-cost admitted learners receive only tenant-approved initial access; paid continuation requires the corresponding verified or authorized manual collection fact; only relevant tenant resources extend and expiry revokes at policy boundary.
 
 ### MCR-2.3 — Free trial and sample access (P1)
 - [ ] Preserve trial as no-payment/no-mandate by default.
