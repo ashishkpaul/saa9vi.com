@@ -7,7 +7,7 @@
 **As-built learning contract:** [Learning Domain Mini-Spec](learning-domain.md)  
 **Related payment contract:** [ADR-054 — Per-Tenant Razorpay Flow B](../adr/adr-054-per-tenant-razorpay-flow-b.md)
 
-> This document proposes boundaries and acceptance contracts. It deliberately does not add entities, GraphQL fields, migrations, provider calls, or database changes. It supersedes the payment-first interpretation of initial learner enrollment in PR #24. The decisions in §13 must be reviewed before implementation begins.
+> This document proposes boundaries and acceptance contracts. It deliberately does not add entities, GraphQL fields, migrations, provider calls, or database changes. It supersedes the payment-first interpretation of initial learner enrollment in PR #24. The decisions in §12 must be reviewed before implementation begins.
 
 ---
 
@@ -91,7 +91,7 @@ The learner recurring domain must resolve provider credentials from the owning t
 9. **Academic and commercial state remain separate.** Payment does not automatically create academic admission; lack of a payment does not automatically block an already admitted learner. Academic statuses such as `COMPLETED` or `WITHDRAWN` are not payment statuses.
 10. **Tenant chooses collection method.** For a paid continuation, the tenant may request collection through its configured online gateway (including its own Razorpay account) or record an approved external method such as bank transfer, UPI/GPay, cash or another tenant-supported method. Saa9vi must distinguish provider-verified collections from tenant-attested/offline collections; never represent a manual attestation as a provider webhook/payment verification.
 11. **Access is policy-bounded.** Free/manual admission is governed by the tenant's academic policy. Paid continuation is governed by the purchased/recorded commercial term. One payment must not silently create indefinite paid access.
-10. **No direct business-data SQL mutations.** Runtime business mutations use the Shop/Admin GraphQL APIs or approved application services invoked by those APIs. Schema changes use `npx vendure migrate`.
+12. **No direct business-data SQL mutations.** Runtime business mutations use the Shop/Admin GraphQL APIs or approved application services invoked by those APIs. Schema changes use `npx vendure migrate`.
 
 ## 4. Proposed bounded-context split
 
@@ -111,7 +111,7 @@ Names below are provisional. They describe the information the domain must own, 
 
 ### 5.1 Tenant learner offer / plan
 
-A tenant-managed offer should contain. Offers are optional and need not exist when a learner is first admitted:
+A tenant-managed offer should contain the following. Offers are optional and need not exist when a learner is first admitted:
 
 - owning `channelId`;
 - stable tenant-scoped code/name and publication/availability status;
@@ -484,6 +484,7 @@ The following are proposed defaults for review. An unchecked decision is a stop 
 | LC-13 | Interest and admission tracking | Use a tenant-scoped course-interest record or verified existing enquiry capability; keep it separate from `CourseEnrollment`. Define enquiry statuses and trainer dispositions without expanding the academic FSM for CRM states. | Yes |
 | LC-14 | Admin email notification | Emit `CourseInterestSubmitted` only after durable interest creation; deliver to the owning tenant admin through retryable, idempotent notification handling. Confirm recipient rules, templates and outbox capability. | Yes |
 | LC-15 | Joining session time | Record the joining time agreed during the admin/learner call with an explicit timezone and course/session association. Decide whether it maps to an existing scheduled BBB session or is only a requested time pending trainer assignment. | Yes |
+| LC-16 | Interest identity and duplicate handling | Decide whether prospects can submit interest without a Shop customer account, what contact verification/consent is required, how duplicate enquiries are matched, and how a prospect is linked to a Channel Customer after admission. Do not assume the existing authenticated-checkout contract is the right identity policy for public interest capture. | Yes |
 
 ## 13. Delivery slices after this contract is accepted
 
