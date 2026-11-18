@@ -282,13 +282,18 @@ Prospective learner selects "Interested" on a course
           now         learner      WAITLIST /
             |           |          DECLINE / CLOSE
             v           v              |
-     Create ENROLLED   Create          v
-      enrollment      INVITED      Keep/close
-            |         enrollment    enquiry only
-            |           |
-            +-----+-----+
-                  |
-                  v
+     Create ENROLLED   Create INVITED      v
+      enrollment      invitation record  Keep/close
+            |              |             enquiry only
+            |              v
+            |        Learner accepts
+            |              |
+            |              v
+            |        ENROLLED status
+            |              |
+            +------+-------+
+                   |
+                   v
       Initial participation at zero cost
                   |
                   v
@@ -476,7 +481,9 @@ The following are proposed defaults for review. An unchecked decision is a stop 
 | LC-10 | Webhook inbox | First assess extending `TenantPaymentWebhookEvent` with a separate subscription event processor; add a new inbox only if the existing contract cannot safely support it | Yes |
 | LC-11 | Zero-stage and offline collection | Support tenant-authorized zero-stage admission without payment and separate audited external collection methods (bank transfer, UPI/GPay, cash, etc.). Never represent manual confirmation as provider verification. | Yes |
 | LC-12 | Plan changes/proration/pause | Defer from MVP; support only clearly defined next-cycle or cancellation behavior initially | Yes |
-| LC-13 | Interest and admission tracking | Use a tenant-scoped course-interest record or verified existing enquiry capability; keep it separate from `CourseEnrollment`. Define enquiry statuses and trainer dispositions without expanding the academic FSM for CRM states. | Yes |\n| LC-14 | Admin email notification | Emit `CourseInterestSubmitted` only after durable interest creation; deliver to the owning tenant admin through retryable, idempotent notification handling. Confirm recipient rules, templates and outbox capability. | Yes |\n| LC-15 | Joining session time | Record the joining time agreed during the admin/learner call with an explicit timezone and course/session association. Decide whether it maps to an existing scheduled BBB session or is only a requested time pending trainer assignment. | Yes |
+| LC-13 | Interest and admission tracking | Use a tenant-scoped course-interest record or verified existing enquiry capability; keep it separate from `CourseEnrollment`. Define enquiry statuses and trainer dispositions without expanding the academic FSM for CRM states. | Yes |
+| LC-14 | Admin email notification | Emit `CourseInterestSubmitted` only after durable interest creation; deliver to the owning tenant admin through retryable, idempotent notification handling. Confirm recipient rules, templates and outbox capability. | Yes |
+| LC-15 | Joining session time | Record the joining time agreed during the admin/learner call with an explicit timezone and course/session association. Decide whether it maps to an existing scheduled BBB session or is only a requested time pending trainer assignment. | Yes |
 
 ## 13. Delivery slices after this contract is accepted
 
