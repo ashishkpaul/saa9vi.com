@@ -90,6 +90,8 @@ Commerce-programme outcome:
 
 ## Phase 2 — Learner subscriptions and digital fulfilment
 
+> **Design contract:** [Learner Commerce Domain Contract](../architecture/learner-commerce-domain-contract.md) is the review proposal for MCR-2.1 and MCR-2.2. It records the as-built boundary, proposed lifecycle/access contracts, acceptance matrix and decisions requiring approval. The checklist below remains open; do not add entities, API fields or migrations until the contract decisions are accepted.
+
 ### MCR-2.1 — Learner-to-tenant recurring lifecycle (P0)
 - [ ] Keep `OrganizationSubscription` for tenant-to-Saa9vi only.
 - [ ] Design a separate channel-scoped learner subscription bounded context.
