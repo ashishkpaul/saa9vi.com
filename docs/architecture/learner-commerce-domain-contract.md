@@ -247,40 +247,63 @@ References:
 
 ## 8. MCR-2.2 — Course enrollment and access convergence
 
-### 8.1 Admission and enrollment are not payment-gated by default
+### 8.1 Stage 1 — zero-cost admission through learner interest and trainer decision
 
-The initial learner journey is admission-first:
+For a learner who discovers a course and expresses interest, the first action is an **interest/enquiry**, not an enrollment. It is free to submit and does not create a payment, mandate, subscription, `CourseEnrollment`, course access grant or BBB entitlement.
+
+The proposed journey is:
 
 ```text
-Tenant admin creates invitation / enrolls learner
-                 |
-                 v
-     Learner joins the course (zero stage)
-                 |
-                 v
-       Initial learning participation
-                 |
-                 v
- Tenant decides whether to offer paid continuation
-                 |
-                 v
- Learner accepts an offer or collection request
-                 |
-       +---------+----------------------+
-       |                                |
-       v                                v
-Online tenant payment             External collection
-(Razorpay / other PG)             (bank transfer / UPI-GPay / cash)
-       |                                |
-       v                                v
-Provider-verified fact          Tenant-attested receipt fact
-       +---------------+----------------+
+Prospective learner selects "Interested" on a course
                        |
                        v
-        Commercial period / continuation access
+          Course interest / enquiry is recorded
+                       |
+                       v
+            CourseInterestSubmitted event
+                       |
+                       v
+        Email notification to tenant admin
+                       |
+                       v
+     Tenant admin contacts learner by phone
+                       |
+                       v
+       Discuss course and agree joining session time
+                       |
+                       v
+             Learner confirms agreement
+                       |
+                       v
+        Trainer reviews and decides learner lifecycle
+             /          |           \
+            v           v            v
+         ENROLL       INVITE     FOLLOW-UP / WAITLIST /
+          now         learner      DECLINE / CLOSE
+            |           |            |
+            v           v            v
+     CourseEnrollment is created or updated only
+       through the authorized Learning workflow
+                       |
+                       v
+        Initial participation at zero cost
+                       |
+                       v
+     Tenant may later offer paid continuation,
+         or may choose not to charge at all
 ```
 
-The tenant may choose not to charge, may charge later, or may offer a paid continuation to selected learners/cohorts. The initial admission must not automatically create a mandate or subscription. The tenant's decision to charge is explicit and separate from initial enrollment.
+**Responsibilities and boundaries:**
+
+1. **Learner interest submission:** the learner submits interest for a specific published course in the current tenant context and gives the contact details/consent required for the tenant to respond. The server derives the Channel and course ownership; the browser cannot choose another tenant.
+2. **Email event:** after the interest record is durably saved, emit `CourseInterestSubmitted`. Notify the tenant administrator for that course/Channel. The email should contain a concise enquiry summary and a secure Admin UI link; do not put provider secrets or unnecessary sensitive information in email.
+3. **Reliable notification:** delivery must be retryable and idempotent. A retry must not create duplicate interest records or uncontrolled duplicate notifications. Prefer the platform's durable outbox/notification mechanism where available; verify that capability before implementation.
+4. **Admin call and session agreement:** the tenant admin contacts the learner, discusses the course and settles the proposed joining session time. Record the contact outcome and agreed time, including its timezone or an unambiguous UTC representation. Do not assume this is a built-in Saa9vi call; a normal phone call is sufficient for this workflow.
+5. **Trainer decision:** after the learner agrees, an authorized trainer/instructor makes the academic disposition. The trainer decides whether to enroll immediately, issue an invitation, follow up, waitlist, or decline/close the enquiry. These are enquiry/admission outcomes, not payment outcomes.
+6. **Enrollment boundary:** only the trainer/admin's explicit authorized decision invokes the existing LearningPlugin invitation/enrollment workflow. An interest submission, email delivery, phone contact or agreed time alone does not create `CourseEnrollment` or grant access.
+7. **Zero-cost start:** when the trainer admits the learner, initial participation can begin without payment, a mandate, a provider account or a configured payment gateway. Preserve the existing ACTIVE academy-admission requirement unless a separate admission-policy change is approved.
+
+The statuses used to track enquiries must remain separate from the existing `CourseEnrollment` FSM. In particular, do not add `WAITLISTED`, `CONTACTED` or payment-related states to `CourseEnrollment` merely to represent enquiry handling. If an invitation is selected, use the existing `INVITED` academic status and implement invite acceptance as its own authorized transition; do not treat an email notification as invite acceptance.
 
 ### 8.2 Preserve the academic enrollment state machine
 
@@ -434,7 +457,7 @@ The following are proposed defaults for review. An unchecked decision is a stop 
 
 | ID | Decision | Proposed default | Review required |
 |---|---|---|---|
-| LC-01 | Initial admission | Tenant admin can invite/enroll at zero stage without a payment or PG. Preserve existing ACTIVE `TenantLearnerMembership` requirement unless a separate admission policy is approved. Initial admission and commercial continuation are separate operations. | Yes |
+| LC-01 | Initial admission | A learner's course-interest submission is not enrollment. Tenant admin contacts the learner, records the agreed joining time, and an authorized trainer decides whether to invite, enroll, follow up, waitlist or decline. Admission remains zero-cost by default. Preserve existing ACTIVE `TenantLearnerMembership` requirement unless separately changed. | Yes |
 | LC-02 | Initial target | One `LearningCourse` per offer/subscription; service offers and bundles deferred until MCR-0.2 taxonomy is accepted | Yes |
 | LC-03 | Billing modes | Recurring via tenant Razorpay Subscriptions; fixed-term via one-time tenant Flow B Vendure order; no lifetime access in MVP | Yes |
 | LC-04 | Provider scope | Razorpay only for MVP; use the tenant's own `TenantPaymentAccount`; verify recurring capability separately from the existing one-time credential probe | Yes |
@@ -445,7 +468,7 @@ The following are proposed defaults for review. An unchecked decision is a stop 
 | LC-09 | Recurring accounting | Decide whether each recurring charge needs a Vendure Order/invoice; proposal is learner billing attempt as recurring billing fact, with Vendure Order used for fixed-term/one-time commerce | Yes |
 | LC-10 | Webhook inbox | First assess extending `TenantPaymentWebhookEvent` with a separate subscription event processor; add a new inbox only if the existing contract cannot safely support it | Yes |
 | LC-11 | Zero-stage and offline collection | Support tenant-authorized zero-stage admission without payment and separate audited external collection methods (bank transfer, UPI/GPay, cash, etc.). Never represent manual confirmation as provider verification. | Yes |
-| LC-12 | Plan changes/proration/pause | Defer from MVP; support only clearly defined next-cycle or cancellation behavior initially | Yes |
+| LC-12 | Plan changes/proration/pause | Defer from MVP; support only clearly defined next-cycle or cancellation behavior initially | Yes |\n| LC-13 | Interest and admission tracking | Use a tenant-scoped course-interest record or verified existing enquiry capability; keep it separate from `CourseEnrollment`. Define enquiry statuses and trainer dispositions without expanding the academic FSM for CRM states. | Yes |\n| LC-14 | Admin email notification | Emit `CourseInterestSubmitted` only after durable interest creation; deliver to the owning tenant admin through retryable, idempotent notification handling. Confirm recipient rules, templates and outbox capability. | Yes |\n| LC-15 | Joining session time | Record the joining time agreed during the admin/learner call with an explicit timezone and course/session association. Decide whether it maps to an existing scheduled BBB session or is only a requested time pending trainer assignment. | Yes |
 
 ## 13. Delivery slices after this contract is accepted
 
@@ -483,42 +506,74 @@ Every schema change is generated and applied through the Vendure CLI migration w
 - [Razorpay subscription webhook events](https://github.com/razorpay/markdown-docs/blob/master/webhooks/subscriptions.md)
 
 
-## Business-model correction — admission first, tenant-directed collection
+## Business-model clarification — interest-led, trainer-controlled zero-cost admission
 
-This section supersedes any wording elsewhere in this contract or prior PR #24 that implies a verified payment is a precondition for initial learner admission/enrollment.
+This section refines the admission-first rule. It supersedes any wording elsewhere in this contract or prior PR #24 that implies that a verified payment is a precondition for initial learner admission/enrollment. It also makes clear that expressing interest is not itself admission.
 
-- **Zero stage:** a tenant administrator may enroll/admit a learner so the learner can begin the course. No payment, mandate, subscription, payment gateway or collection method is required at this stage.
-- **Tenant decides when to charge:** after the learner has enrolled and is ready to continue, the tenant may offer a paid continuation/term or request payment. The tenant may also choose not to charge.
-- **Tenant chooses the collection rail:** the tenant may use its own configured payment gateway (for example, its own Razorpay account) or an external method such as bank transfer, UPI/GPay, cash or another method the tenant supports.
-- **Provenance is mandatory:** gateway-confirmed collection and tenant-attested offline collection are different fact types. Store method, amount/currency, reference/evidence, confirmer and time for offline collection; never label it as provider-verified.
-- **No implicit downgrade of initial learning:** a pending or failed paid-continuation request must not retroactively convert the zero-stage admission into an unpaid/invalid enrollment. The tenant's stated course/cohort policy governs the initial access boundary and any later paid continuation boundary.
-- **Recurring subscription is optional:** recurring Razorpay subscription is one possible tenant collection choice, not a universal prerequisite for learner admission or all paid continuations.
+### Stage 1 — Zero-cost admission
 
-Required user journey:
+1. **Learner expresses interest:** the learner selects a course and submits an interest/enquiry. No payment is requested at this point.
+2. **Tenant admin is notified:** after the enquiry is durably recorded, `CourseInterestSubmitted` triggers an email to the tenant administrator responsible for that course. Notification delivery is retryable and idempotent.
+3. **Admin contacts the learner:** the tenant admin calls the learner, explains the course and agrees the joining session time with the learner.
+4. **Learner agrees:** the agreed joining time and call outcome are recorded. The learner's agreement is an input to the trainer's decision; it is not an automatic enrollment.
+5. **Trainer decides the learner lifecycle:** an authorized trainer/instructor chooses the next action, for example:
+   - enroll the learner now;
+   - issue an invitation for the learner to accept;
+   - keep the enquiry for follow-up or waitlist; or
+   - decline/close the enquiry.
+6. **Academic admission is explicit:** only the trainer's authorized disposition invokes the existing LearningPlugin invitation/enrollment flow. Interest and notification records remain separate from `CourseEnrollment`.
+7. **Initial learning is zero-cost:** an admitted learner can start within the tenant-approved initial course/session scope without payment, mandate, tenant Razorpay configuration or any other payment gateway.
 
 ```text
-Tenant admin admits learner (zero stage; no payment)
-                  |
-                  v
-         Learner starts course
-                  |
-                  v
-       Tenant offers paid continuation
-                  |
-                  v
-       Learner accepts / payment requested
-                  |
-          +-------+--------+
-          |                |
-          v                v
-  Tenant online PG    External collection
-  (tenant account)    (bank / UPI-GPay / cash)
-          |                |
-          v                v
- Provider-confirmed   Tenant-attested
- collection fact      collection fact
-          +-------+--------+
-                  |
-                  v
-     Paid continuation period/access
+Learner submits course interest
+             |
+             v
+  Persist tenant-scoped enquiry
+             |
+             v
+   CourseInterestSubmitted event
+             |
+             v
+ Email tenant administrator
+             |
+             v
+ Admin calls learner and agrees
+      joining session time
+             |
+             v
+       Learner agrees
+             |
+             v
+    Trainer decides lifecycle
+       /       |        \
+      v        v         v
+   ENROLL    INVITE   FOLLOW-UP /
+     now    learner   WAITLIST /
+                       DECLINE
+      |
+      v
+Initial zero-cost participation
+      |
+      v
+Tenant may later offer paid continuation
+or may choose not to charge
 ```
+
+An enquiry that is not admitted has no academic enrollment or course/BBB access. If the trainer chooses `INVITED`, the learner must complete the defined invite-acceptance transition before receiving ENROLLED-only course access. A scheduled joining time must not bypass the existing course enrollment, tenant admission or BBB meeting entitlement checks.
+
+### Later tenant-directed collection (optional)
+
+- **Tenant decides whether and when to charge:** after initial admission, the tenant may offer a paid continuation/term or request payment. It may also continue to provide learning without charge.
+- **Tenant chooses the collection rail:** the tenant may use its own configured payment gateway (for example, its own Razorpay account) or an external method such as bank transfer, UPI/GPay, cash or another method it supports.
+- **Provenance is mandatory:** gateway-confirmed collection and tenant-attested offline collection are different fact types. Store method, amount/currency, reference/evidence, confirmer and time for offline collection; never label it as provider-verified.
+- **No implicit downgrade of initial learning:** a pending or failed paid-continuation request must not retroactively invalidate zero-stage enrollment. Tenant course/cohort policy governs the initial access boundary and any later paid-continuation boundary.
+- **Recurring subscription is optional:** recurring Razorpay subscription is one possible collection choice, not a prerequisite for learner interest, admission or all paid continuations.
+
+### Required separation
+
+- `CourseInterest`/enquiry lifecycle: interest, contact, call outcome, agreed joining time and trainer disposition.
+- `CourseEnrollment` lifecycle: existing academic states only — `INVITED`, `ENROLLED`, `SUSPENDED`, `COMPLETED`, `WITHDRAWN`.
+- Commercial lifecycle: optional paid offer, payment/collection facts and bounded paid-continuation period.
+- BBB lifecycle: separate session/meeting entitlement and join authorization.
+
+A learner-interest event must not issue an academic enrollment, financial fact, paid period, course access grant or BBB entitlement by itself. A trainer-approved zero-cost admission may establish the initial academic/access path; later tenant-directed collection is a separate decision and process.
