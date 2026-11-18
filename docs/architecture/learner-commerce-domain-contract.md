@@ -330,7 +330,7 @@ MCR-2.2 adds a commercial-access eligibility check alongside academic admission/
 A conceptual `CourseAccessGrant` (name provisional) represents a time-bounded right to access one tenant course. It should contain:
 
 - `channelId`, `customerId`, `courseId`;
-- source type: `LEARNER_SUBSCRIPTION`, `SETTLED_ORDER`, or an explicitly approved `FREE / MANUAL` source;
+- source type: `TRAINER_APPROVED_ZERO_COST_ADMISSION`, `LEARNER_SUBSCRIPTION`, `SETTLED_ORDER`, or `MANUAL_CONFIRMED_COLLECTION`; zero-cost admission and offline collection are distinct provenance types;
 - immutable source reference and idempotency key;
 - `validFrom` and `validUntil` in UTC, with `validUntil` exclusive;
 - policy/version metadata sufficient to explain why the grant exists.
