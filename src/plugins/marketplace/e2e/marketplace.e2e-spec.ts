@@ -136,8 +136,6 @@ async function assertInfrastructure(): Promise<void> {
 
 // ─── Test indices (isolated from live projections) ──────────────────────────
 
-// Set BEFORE plugin construction — the indexer and search resolver read
-// these at construction time.
 const TEST_SESSIONS_INDEX = 'e2e_marketplace_sessions';
 const TEST_INSTRUCTORS_INDEX = 'e2e_marketplace_instructors';
 const TEST_MARKETPLACE_INDICES = [TEST_SESSIONS_INDEX, TEST_INSTRUCTORS_INDEX];
