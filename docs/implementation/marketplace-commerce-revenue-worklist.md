@@ -90,7 +90,7 @@ Commerce-programme outcome:
 
 ## Phase 2 — Learner subscriptions and digital fulfilment
 
-> **Design contract:** [Learner Commerce Domain Contract](../architecture/learner-commerce-domain-contract.md) is the review proposal for MCR-2.1 and MCR-2.2. It records the as-built boundary, proposed lifecycle/access contracts, acceptance matrix and decisions requiring approval. The checklist below remains open; do not add entities, API fields or migrations until the contract decisions are accepted.
+> **Design contract:** [Learner Commerce Domain Contract](../architecture/learner-commerce-domain-contract.md) is the review proposal for MCR-2.1 and MCR-2.2. **Business sequence: interest → admin contact/call → learner agreement on joining time → trainer-controlled zero-cost admission → optional tenant-directed collection later.** Interest submission triggers an email to the owning tenant admin but does not enroll the learner or grant access. Only an authorized trainer/admin disposition invokes the existing invite/enroll workflow. Paid continuation remains optional; collection can use the tenant PG or an external/manual method with distinct provenance. The checklist remains open pending policy agreement; do not add entities, API fields or migrations until the decisions are accepted.
 
 ### MCR-2.1 — Learner-to-tenant recurring lifecycle (P0)
 - [ ] Keep `OrganizationSubscription` for tenant-to-Saa9vi only.
@@ -102,12 +102,18 @@ Commerce-programme outcome:
 - [ ] Acceptance: tests cover tenant isolation, duplicate/out-of-order webhooks, renewal, failure, recovery, cancellation and expiry.
 
 ### MCR-2.2 — Course enrollment and entitlement convergence (P0)
-- [ ] Audit CourseEnrollment FSM, TenantLearnerMembership admission and BbbEntitlement contracts.
-- [ ] Define verified subscription/order -> enrollment and entitlement activation.
+- [ ] Audit CourseEnrollment FSM, TenantLearnerMembership admission and BbbEntitlement contracts; keep enquiry/contact states outside the academic enrollment FSM.
+- [ ] Design learner course-interest capture and a tenant-scoped `CourseInterestSubmitted` event.
+- [ ] Notify the responsible tenant admin by retryable/idempotent email after the enquiry is durably saved.
+- [ ] Design admin call/contact outcome, agreed joining-session time (timezone-aware) and explicit trainer disposition (enroll, invite, follow-up, waitlist or decline).
+- [ ] Ensure interest submission, email delivery, admin contact and learner agreement do not themselves create CourseEnrollment or grant course/BBB access.
+- [ ] Define the authorized trainer/admin transition from accepted enquiry into the existing invite/enroll workflow, preserving current academy-membership admission checks.
+- [ ] Keep initial zero-cost admission independent from commercial collection; only a trainer-approved disposition creates the academic enrollment.
+- [ ] Define paid-continuation eligibility and grant convergence separately; verified or authorized manual collection may extend a commercial period but is not a prerequisite for initial admission.
 - [ ] Define paid-period boundaries and past_due, grace, cancellation-at-period-end, immediate cancellation, refund/chargeback semantics.
 - [ ] Extend entitlement on confirmed renewal; never issue indefinite access from a single payment.
 - [ ] Ensure course access and BBB join authorization use server-side eligibility and tenant assertions.
-- [ ] Acceptance: no paid access before verified payment/authorization; only relevant tenant resources extend; expiry revokes at policy boundary.
+- [ ] Acceptance: interest notification is tenant-scoped and retryable/idempotent; no enrollment/access is granted before trainer disposition; zero-cost admitted learners receive only tenant-approved initial access; paid continuation requires the corresponding verified or authorized manual collection fact; only relevant tenant resources extend and expiry revokes at policy boundary.
 
 ### MCR-2.3 — Free trial and sample access (P1)
 - [ ] Preserve trial as no-payment/no-mandate by default.
