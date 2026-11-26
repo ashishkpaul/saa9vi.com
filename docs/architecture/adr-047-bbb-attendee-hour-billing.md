@@ -1,6 +1,6 @@
 # ADR-047: Attendee-Hour (Metered) Billing Is a Second Append-Only Billing Fact
 
-- **Status:** Accepted (2026-09-30)
+- **Status:** Superseded by ADR-057 for current tenant commercial billing (2026-11-26); retained as a historical design and data-compatibility record
 - **Date:** 2026-09-30
 - **Deciders:** Platform architecture
 - **Supersedes:** — (extends ADR-031 capacity policy and ADR-039/ADR-041 subscription billing; does **not** supersede the grant system)
