@@ -942,7 +942,7 @@ ephemeral `authorizationUrl` (for provider-wired upgrades needing e-mandate/UPI 
 
 ## ADR-047: Attendee-Hour (Metered) Billing Is a Second Append-Only Billing Fact
 
-**Status:** Accepted (2026-09-30)  
+**Status:** Superseded for current tenant commercial billing by ADR-057; retained for historical data compatibility  
 **Full record:** `docs/architecture/adr-047-bbb-attendee-hour-billing.md`
 
 **Core decision:** BBB billing gains a second, mutually exclusive mode. `BbbOrganization.billingMode`
@@ -1186,3 +1186,24 @@ The checker is run as part of the standard gate sequence before push (`npm run v
 **Key operations:** `TENANT_PAYMENT_ENCRYPTION_KEY` is a 64-character hex-encoded 32-byte AES key and is required when `APP_ENV !== 'dev'`. `TENANT_PAYMENT_ENCRYPTION_KEY_PREVIOUS` supports fallback decryption during rotation; the reviewed service does not include an automatic bulk re-encryption command. This key is distinct from `VENDURE_ENCRYPTION_KEY`, which configures Vendure's `DefaultEncryptionStrategy` for Stripe plugin secret encryption.
 
 **Migrations required:** yes — `tenant_payment_account` table. Source/SDL baseline: `3c245952d57b9ddeb27b9cbd6ee01de5bae0ba71`. Runtime and provider verification remain separate evidence requirements.
+
+
+---
+
+## ADR-057: Keycloak SSO and Vendure-Owned Monthly Subscription Gate for PILOS
+
+**Status:** Accepted (2026-11-26)  
+**Full record:** docs/adr/adr-057-pilos-keycloak-monthly-subscription-gating.md
+
+**Core decisions:**
+
+1. Vendure owns the tenant's fixed monthly Saa9vi subscription and its effective access state. The Vendure Channel remains the tenant identity (INV-001).
+2. Keycloak is the shared OIDC identity provider. PILOS uses its native OIDC integration; Vendure uses its Admin Keycloak authentication strategy. Identity linking uses validated issuer + subject, while each platform retains its own authorisation rules.
+3. PILOS is the operational system of record for tenant rooms, meetings, attendance, recordings and BBB lifecycle. Vendure is not a second meeting source of truth.
+4. PILOS receives a versioned tenant-level entitlement projection from Vendure. Access requires active tenant membership/role and an active, unexpired tenant entitlement. Do not fan out the tenant subscription into per-moderator subscriptions.
+5. An inactive subscription blocks the tenant's PILOS operations but never blocks the seller's Vendure Admin login or renewal path.
+6. Billing is fixed monthly. Meeting count, duration and attendee-minute data are retained for operations/audit/reporting, never used to calculate new subscription invoices.
+7. ADR-047's grant / attendee-hour model is superseded as the current commercial billing basis. Existing records remain available for historical reconciliation until a separate migration decision retires them.
+
+**New invariant:** INV-032 in docs/architecture/invariants.md.
+
