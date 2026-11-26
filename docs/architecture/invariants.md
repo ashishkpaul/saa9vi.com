@@ -492,6 +492,8 @@ before `requestProvisioning`. Registered in `src/platform/invariants/cli.ts`; ru
 
 ## INV-028: Metered Billing Truth Is `BbbMeteredUsage`; Money Is Rounded Once per Month (ADR-047)
 
+> **Current status under ADR-057:** This is a legacy implementation/data-integrity constraint only. It does not define the current Saa9vi tenant billing model and must not be used to calculate new monthly subscription invoices. Retain historical rows until a separate migration decision.
+
 **Rule:** For an organization with `billingMode = 'metered'`, the billing fact is the
 **`BbbMeteredUsage` row** — one append-only row per completed meeting, `UNIQUE(meetingId)`,
 written by the database write itself (`INSERT … ON CONFLICT (meetingId) DO NOTHING RETURNING id`),
@@ -575,3 +577,22 @@ platform-only. See `docs/architecture/security.md` SEC-008.
 **Rationale:** The native pool ranks servers by utilisation. If any other code path writes `currentLoad`, or any selection path returns no server while a healthy non-excluded server exists, load ceases to be a measured, trustworthy signal and the pool degrades to random selection again.
 
 **Rejection criterion:** any other writer of `currentLoad`, or any selection path that returns no server while a healthy non-excluded server exists.
+
+---
+
+## INV-032: Vendure Subscription Governs Tenant PILOS Access (ADR-057)
+
+**Rule:** The effective monthly Saa9vi service subscription in Vendure is the sole commercial authority for whether a tenant may use PILOS / BBB services.
+
+1. The tenant is identified by its Vendure Channel (INV-001). The PILOS tenant/organisation mapping must resolve to that Channel; no second Vendure tenant identity is introduced.
+2. Keycloak authenticates the individual user. A validated issuer + subject identity link, together with active tenant membership and PILOS operational role, determines the user's identity and operational permissions. Keycloak role claims or email alone do not establish tenant membership or subscription access.
+3. PILOS maintains only a versioned tenant-level projection of the Vendure subscription. It is not a second subscription ledger and must not create independent subscriptions for each moderator.
+4. A protected PILOS operation requires both active tenant membership/role and an active tenant entitlement whose validUntil has not passed. Missing, stale, suspended or expired entitlement denies the operation. The check is enforced server-side for existing sessions as well as new logins.
+5. An inactive tenant subscription blocks that tenant's PILOS operational access but must never block the tenant owner's Vendure Admin authentication or subscription renewal path.
+6. Tenant subscription charges are fixed monthly amounts from Vendure. Meeting counts, meeting duration and attendance/attendee-minute records are not inputs to new subscription invoices. Meeting records remain PILOS operational/audit data.
+
+**Synchronization:** Subscription state is delivered from Vendure to PILOS through an authenticated, idempotent, monotonically versioned integration. Delivery is retried and reconciled; validUntil prevents a missed expiry event from granting indefinite access. The delivery follows INV-004's persist-before-process discipline.
+
+**Legacy transition:** INV-028 and ADR-047 describe the former grant/metered billing implementation. Their existing data and integrity constraints may be retained during migration, but they do not define the current commercial billing model and must not be used to calculate new tenant subscription invoices.
+
+**Rejection criteria:** Any PR that (a) blocks Vendure renewal because a tenant subscription is inactive, (b) allows PILOS operations without an active tenant entitlement and tenant membership, (c) treats Keycloak as the subscription authority, (d) fans out one tenant subscription into independent moderator subscriptions, or (e) calculates a new Saa9vi tenant invoice from meeting or attendance usage is rejected.
