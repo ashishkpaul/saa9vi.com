@@ -16,6 +16,7 @@ import {
 import { IsNull } from 'typeorm';
 import { SUPER_ADMIN_ROLE_CODE } from '@vendure/common/lib/shared-constants';
 import { ChannelRoleRepairService } from '../services/channel-role-repair.service';
+import { CommercialEntitlementService } from '../../platform/commercial/commercial-entitlement.service';
 import { TenantProfileService } from '../services/tenant-profile.service';
 import { InstructorProfileService } from '../services/instructor-profile.service';
 import { MediaResourceService } from '../services/media-resource.service';
@@ -140,6 +141,7 @@ export class TenantAdminResolver {
     private readonly tenantLearnerMembershipService: TenantLearnerMembershipService,
     private readonly channelRoleRepairService: ChannelRoleRepairService,
     private readonly connection: TransactionalConnection,
+    private readonly commercialEntitlements: CommercialEntitlementService,
     private readonly administratorService: AdministratorService,
     private readonly roleService: RoleService,
     private readonly listQueryBuilder: ListQueryBuilder,
@@ -571,5 +573,108 @@ export class TenantAdminResolver {
     @Args('channelId') channelId: ID,
   ) {
     return this.channelRoleRepairService.repairChannelRoleAssignments(channelId);
+  }
+
+  // ── PILOS entitlement (ADR-057 D5) ──────────────────────────────────────
+
+  /** Tenant-level PILOS access entitlement projection.
+   *
+   * PILOS calls this Admin API to fetch the effective subscription state for a
+   * tenant channel. PILOS enforces both this tenant entitlement AND individual
+   * moderator membership on the backend — a Keycloak login alone is never
+   * sufficient.
+   *
+   *   subscription = current subscription for channel
+   *   if (!subscription || !subscription.plan.pilosAccessEnabled) → MISSING
+   *   if (channelPiloslAccessEligible(channelId)) → ACTIVE
+   *   if (subscription.status === 'past_due') → SUSPENDED  (grace expired)
+   *   if (subscription.status === 'cancelled') → EXPIRED
+   *
+   * SuperAdmin only — PILOS authenticates as a platform operator.
+   */
+  @Query()
+  @Allow(Permission.SuperAdmin)
+  async tenantPiloslEntitlement(
+    @Ctx() ctx: RequestContext,
+    @Args('channelId') channelId: string,
+  ): Promise<{
+    tenantRef: string;
+    status: string;
+    plan: string | null;
+    version: number | null;
+    validUntil: Date | null;
+  }> {
+    const subscription = await this.commercialEntitlements.findChannelSubscription(
+      channelId,
+    );
+    if (!subscription) {
+      return {
+        tenantRef: channelId,
+        status: 'MISSING',
+        plan: null,
+        version: null,
+        validUntil: null,
+      };
+    }
+
+    const plan = subscription.plan;
+
+    // PILOS access is gated on a separate plan flag — sharing the billing
+    // record does not make PILOS access and marketplace listing equivalent.
+    if (!plan?.pilosAccessEnabled) {
+      return {
+        tenantRef: channelId,
+        status: 'MISSING',
+        plan: plan?.slug ?? null,
+        version: subscription.version,
+        validUntil: subscription.currentPeriodEnd ?? null,
+      };
+    }
+
+    const eligible = await this.commercialEntitlements.channelPiloslAccessEligible(
+      channelId,
+    );
+
+    if (eligible) {
+      return {
+        tenantRef: channelId,
+        status: 'ACTIVE',
+        plan: plan.slug,
+        version: subscription.version,
+        validUntil: subscription.currentPeriodEnd ?? null,
+      };
+    }
+
+    // Not eligible but subscribed to a PILOS plan — determine why.
+    if (subscription.status === 'past_due') {
+      // Grace expired → suspended (still has a subscription, but access blocked)
+      return {
+        tenantRef: channelId,
+        status: 'SUSPENDED',
+        plan: plan.slug,
+        version: subscription.version,
+        validUntil: subscription.marketplaceGraceUntil ?? null,
+      };
+    }
+
+    if (subscription.status === 'cancelled') {
+      return {
+        tenantRef: channelId,
+        status: 'EXPIRED',
+        plan: plan.slug,
+        version: subscription.version,
+        validUntil: subscription.currentPeriodEnd ?? null,
+      };
+    }
+
+    // Any other non-active status (pending_provider_auth, trialing without
+    // entitlement, etc.) → missing entitlement.
+    return {
+      tenantRef: channelId,
+      status: 'MISSING',
+      plan: plan.slug,
+      version: subscription.version,
+      validUntil: subscription.currentPeriodEnd ?? null,
+    };
   }
 }
