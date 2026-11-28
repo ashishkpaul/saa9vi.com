@@ -87,6 +87,33 @@ export const MARKETPLACE_LISTING_ENTITLEMENT: CommercialEntitlement = {
   requiresPlanFlag: (plan) => plan?.marketplaceListingEnabled === true,
 };
 
+/**
+ * ADR-057 §D4/D5 — PILOS access entitlement.
+ *
+ * Tenant-level entitlement for PILOS meeting operations. SEPARATE from
+ * marketplace listing eligibility (ADR-042) — sharing the
+ * `OrganizationSubscription` billing record does not make them
+ * indistinguishable.
+ *
+ *   subscription = findCurrentSubscriptionForChannel(channelId)
+ *   if (!subscription)                                              → false
+ *   plan = subscription.plan
+ *   if (!plan.pilosAccessEnabled)                                   → false
+ *   if (subscription.status === 'active')                           → true
+ *   if (status === 'past_due' && now() < marketplaceGraceUntil)   → true
+ *   → false
+ *
+ * Consumed by `PilosAccessSyncPlugin` (PR 6) for tenant-level entitlement
+ * projection to PILOS.
+ */
+export const PILOS_ACCESS_ENTITLEMENT: CommercialEntitlement = {
+  window: {
+    eligibleStatuses: ['active'],
+    graceStatuses: ['past_due'],
+  },
+  requiresPlanFlag: (plan) => plan?.pilosAccessEnabled === true,
+};
+
 
 @Injectable()
 export class CommercialEntitlementService {
@@ -167,5 +194,19 @@ export class CommercialEntitlementService {
    */
   channelMarketplaceEligible(channelId: string, now: Date = new Date()): Promise<boolean> {
     return this.isEntitled(channelId, MARKETPLACE_LISTING_ENTITLEMENT, now);
+  }
+
+  /**
+   * ADR-057 §D5 — `channelPiloslAccessEligible(channelId)`:
+   *
+   * Tenant-level PILOS access entitlement. Same eligibility window as
+   * marketplace listing (active OR past_due inside grace), but gated on the
+   * separate `pilosAccessEnabled` plan flag.
+   *
+   * Consumed by `PilosAccessSyncPlugin` (PR 6) for tenant-level entitlement
+   * projection to PILOS.
+   */
+  channelPiloslAccessEligible(channelId: string, now: Date = new Date()): Promise<boolean> {
+    return this.isEntitled(channelId, PILOS_ACCESS_ENTITLEMENT, now);
   }
 }
