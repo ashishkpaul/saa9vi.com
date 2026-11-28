@@ -1,5 +1,9 @@
 import { Inject, OnApplicationBootstrap } from '@nestjs/common';
-import { PluginCommonModule, VendurePlugin } from '@vendure/core';
+import {
+  PluginCommonModule,
+  VendurePlugin,
+  NativeAuthenticationStrategy,
+} from '@vendure/core';
 import { CustomerDeletionModule } from '../../platform/customer-deletion/customer-deletion.module';
 import { CommercialEntitlementModule } from '../../platform/commercial/commercial-entitlement.module';
 import { CustomerDeletionService } from '../../platform/customer-deletion/customer-deletion.service';
@@ -30,6 +34,7 @@ import { TenantRoleReconciliationService } from './services/tenant-role-reconcil
 import { TenantThemeService } from './services/tenant-theme.service';
 import { ChannelRoleRepairService } from './services/channel-role-repair.service';
 import { KeycloakIdentityService } from './services/keycloak-identity.service';
+import { KeycloakAuthenticationStrategy } from './auth/keycloak-authentication-strategy';
 import { TenantShopResolver } from './api/tenant-shop.resolver';
 import { TenantAdminResolver } from './api/tenant-admin.resolver';
 import { TenantCommercialEligibilityService } from './services/tenant-commercial-eligibility.service';
@@ -93,6 +98,22 @@ function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
       mediaResourcePermission,
       tenantManageAdmissionsPermission,
     );
+
+    // Register Keycloak authentication strategy for Admin API SSO (ADR-057 D3).
+    // Only registered when Keycloak issuer/realm are configured; otherwise the
+    // default NativeAuthenticationStrategy remains the sole admin auth method.
+    const keycloakIssuer = process.env.KEYCLOAK_ISSUER;
+    const keycloakRealm = process.env.KEYCLOAK_REALM;
+    if (keycloakIssuer && keycloakRealm) {
+      config.authOptions.adminAuthenticationStrategy = [
+        new NativeAuthenticationStrategy(),
+        new KeycloakAuthenticationStrategy({
+          issuer: keycloakIssuer,
+          realm: keycloakRealm,
+        }),
+      ];
+    }
+
     return config;
   },
 })
