@@ -33,9 +33,11 @@ export class KeycloakIdentity extends VendureEntity implements ChannelAware {
   @JoinTable()
   channels: Channel[];
 
-  /** Tenant Channel.id — the academy boundary (INV-001). */
-  @Column({ type: "varchar" })
-  channelId: string;
+  /** Tenant Channel.id — the academy boundary (INV-001). May be null at
+   * first Keycloak login if the channel is not yet known; it is populated
+   * once the Administrator is associated with a tenant channel. */
+  @Column({ type: "varchar", nullable: true })
+  channelId: string | null;
 
   /** Keycloak issuer URL (the `iss` claim). */
   @Column({ type: "varchar" })

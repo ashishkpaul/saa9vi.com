@@ -72,6 +72,27 @@ export class SubscriptionPlan extends VendureEntity {
   @Column({ default: false })
   marketplaceListingEnabled: boolean;
 
+  /**
+   * PILOS access capability flag (ADR-057 §D4/D5).
+   *
+   * Tenant channels subscribed to a plan with this flag set are granted
+   * tenant-level PILOS access entitlement, synced to PILOS via
+   * PilosAccessSyncPlugin (PR 6). SEPARATE entitlement from
+   * `marketplaceListingEnabled` (ADR-042) and from `whitelabelEnabled`
+   * (ADR-043 L1 theming) — sharing a billing record does not make them
+   * indistinguishable.
+   *
+   * Defaults to `false` — PILOS access is opt-in per plan tier, so every
+   * pre-existing plan row stays without PILOS access until Portal Admin
+   * explicitly enables it.
+   *
+   * PILOS access is additionally gated by the commercial eligibility window
+   * (status active, or past_due inside grace) via
+   * `CommercialEntitlementService.channelPiloslAccessEligible()`.
+   */
+  @Column({ default: false })
+  pilosAccessEnabled: boolean;
+
   @Column({ default: true })
   isActive: boolean;
 
