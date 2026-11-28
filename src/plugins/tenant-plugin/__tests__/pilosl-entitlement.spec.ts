@@ -9,7 +9,6 @@ import { startOnFreePort } from '../../../test-utils/free-port';
 import { SchemaPostgresInitializer } from '../e2e/schema-postgres-initializer';
 import {
   Channel,
-  ConfigService,
   mergeConfig,
   Permission,
   RequestContext,
@@ -106,17 +105,26 @@ describe('PR 5 — PILOS tenant-level entitlement API', () => {
     });
     if (!superAdminUser) {
       throw new Error('Could not find superadmin user');
+    }
+    return server.app.get(RequestContextService).create({
+      apiType: 'admin',
+      user: superAdminUser,
+    });
+  }
   async function provisionTenant(
     ctx: RequestContext,
     businessName: string,
     channelCode: string,
   ): Promise<string> {
-    const { SellerService, ChannelService, RoleService, UserService, Zone } =
-      server.app as any;
-    const seller = await SellerService.create(ctx, { name: businessName });
+    const sellerService = server.app.get(SellerService);
+    const channelService = server.app.get(ChannelService);
+    const roleService = server.app.get(RoleService);
+    const userService = server.app.get(UserService);
+
+    const seller = await sellerService.create(ctx, { name: businessName });
 
     const defaultChannel = await connection.getRepository(ctx, Channel).findOneOrFail({
-      where: { id: (await ChannelService.getDefaultChannel(ctx)).id },
+      where: { id: (await channelService.getDefaultChannel(ctx)).id },
       relations: ['defaultTaxZone', 'defaultShippingZone'],
     });
 
@@ -149,7 +157,7 @@ describe('PR 5 — PILOS tenant-level entitlement API', () => {
     }
     const channel = channelResult;
 
-    const role = await RoleService.create(ctx, {
+    const role = await roleService.create(ctx, {
       code: `${channelCode}-admin`,
       description: `Tenant administrator for ${businessName}`,
       permissions: [Permission.Authenticated, Permission.ReadAdministrator],
@@ -162,14 +170,14 @@ describe('PR 5 — PILOS tenant-level entitlement API', () => {
     await connection.getRepository(ctx, Role).save(roleEntity);
 
     await connection.withTransaction(ctx, async (txCtx) => {
-      const created = await server.app.get(AdministratorService).create(txCtx, {
+      const created = await AdministratorService.create(txCtx, {
         firstName: 'Owner',
         lastName: businessName,
         emailAddress: `owner-${channelCode}-${Date.now()}@example.com`,
         password: 'OwnerP@ss123',
         roleIds: [],
       });
-      await server.app.get(UserService).setVerificationToken(txCtx, created.user);
+      await userService.setVerificationToken(txCtx, created.user);
       if (role) {
         created.user.roles = [role];
         await connection.getRepository(txCtx, User).save(created.user);
@@ -190,6 +198,42 @@ describe('PR 5 — PILOS tenant-level entitlement API', () => {
     pilosAccessEnabled: boolean = true,
   ): Promise<void> {
     const repo = connection.getRepository(ctx, 'OrganizationSubscription');
+    const planRepo = connection.getRepository(ctx, 'SubscriptionPlan');
+
+    let plan = await planRepo.findOne({ where: { slug: planSlug } });
+    if (!plan) {
+      plan = await planRepo.save(
+        planRepo.create({
+          slug: planSlug,
+          name: planSlug,
+          monthlyPriceInPaise: 100000,
+          pilosAccessEnabled,
+        }),
+      );
+    }
+
+    const existing = await repo.findOne({ where: { channelId } });
+    if (existing) {
+      existing.status = status as any;
+      existing.plan = plan as any;
+      existing.currentPeriodEnd = currentPeriodEnd;
+      existing.marketplaceGraceUntil = marketplaceGraceUntil;
+      existing.version = (existing.version || 1) + 1;
+      await repo.save(existing);
+    } else {
+      await repo.save(
+        repo.create({
+          channelId,
+          plan,
+          status,
+          currentPeriodEnd,
+          marketplaceGraceUntil,
+          version: 1,
+        }),
+      );
+    }
+  }
+
   // ── Tests ──
   it('returns MISSING when channel has no subscription', async () => {
     const ctx = await getSuperAdminContext();
@@ -279,45 +323,3 @@ describe('PR 5 — PILOS tenant-level entitlement API', () => {
   });
 });
 
-    const planRepo = connection.getRepository(ctx, 'SubscriptionPlan');
-
-    let plan = await planRepo.findOne({ where: { slug: planSlug } });
-    if (!plan) {
-      plan = await planRepo.save(
-        planRepo.create({
-          slug: planSlug,
-          name: planSlug,
-          monthlyPriceInPaise: 100000,
-          pilosAccessEnabled,
-        }),
-      );
-    }
-
-    const existing = await repo.findOne({ where: { channelId } });
-    if (existing) {
-      existing.status = status as any;
-      existing.plan = plan as any;
-      existing.currentPeriodEnd = currentPeriodEnd;
-      existing.marketplaceGraceUntil = marketplaceGraceUntil;
-      existing.version = (existing.version || 1) + 1;
-      await repo.save(existing);
-    } else {
-      await repo.save(
-        repo.create({
-          channelId,
-          plan,
-          status,
-          currentPeriodEnd,
-          marketplaceGraceUntil,
-          version: 1,
-        }),
-      );
-    }
-  }
-
-    }
-    return server.app.get(RequestContextService).create({
-      apiType: 'admin',
-      user: superAdminUser,
-    });
-  }
