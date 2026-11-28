@@ -227,9 +227,9 @@ describe('PR 2 — Keycloak identity mapping (tenant/moderator identity)', () =>
     });
 
     return {
-      channelId: channel.id,
+      channelId: String(channel.id),
       channelCode: channel.code,
-      administratorId: administrator.id,
+      administratorId: String(administrator.id),
     };
   }
 
