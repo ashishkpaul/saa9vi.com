@@ -48,10 +48,10 @@ export class KeycloakIdentity extends VendureEntity implements ChannelAware {
   subject: string;
 
   /** Optional link to a Vendure Customer. Populated in PR 4. */
-  @Column({ nullable: true })
+  @Column({ type: "varchar", nullable: true })
   customerId: string | null;
 
   /** Optional link to a Vendure Administrator. Populated in PR 4. */
-  @Column({ nullable: true })
+  @Column({ type: "varchar", nullable: true })
   administratorId: string | null;
 }
