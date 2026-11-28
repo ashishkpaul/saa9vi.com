@@ -575,3 +575,17 @@ platform-only. See `docs/architecture/security.md` SEC-008.
 **Rationale:** The native pool ranks servers by utilisation. If any other code path writes `currentLoad`, or any selection path returns no server while a healthy non-excluded server exists, load ceases to be a measured, trustworthy signal and the pool degrades to random selection again.
 
 **Rejection criterion:** any other writer of `currentLoad`, or any selection path that returns no server while a healthy non-excluded server exists.
+
+---
+
+## INV-032: Keycloak Is Identity, Not Subscription Authority; PILOS Enforces Tenant Entitlement (ADR-057)
+
+**Rule:** Keycloak is the shared OIDC identity provider for PILOS and Vendure Admin SSO, but it is **not** the subscription authority. Subscription state (active, suspended, expired, validUntil) is owned by Vendure's `OrganizationSubscription` and must not be stored, calculated, or gated by Keycloak token claims.
+
+PILOS enforces tenant entitlement and membership on the backend for every protected operation (room and meeting administration, meeting start/join, and other tenant operations). A moderator may use PILOS only when both conditions hold:
+1. the user has an active membership and the required PILOS operational role for that tenant; and
+2. the tenant entitlement is active and the current time is before `validUntil`.
+
+A frontend, middleware, or Keycloak role check alone is insufficient. Missing, unknown, expired, or suspended tenant entitlement fails closed. Keycloak authenticates the person; Vendure channel assignment and PILOS tenant membership/roles determine what that person may do.
+
+**Rejection criterion:** any access check that grants PILOS operations based solely on a Keycloak login, email, or role claim without a tenant-level entitlement check; any code path that stores subscription state in Keycloak or derives PILOS access from a token claim without backend entitlement verification.
