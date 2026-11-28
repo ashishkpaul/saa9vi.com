@@ -218,6 +218,23 @@ export const adminApiExtensions = gql`
         errors: [String!]!
     }
 
+    """Tenant-level PILOS access entitlement projection (ADR-057 D4/D5).
+    Consumed by PILOS to enforce tenant subscription + membership on the
+    backend. PILOS checks both this tenant entitlement AND individual
+    moderator membership before granting access."""
+    type PiloslTenantEntitlement {
+        """Vendure Channel ID — the stable external tenant reference."""
+        tenantRef: String!
+        """ACTIVE | SUSPENDED | EXPIRED | MISSING"""
+        status: String!
+        """Subscription plan slug (e.g. STARTER). Null when not entitled."""
+        plan: String
+        """Monotonically increasing version — PILOS rejects stale versions."""
+        version: Int
+        """Entitlement expiry. Null when no time-bounded expiry applies."""
+        validUntil: DateTime
+    }
+
     extend type Query {
         tenantProfile(channelId: String): TenantProfile
         instructorProfiles(options: InstructorProfileListOptions): InstructorProfileList!
@@ -227,6 +244,8 @@ export const adminApiExtensions = gql`
         tenantLearners(options: TenantLearnersListOptions): TenantLearnerMembershipList!
         tenantLearnerMembershipLogs(customerId: ID!): [TenantLearnerMembershipLog!]!
         checkChannelRoleAssignments(channelId: ID!): ChannelRoleRepairResult!
+        """ADR-057 §D5 — tenant-level PILOS entitlement projection. SuperAdmin only."""
+        tenantPiloslEntitlement(channelId: String!): PiloslTenantEntitlement!
     }
 
     extend type Mutation {
