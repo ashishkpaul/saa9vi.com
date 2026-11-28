@@ -1,4 +1,6 @@
 import {
+  Administrator,
+  AdministratorService,
   AuthenticationStrategy,
   ExternalAuthenticationService,
   Injector,
@@ -51,6 +53,7 @@ export class KeycloakAuthenticationStrategy implements AuthenticationStrategy<Ke
   private externalAuthenticationService!: ExternalAuthenticationService;
   private roleService!: RoleService;
   private connection!: TransactionalConnection;
+  private administratorService!: AdministratorService;
   private keycloakUserinfoUrl: string;
 
   constructor(private options: KeycloakAuthStrategyOptions) {
@@ -61,6 +64,7 @@ export class KeycloakAuthenticationStrategy implements AuthenticationStrategy<Ke
     this.externalAuthenticationService = injector.get(ExternalAuthenticationService);
     this.roleService = injector.get(RoleService);
     this.connection = injector.get(TransactionalConnection);
+    this.administratorService = injector.get(AdministratorService);
   }
 
   defineInputType(): DocumentNode {
@@ -167,7 +171,7 @@ export class KeycloakAuthenticationStrategy implements AuthenticationStrategy<Ke
   }
 
   private async findOrCreateKeycloakUserRole(ctx: RequestContext): Promise<Role> {
-    const roles = await this.roleService.findAll();
+    const roles = await this.roleService.findAll(ctx);
     const existing = roles.items.find((r: Role) => r.code === 'keycloak-user');
     if (existing) {
       return existing;
@@ -186,12 +190,12 @@ export class KeycloakAuthenticationStrategy implements AuthenticationStrategy<Ke
     user: User,
   ): Promise<void> {
     const identityRepo = this.connection.getRepository(ctx, KeycloakIdentity);
+    const administratorRepo = this.connection.getRepository(ctx, Administrator);
 
-    const userWithAdmin = await this.connection.getRepository(ctx, User).findOne({
-      where: { id: user.id },
-      relations: ['administrator'],
+    const administrator = await administratorRepo.findOne({
+      where: { user: { id: user.id } },
     });
-    const administratorId = userWithAdmin?.administrator?.id;
+    const administratorId = administrator?.id;
     if (!administratorId) {
       Logger.warn(
         `Keycloak user ${subject} has no administrator record; identity not linked`,

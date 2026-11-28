@@ -10,11 +10,18 @@ import { SchemaPostgresInitializer } from '../e2e/schema-postgres-initializer';
 import {
   Administrator,
   Channel,
+  ConfigService,
   mergeConfig,
   Permission,
   RequestContext,
   RequestContextService,
   Role,
+  SellerService,
+  ChannelService,
+  AdministratorService,
+  RoleService,
+  UserService,
+  Zone,
   TransactionalConnection,
   User,
 } from '@vendure/core';
@@ -131,7 +138,8 @@ describe('PR 2 — Keycloak identity mapping (tenant/moderator identity)', () =>
   });
 
   async function getSuperAdminContext(): Promise<RequestContext> {
-    const { superadminCredentials } = server.app.getConfig().authOptions;
+    const configService = server.app.get(ConfigService);
+    const { superadminCredentials } = configService.authOptions;
     const superAdminUser = await connection.getRepository(User).findOne({
       where: { identifier: superadminCredentials.identifier },
     });
@@ -149,11 +157,16 @@ describe('PR 2 — Keycloak identity mapping (tenant/moderator identity)', () =>
     businessName: string,
     channelCode: string,
   ): Promise<{ channelId: string; channelCode: string; administratorId: string }> {
-    const { SellerService, ChannelService, AdministratorService, RoleService, UserService, Zone } = server.app;
-    const seller = await SellerService.create(ctx, { name: businessName });
+    const sellerService = server.app.get(SellerService);
+    const channelService = server.app.get(ChannelService);
+    const administratorService = server.app.get(AdministratorService);
+    const roleService = server.app.get(RoleService);
+    const userService = server.app.get(UserService);
+
+    const seller = await sellerService.create(ctx, { name: businessName });
 
     const defaultChannel = await connection.getRepository(ctx, Channel).findOneOrFail({
-      where: { id: (await ChannelService.getDefaultChannel(ctx)).id },
+      where: { id: (await channelService.getDefaultChannel(ctx)).id },
       relations: ['defaultTaxZone', 'defaultShippingZone'],
     });
 
@@ -165,11 +178,11 @@ describe('PR 2 — Keycloak identity mapping (tenant/moderator identity)', () =>
       if (!defaultZone) {
         defaultZone = await zoneRepo.save(new Zone({ name: 'Default Zone' }));
       }
-      if (!defaultTaxZoneId) defaultTaxZoneId = defaultZone.id;
-      if (!defaultShippingZoneId) defaultShippingZoneId = defaultZone.id;
+      if (!defaultTaxZoneId && defaultZone) defaultTaxZoneId = defaultZone.id;
+      if (!defaultShippingZoneId && defaultZone) defaultShippingZoneId = defaultZone.id;
     }
 
-    const channelResult = await ChannelService.create(ctx, {
+    const channelResult = await channelService.create(ctx, {
       code: channelCode,
       token: `tok_${channelCode}_${Date.now().toString(36).slice(2, 8)}`,
       sellerId: seller.id,
@@ -185,7 +198,7 @@ describe('PR 2 — Keycloak identity mapping (tenant/moderator identity)', () =>
     }
     const channel = channelResult;
 
-    const role = await RoleService.create(ctx, {
+    const role = await roleService.create(ctx, {
       code: `${channelCode}-admin`,
       description: `Tenant administrator for ${businessName}`,
       permissions: [Permission.Authenticated, Permission.ReadAdministrator],
@@ -198,14 +211,14 @@ describe('PR 2 — Keycloak identity mapping (tenant/moderator identity)', () =>
     await connection.getRepository(ctx, Role).save(roleEntity);
 
     const administrator = await connection.withTransaction(ctx, async (txCtx) => {
-      const created = await AdministratorService.create(txCtx, {
+      const created = await administratorService.create(txCtx, {
         firstName: 'Owner',
         lastName: businessName,
         emailAddress: `owner-${channelCode}-${Date.now()}@example.com`,
         password: 'OwnerP@ss123',
         roleIds: [],
       });
-      await server.app.get(UserService).setVerificationToken(txCtx, created.user);
+      await userService.setVerificationToken(txCtx, created.user);
       if (role) {
         created.user.roles = [role];
         await connection.getRepository(txCtx, User).save(created.user);
