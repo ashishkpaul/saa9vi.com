@@ -17,6 +17,7 @@ import { TenantRegistrationLog } from './entities/tenant-registration-log.entity
 import { TenantTheme } from './entities/tenant-theme.entity';
 import { TenantLearnerMembership } from './entities/tenant-learner-membership.entity';
 import { TenantLearnerMembershipLog } from './entities/tenant-learner-membership-log.entity';
+import { KeycloakIdentity } from './entities/keycloak-identity.entity';
 import { TenantLearnerMembershipService } from './services/tenant-learner-membership.service';
 import { TenantProfileService } from './services/tenant-profile.service';
 import { InstructorProfileService } from './services/instructor-profile.service';
@@ -28,6 +29,7 @@ import { TenantRegistrationService } from './services/tenant-registration.servic
 import { TenantRoleReconciliationService } from './services/tenant-role-reconciliation.service';
 import { TenantThemeService } from './services/tenant-theme.service';
 import { ChannelRoleRepairService } from './services/channel-role-repair.service';
+import { KeycloakIdentityService } from './services/keycloak-identity.service';
 import { TenantShopResolver } from './api/tenant-shop.resolver';
 import { TenantAdminResolver } from './api/tenant-admin.resolver';
 import { TenantCommercialEligibilityService } from './services/tenant-commercial-eligibility.service';
@@ -52,7 +54,7 @@ function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
 @VendurePlugin({
   compatibility: '^3.7.0',
   imports: [PluginCommonModule, CustomerDeletionModule, CommercialEntitlementModule],
-  entities: [TenantProfile, InstructorProfile, MediaResource, TenantRegistrationLog, TenantTheme, TenantLearnerMembership, TenantLearnerMembershipLog],
+  entities: [TenantProfile, InstructorProfile, MediaResource, TenantRegistrationLog, TenantTheme, TenantLearnerMembership, TenantLearnerMembershipLog, KeycloakIdentity],
   providers: [
     TenantProfileService,
     InstructorProfileService,
@@ -66,6 +68,7 @@ function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
     TenantCommercialEligibilityService,
     TenantLearnerMembershipService,
     ChannelRoleRepairService,
+    KeycloakIdentityService,
     // C-10: expose LearnerAdmissionPort so BBB and other plugins can inject
     // it without directly importing TenantLearnerMembershipService.
     {
@@ -73,7 +76,7 @@ function concatApiExtensions(...docs: DocumentNode[]): DocumentNode {
       useExisting: TenantLearnerMembershipService,
     },
   ],
-  exports: [LEARNER_ADMISSION_PORT, TenantLearnerMembershipService],
+  exports: [LEARNER_ADMISSION_PORT, TenantLearnerMembershipService, KeycloakIdentityService],
   adminApiExtensions: {
     schema: concatApiExtensions(adminApiExtensions, themeAdminExtensions),
     resolvers: [TenantAdminResolver],
